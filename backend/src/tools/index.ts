@@ -1,0 +1,102 @@
+/**
+ * Tool registry — `docs/03-intelligence-runtime.md`.
+ *
+ * The runtime builds a permission-filtered compact catalog. Only commonly required
+ * tools are preloaded; other schemas load lazily. Execution rechecks authorization and
+ * validates input even when the tool was discoverable earlier.
+ */
+
+import type { ExecutionContext } from "../core/context.js";
+import type { PlatformError } from "../core/errors.js";
+import type { BlobRef } from "../core/ids.js";
+
+/**
+ * Effect classification. This drives the approval policy, so an unknown effect is
+ * never treated as `read` — see `../mcp` for how imported tools are classified.
+ */
+export const TOOL_EFFECTS = [
+  "read",
+  "internal-write",
+  "external-write",
+  "destructive",
+] as const;
+
+export type ToolEffect = (typeof TOOL_EFFECTS)[number];
+
+export type ApprovalPolicy = "never" | "policy" | "always";
+
+export type ToolDescriptor = {
+  readonly name: string;
+  readonly label: string;
+  readonly description: string;
+  readonly category: string;
+  /** JSON Schema. Validated on execution, not merely advertised. */
+  readonly inputSchema: unknown;
+  readonly outputSchema: unknown;
+  readonly effect: ToolEffect;
+  readonly approvalPolicy: ApprovalPolicy;
+  /** External and destructive tools must supply an idempotency key. */
+  readonly requiresIdempotencyKey: boolean;
+};
+
+/** What enters the model's context during discovery: no schemas, just enough to choose. */
+export type ToolCatalogEntry = Pick<
+  ToolDescriptor,
+  "name" | "label" | "description" | "category" | "effect"
+>;
+
+/** Shared success/error envelope — every tool, including imported ones. */
+export type ToolResult<T = unknown> =
+  | {
+      readonly ok: true;
+      readonly data: T;
+      /** Set when the payload was compacted or spilled rather than returned inline. */
+      readonly spilledOutputRef?: BlobRef;
+      readonly truncated?: boolean;
+    }
+  | {
+      readonly ok: false;
+      readonly error: PlatformError;
+    };
+
+export type ToolExecutionInput = {
+  readonly context: ExecutionContext;
+  readonly input: unknown;
+  /** Derived from tenant, run and tool-call identity. Replays return the first result. */
+  readonly idempotencyKey?: string;
+};
+
+export interface Tool<T = unknown> {
+  readonly descriptor: ToolDescriptor;
+  execute(input: ToolExecutionInput): Promise<ToolResult<T>>;
+}
+
+/**
+ * Applications register providers rather than individual tools, so a provider can
+ * resolve its tool list against tenant configuration.
+ */
+export interface ToolProvider {
+  readonly id: string;
+  listTools(context: ExecutionContext): Promise<readonly Tool[]>;
+}
+
+/** Decides both discovery visibility and execution permission. Never the prompt's job. */
+export interface AuthorizationPolicy {
+  filterCatalog(
+    context: ExecutionContext,
+    tools: readonly ToolDescriptor[],
+  ): Promise<readonly ToolDescriptor[]>;
+  authorizeExecution(context: ExecutionContext, toolName: string): Promise<boolean>;
+}
+
+/** Built-in meta-tools. Always present, never provider-supplied. */
+export const META_TOOLS = [
+  "learn_tools",
+  "execute_tool",
+  "load_skill",
+  "ask_questions",
+  "request_approval",
+  "read_tool_output",
+] as const;
+
+export type MetaToolName = (typeof META_TOOLS)[number];
