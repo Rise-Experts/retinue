@@ -47,6 +47,22 @@ Per agent/run:
 - Retry count and backoff.
 - Maximum inline tool-output size.
 
+## Retry policy
+
+Transient failures are retried with a Claude/Anthropic-SDK-style policy rather than a naive
+fixed loop:
+
+- **Exponential backoff with jitter** between attempts, up to a bounded maximum attempt count.
+- **Honor server timing**: when the provider returns a `retry-after` / `retry-after-ms` header,
+  wait at least that long before the next attempt.
+- **Retry only transient classes**: `429` rate limits, `408`/`409`, `5xx`, and `529` overloaded.
+  Deterministic `4xx` validation errors are not retried — they fail fast.
+- **Retries are safe because writes are idempotent**: every external/destructive call carries an
+  idempotency key (see Idempotency below), so a retried publish/send/schedule returns the original
+  result instead of firing the side effect twice.
+- The run surfaces `RetryPending` between attempts; exhausting the attempt budget moves it to
+  `Failed` with the last error preserved.
+
 ## Questions
 
 `ask_questions` is used for consequential ambiguity that cannot be resolved from context or tools. Questions persist as typed message parts. The run moves to `WaitingForQuestion`; an answer mutation records the answer and queues a continuation.
@@ -89,4 +105,5 @@ Transports map these events to GraphQL subscriptions, SSE or another channel wit
 - Pending interactions survive deployment/restart.
 - Approval cannot be bypassed through direct tool execution.
 - Cancellation and retry states are observable and tested.
+- Retries use backoff with jitter, honor `retry-after`, retry only transient classes, and never double-fire an idempotent external write.
 
