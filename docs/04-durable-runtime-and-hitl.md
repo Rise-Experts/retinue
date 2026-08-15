@@ -62,6 +62,9 @@ fixed loop:
   result instead of firing the side effect twice.
 - The run surfaces `RetryPending` between attempts; exhausting the attempt budget moves it to
   `Failed` with the last error preserved.
+- Each retry emits a `run.retry-pending` transport event with attempt number, max attempts,
+  next-attempt time and the triggering error, so the frontend can show a live retry indicator
+  (attempt/countdown/reason) rather than only the status.
 
 ## Questions
 
@@ -89,6 +92,7 @@ Every external/destructive tool requires an idempotency key derived from tenant,
 Stable events include:
 
 - Run queued/started/checkpointed/completed/failed/cancelled.
+- Run retry-pending, carrying `attempt`, `maxAttempts`, `nextAttemptAt` and the triggering error.
 - Content part added/updated.
 - Tool started/completed/failed.
 - Question requested/answered.

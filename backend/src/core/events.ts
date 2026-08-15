@@ -17,6 +17,7 @@ export const RUN_EVENT_TYPES = [
   "run.completed",
   "run.failed",
   "run.cancelled",
+  "run.retry-pending",
   "part.added",
   "part.updated",
   "tool.started",
@@ -45,6 +46,20 @@ export type RunLifecycleEvent = EventBase<
 >;
 
 export type RunFailedEvent = EventBase<"run.failed"> & {
+  readonly error: PlatformError;
+};
+
+/**
+ * Emitted when a transient failure triggers a retry (see docs/04 → Retry policy).
+ * Carries enough for a client to render "attempt 2 of 5, retrying in ~3s (rate limited)"
+ * rather than only showing the `retry-pending` status.
+ */
+export type RunRetryPendingEvent = EventBase<"run.retry-pending"> & {
+  readonly attempt: number;
+  readonly maxAttempts: number;
+  /** When the next attempt is scheduled, honoring any `retry-after` the provider returned. */
+  readonly nextAttemptAt: string;
+  /** The transient error that triggered the retry. */
   readonly error: PlatformError;
 };
 
@@ -78,6 +93,7 @@ export type ContextCompactedEvent = EventBase<"context.compacted"> & {
 export type RunEvent =
   | RunLifecycleEvent
   | RunFailedEvent
+  | RunRetryPendingEvent
   | PartEvent
   | ToolEvent
   | InteractionEvent
