@@ -1,5 +1,5 @@
 /**
- * @agent-platform/backend
+ * @agentkit/backend
  *
  * Server-side contracts for the reusable AI platform. See `../docs` for the
  * specifications each module implements, and `README.md` for the module map.

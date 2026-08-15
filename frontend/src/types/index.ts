@@ -28,7 +28,7 @@ export type {
   TextPart,
   ToolCallPart,
   ToolResultPart,
-} from "@agent-platform/backend";
+} from "@agentkit/backend";
 
 /** Local echo state for an optimistic send, before the server confirms it. */
 export type OptimisticState = "pending" | "confirmed" | "failed";

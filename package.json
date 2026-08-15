@@ -1,0 +1,26 @@
+{
+  "name": "@agentkit/monorepo",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Reusable AI agent platform — npm-workspaces monorepo (see docs/).",
+  "license": "UNLICENSED",
+  "type": "module",
+  "workspaces": [
+    "backend",
+    "frontend"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "typecheck": "tsc -b",
+    "build": "tsc -b",
+    "test": "npm run test --workspaces --if-present && npm run test:boundaries",
+    "test:boundaries": "node --test scripts/*.test.mjs",
+    "check:boundaries": "node scripts/check-boundaries.mjs",
+    "clean": "npm run clean --workspaces --if-present && rm -rf tsconfig.tsbuildinfo"
+  },
+  "devDependencies": {
+    "typescript": "^5"
+  }
+}

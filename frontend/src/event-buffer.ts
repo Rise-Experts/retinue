@@ -9,7 +9,7 @@
  * order, drops anything already seen, and holds a gap until it fills.
  */
 
-import type { RunEvent } from "@agent-platform/backend";
+import type { RunEvent } from "@agentkit/backend";
 
 export type EventBuffer = {
   /**

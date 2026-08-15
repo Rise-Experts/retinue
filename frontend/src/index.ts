@@ -1,5 +1,5 @@
 /**
- * @agent-platform/frontend
+ * @agentkit/frontend
  *
  * Headless client state for the reusable AI platform. No product styling, no transport
  * assumptions — see `../docs/06-graphql-and-frontend.md`.
