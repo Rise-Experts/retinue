@@ -70,6 +70,9 @@ Components:
 - Error, retry and processing states.
 
 Components support theming, internationalization, accessibility and custom part renderers.
+Internationalization is a locale-keyed message catalog that resolves stable backend codes (tool
+names, statuses, retry indicators, error codes) to display strings with ICU interpolation and a
+default-locale/raw-id fallback; a consuming app can register its own catalog. See docs/14.
 
 ## Mobile
 

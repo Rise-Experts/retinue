@@ -46,7 +46,7 @@ Agents are declarative, stored, versioned and auditable.
 
 ## Tool registry
 
-Tool descriptors declare name, label, description, category, input/output schemas, effect classification, approval policy and idempotency requirement.
+Tool descriptors declare name, label, description, category, input/output schemas, effect classification, approval policy and idempotency requirement. The model-facing description stays canonical; the user-facing label/description is localizable (a catalog key or locale map) per docs/14.
 
 Effects:
 
