@@ -20,6 +20,7 @@ This directory defines the extraction and migration of a reusable AI platform in
 - A first-class authorization model filtering tools, retrieval and every store call.
 - RAG, attachments, OCR, vision, PDF, document and artifact support.
 - GraphQL APIs/subscriptions, headless React hooks and optional UI components.
+- Full localization: the backend emits stable codes, the frontend renders them per user locale.
 - Token counting, usage/cost accounting with quotas, telemetry and versioned evaluations.
 
 ## Non-goals
@@ -45,6 +46,7 @@ This directory defines the extraction and migration of a reusable AI platform in
 11. [Authorization](11-authorization.md)
 12. [Usage, token counting and accounting](12-usage-and-accounting.md)
 13. [Sessions, threads and session state](13-sessions-and-threads.md)
+14. [Localization (i18n)](14-localization.md)
 
 ## Governing principles
 

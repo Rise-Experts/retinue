@@ -40,6 +40,7 @@ agent-platform/
 - Adapter packages implement ports; ports never import adapters.
 - Imported MCP tools flow through the same authorization and approval path as native tools.
 - Authorization is a port; services take decisions from it and never inline permission logic.
+- Contracts, events and tool results carry stable codes and structured data — never pre-localized user prose. The frontend localizes (see docs/14).
 - `react` is headless. `ui` depends on `react`, not vice versa.
 - GraphQL resolvers call application services and contain no domain logic.
 - ShareFlow registers tools, context providers, skills and agents through public interfaces.
