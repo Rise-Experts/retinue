@@ -53,7 +53,7 @@ Required hooks:
 - `useAttachmentUpload`
 - `useArtifact`
 
-The package provides typed part reducers, optimistic sends, cursor catch-up, retry and cancellation. It contains no product styling.
+The package provides typed part reducers, optimistic sends, cursor catch-up, retry and cancellation. It contains no product styling. `useRunSubscription` exposes a `retry` state (attempt, max attempts, next-attempt time, reason) derived from the `run.retry-pending` event, which the "Error, retry and processing states" component renders as a live indicator.
 
 ## Optional UI package
 

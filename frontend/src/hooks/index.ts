@@ -45,6 +45,18 @@ export type UseSendMessage = (input: { conversationId: string }) => {
   readonly error: PlatformError | undefined;
 };
 
+/**
+ * Retry detail surfaced from the latest `run.retry-pending` event, so a UI can show
+ * "attempt 2 of 5, retrying in ~3s" and not just the bare `retry-pending` status.
+ * `undefined` once the run leaves `retry-pending`.
+ */
+export type RetryState = {
+  readonly attempt: number;
+  readonly maxAttempts: number;
+  readonly nextAttemptAt: string;
+  readonly reason: PlatformError;
+};
+
 export type UseRunSubscription = (input: {
   runId: string;
   /** Resume point after a reconnect, so no part is missed or rendered twice. */
@@ -53,6 +65,8 @@ export type UseRunSubscription = (input: {
   readonly status: RunStatus | undefined;
   readonly parts: readonly MessagePart[];
   readonly lastEvent: RunEvent | undefined;
+  /** Present while `status === "retry-pending"`; drives the retry indicator. */
+  readonly retry: RetryState | undefined;
   readonly connected: boolean;
 };
 
