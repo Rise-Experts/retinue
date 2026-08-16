@@ -1,0 +1,32 @@
+{
+  "name": "@agentkit/website",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "docs:api": "typedoc",
+    "docs:llms": "node scripts/gen-llms.mjs",
+    "prebuild": "npm run docs:api && npm run docs:llms",
+    "build": "docusaurus build",
+    "start": "docusaurus start",
+    "serve": "docusaurus serve"
+  },
+  "dependencies": {
+    "@docusaurus/core": "^3.6.3",
+    "@docusaurus/preset-classic": "^3.6.3",
+    "@docusaurus/theme-mermaid": "^3.6.3",
+    "@mermaid-js/layout-elk": "^0.1.9",
+    "clsx": "^2.1.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@docusaurus/module-type-aliases": "^3.6.3",
+    "@docusaurus/tsconfig": "^3.6.3",
+    "typedoc": "^0.28.0",
+    "typedoc-plugin-markdown": "^4.4.1",
+    "typescript": "^5.6.3"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

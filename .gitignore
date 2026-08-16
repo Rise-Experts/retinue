@@ -4,3 +4,11 @@ dist/
 .DS_Store
 plan.md
 plan.archive/
+
+# Docusaurus site
+website/build/
+website/.docusaurus/
+website/static/llms.txt
+website/static/llms-full.txt
+# TypeDoc-generated API reference (built in CI)
+website/api/

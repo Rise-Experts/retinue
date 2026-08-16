@@ -1,0 +1,9 @@
+{
+  "$schema": "https://typedoc.org/schema.json",
+  "entryPointStrategy": "packages",
+  "entryPoints": ["../backend", "../frontend"],
+  "plugin": ["typedoc-plugin-markdown"],
+  "out": "api",
+  "readme": "none",
+  "githubPages": false
+}
