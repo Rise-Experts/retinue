@@ -48,6 +48,10 @@ This directory defines the extraction and migration of a reusable AI platform in
 13. [Sessions, threads and session state](13-sessions-and-threads.md)
 14. [Localization (i18n)](14-localization.md)
 
+## Extraction
+
+- [Twenty / Agno extraction inventory](extraction/inventory.md)
+
 ## Governing principles
 
 1. Every tenant-sensitive operation receives an explicit tenant context.
