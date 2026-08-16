@@ -1,0 +1,78 @@
+.hero {
+  padding: 5rem 1rem 4rem;
+  background: linear-gradient(160deg, var(--ifm-color-primary-darkest), var(--ifm-color-primary));
+  color: #fff;
+}
+.heroInner {
+  max-width: 860px;
+  margin: 0 auto;
+  text-align: center;
+}
+.heroTitle {
+  font-size: 3.5rem;
+  font-weight: 800;
+  margin: 0 0 0.5rem;
+  letter-spacing: -0.02em;
+}
+.heroSubtitle {
+  font-size: 1.25rem;
+  opacity: 0.92;
+  margin: 0 auto 2rem;
+  max-width: 640px;
+}
+.heroButtons {
+  display: flex;
+  gap: 0.75rem;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+.buttonPrimary,
+.buttonSecondary {
+  padding: 0.7rem 1.4rem;
+  border-radius: 8px;
+  font-weight: 600;
+  text-decoration: none;
+  transition: transform 0.06s ease, opacity 0.15s ease;
+}
+.buttonPrimary {
+  background: #fff;
+  color: var(--ifm-color-primary-darkest);
+}
+.buttonSecondary {
+  background: rgba(255, 255, 255, 0.14);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+}
+.buttonPrimary:hover,
+.buttonSecondary:hover {
+  transform: translateY(-1px);
+  opacity: 0.95;
+}
+.features {
+  max-width: 1120px;
+  margin: 3.5rem auto;
+  padding: 0 1rem;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 1.25rem;
+}
+.card {
+  border: 1px solid var(--ifm-color-emphasis-200);
+  border-radius: 12px;
+  padding: 1.5rem;
+  background: var(--ifm-background-surface-color);
+  transition: border-color 0.15s ease, transform 0.06s ease;
+}
+.card:hover {
+  border-color: var(--ifm-color-primary);
+  transform: translateY(-2px);
+}
+.cardTitle {
+  margin: 0 0 0.5rem;
+  font-size: 1.15rem;
+}
+.cardBody {
+  margin: 0;
+  color: var(--ifm-color-emphasis-700);
+  font-size: 0.97rem;
+}

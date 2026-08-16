@@ -11,13 +11,31 @@ const config: Config = {
   onBrokenLinks: "warn",
   onBrokenMarkdownLinks: "warn",
 
-  // Parse .md as CommonMark (not MDX) so spec syntax like `{tenantId}` and `<T>` is literal.
+  // Parse .md as CommonMark (not MDX) so spec/API syntax like `{tenantId}` and `<T>` is literal.
   markdown: { format: "md", mermaid: true },
-  themes: ["@docusaurus/theme-mermaid"],
+  themes: [
+    "@docusaurus/theme-mermaid",
+    // Offline full-text search — no external service.
+    [
+      "@easyops-cn/docusaurus-search-local",
+      { hashed: true, indexBlog: false, docsRouteBasePath: ["/docs", "/specifications", "/api"] },
+    ],
+  ],
 
   i18n: { defaultLocale: "en", locales: ["en"] },
 
   plugins: [
+    // Internal specifications (the design docs), kept as a secondary section.
+    [
+      "@docusaurus/plugin-content-docs",
+      {
+        id: "specs",
+        path: "../docs",
+        routeBasePath: "specifications",
+        sidebarPath: "./sidebars-specs.ts",
+      },
+    ],
+    // TypeDoc-generated API reference.
     [
       "@docusaurus/plugin-content-docs",
       {
@@ -33,11 +51,12 @@ const config: Config = {
     [
       "classic",
       {
+        // The primary, hand-written developer documentation.
         docs: {
-          // The specs and generated API reference live in the repo's docs/ folder.
-          path: "../docs",
-          routeBasePath: "/",
+          path: "content",
+          routeBasePath: "docs",
           sidebarPath: "./sidebars.ts",
+          editUrl: "https://github.com/Rise-Experts/agentkit/tree/main/website/content/",
         },
         blog: false,
         theme: { customCss: "./src/css/custom.css" },
@@ -46,16 +65,41 @@ const config: Config = {
   ],
 
   themeConfig: {
+    colorMode: {
+      defaultMode: "light",
+      respectPrefersColorScheme: true,
+      disableSwitch: false,
+    },
     navbar: {
       title: "@agentkit",
       items: [
-        { type: "docSidebar", sidebarId: "specs", position: "left", label: "Docs" },
+        { type: "docSidebar", sidebarId: "docs", position: "left", label: "Docs" },
         { to: "/api/", label: "API", position: "left" },
+        { to: "/specifications/", label: "Specs", position: "left" },
         { href: "https://github.com/Rise-Experts/agentkit", label: "GitHub", position: "right" },
       ],
     },
-    footer: { style: "dark", copyright: "© Rise Experts — @agentkit" },
-    // AI search (kapa/Inkeep/Algolia AskAI) is wired via env at deploy; see README.
+    footer: {
+      style: "dark",
+      links: [
+        {
+          title: "Docs",
+          items: [
+            { label: "Overview", to: "/docs/overview" },
+            { label: "Getting Started", to: "/docs/getting-started/installation" },
+            { label: "API Reference", to: "/api/" },
+          ],
+        },
+        {
+          title: "More",
+          items: [
+            { label: "Specifications", to: "/specifications/" },
+            { label: "GitHub", href: "https://github.com/Rise-Experts/agentkit" },
+          ],
+        },
+      ],
+      copyright: "© Rise Experts — @agentkit",
+    },
   } satisfies Preset.ThemeConfig,
 };
 
