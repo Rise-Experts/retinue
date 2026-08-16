@@ -53,6 +53,7 @@ This directory defines the extraction and migration of a reusable AI platform in
 ## Extraction
 
 - [Twenty / Agno extraction inventory](extraction/inventory.md)
+- [twenty-sdk vs @agentkit comparison](extraction/twenty-sdk-comparison.md)
 
 ## Governing principles
 
