@@ -1,0 +1,22 @@
+{
+  "//": "TypeDoc-only config. Resolves @agentkit/* imports from SOURCE (not built dist) via paths,",
+  "//2": "so the API reference generates without pre-building the workspace — works in CI, Cloudflare and locally.",
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "jsx": "react-jsx",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "types": [],
+    "baseUrl": ".",
+    "paths": {
+      "@agentkit/backend": ["../backend/src/index.ts"],
+      "@agentkit/frontend": ["../frontend/src/index.ts"]
+    },
+    "noEmit": true
+  },
+  "include": ["../backend/src/index.ts", "../frontend/src/index.ts"]
+}

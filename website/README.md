@@ -38,9 +38,9 @@ steps need your Cloudflare/DNS access; the config is already in the repo:**
 1. In the Cloudflare project (Workers & Pages → your `agentkit-docs` project) → **Settings →
    Build**, set:
    - **Root directory:** `website`  ← critical; without it Cloudflare builds the monorepo root.
-   - **Build command:** `(cd .. && npm ci && npm run build) && npm ci && npm run build`
-     — the first step installs + builds the `@agentkit/*` packages (emitting `dist/*.d.ts` so
-     TypeDoc can resolve cross-package types); the second installs the site and builds it.
+   - **Build command:** `npm run build`
+     — TypeDoc resolves `@agentkit/*` from source (`tsconfig.typedoc.json` paths), so no
+     workspace pre-build is needed.
    - **Deploy command:** `npx wrangler deploy` (default — it reads `website/wrangler.jsonc`).
 2. **Custom domain**: project → **Custom domains** → add **`docs.agentkit.riseexperts.de`**.
    - If `riseexperts.de` DNS is **on Cloudflare**, the record is created automatically.
@@ -56,6 +56,5 @@ and publishes automatically.
 > plus this `wrangler.jsonc` fixes both.
 
 ## Known follow-up
-TypeDoc emits a few broken `_media` links from source doc-comments that reference `../docs/*`
-(rendered as warnings; the build still passes). Tidy these by stripping doc-relative links from
-the API doc-comments or configuring the plugin's media handling.
+- AI search widget (kapa/Inkeep/Algolia AskAI) — wire in `themeConfig`, keys via env at deploy.
+- The `onBrokenMarkdownLinks` deprecation warning migrates to `markdown.hooks` in Docusaurus v4.

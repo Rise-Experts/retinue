@@ -1,7 +1,7 @@
 {
   "$schema": "https://typedoc.org/schema.json",
-  "entryPointStrategy": "packages",
-  "entryPoints": ["../backend", "../frontend"],
+  "entryPoints": ["../backend/src/index.ts", "../frontend/src/index.ts"],
+  "tsconfig": "tsconfig.typedoc.json",
   "plugin": ["typedoc-plugin-markdown"],
   "out": "api",
   "readme": "none",

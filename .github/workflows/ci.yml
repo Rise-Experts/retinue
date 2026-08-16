@@ -33,10 +33,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - name: Install workspace
-        run: npm ci
-      - name: Build packages (emit dist/*.d.ts so TypeDoc resolves @agentkit/* types)
-        run: npm run build
       - name: Install (website)
         run: npm ci
         working-directory: website
