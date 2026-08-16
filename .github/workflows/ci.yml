@@ -25,3 +25,17 @@ jobs:
         run: npm run check:boundaries
       - name: Eval dataset coverage
         run: npm run evals:coverage
+
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install (website)
+        run: npm install
+        working-directory: website
+      - name: Build docs site
+        run: npm run build
+        working-directory: website
