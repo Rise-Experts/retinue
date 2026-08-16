@@ -23,3 +23,5 @@ jobs:
         run: npm run build
       - name: Dependency boundaries
         run: npm run check:boundaries
+      - name: Eval dataset coverage
+        run: npm run evals:coverage
