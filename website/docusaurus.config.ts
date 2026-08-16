@@ -4,7 +4,7 @@ import type * as Preset from "@docusaurus/preset-classic";
 const config: Config = {
   title: "@agentkit",
   tagline: "A reusable, provider-neutral AI agent platform",
-  url: "https://agentkit.rise-experts.dev",
+  url: "https://docs.agentkit.riseexperts.de",
   baseUrl: "/",
   organizationName: "Rise-Experts",
   projectName: "agentkit",
