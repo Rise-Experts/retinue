@@ -15,8 +15,10 @@
   "scripts": {
     "typecheck": "tsc -b",
     "build": "tsc -b",
-    "test": "npm run test --workspaces --if-present && npm run test:boundaries",
+    "test": "npm run test --workspaces --if-present && npm run test:boundaries && npm run test:evals",
     "test:boundaries": "node --test scripts/*.test.mjs",
+    "test:evals": "node --test evals/*.test.mjs",
+    "evals:coverage": "node evals/coverage.mjs",
     "check:boundaries": "node scripts/check-boundaries.mjs",
     "clean": "npm run clean --workspaces --if-present && rm -rf tsconfig.tsbuildinfo"
   },
