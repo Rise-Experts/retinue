@@ -38,7 +38,9 @@ steps need your Cloudflare/DNS access; the config is already in the repo:**
 1. In the Cloudflare project (Workers & Pages → your `agentkit-docs` project) → **Settings →
    Build**, set:
    - **Root directory:** `website`  ← critical; without it Cloudflare builds the monorepo root.
-   - **Build command:** `npm install && npm run build`
+   - **Build command:** `(cd .. && npm ci && npm run build) && npm ci && npm run build`
+     — the first step installs + builds the `@agentkit/*` packages (emitting `dist/*.d.ts` so
+     TypeDoc can resolve cross-package types); the second installs the site and builds it.
    - **Deploy command:** `npx wrangler deploy` (default — it reads `website/wrangler.jsonc`).
 2. **Custom domain**: project → **Custom domains** → add **`docs.agentkit.riseexperts.de`**.
    - If `riseexperts.de` DNS is **on Cloudflare**, the record is created automatically.
