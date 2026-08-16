@@ -11,6 +11,7 @@ This directory defines the extraction and migration of a reusable AI platform in
 - Provider-neutral model execution using the Vercel AI SDK.
 - Durable conversations, runs, typed content parts, checkpoints, cancellation and recovery.
 - Threads that carry cross-run session state and compact their own long history.
+- User-level memory that follows a principal across their conversations, under their control.
 - Permission-filtered tools with lazy discovery and consistent result envelopes.
 - Skills, explicit context providers and token-aware context pruning.
 - Durable questions and approval gates for external actions.
@@ -47,6 +48,7 @@ This directory defines the extraction and migration of a reusable AI platform in
 12. [Usage, token counting and accounting](12-usage-and-accounting.md)
 13. [Sessions, threads and session state](13-sessions-and-threads.md)
 14. [Localization (i18n)](14-localization.md)
+15. [User-level memory](15-user-memory.md)
 
 ## Governing principles
 

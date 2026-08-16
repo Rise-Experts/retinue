@@ -83,6 +83,7 @@ Each provider returns a section with priority, token estimate, provenance, sensi
 Built-in providers:
 
 - Principal, role, locale, timezone and current date.
+- Relevant user memory (cross-session, per principal — see docs/15).
 - Tenant instructions.
 - Application/screen context.
 - Uploaded files.

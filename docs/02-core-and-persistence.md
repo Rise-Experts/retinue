@@ -28,6 +28,7 @@ Logical entities:
 - Conversation (thread, with agent binding and ownership)
 - Session state (cross-run working memory)
 - Thread summary (compacted history)
+- Principal memory (cross-session user memory)
 - Run
 - Message
 - Message part
@@ -70,6 +71,7 @@ Use small interfaces rather than one database adapter:
 interface ConversationStore {}
 interface SessionStateStore {}
 interface ThreadSummaryStore {}
+interface PrincipalMemoryStore {}
 interface RunStore {}
 interface MessageStore {}
 interface AgentStore {}
