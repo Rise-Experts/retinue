@@ -45,7 +45,8 @@ const makeProvider = (): ToolProvider => ({
         data: { hits: [`result for ${(input as { q: string }).q}`] },
       })),
       tool(
-        descriptor({ name: "publish", category: "publishing", effect: "external-write", approvalPolicy: "policy", requiresIdempotencyKey: true }),
+        // External write that is idempotent but does not itself require approval.
+        descriptor({ name: "publish", category: "publishing", effect: "external-write", requiresIdempotencyKey: true }),
         async () => {
           publishState.count += 1;
           return { ok: true, data: { published: true, at: publishState.count } };
@@ -53,12 +54,13 @@ const makeProvider = (): ToolProvider => ({
       ),
       tool(descriptor({ name: "secret", effect: "destructive" }), async () => ({ ok: true, data: "secret" })),
       tool(descriptor({ name: "bigread" }), async () => ({ ok: true, data: { blob: "x".repeat(50_000) } })),
+      tool(descriptor({ name: "danger", effect: "destructive", approvalPolicy: "always" }), async () => ({ ok: true, data: "boom" })),
     ];
   },
 });
 
 const policy = createAuthorizationPolicy({
-  roles: [{ roleId: "editor", permissions: [], tools: ["search", "publish", "bigread"] }],
+  roles: [{ roleId: "editor", permissions: [], tools: ["search", "publish", "bigread", "danger"] }],
 });
 
 const registry = () =>
@@ -76,7 +78,7 @@ describe("tool catalog — only task-relevant schemas, only authorized tools", (
     expect(cat.preloaded.map((d) => d.name)).toEqual(["search"]);
     expect(cat.preloaded[0]).toHaveProperty("inputSchema"); // preloaded carry schemas
     const discoverable = cat.discoverable.map((e) => e.name).sort();
-    expect(discoverable).toEqual(["bigread", "publish"]);
+    expect(discoverable).toEqual(["bigread", "danger", "publish"]);
     expect(cat.discoverable[0]).not.toHaveProperty("inputSchema"); // compact — no schema in context
     // 'secret' is not in the role allow-list → absent from discovery entirely.
     expect([...cat.preloaded, ...cat.discoverable].some((e) => e.name === "secret")).toBe(false);
@@ -145,8 +147,14 @@ describe("execute_tool — re-auth, validation, idempotency, spill", () => {
       idempotency: createMemoryIdempotencyStore(),
       approval: { isAllowed: async () => false }, // no standing grant
     });
-    // 'publish' is external-write; give it an approval policy by treating it as requiring approval.
-    const result = await reg.execute(ctx(["editor"]), { name: "publish", input: {}, idempotencyKey: "k1" });
+    // 'danger' has approvalPolicy 'always' — it must not execute without a grant.
+    const result = await reg.execute(ctx(["editor"]), { name: "danger", input: {}, idempotencyKey: "k1" });
+    expect(result).toMatchObject({ ok: false, error: { code: "approval_required" } });
+  });
+
+  it("fails closed: a policy-classified tool is refused when no approval check is wired", async () => {
+    const reg = createToolRegistry({ providers: [makeProvider()], authorization: policy, idempotency: createMemoryIdempotencyStore() });
+    const result = await reg.execute(ctx(["editor"]), { name: "danger", input: {}, idempotencyKey: "k1" });
     expect(result).toMatchObject({ ok: false, error: { code: "approval_required" } });
   });
 

@@ -99,9 +99,10 @@ export const assemblePrompt = (input: {
   let total = included.reduce((sum, s) => sum + s.estimatedTokens, 0);
   for (const stage of PRUNE_ORDER) {
     if (total <= modelContextTokens) break;
-    // Drop lowest-priority sections tagged for this stage first.
+    // Drop lowest-priority sections tagged for this stage first. Base policy is never eligible,
+    // even if a section carried a pruneStage — critical instructions are never dropped.
     const eligible = included
-      .filter((s) => s.pruneStage === stage)
+      .filter((s) => s.pruneStage === stage && s.kind !== "base-policy")
       .sort((a, b) => a.priority - b.priority);
     for (const section of eligible) {
       if (total <= modelContextTokens) break;

@@ -26,20 +26,32 @@ const forbidden = (message: string) =>
 
 const PRIVATE_HOSTNAMES = new Set(["localhost", "ip6-localhost", "metadata.google.internal"]);
 
-/** Best-effort private/loopback/link-local detection for a host (name or IP literal). */
-export const isPrivateHost = (host: string): boolean => {
-  const h = host.toLowerCase().replace(/^\[|\]$/g, "");
-  if (PRIVATE_HOSTNAMES.has(h) || h.endsWith(".local") || h.endsWith(".internal")) return true;
-  if (h === "::1" || h.startsWith("fc") || h.startsWith("fd") || h.startsWith("fe80")) return true; // IPv6 loopback/ULA/link-local
+/** Normalize a host for policy checks: lowercase, strip IPv6 brackets and a trailing dot (`a.` ≡ `a`). */
+export const normalizeHost = (host: string): string => host.toLowerCase().replace(/^\[|\]$/g, "").replace(/\.+$/, "");
+
+const isPrivateV4 = (h: string): boolean => {
   const v4 = h.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
-  if (v4) {
-    const [a, b] = [Number(v4[1]), Number(v4[2])];
-    if (a === 10 || a === 127 || a === 0) return true;
-    if (a === 169 && b === 254) return true; // link-local incl. cloud metadata 169.254.169.254
-    if (a === 172 && b >= 16 && b <= 31) return true;
-    if (a === 192 && b === 168) return true;
-  }
+  if (!v4) return false;
+  const [a, b] = [Number(v4[1]), Number(v4[2])];
+  if (a === 10 || a === 127 || a === 0) return true;
+  if (a === 169 && b === 254) return true; // link-local incl. cloud metadata 169.254.169.254
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  if (a === 192 && b === 168) return true;
   return false;
+};
+
+/**
+ * Private/loopback/link-local detection for a host (name or IP literal). Blocks the obvious private
+ * ranges, and — importantly — every IPv6 literal by default: an IPv4-mapped form like
+ * `::ffff:169.254.169.254` otherwise slips a metadata address past a naive v4-only check. A specific
+ * public IPv6 endpoint must instead be permitted explicitly via `allowedHttpHosts`.
+ */
+export const isPrivateHost = (host: string): boolean => {
+  const h = normalizeHost(host);
+  if (h.length === 0) return true;
+  if (h === "localhost" || PRIVATE_HOSTNAMES.has(h) || h.endsWith(".local") || h.endsWith(".internal")) return true;
+  if (h.includes(":")) return true; // any IPv6 literal (incl. ::, ::1, ::ffff:… mapped) — deny by default
+  return isPrivateV4(h);
 };
 
 /**
@@ -62,8 +74,14 @@ export const validateEndpoint = (policy: EgressPolicy, transport: McpTransport, 
   const schemes = policy.allowedSchemes ?? ["https"];
   const scheme = url.protocol.replace(/:$/, "");
   if (!schemes.includes(scheme)) throw forbidden(`scheme "${scheme}" is not permitted for MCP egress`);
+  const host = normalizeHost(url.hostname);
+  // An explicit host allow-list is authoritative — it lets an operator permit a specific internal or
+  // IPv6-literal host they trust. Without one, private/loopback/metadata targets are blocked.
+  if (policy.allowedHttpHosts) {
+    if (!policy.allowedHttpHosts.map(normalizeHost).includes(host))
+      throw forbidden(`host "${url.hostname}" is not on the egress allow-list`);
+    return;
+  }
   if (!policy.allowPrivateNetworks && isPrivateHost(url.hostname))
     throw forbidden(`endpoint host "${url.hostname}" resolves to a private/loopback address`);
-  if (policy.allowedHttpHosts && !policy.allowedHttpHosts.includes(url.hostname))
-    throw forbidden(`host "${url.hostname}" is not on the egress allow-list`);
 };

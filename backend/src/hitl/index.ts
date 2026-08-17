@@ -27,7 +27,7 @@ export const APPROVAL_DECISIONS = [
 
 export type ApprovalDecision = (typeof APPROVAL_DECISIONS)[number];
 
-export type ApprovalScope = "principal" | "tenant" | "category";
+export type ApprovalScope = "principal" | "tenant" | "category" | "conversation";
 
 /**
  * The pending approval stores the exact normalized tool name and input. Resumption
@@ -54,6 +54,8 @@ export type ApprovalGrant = {
   readonly tenantId: TenantId;
   readonly scope: ApprovalScope;
   readonly toolNameOrCategory: string;
+  /** Required when `scope` is `conversation`: the grant only applies within this conversation. */
+  readonly conversationId?: string;
   readonly grantedAt: string;
   readonly expiresAt?: string;
   readonly revokedAt?: string;

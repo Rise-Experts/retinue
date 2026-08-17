@@ -158,12 +158,12 @@ export const createToolRegistry = (config: ToolRegistryConfig): ToolRegistry => 
       await assertToolAuthorized(config.authorization, context, { name: d.name, category: d.category });
 
       // Approval gate: a policy-classified tool cannot be executed directly without a standing grant.
-      if (d.approvalPolicy !== "never" && config.approval) {
-        const allowed = await config.approval.isAllowed(context, {
-          name: d.name,
-          category: d.category,
-          approvalPolicy: d.approvalPolicy,
-        });
+      // Fail CLOSED — if no approval check is wired, a policy/always tool (e.g. every MCP external
+      // write) is refused rather than silently executed unapproved.
+      if (d.approvalPolicy !== "never") {
+        const allowed = config.approval
+          ? await config.approval.isAllowed(context, { name: d.name, category: d.category, approvalPolicy: d.approvalPolicy })
+          : false;
         if (!allowed)
           return { ok: false, error: { code: "approval_required", message: `Tool ${d.name} requires approval`, retryable: false } };
       }

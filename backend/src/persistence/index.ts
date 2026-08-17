@@ -238,9 +238,13 @@ export interface InteractionStore {
 /** Standing approval grants from `allow-conversation` / `allow-always` (`docs/04` → Approvals). */
 export interface ApprovalGrantStore {
   grant(input: TenantScope & { grant: ApprovalGrant }): Promise<void>;
-  /** An active (unrevoked, unexpired) grant matching the tool name or category, or null. */
+  /**
+   * An active (unrevoked, unexpired) grant matching the tool name or category, or null. A
+   * conversation-scoped grant matches only when `conversationId` is supplied and equal — so an
+   * `allow-conversation` grant never leaks to another conversation or tenant-wide.
+   */
   findActive(
-    input: TenantScope & { toolNameOrCategory: string; now: string },
+    input: TenantScope & { toolNameOrCategory: string; now: string; conversationId?: string },
   ): Promise<ApprovalGrant | null>;
   revoke(input: TenantScope & { grantId: ApprovalGrantId; at: string }): Promise<void>;
 }

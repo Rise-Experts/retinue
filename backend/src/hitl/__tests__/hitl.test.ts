@@ -108,6 +108,24 @@ describe("approvals — stored input, decisions, idempotent resume, unbypassable
     expect(await gate.isAllowed(ctx(), tool)).toBe(true);
   });
 
+  it("allow-conversation grants only within that conversation, not tenant-wide", async () => {
+    const interactions = createMemoryInteractionStore();
+    const grants = createMemoryApprovalGrantStore();
+    const { dispatcher } = recordingDispatcher();
+    let n = 0;
+    const svc = createApprovalService({ interactions, grants, dispatcher, clock: () => "t", idFactory: () => `id${(n += 1)}` });
+    const gate = createApprovalGate({ grants, clock: () => "t" });
+    const tool = { name: "publish", category: "publishing", approvalPolicy: "always" as const };
+    const inConversation: ExecutionContext = { ...ctx(), conversationId: asId("conv-1") };
+    const otherConversation: ExecutionContext = { ...ctx(), conversationId: asId("conv-2") };
+
+    const approval = await svc.request(inConversation, RUN, req);
+    await svc.decide({ tenantId: T, interactionId: approval.id, runId: RUN, conversationId: asId("conv-1"), decision: "allow-conversation" });
+
+    expect(await gate.isAllowed(inConversation, tool)).toBe(true); // same conversation → honored
+    expect(await gate.isAllowed(otherConversation, tool)).toBe(false); // different conversation → still gated
+  });
+
   it("the gate never gates a tool whose policy is 'never'", async () => {
     const gate = createApprovalGate({ grants: createMemoryApprovalGrantStore() });
     expect(await gate.isAllowed(ctx(), { name: "search", category: "read", approvalPolicy: "never" })).toBe(true);

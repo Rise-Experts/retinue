@@ -74,9 +74,13 @@ export const createMemoryApprovalGrantStore = (): ApprovalGrantStore => {
     async grant({ tenantId, grant }) {
       grants(tenantId).set(grant.id, grant);
     },
-    async findActive({ tenantId, toolNameOrCategory, now }) {
-      for (const g of grants(tenantId).values())
-        if (active(g, now) && g.toolNameOrCategory === toolNameOrCategory) return g;
+    async findActive({ tenantId, toolNameOrCategory, now, conversationId }) {
+      for (const g of grants(tenantId).values()) {
+        if (!active(g, now) || g.toolNameOrCategory !== toolNameOrCategory) continue;
+        // A conversation-scoped grant only applies within its own conversation.
+        if (g.scope === "conversation" && g.conversationId !== conversationId) continue;
+        return g;
+      }
       return null;
     },
     async revoke({ tenantId, grantId, at }) {

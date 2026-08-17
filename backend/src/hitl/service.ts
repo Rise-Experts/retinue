@@ -86,7 +86,7 @@ export type ApprovalRequest = {
 };
 
 const grantScopeFor = (decision: ApprovalDecision): ApprovalScope | null =>
-  decision === "allow-conversation" ? "category" : decision === "allow-always" ? "tenant" : null;
+  decision === "allow-conversation" ? "conversation" : decision === "allow-always" ? "tenant" : null;
 
 export const createApprovalService = (deps: {
   readonly interactions: InteractionStore;
@@ -133,12 +133,15 @@ export const createApprovalService = (deps: {
 
       let grant: ApprovalGrant | undefined;
       const scope = grantScopeFor(input.decision);
-      if (scope) {
+      // A conversation-scoped grant needs a conversationId; without one, skip the standing grant
+      // (the run still resumes once) rather than silently widening it to the whole tenant.
+      if (scope && !(scope === "conversation" && input.conversationId === undefined)) {
         grant = {
           id: asId(newId()),
           tenantId: input.tenantId,
           scope,
           toolNameOrCategory: approval.toolName,
+          ...(scope === "conversation" && input.conversationId !== undefined ? { conversationId: input.conversationId } : {}),
           grantedAt: clock(),
         };
         await deps.grants.grant({ tenantId: input.tenantId, grant });
@@ -164,9 +167,11 @@ export const createApprovalGate = (deps: { readonly grants: ApprovalGrantStore; 
     ): Promise<boolean> {
       if (tool.approvalPolicy === "never") return true;
       const now = clock();
-      const byName = await deps.grants.findActive({ tenantId: context.tenantId, toolNameOrCategory: tool.name, now });
+      const conversationId = context.conversationId;
+      const scope = { tenantId: context.tenantId, now, ...(conversationId ? { conversationId } : {}) };
+      const byName = await deps.grants.findActive({ ...scope, toolNameOrCategory: tool.name });
       if (byName) return true;
-      const byCategory = await deps.grants.findActive({ tenantId: context.tenantId, toolNameOrCategory: tool.category, now });
+      const byCategory = await deps.grants.findActive({ ...scope, toolNameOrCategory: tool.category });
       return byCategory !== null;
     },
   };

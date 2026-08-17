@@ -47,6 +47,26 @@ describe("egress policy — SSRF & allow-lists", () => {
     for (const h of ["mcp.example.com", "8.8.8.8", "203.0.113.5"]) expect(isPrivateHost(h)).toBe(false);
   });
 
+  it("blocks SSRF bypasses: IPv4-mapped IPv6, trailing dot, and :: forms", () => {
+    for (const h of [
+      "::ffff:169.254.169.254", // IPv4-mapped metadata address
+      "[::ffff:169.254.169.254]",
+      "::ffff:127.0.0.1",
+      "::",
+      "localhost.", // trailing dot
+      "metadata.google.internal.",
+      "foo.local.",
+      "2001:db8::1", // any IPv6 literal is denied by default
+    ])
+      expect(isPrivateHost(h)).toBe(true);
+  });
+
+  it("validateEndpoint rejects the mapped-metadata and trailing-dot bypasses", () => {
+    const p = { allowedSchemes: ["https"] };
+    expect(() => validateEndpoint(p, "streamable-http", "https://[::ffff:169.254.169.254]/")).toThrow(/private/);
+    expect(() => validateEndpoint(p, "streamable-http", "https://metadata.google.internal./")).toThrow(/private/);
+  });
+
   it("rejects a non-https scheme and a private host", () => {
     expect(() => validateEndpoint(policy, "streamable-http", "http://mcp.example.com")).toThrow(/scheme/);
     expect(() => validateEndpoint(policy, "streamable-http", "https://169.254.169.254/rpc")).toThrow(/private/);

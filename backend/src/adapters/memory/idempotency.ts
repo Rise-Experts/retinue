@@ -2,6 +2,11 @@
  * In-memory idempotency store — `docs/04` → Idempotency. Persists a tool result by key so a resumed
  * or retried external/destructive call returns the original result instead of repeating the side
  * effect. Tenant-partitioned. Verified indirectly through the tool registry's replay path.
+ *
+ * The registry's `get`-then-`put` is safe here because the durable runtime serializes work per run
+ * (one worker per run; `runWithRetry` retries sequentially), so no two executions of the same
+ * `(tenant, run, tool-call)` race. A DISTRIBUTED adapter must instead implement an atomic
+ * put-if-absent / reserve so concurrent duplicates cannot both execute before either writes.
  */
 
 import type { IdempotencyKey, IdempotencyStore, IdempotentResult } from "../../idempotency/index.js";
