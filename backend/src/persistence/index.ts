@@ -12,9 +12,10 @@
 import type { Page, PageRequest, TenantScope } from "../core/context.js";
 import type { Message } from "../core/content-parts.js";
 import type { AgentManifest } from "../agents/index.js";
-import type { ConversationId, MessageId, RunId, TenantId } from "../core/ids.js";
+import type { PlatformError } from "../core/errors.js";
+import type { AgentId, ConversationId, MessageId, RunId, TenantId } from "../core/ids.js";
 import type { PendingApproval, PendingQuestion } from "../hitl/index.js";
-import type { Run } from "../runtime/index.js";
+import type { Run, RunCheckpoint, RunStatus } from "../runtime/index.js";
 import type { SkillCatalogEntry, SkillVersion } from "../skills/index.js";
 
 export type Conversation = {
@@ -91,10 +92,51 @@ export interface ThreadSummaryStore {
   ): Promise<ThreadSummary>;
 }
 
+export type NewRun = {
+  readonly id: RunId;
+  readonly conversationId: ConversationId;
+  readonly agentId: AgentId;
+  readonly agentVersion: number;
+};
+
+/**
+ * The run's durable lifecycle store. Beyond read/claim it owns lease keepalive, guarded status
+ * transitions, durable cancellation and stale-lease reaping — the primitives the durable worker
+ * (`createDurableWorker`) needs for crash recovery without duplicate work. Verified by the shared
+ * `runStoreConformance` harness so every adapter agrees on claim/lease/transition semantics.
+ */
 export interface RunStore {
+  create(input: TenantScope & NewRun): Promise<Run>;
   findById(input: TenantScope & { id: RunId }): Promise<Run | null>;
-  /** Atomic claim. Returns null when another worker already holds the run. */
-  claim(input: TenantScope & { id: RunId; workerId: string }): Promise<Run | null>;
+  /**
+   * Atomic lease-based claim. Succeeds for a `queued` run, or for a `running` run whose lease has
+   * expired (crash recovery). Returns null when another worker holds a live lease or the run is
+   * terminal — so two workers never process one run.
+   */
+  claim(
+    input: TenantScope & { id: RunId; workerId: string; leaseMs: number; now: string },
+  ): Promise<Run | null>;
+  /** Extend the lease. Returns false when the claim was lost (reaped/stolen) so the worker aborts. */
+  keepalive(
+    input: TenantScope & { id: RunId; workerId: string; leaseMs: number; now: string },
+  ): Promise<boolean>;
+  /** Guarded transition by the claiming worker; rejects moves absent from `RUN_TRANSITIONS`. */
+  transition(
+    input: TenantScope & {
+      id: RunId;
+      workerId: string;
+      to: RunStatus;
+      now: string;
+      error?: PlatformError;
+    },
+  ): Promise<Run>;
+  /** Persist a cancellation request. The owning worker observes it and stops cooperatively. */
+  requestCancel(input: TenantScope & { id: RunId; now: string }): Promise<Run | null>;
+  /**
+   * Maintenance sweep for runs whose lease expired — recovery candidates. Cross-tenant by design
+   * (a background reaper has no tenant); each returned run carries its own `tenantId` for re-claim.
+   */
+  reapExpired(input: { now: string; limit: number }): Promise<readonly Run[]>;
 }
 
 export interface MessageStore {
@@ -127,7 +169,9 @@ export interface InteractionStore {
 }
 
 export interface CheckpointStore {
-  latest(input: TenantScope & { runId: RunId }): Promise<unknown | null>;
+  latest(input: TenantScope & { runId: RunId }): Promise<RunCheckpoint | null>;
+  /** Overwrite the run's checkpoint. Monotonic: a save with a lower sequence is ignored. */
+  save(input: TenantScope & { checkpoint: RunCheckpoint }): Promise<void>;
 }
 
 export interface UsageStore {}

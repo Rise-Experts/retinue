@@ -73,6 +73,11 @@ export type Run = {
   /** Identifies the worker holding the claim; used to reap stale streams. */
   readonly claimedBy?: string;
   readonly keepaliveAt?: string;
+  /** When the current claim's lease expires. A past value marks the run reclaimable. */
+  readonly leaseExpiresAt?: string;
+  /** Set when a cancel was requested; the owning worker observes it and stops. Durable so a
+   * cancel issued to one process is honored by whichever worker holds the run. */
+  readonly cancelRequestedAt?: string;
 };
 
 /** Durable job enqueue. Adapters: BullMQ, in-memory for tests. */
@@ -84,3 +89,7 @@ export interface JobDispatcher {
 export interface DistributedLockStore {
   acquire(key: string, ttlMs: number): Promise<{ released: () => Promise<void> } | null>;
 }
+
+export * from "./retry.js";
+export * from "./checkpoint.js";
+export * from "./worker.js";

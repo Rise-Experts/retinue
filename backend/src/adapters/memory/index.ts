@@ -86,3 +86,6 @@ export const createMemoryConversationStore = (
     },
   } satisfies ConversationStore;
 };
+
+/** Durable-runtime reference adapters (RunStore, CheckpointStore, JobDispatcher, locks). */
+export * from "./runtime.js";
