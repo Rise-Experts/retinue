@@ -12,22 +12,44 @@
 import type { Page, PageRequest, TenantScope } from "../core/context.js";
 import type { Message } from "../core/content-parts.js";
 import type { AgentManifest } from "../agents/index.js";
-import type { ConversationId, MessageId, RunId } from "../core/ids.js";
+import type { ConversationId, MessageId, RunId, TenantId } from "../core/ids.js";
 import type { PendingApproval, PendingQuestion } from "../hitl/index.js";
 import type { Run } from "../runtime/index.js";
 import type { SkillCatalogEntry, SkillVersion } from "../skills/index.js";
 
 export type Conversation = {
   readonly id: ConversationId;
+  readonly tenantId: TenantId;
   readonly title: string;
+  /** Optimistic-concurrency version; incremented on every write. */
+  readonly version: number;
   readonly archivedAt?: string;
+  /** Set by soft-delete; `findById`/`list` hide soft-deleted rows. */
+  readonly deletedAt?: string;
   readonly createdAt: string;
   readonly updatedAt: string;
 };
 
+export type ConversationPatch = {
+  readonly title?: string;
+  /** `null` un-archives; a timestamp archives. */
+  readonly archivedAt?: string | null;
+};
+
+/**
+ * The exemplar store. **Every store follows this shape** (docs/02 mandatory method behavior):
+ * an explicit `{ tenantId }` on every call (bare `findById(id)` is a type error), cursor
+ * pagination on lists, `expectedVersion` optimistic concurrency on updates, and soft-delete
+ * semantics. Adapters are verified by the shared conformance harness.
+ */
 export interface ConversationStore {
+  create(input: TenantScope & { id: ConversationId; title: string }): Promise<Conversation>;
   findById(input: TenantScope & { id: ConversationId }): Promise<Conversation | null>;
   list(input: TenantScope & PageRequest): Promise<Page<Conversation>>;
+  update(
+    input: TenantScope & { id: ConversationId; expectedVersion: number; patch: ConversationPatch },
+  ): Promise<Conversation>;
+  softDelete(input: TenantScope & { id: ConversationId }): Promise<void>;
 }
 
 /**
