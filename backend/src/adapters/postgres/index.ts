@@ -6,6 +6,7 @@ import type { AdapterCapability } from "../../persistence/index.js";
 
 export * from "./sql.js";
 export * from "./migrations.js";
+export * from "./schema.js";
 export * from "./conversation-store.js";
 export * from "./pg-executor.js";
 
