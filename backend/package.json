@@ -23,7 +23,14 @@
     "clean": "rm -rf dist tsconfig.tsbuildinfo"
   },
   "dependencies": {
-    "zod": "^3.23.8"
+    "@ai-sdk/anthropic": "^4.0.39",
+    "@ai-sdk/azure": "^4.0.43",
+    "@ai-sdk/google": "^4.0.44",
+    "@ai-sdk/mistral": "^4.0.29",
+    "@ai-sdk/openai": "^4.0.42",
+    "@ai-sdk/openai-compatible": "^3.0.31",
+    "ai": "^7.0.66",
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "@types/node": "^20",

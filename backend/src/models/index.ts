@@ -130,6 +130,8 @@ export const createModelRegistry = (config: ModelRegistryConfig): ModelRegistry 
   };
 };
 
+export * from "./provider-factory.js";
+
 /**
  * Cost of a unit of usage, in the pricing currency's minor units. Prices are per-million tokens.
  * Cached input is billed at the cache-read rate when present. This is what feeds usage accounting.
