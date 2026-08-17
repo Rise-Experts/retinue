@@ -101,3 +101,6 @@ export * from "./blobs.js";
 
 /** Idempotency store reference adapter. */
 export * from "./idempotency.js";
+
+/** Skill store reference adapter. */
+export * from "./skills.js";
