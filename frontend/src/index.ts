@@ -7,4 +7,7 @@
 
 export * from "./types/index.js";
 export * from "./event-buffer.js";
+export * from "./reducers.js";
+export * from "./client.js";
 export type * from "./hooks/index.js";
+export * from "./hooks/hooks.js";
