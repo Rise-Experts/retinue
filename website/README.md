@@ -36,13 +36,17 @@ secret needed, Cloudflare builds from the connected repo on each push. One-time 
 steps need your Cloudflare/DNS access; the config is already in the repo:**
 
 1. In the Cloudflare project (Workers & Pages → your `agentkit-docs` project) → **Settings →
-   Build**, set:
-   - **Root directory:** `website`  ← critical; without it Cloudflare builds the monorepo root.
-   - **Build command:** `(cd .. && npm ci) && npm run build`
-     — the workspace install makes backend/frontend **dependencies** (e.g. `zod`) resolvable for
-     TypeDoc; `@agentkit/*` themselves resolve from source (`tsconfig.typedoc.json` paths), so no
-     workspace *build* is needed.
-   - **Deploy command:** `npx wrangler deploy` (default — it reads `website/wrangler.jsonc`).
+   Build**, set — these run from the **repo root**, so no "Root directory" is needed:
+   - **Root directory:** leave empty / repo root.
+   - **Build command:** `npm run docs:build`
+     — installs the workspace (so TypeDoc resolves backend deps like `zod`), installs the site,
+     and builds it (`@agentkit/*` resolve from source via `tsconfig.typedoc.json` paths).
+   - **Deploy command:** `npx wrangler deploy --config website/wrangler.jsonc`
+     — `assets.directory` in that config resolves to `website/build`, uploaded as static assets.
+
+   > The earlier failures happened because Cloudflare built at the repo root (running the
+   > monorepo `tsc -b` + `wrangler` with no config). The two commands above are **root-aware**,
+   > so they work regardless of the Root directory setting.
 2. **Custom domain**: project → **Custom domains** → add **`docs.agentkit.riseexperts.de`**.
    - If `riseexperts.de` DNS is **on Cloudflare**, the record is created automatically.
    - Otherwise add a DNS **CNAME**: `docs.agentkit` → `<worker>.workers.dev` (as shown in the
