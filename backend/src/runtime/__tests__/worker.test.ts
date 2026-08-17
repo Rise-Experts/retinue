@@ -12,6 +12,8 @@ import type {
   ToolCallId,
 } from "../../core/ids.js";
 import { createMemoryCheckpointStore, createMemoryRunStore } from "../../adapters/memory/runtime.js";
+import { createMemoryUsageStore } from "../../adapters/memory/usage.js";
+import { createUsageRecorder, type PricingResolver } from "../../usage/index.js";
 import type { CheckpointStore, RunStore } from "../../persistence/index.js";
 import { createDurableWorker, deriveRunMessageId, type AgentEngine, type EngineEvent } from "../worker.js";
 import { emptyCheckpoint } from "../checkpoint.js";
@@ -206,6 +208,53 @@ describe("durable worker — crash recovery", () => {
     clock.advance(10_000);
     const expired = await runs.reapExpired({ now: new Date(clock.peek()).toISOString(), limit: 10 });
     expect(expired.map((r) => r.id)).toContain(RUN);
+  });
+});
+
+describe("durable worker — usage recording", () => {
+  const pricing: PricingResolver = { resolve: () => ({ currency: "USD", inputPerMillion: 1000, outputPerMillion: 2000 }) };
+
+  it("records usage for realized steps in the completion path", async () => {
+    const clock = fakeClock();
+    const runs = createMemoryRunStore();
+    const checkpoints = createMemoryCheckpointStore();
+    const usageStore = createMemoryUsageStore();
+    await runs.create({ tenantId: TENANT, id: RUN, conversationId: CONVO, agentId: asId("a1"), agentVersion: 1 });
+    const engine: AgentEngine = {
+      async *run() {
+        yield { type: "usage.updated", inputTokens: 100, outputTokens: 50, modelId: "m1", costMinorUnits: 30, currency: "USD" };
+        yield { type: "part.added", messageId: deriveRunMessageId(RUN) as MessageId, part: textPart("p1", "done") };
+      },
+    };
+    const { deps } = baseDeps(runs, checkpoints, engine, clock);
+    const worker = createDurableWorker({ ...deps, usage: createUsageRecorder({ store: usageStore, pricing }) });
+    const result = await worker.process({ tenantId: TENANT, runId: RUN });
+
+    expect(result.outcome).toBe("completed");
+    const totals = await usageStore.totals({ tenantId: TENANT, runId: RUN });
+    expect(totals).toMatchObject({ inputTokens: 100, outputTokens: 50, costMinorUnits: 30, eventCount: 1 });
+  });
+
+  it("keeps usage that was realized before a mid-run failure", async () => {
+    const clock = fakeClock();
+    const runs = createMemoryRunStore();
+    const checkpoints = createMemoryCheckpointStore();
+    const usageStore = createMemoryUsageStore();
+    await runs.create({ tenantId: TENANT, id: RUN, conversationId: CONVO, agentId: asId("a1"), agentVersion: 1 });
+    const engine: AgentEngine = {
+      async *run() {
+        yield { type: "usage.updated", inputTokens: 80, outputTokens: 20, modelId: "m1", costMinorUnits: 12, currency: "USD" };
+        throw new Error("provider exploded after the billed call");
+      },
+    };
+    const { deps } = baseDeps(runs, checkpoints, engine, clock);
+    const worker = createDurableWorker({ ...deps, usage: createUsageRecorder({ store: usageStore, pricing }) });
+    const result = await worker.process({ tenantId: TENANT, runId: RUN });
+
+    expect(result.outcome).toBe("failed");
+    // The provider call happened and consumed tokens — usage must survive the failure.
+    const totals = await usageStore.totals({ tenantId: TENANT, runId: RUN });
+    expect(totals).toMatchObject({ inputTokens: 80, costMinorUnits: 12, eventCount: 1 });
   });
 });
 

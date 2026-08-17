@@ -16,6 +16,7 @@ import type { PlatformError } from "../core/errors.js";
 import type { AgentId, ConversationId, MessageId, RunId, TenantId } from "../core/ids.js";
 import type { PendingApproval, PendingQuestion } from "../hitl/index.js";
 import type { Run, RunCheckpoint, RunStatus } from "../runtime/index.js";
+import type { UsageEvent } from "../usage/index.js";
 import type { SkillCatalogEntry, SkillVersion } from "../skills/index.js";
 
 export type Conversation = {
@@ -212,7 +213,30 @@ export interface CheckpointStore {
   save(input: TenantScope & { checkpoint: RunCheckpoint }): Promise<void>;
 }
 
-export interface UsageStore {}
+/** Aggregated usage across a set of events — the basis of ceiling checks and rollups. */
+export type UsageTotals = {
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  readonly cachedInputTokens: number;
+  readonly reasoningTokens: number;
+  readonly costMinorUnits: number;
+  readonly eventCount: number;
+};
+
+/**
+ * Append-only usage ledger (`docs/12`). Events are never edited or deleted; corrections are new
+ * compensating events. Rollups are derived from events, never a second source of truth. Appends are
+ * idempotent on `(runId, stepId)` (or `id`) so a recovered run never double-counts.
+ */
+export interface UsageStore {
+  append(input: TenantScope & { event: UsageEvent }): Promise<void>;
+  listByRun(input: TenantScope & PageRequest & { runId: RunId }): Promise<Page<UsageEvent>>;
+  /** Running totals, optionally scoped to a run or conversation — used by `reserve()` and rollups. */
+  totals(
+    input: TenantScope & { runId?: RunId; conversationId?: ConversationId },
+  ): Promise<UsageTotals>;
+}
+
 export interface EvaluationStore {}
 export interface FileMetadataStore {}
 export interface KnowledgeStore {}

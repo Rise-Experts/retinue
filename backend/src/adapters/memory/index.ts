@@ -92,3 +92,6 @@ export * from "./runtime.js";
 
 /** Session/thread reference adapters (SessionStateStore, run coordinator, binding, unit of work). */
 export * from "./sessions.js";
+
+/** Append-only usage ledger reference adapter. */
+export * from "./usage.js";

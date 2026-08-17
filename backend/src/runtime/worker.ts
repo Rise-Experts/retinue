@@ -32,6 +32,7 @@ import {
 } from "../core/events.js";
 import type { MessageId, MessagePartId, RunId } from "../core/ids.js";
 import type { CheckpointStore, RunStore } from "../persistence/index.js";
+import type { UsageRecorder } from "../usage/index.js";
 import type { RunCheckpoint } from "./checkpoint.js";
 import { type DistributedLockStore, type Run } from "./index.js";
 import { toPlatformError } from "./retry.js";
@@ -78,6 +79,9 @@ export type DurableWorkerDeps = {
   readonly engine: AgentEngine;
   /** Durable per-run event log for reconnect catch-up. Optional but required for gap-free reconnect. */
   readonly eventLog?: RunEventLog;
+  /** Records durable usage per realized step (doc 12). Recorded as usage is realized, so a later
+   * failure never loses the usage already consumed — and idempotently, so recovery never double-counts. */
+  readonly usage?: UsageRecorder;
   /** Host builds the execution context; identity never comes from model output. */
   readonly buildContext: (run: Run) => ExecutionContext | Promise<ExecutionContext>;
   readonly workerId: string;
@@ -151,6 +155,21 @@ export const createDurableWorker = (deps: DurableWorkerDeps) => {
       state = reduceRunEvent(state, event);
       await publisher.publish(channel, event);
       if (deps.eventLog) await deps.eventLog.append({ tenantId, event });
+      // Record durable usage for a realized step. Keyed by sequence so recovery never double-counts.
+      if (deps.usage && event.type === "usage.updated" && event.modelId !== undefined) {
+        await deps.usage.record(context, {
+          runId: run.id,
+          conversationId: run.conversationId,
+          modelId: event.modelId,
+          inputTokens: event.inputTokens,
+          outputTokens: event.outputTokens,
+          cachedInputTokens: event.cachedInputTokens ?? 0,
+          ...(event.reasoningTokens === undefined ? {} : { reasoningTokens: event.reasoningTokens }),
+          costMinorUnits: event.costMinorUnits ?? 0,
+          currency: event.currency ?? "USD",
+          stepId: event.stepId ?? String(event.sequence),
+        });
+      }
     };
     const persist = () => checkpoints.save({ tenantId, checkpoint: toCheckpoint() });
 

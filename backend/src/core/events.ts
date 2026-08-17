@@ -83,6 +83,13 @@ export type UsageUpdatedEvent = EventBase<"usage.updated"> & {
   readonly inputTokens: number;
   readonly outputTokens: number;
   readonly costMinorUnits?: number;
+  /** When present, the worker records a durable `UsageEvent` for this realized step. */
+  readonly modelId?: string;
+  readonly cachedInputTokens?: number;
+  readonly reasoningTokens?: number;
+  readonly currency?: string;
+  /** Stable per-step id so recording is idempotent across a recovery. */
+  readonly stepId?: string;
 };
 
 export type ContextCompactedEvent = EventBase<"context.compacted"> & {
