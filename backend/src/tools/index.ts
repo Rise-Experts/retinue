@@ -80,14 +80,8 @@ export interface ToolProvider {
   listTools(context: ExecutionContext): Promise<readonly Tool[]>;
 }
 
-/** Decides both discovery visibility and execution permission. Never the prompt's job. */
-export interface AuthorizationPolicy {
-  filterCatalog(
-    context: ExecutionContext,
-    tools: readonly ToolDescriptor[],
-  ): Promise<readonly ToolDescriptor[]>;
-  authorizeExecution(context: ExecutionContext, toolName: string): Promise<boolean>;
-}
+// The authorization port lives in `../authorization` (docs/11) — a single canonical definition
+// used for both discovery filtering and execution permission.
 
 /** Built-in meta-tools. Always present, never provider-supplied. */
 export const META_TOOLS = [
