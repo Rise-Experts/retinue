@@ -103,15 +103,23 @@ export interface ConversationBindingStore {
  * deterministic. Backed by `DistributedLockStore` semantics in production; in-memory for tests.
  */
 export interface ConversationRunCoordinator {
-  /** Atomically make `runId` the conversation's active run. False when one is already active. */
-  claim(input: TenantScope & { conversationId: ConversationId; runId: RunId }): Promise<boolean>;
-  /** Release the active run on terminal. No-op unless `runId` currently holds it. */
-  release(input: TenantScope & { conversationId: ConversationId; runId: RunId }): Promise<void>;
+  /**
+   * Atomically claim the conversation for `runId`, or enqueue it FIFO if one is already active. This
+   * MUST be atomic (no claim→enqueue gap) so a run can never slip past into an idle-but-unclaimed
+   * slot and strand itself. The primary entry point for starting a run.
+   */
+  claimOrEnqueue(
+    input: TenantScope & { conversationId: ConversationId; runId: RunId },
+  ): Promise<{ status: "started" | "queued"; position: number }>;
+  /**
+   * Atomically release `runId` (if it holds the slot) and promote the next queued run. MUST be atomic
+   * (no release→dequeue→claim gap) so two runs can never both become active. Returns the promoted run
+   * to dispatch, or null when the backlog is empty. The primary entry point on run terminal.
+   */
+  releaseAndPromote(
+    input: TenantScope & { conversationId: ConversationId; runId: RunId },
+  ): Promise<RunId | null>;
   active(input: TenantScope & { conversationId: ConversationId }): Promise<RunId | null>;
-  /** Append a run to the FIFO backlog. Idempotent; returns the run's 1-based queue position. */
-  enqueue(input: TenantScope & { conversationId: ConversationId; runId: RunId }): Promise<number>;
-  /** Pop the next queued run (FIFO), or null when the backlog is empty. */
-  dequeue(input: TenantScope & { conversationId: ConversationId }): Promise<RunId | null>;
   depth(input: TenantScope & { conversationId: ConversationId }): Promise<number>;
 }
 

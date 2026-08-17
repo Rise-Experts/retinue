@@ -11,7 +11,11 @@ import type {
   TenantId,
   ToolCallId,
 } from "../../core/ids.js";
-import { createMemoryCheckpointStore, createMemoryRunStore } from "../../adapters/memory/runtime.js";
+import {
+  createMemoryCheckpointStore,
+  createMemoryRunEventLog,
+  createMemoryRunStore,
+} from "../../adapters/memory/runtime.js";
 import { createMemoryUsageStore } from "../../adapters/memory/usage.js";
 import { createUsageRecorder, type PricingResolver } from "../../usage/index.js";
 import type { CheckpointStore, RunStore } from "../../persistence/index.js";
@@ -198,6 +202,44 @@ describe("durable worker — crash recovery", () => {
     expect(errorPart).toBeDefined();
     expect(events.some((e) => e.type === "tool.failed")).toBe(true);
     expect(cp?.pendingToolCalls).toHaveLength(0);
+  });
+
+  it("reconciles from the event log when the checkpoint lags behind it (C1)", async () => {
+    const clock = fakeClock();
+    const runs = createMemoryRunStore();
+    const checkpoints = createMemoryCheckpointStore();
+    const eventLog = createMemoryRunEventLog();
+    const external = { count: 1 }; // worker-1 already fired the tool once.
+    await runs.create({ tenantId: TENANT, id: RUN, conversationId: CONVO, agentId: asId("a1"), agentVersion: 1 });
+    await runs.claim({ tenantId: TENANT, id: RUN, workerId: "worker-1", leaseMs: 30_000, now: new Date(clock.now()).toISOString() });
+
+    // worker-1: the event LOG got the part (seq 1) and a tool.started (seq 2), but the CHECKPOINT was
+    // only written at seq 1 (it lags the log) — then the worker crashed.
+    const mk = (seq: number, e: Partial<RunEvent> & { type: RunEvent["type"] }) =>
+      ({ runId: RUN, sequence: seq, occurredAt: `t${seq}`, ...e }) as RunEvent;
+    await eventLog.append({ tenantId: TENANT, event: mk(1, { type: "part.added", messageId: asId<MessageId>("m1"), part: textPart("p1", "thinking") } as never) });
+    await eventLog.append({ tenantId: TENANT, event: mk(2, { type: "tool.started", toolCallId: asId<ToolCallId>("tc1"), toolName: "publish" } as never) });
+    await checkpoints.save({ tenantId: TENANT, checkpoint: { ...emptyCheckpoint(RUN, "t0"), sequence: 1, parts: [textPart("p1", "thinking") as MessagePart] } });
+
+    clock.advance(60_000);
+    const resumeEngine: AgentEngine = {
+      async *run({ resume }) {
+        // Reconciliation folded the logged tool.started, then finalized it — so no pending remains.
+        expect(resume?.pendingToolCalls).toHaveLength(0);
+        yield { type: "part.added", messageId: deriveRunMessageId(RUN) as MessageId, part: textPart("p9", "recovered") };
+      },
+    };
+    const { events, deps } = baseDeps(runs, checkpoints, resumeEngine, clock);
+    const result = await createDurableWorker({ ...deps, eventLog, workerId: "worker-2" }).process({ tenantId: TENANT, runId: RUN });
+
+    expect(result.outcome).toBe("completed");
+    expect(external.count).toBe(1); // the logged-but-uncheckpointed tool was finalized, never re-run
+    // New events continue past the durable max (seq 2) — no sequence collides with the log.
+    const logged = await eventLog.listAfter({ tenantId: TENANT, runId: RUN, after: 0 });
+    const seqs = logged.map((e) => e.sequence);
+    expect(new Set(seqs).size).toBe(seqs.length); // all sequences unique — no collision/drop
+    expect(Math.max(...seqs)).toBeGreaterThan(2);
+    expect(events.some((e) => e.type === "tool.failed")).toBe(true);
   });
 
   it("reapExpired surfaces runs whose lease has passed", async () => {

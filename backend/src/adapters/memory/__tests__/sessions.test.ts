@@ -49,10 +49,24 @@ describe("per-conversation serialization", () => {
 
   it("a second claimant cannot take an active conversation", async () => {
     const coord = createMemoryConversationRunCoordinator();
-    expect(await coord.claim({ tenantId: T, conversationId: C, runId: asId<RunId>("A") })).toBe(true);
-    expect(await coord.claim({ tenantId: T, conversationId: C, runId: asId<RunId>("B") })).toBe(false);
+    expect((await coord.claimOrEnqueue({ tenantId: T, conversationId: C, runId: asId<RunId>("A") })).status).toBe("started");
+    expect((await coord.claimOrEnqueue({ tenantId: T, conversationId: C, runId: asId<RunId>("B") })).status).toBe("queued");
     // Re-claim by the holder is idempotent.
-    expect(await coord.claim({ tenantId: T, conversationId: C, runId: asId<RunId>("A") })).toBe(true);
+    expect((await coord.claimOrEnqueue({ tenantId: T, conversationId: C, runId: asId<RunId>("A") })).status).toBe("started");
+  });
+
+  it("release+promote is atomic — a run arriving in the gap cannot double-occupy the slot", async () => {
+    const coord = createMemoryConversationRunCoordinator();
+    const a = asId<RunId>("A");
+    const b = asId<RunId>("B");
+    const c = asId<RunId>("C");
+    await coord.claimOrEnqueue({ tenantId: T, conversationId: C, runId: a });
+    await coord.claimOrEnqueue({ tenantId: T, conversationId: C, runId: b }); // queued behind A
+    // A terminates → B is promoted atomically and becomes active.
+    expect(await coord.releaseAndPromote({ tenantId: T, conversationId: C, runId: a })).toBe(b);
+    expect(await coord.active({ tenantId: T, conversationId: C })).toBe(b);
+    // A third run arriving now sees B active and must queue — it cannot run concurrently.
+    expect((await coord.claimOrEnqueue({ tenantId: T, conversationId: C, runId: c })).status).toBe("queued");
   });
 });
 

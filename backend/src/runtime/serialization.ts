@@ -19,31 +19,29 @@ import type { JobDispatcher } from "./index.js";
 
 /**
  * Start `runId` now if the conversation is free, else enqueue it FIFO. Returns whether it started.
- * The claim is atomic, so two runs racing to start the same conversation cannot both win.
+ * The claim-or-enqueue is atomic, so two runs racing to start the same conversation cannot both win,
+ * and a run can never slip into an idle-but-unclaimed slot and strand itself.
  */
 export const startOrEnqueueRun = async (
   coordinator: ConversationRunCoordinator,
   input: { tenantId: TenantId; conversationId: ConversationId; runId: RunId },
 ): Promise<"started" | "queued"> => {
-  if (await coordinator.claim(input)) return "started";
-  await coordinator.enqueue(input);
-  return "queued";
+  return (await coordinator.claimOrEnqueue(input)).status;
 };
 
 /**
- * On a run reaching a terminal state, release the conversation and hand the next queued run to the
- * dispatcher (claiming it so nothing else can slip in first). Returns the promoted run, or null when
- * the backlog is empty. This is the per-thread mailbox drain that guarantees FIFO execution.
+ * On a run reaching a terminal state, atomically release the conversation and promote the next queued
+ * run, then hand it to the dispatcher. Returns the promoted run, or null when the backlog is empty.
+ * Because release+promote is atomic, two runs can never both become active. This is the per-thread
+ * mailbox drain that guarantees FIFO execution.
  */
 export const advanceConversation = async (
   coordinator: ConversationRunCoordinator,
   dispatcher: JobDispatcher,
   input: { tenantId: TenantId; conversationId: ConversationId; runId: RunId },
 ): Promise<RunId | null> => {
-  await coordinator.release(input);
-  const next = await coordinator.dequeue({ tenantId: input.tenantId, conversationId: input.conversationId });
+  const next = await coordinator.releaseAndPromote(input);
   if (next === null) return null;
-  await coordinator.claim({ tenantId: input.tenantId, conversationId: input.conversationId, runId: next });
   await dispatcher.enqueueRun({ tenantId: input.tenantId, runId: next });
   return next;
 };

@@ -110,9 +110,6 @@ class ClaimLostError extends Error {
   }
 }
 
-const isToolCallEvent = (t: EngineEvent["type"]): boolean =>
-  t === "tool.started" || t === "tool.completed" || t === "tool.failed";
-
 export const createDurableWorker = (deps: DurableWorkerDeps) => {
   const now = deps.now ?? Date.now;
   const clock = deps.clock ?? (() => new Date(now()).toISOString());
@@ -136,7 +133,6 @@ export const createDurableWorker = (deps: DurableWorkerDeps) => {
           sequence: initial.sequence,
         }
       : EMPTY_RUN_STREAM_STATE;
-    const recovered = state.sequence > 0;
     let cancelRequested = run.cancelRequestedAt !== undefined;
     let lastKeepalive = now();
 
@@ -144,7 +140,8 @@ export const createDurableWorker = (deps: DurableWorkerDeps) => {
       runId: run.id,
       sequence: state.sequence,
       parts: state.parts,
-      step: 0,
+      // Step = tool-call rounds reached, so a resumed engine trusting `resume.step` never re-drives.
+      step: state.parts.filter((p) => p.type === "tool-call").length,
       pendingToolCalls: state.pendingToolCalls,
       usage: state.usage,
       updatedAt: clock(),
@@ -203,8 +200,20 @@ export const createDurableWorker = (deps: DurableWorkerDeps) => {
       if (fresh?.cancelRequestedAt !== undefined) cancelRequested = true;
     };
 
-    // Recovery: a re-claimed run carries dangling tool calls in its checkpoint. Finalize them once,
-    // before the engine resumes, so it observes them as failed and never re-fires the side effect.
+    // Recovery reconciliation (C1). `emit` makes an event durable in the log *before* the checkpoint
+    // is written, so after a crash the log can lead the checkpoint. Fold the events the log has beyond
+    // the checkpoint back into state, so: (a) new sequences continue past the true durable max instead
+    // of colliding, and (b) a tool.started that was logged but not yet checkpointed is still seen as
+    // pending — and therefore finalized below — so it is never silently re-run.
+    if (deps.eventLog) {
+      const missed = await deps.eventLog.listAfter({ tenantId, runId: run.id, after: state.sequence });
+      for (const event of missed) state = reduceRunEvent(state, event);
+      if (missed.length > 0) await persist();
+    }
+    const recovered = state.sequence > 0;
+
+    // A re-claimed run may carry dangling tool calls (from the checkpoint or the reconciled log).
+    // Finalize them once, before the engine resumes, so it observes them as failed and never re-fires.
     if (state.pendingToolCalls.length > 0) await finalizePending();
 
     try {
@@ -218,7 +227,7 @@ export const createDurableWorker = (deps: DurableWorkerDeps) => {
       for await (const body of iterable) {
         await emit(body);
         await persist(); // durable before the engine proceeds (tool.started) / between retry attempts
-        if (!isToolCallEvent(body.type)) await heartbeat();
+        await heartbeat(); // throttled; runs on every event so a tool-heavy run keeps its lease alive
         if (cancelRequested) break;
       }
 
@@ -252,6 +261,9 @@ export const createDurableWorker = (deps: DurableWorkerDeps) => {
     /** Claim (under an optional lock) and drive a run. Idempotent: a claimed/terminal run is skipped. */
     async process(input: { tenantId: Run["tenantId"]; runId: RunId }): Promise<ProcessResult> {
       const { tenantId, runId } = input;
+      // Best-effort mutual exclusion. The authoritative guard is the RunStore lease (kept alive by
+      // heartbeat); this lock is not renewed, so on a run longer than leaseMs it simply expires —
+      // a harmless degradation, since claim/keepalive still prevent two workers driving one run.
       const lock = deps.locks ? await deps.locks.acquire(`run:${runId}`, leaseMs) : { released: async () => {} };
       if (!lock) return { run: await runs.findById({ tenantId, id: runId }), outcome: "skipped" };
       try {

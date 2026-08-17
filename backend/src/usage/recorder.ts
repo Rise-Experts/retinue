@@ -71,6 +71,10 @@ export const createUsageRecorder = (config: {
     },
 
     async reserve(context, estimate): Promise<Reservation> {
+      // Best-effort pre-flight: a read-then-decide, so two concurrent reserves can both pass and then
+      // both spend — the authoritative bound is the append-only ledger checked here plus the run's
+      // limits. If a model has no pricing, its estimated cost is 0; pair a cost ceiling with a token
+      // ceiling to bound unknown-priced models.
       const id = idFactory();
       const ceiling = await config.resolveCeiling?.(context);
       if (!ceiling) return { id, withinCeiling: true };
