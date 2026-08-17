@@ -104,3 +104,6 @@ export * from "./idempotency.js";
 
 /** Skill store reference adapter. */
 export * from "./skills.js";
+
+/** Thread summary reference adapter (compacted history). */
+export * from "./thread-summary.js";

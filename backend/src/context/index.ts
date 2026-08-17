@@ -69,3 +69,5 @@ export type PromptPreview = {
 };
 
 export * from "./assembler.js";
+
+export * from "./compaction.js";
