@@ -23,3 +23,5 @@ export * from "./adapters/postgres/index.js";
 export * from "./adapters/supabase/index.js";
 
 export * from "./principal-memory/index.js";
+
+export * from "./graphql/index.js";

@@ -1,0 +1,114 @@
+/**
+ * GraphQL schema (SDL) — `docs/06-graphql-and-frontend.md` → GraphQL boundary.
+ *
+ * The package ships the schema as SDL plus a thin resolver map (see `./resolvers`), so a host can
+ * mount it on any GraphQL server (Yoga, Apollo, Mercurius) without the library taking a server
+ * dependency. Resolvers stay thin: authenticate, validate, build the execution context, call a
+ * platform service. Subscriptions carry the stable `RunEvent` set and support resuming after a
+ * cursor via `openRunEventStream`.
+ */
+
+export const typeDefs = /* GraphQL */ `
+  scalar JSON
+  scalar DateTime
+
+  type Conversation {
+    id: ID!
+    title: String!
+    version: Int!
+    archivedAt: DateTime
+    createdAt: DateTime!
+    updatedAt: DateTime!
+  }
+
+  type ConversationPage {
+    items: [Conversation!]!
+    nextCursor: String
+  }
+
+  enum RunStatus {
+    queued
+    running
+    waiting_for_question
+    waiting_for_approval
+    retry_pending
+    completed
+    failed
+    cancelled
+  }
+
+  type Run {
+    id: ID!
+    conversationId: ID!
+    status: RunStatus!
+    createdAt: DateTime!
+    finishedAt: DateTime
+  }
+
+  type ToolCatalogEntry {
+    name: String!
+    label: String!
+    description: String!
+    category: String!
+    effect: String!
+  }
+
+  type ToolCatalog {
+    preloaded: [JSON!]!
+    discoverable: [ToolCatalogEntry!]!
+    meta: [ToolCatalogEntry!]!
+  }
+
+  type UsageTotals {
+    inputTokens: Int!
+    outputTokens: Int!
+    cachedInputTokens: Int!
+    costMinorUnits: Int!
+    eventCount: Int!
+  }
+
+  "A single transport event; payload carries the typed part / lifecycle detail."
+  type RunEvent {
+    type: String!
+    runId: ID!
+    sequence: Int!
+    occurredAt: DateTime!
+    payload: JSON!
+  }
+
+  input QuestionAnswerInput {
+    interactionId: ID!
+    runId: ID!
+    answers: JSON!
+  }
+
+  input ApprovalDecisionInput {
+    interactionId: ID!
+    runId: ID!
+    decision: String!
+  }
+
+  type Query {
+    conversations(limit: Int!, cursor: String): ConversationPage!
+    conversation(id: ID!): Conversation
+    run(id: ID!): Run
+    toolCatalog(preloaded: [String!]!, categories: [String!]!, excluded: [String!]!): ToolCatalog!
+    usage(runId: ID): UsageTotals!
+  }
+
+  type Mutation {
+    createConversation(id: ID!, title: String!): Conversation!
+    renameConversation(id: ID!, expectedVersion: Int!, title: String!): Conversation!
+    archiveConversation(id: ID!, expectedVersion: Int!): Conversation!
+    deleteConversation(id: ID!): Boolean!
+    sendMessage(conversationId: ID!, runId: ID!): Run!
+    cancelRun(runId: ID!): Boolean!
+    answerQuestion(input: QuestionAnswerInput!): Boolean!
+    decideApproval(input: ApprovalDecisionInput!): Boolean!
+  }
+
+  type Subscription {
+    "Conversation/run events, resumable after a cursor (sequence)."
+    runEvents(runId: ID!, conversationId: ID!, after: Int): RunEvent!
+  }
+`;
