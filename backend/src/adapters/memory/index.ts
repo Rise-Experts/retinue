@@ -113,3 +113,6 @@ export * from "./hitl.js";
 
 /** MCP connection reference adapter. */
 export * from "./mcp.js";
+
+/** Principal (user-level) memory reference adapter. */
+export * from "./principal-memory.js";

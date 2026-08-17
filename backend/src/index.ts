@@ -21,3 +21,5 @@ export * from "./persistence/index.js";
 export * from "./adapters/memory/index.js";
 export * from "./adapters/postgres/index.js";
 export * from "./adapters/supabase/index.js";
+
+export * from "./principal-memory/index.js";
