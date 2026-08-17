@@ -94,3 +94,4 @@ export * from "./retry.js";
 export * from "./checkpoint.js";
 export * from "./worker.js";
 export * from "./streaming.js";
+export * from "./serialization.js";

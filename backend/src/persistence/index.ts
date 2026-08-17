@@ -76,6 +76,44 @@ export interface SessionStateStore {
   ): Promise<SessionState>;
 }
 
+export type AgentVersionPolicy = "pinned" | "latest";
+
+/**
+ * Binds a thread to the agent that owns it (`docs/13`). A resumed thread runs the same agent — and,
+ * when pinned, the same version — that produced its earlier turns, so continuation is deterministic.
+ * Kept as its own record rather than bloating the frozen `Conversation`.
+ */
+export type ConversationBinding = {
+  readonly conversationId: ConversationId;
+  readonly agentId: AgentId;
+  readonly agentVersionPolicy: AgentVersionPolicy;
+  /** Recorded when the policy is `pinned`. */
+  readonly agentVersion?: number;
+};
+
+export interface ConversationBindingStore {
+  bind(input: TenantScope & ConversationBinding): Promise<void>;
+  get(input: TenantScope & { conversationId: ConversationId }): Promise<ConversationBinding | null>;
+}
+
+/**
+ * Per-conversation run serialization (`docs/13` → Run ordering). At most one `Running` run per
+ * conversation; further runs queue FIFO by enqueue time so session-state and message order are
+ * deterministic. Backed by `DistributedLockStore` semantics in production; in-memory for tests.
+ */
+export interface ConversationRunCoordinator {
+  /** Atomically make `runId` the conversation's active run. False when one is already active. */
+  claim(input: TenantScope & { conversationId: ConversationId; runId: RunId }): Promise<boolean>;
+  /** Release the active run on terminal. No-op unless `runId` currently holds it. */
+  release(input: TenantScope & { conversationId: ConversationId; runId: RunId }): Promise<void>;
+  active(input: TenantScope & { conversationId: ConversationId }): Promise<RunId | null>;
+  /** Append a run to the FIFO backlog. Idempotent; returns the run's 1-based queue position. */
+  enqueue(input: TenantScope & { conversationId: ConversationId; runId: RunId }): Promise<number>;
+  /** Pop the next queued run (FIFO), or null when the backlog is empty. */
+  dequeue(input: TenantScope & { conversationId: ConversationId }): Promise<RunId | null>;
+  depth(input: TenantScope & { conversationId: ConversationId }): Promise<number>;
+}
+
 /** Compacted older history (`docs/13`). Recent turns stay verbatim; this is versioned. */
 export type ThreadSummary = {
   readonly conversationId: ConversationId;
