@@ -100,13 +100,14 @@ export const createMemoryRunStore = (): RunStore => {
         throw conflict(`Run ${id} is held by another worker`);
       if (run.status !== to && !canTransition(run.status, to))
         throw conflict(`Illegal run transition ${run.status} -> ${to}`);
+      // Terminal or paused-for-interaction: release the claim/lease so a continuation can re-claim.
+      const releases = isTerminal(to) || to === "waiting-for-question" || to === "waiting-for-approval";
       const next: Run = {
         ...run,
         status: to,
         ...(error === undefined ? {} : { error }),
-        ...(isTerminal(to)
-          ? { finishedAt: now, claimedBy: undefined, leaseExpiresAt: undefined }
-          : {}),
+        ...(isTerminal(to) ? { finishedAt: now } : {}),
+        ...(releases ? { claimedBy: undefined, leaseExpiresAt: undefined } : {}),
       };
       rows.set(id, next);
       return next;

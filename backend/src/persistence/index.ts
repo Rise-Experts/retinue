@@ -13,8 +13,17 @@ import type { Page, PageRequest, TenantScope } from "../core/context.js";
 import type { Message } from "../core/content-parts.js";
 import type { AgentManifest } from "../agents/index.js";
 import type { PlatformError } from "../core/errors.js";
-import type { AgentId, BlobRef, ConversationId, MessageId, RunId, TenantId } from "../core/ids.js";
-import type { PendingApproval, PendingQuestion } from "../hitl/index.js";
+import type {
+  AgentId,
+  ApprovalGrantId,
+  BlobRef,
+  ConversationId,
+  InteractionId,
+  MessageId,
+  RunId,
+  TenantId,
+} from "../core/ids.js";
+import type { ApprovalDecision, ApprovalGrant, PendingApproval, PendingQuestion } from "../hitl/index.js";
 import type { Run, RunCheckpoint, RunStatus } from "../runtime/index.js";
 import type { UsageEvent } from "../usage/index.js";
 import type { SkillCatalogEntry, SkillVersion } from "../skills/index.js";
@@ -206,13 +215,34 @@ export interface SkillStore {
   ): Promise<SkillVersion | null>;
 }
 
+/**
+ * Durable human-in-the-loop interactions (`docs/04` → Questions & Approvals). Pending questions and
+ * approvals survive restart/deploy. `answer`/`decide` are idempotent — the first call resolves the
+ * interaction and reports `alreadyResolved: false`; a duplicate reports `true` and changes nothing,
+ * so a continuation is queued exactly once.
+ */
 export interface InteractionStore {
-  findPendingQuestion(
-    input: TenantScope & { runId: RunId },
-  ): Promise<PendingQuestion | null>;
-  findPendingApproval(
-    input: TenantScope & { runId: RunId },
-  ): Promise<PendingApproval | null>;
+  createQuestion(input: TenantScope & { question: PendingQuestion }): Promise<void>;
+  findPendingQuestion(input: TenantScope & { runId: RunId }): Promise<PendingQuestion | null>;
+  answerQuestion(
+    input: TenantScope & { interactionId: InteractionId; answers: Readonly<Record<string, string>>; at: string },
+  ): Promise<{ question: PendingQuestion; alreadyResolved: boolean }>;
+
+  createApproval(input: TenantScope & { approval: PendingApproval }): Promise<void>;
+  findPendingApproval(input: TenantScope & { runId: RunId }): Promise<PendingApproval | null>;
+  decideApproval(
+    input: TenantScope & { interactionId: InteractionId; decision: ApprovalDecision; at: string },
+  ): Promise<{ approval: PendingApproval; alreadyResolved: boolean }>;
+}
+
+/** Standing approval grants from `allow-conversation` / `allow-always` (`docs/04` → Approvals). */
+export interface ApprovalGrantStore {
+  grant(input: TenantScope & { grant: ApprovalGrant }): Promise<void>;
+  /** An active (unrevoked, unexpired) grant matching the tool name or category, or null. */
+  findActive(
+    input: TenantScope & { toolNameOrCategory: string; now: string },
+  ): Promise<ApprovalGrant | null>;
+  revoke(input: TenantScope & { grantId: ApprovalGrantId; at: string }): Promise<void>;
 }
 
 export interface CheckpointStore {

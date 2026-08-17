@@ -107,3 +107,6 @@ export * from "./skills.js";
 
 /** Thread summary reference adapter (compacted history). */
 export * from "./thread-summary.js";
+
+/** HITL reference adapters (interactions + approval grants). */
+export * from "./hitl.js";

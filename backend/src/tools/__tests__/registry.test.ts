@@ -45,7 +45,7 @@ const makeProvider = (): ToolProvider => ({
         data: { hits: [`result for ${(input as { q: string }).q}`] },
       })),
       tool(
-        descriptor({ name: "publish", category: "publishing", effect: "external-write", requiresIdempotencyKey: true }),
+        descriptor({ name: "publish", category: "publishing", effect: "external-write", approvalPolicy: "policy", requiresIdempotencyKey: true }),
         async () => {
           publishState.count += 1;
           return { ok: true, data: { published: true, at: publishState.count } };
@@ -136,6 +136,18 @@ describe("execute_tool — re-auth, validation, idempotency, spill", () => {
     const b = await reg.execute(ctx(["editor"]), call);
     expect(a).toMatchObject({ ok: true });
     expect(publishState.count).toBe(1);
+  });
+
+  it("blocks a policy-classified tool from executing directly without an approval grant", async () => {
+    const reg = createToolRegistry({
+      providers: [makeProvider()],
+      authorization: policy,
+      idempotency: createMemoryIdempotencyStore(),
+      approval: { isAllowed: async () => false }, // no standing grant
+    });
+    // 'publish' is external-write; give it an approval policy by treating it as requiring approval.
+    const result = await reg.execute(ctx(["editor"]), { name: "publish", input: {}, idempotencyKey: "k1" });
+    expect(result).toMatchObject({ ok: false, error: { code: "approval_required" } });
   });
 
   it("spills a large result and reads it back through read_tool_output", async () => {

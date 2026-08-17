@@ -76,11 +76,23 @@ export type ToolCatalog = {
   readonly meta: readonly ToolCatalogEntry[];
 };
 
+/** Structural approval check (satisfied by the HITL `ApprovalGate`) — kept structural to avoid a
+ * tools→hitl dependency. Returns false when the tool needs approval and has no standing grant. */
+export interface ApprovalCheck {
+  isAllowed(
+    context: ExecutionContext,
+    tool: { readonly name: string; readonly category: string; readonly approvalPolicy: ApprovalPolicyValue },
+  ): Promise<boolean>;
+}
+type ApprovalPolicyValue = "never" | "policy" | "always";
+
 export type ToolRegistryConfig = {
   readonly providers: readonly ToolProvider[];
   readonly authorization: AuthorizationPolicy;
   readonly idempotency?: IdempotencyStore;
   readonly blobs?: BlobStore;
+  /** Makes approval unbypassable: a policy-classified tool cannot execute directly without a grant. */
+  readonly approval?: ApprovalCheck;
   /** Results whose JSON exceeds this are spilled to `blobs` and referenced. Default 8 KiB. */
   readonly maxInlineOutputBytes?: number;
   readonly validator?: SchemaValidator;
@@ -144,6 +156,17 @@ export const createToolRegistry = (config: ToolRegistryConfig): ToolRegistry => 
       const d = tool.descriptor;
       // Re-authorize at execution even though it was discoverable earlier.
       await assertToolAuthorized(config.authorization, context, { name: d.name, category: d.category });
+
+      // Approval gate: a policy-classified tool cannot be executed directly without a standing grant.
+      if (d.approvalPolicy !== "never" && config.approval) {
+        const allowed = await config.approval.isAllowed(context, {
+          name: d.name,
+          category: d.category,
+          approvalPolicy: d.approvalPolicy,
+        });
+        if (!allowed)
+          return { ok: false, error: { code: "approval_required", message: `Tool ${d.name} requires approval`, retryable: false } };
+      }
 
       // Re-validate input against the descriptor's schema.
       const validated = validator.validate(d.inputSchema, input.input);
