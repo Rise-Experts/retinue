@@ -5,7 +5,7 @@
   "scripts": {
     "docs:api": "typedoc",
     "docs:llms": "node scripts/gen-llms.mjs",
-    "prebuild": "npm run docs:api && npm run docs:llms",
+    "prebuild": "npm --prefix .. ci && npm run docs:api && npm run docs:llms",
     "build": "docusaurus build",
     "start": "docusaurus start",
     "serve": "docusaurus serve"
