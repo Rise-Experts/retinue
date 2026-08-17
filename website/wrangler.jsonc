@@ -1,7 +1,7 @@
 {
-  // Cloudflare Workers Static Assets — serves the Docusaurus build output.
-  // Cloudflare's Git build runs (with Root directory = website): npm install -> npm run build
-  // -> npx wrangler deploy, which uploads ./build as static assets. No Worker script needed.
+  // Cloudflare Workers Static Assets — serves the Docusaurus build output (./build).
+  // Deployed from the repo root: `npm run docs:build` then
+  // `npx wrangler deploy --config website/wrangler.jsonc`. No Worker script needed.
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "agentkit-docs",
   "compatibility_date": "2024-11-01",
