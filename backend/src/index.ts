@@ -19,3 +19,4 @@ export * from "./context/index.js";
 export * from "./hitl/index.js";
 export * from "./persistence/index.js";
 export * from "./adapters/memory/index.js";
+export * from "./adapters/postgres/index.js";
