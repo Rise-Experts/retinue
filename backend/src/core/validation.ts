@@ -79,7 +79,7 @@ const runEventSchema = z.object({
 const fail = (what: string, error: z.ZodError): never => {
   throw new AgentPlatformError({
     code: "invalid_input",
-    message: `Invalid ${what}: ${error.issues.map((i) => `${i.path.join(".")} ${i.message}`).join("; ")}`,
+    message: `Invalid ${what}: ${error.issues.map((i: z.ZodIssue) => `${i.path.join(".")} ${i.message}`).join("; ")}`,
     retryable: false,
   });
 };
