@@ -95,3 +95,9 @@ export * from "./sessions.js";
 
 /** Append-only usage ledger reference adapter. */
 export * from "./usage.js";
+
+/** Blob store reference adapter (spilled tool output). */
+export * from "./blobs.js";
+
+/** Idempotency store reference adapter. */
+export * from "./idempotency.js";

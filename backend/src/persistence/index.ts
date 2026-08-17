@@ -13,7 +13,7 @@ import type { Page, PageRequest, TenantScope } from "../core/context.js";
 import type { Message } from "../core/content-parts.js";
 import type { AgentManifest } from "../agents/index.js";
 import type { PlatformError } from "../core/errors.js";
-import type { AgentId, ConversationId, MessageId, RunId, TenantId } from "../core/ids.js";
+import type { AgentId, BlobRef, ConversationId, MessageId, RunId, TenantId } from "../core/ids.js";
 import type { PendingApproval, PendingQuestion } from "../hitl/index.js";
 import type { Run, RunCheckpoint, RunStatus } from "../runtime/index.js";
 import type { UsageEvent } from "../usage/index.js";
@@ -244,7 +244,16 @@ export interface ArtifactStore {}
 
 export interface VectorIndex {}
 export interface KeywordIndex {}
-export interface BlobStore {}
+
+/**
+ * Content-addressable blob storage for spilled tool output (`docs/03` → Tool results). A large
+ * result is offloaded here and referenced by an authorized `BlobRef`, read back via
+ * `read_tool_output`. Tenant-scoped so a ref from one tenant can never resolve another's bytes.
+ */
+export interface BlobStore {
+  put(input: TenantScope & { value: unknown }): Promise<BlobRef>;
+  get(input: TenantScope & { ref: BlobRef }): Promise<unknown | null>;
+}
 
 /**
  * Neutral unit of work, so a transaction-dependent workflow does not hardcode a

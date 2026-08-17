@@ -94,3 +94,6 @@ export const META_TOOLS = [
 ] as const;
 
 export type MetaToolName = (typeof META_TOOLS)[number];
+
+export * from "./meta-tools.js";
+export * from "./registry.js";
