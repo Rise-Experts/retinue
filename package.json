@@ -20,6 +20,7 @@
     "test:evals": "node --test evals/*.test.mjs",
     "evals:coverage": "node evals/coverage.mjs",
     "check:boundaries": "node scripts/check-boundaries.mjs",
+    "docs:build": "npm --prefix website ci && npm --prefix website run build",
     "clean": "npm run clean --workspaces --if-present && rm -rf tsconfig.tsbuildinfo"
   },
   "devDependencies": {

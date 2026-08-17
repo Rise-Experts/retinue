@@ -1,0 +1,11 @@
+{
+  // Repo-root deploy config, so Cloudflare works even when "Root directory" is the repo root.
+  // Build with `npm run docs:build` (produces website/build), then `npx wrangler deploy` here
+  // uploads website/build as static assets. (website/wrangler.jsonc covers Root directory=website.)
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "agentkit-docs",
+  "compatibility_date": "2024-11-01",
+  "assets": {
+    "directory": "./website/build"
+  }
+}

@@ -36,13 +36,15 @@ secret needed, Cloudflare builds from the connected repo on each push. One-time 
 steps need your Cloudflare/DNS access; the config is already in the repo:**
 
 1. In the Cloudflare project (Workers & Pages → your `agentkit-docs` project) → **Settings →
-   Build**, set:
-   - **Root directory:** `website`
-   - **Build command:** `npm run build`
-     — the site's `prebuild` runs `npm --prefix .. ci`, installing the workspace so TypeDoc can
-     resolve backend deps (e.g. `zod`); `@agentkit/*` resolve from source. Fully self-contained.
-   - **Deploy command:** `npx wrangler deploy` (reads `website/wrangler.jsonc`; **not**
-     `wrangler versions upload`, which stages a version without publishing to the live URL).
+   Build**, set — these work from the **repo root**, so the "Root directory" setting no longer
+   matters (a root `wrangler.jsonc` and `website/wrangler.jsonc` both exist):
+   - **Root directory:** leave as repo root (default).
+   - **Build command:** `npm run docs:build`
+     — installs the site, whose `prebuild` installs the workspace so TypeDoc resolves backend
+     deps (`zod`); produces `website/build`.
+   - **Deploy command:** `npx wrangler deploy`  ← change from `npx wrangler versions upload`
+     (`versions upload` stages a version without publishing to the live URL). From the repo root
+     this reads the root `wrangler.jsonc`, whose `assets.directory` is `./website/build`.
 2. **Custom domain**: project → **Custom domains** → add **`docs.agentkit.riseexperts.de`**.
    - If `riseexperts.de` DNS is **on Cloudflare**, the record is created automatically.
    - Otherwise add a DNS **CNAME**: `docs.agentkit` → `<worker>.workers.dev` (as shown in the
