@@ -11,3 +11,5 @@ export * from "./reducers.js";
 export * from "./client.js";
 export type * from "./hooks/index.js";
 export * from "./hooks/hooks.js";
+
+export * from "./context-inspector.js";

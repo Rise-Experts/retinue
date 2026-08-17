@@ -10,6 +10,7 @@ import { createContext, createElement, useCallback, useContext, useEffect, useRe
 import type { ReactNode } from "react";
 import type { AgentkitClient, ApprovalDecision } from "../client.js";
 import { createRunProjector, type RunView } from "../reducers.js";
+import { shapeContextPanel, type ContextPanelData } from "../context-inspector.js";
 import type { ConversationSummary, Message, MessagePart, PlatformError } from "../types/index.js";
 
 const ClientContext = createContext<AgentkitClient | null>(null);
@@ -147,6 +148,40 @@ export const useDecideApproval = () => {
 export const useCancelRun = () => {
   const { run, busy } = useMutation((client, input: { runId: string }) => client.cancelRun(input));
   return { cancel: run, cancelling: busy };
+};
+
+/** Fetches and shapes the context inspection for a conversation/run for the Context panel (#39). */
+export const useSessionContext = (input: { conversationId: string; runId?: string }) => {
+  const client = useAgentkitClient();
+  const [data, setData] = useState<ContextPanelData | undefined>(undefined);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<PlatformError | undefined>(undefined);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!client.getConversationContext) {
+      setLoading(false);
+      return;
+    }
+    (async () => {
+      try {
+        const inspection = await client.getConversationContext!({ conversationId: input.conversationId, ...(input.runId ? { runId: input.runId } : {}) });
+        if (!cancelled) {
+          setData(shapeContextPanel(inspection));
+          setError(undefined);
+        }
+      } catch (e) {
+        if (!cancelled) setError(e as PlatformError);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [client, input.conversationId, input.runId]);
+
+  return { data, loading, error };
 };
 
 export const useConversation = (input: { conversationId: string }) => {

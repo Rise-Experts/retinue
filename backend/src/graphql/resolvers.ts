@@ -9,6 +9,7 @@ import type { ExecutionContext } from "../core/context.js";
 import type { ConversationId, RunId } from "../core/ids.js";
 import { asId } from "../core/ids.js";
 import type { ConversationStore, UsageStore } from "../persistence/index.js";
+import type { ContextInspection } from "../context/index.js";
 import type { ToolRegistry } from "../tools/index.js";
 import { startOrEnqueueRun, type JobDispatcher } from "../runtime/index.js";
 import { openRunEventStream, type LiveEventSource } from "../runtime/index.js";
@@ -31,6 +32,11 @@ export type ResolverDeps = {
   readonly eventLog: RunEventLog;
   readonly live: LiveEventSource;
   readonly channelFor?: (conversationId: ConversationId) => string;
+  /** Host-provided context assembly for the inspector (providers are app-specific). */
+  readonly inspectContext?: (
+    execution: ExecutionContext,
+    input: { conversationId: ConversationId; runId?: RunId },
+  ) => Promise<ContextInspection | null>;
 };
 
 /** Serialize a stored Run to the GraphQL RunStatus enum (underscores, not hyphens). */
@@ -64,6 +70,13 @@ export const createResolvers = (deps: ResolverDeps) => {
       },
       async usage(_: unknown, args: { runId?: string }, ctx: GraphQLContext) {
         return deps.usage.totals({ tenantId: tid(ctx), ...(args.runId ? { runId: asId<RunId>(args.runId) } : {}) });
+      },
+      async conversationContext(_: unknown, args: { conversationId: string; runId?: string }, ctx: GraphQLContext) {
+        if (!deps.inspectContext) return null;
+        return deps.inspectContext(ctx.execution, {
+          conversationId: asId<ConversationId>(args.conversationId),
+          ...(args.runId ? { runId: asId<RunId>(args.runId) } : {}),
+        });
       },
     },
 

@@ -130,3 +130,49 @@ export const assemblePrompt = (input: {
 
   return { sections: included, preview, totalTokens: total, pruned };
 };
+
+/** A section's inspector view — enough for the Context panel to explain what shaped a turn. */
+export type InspectedSection = {
+  readonly title: string;
+  readonly providerId: string;
+  readonly kind: ContextKind;
+  readonly provenance: string;
+  readonly estimatedTokens: number;
+  readonly sensitivity: ContextSection["sensitivity"];
+  readonly included: boolean;
+  /** Set when the section was dropped: why. */
+  readonly prunedReason?: string;
+};
+
+export type ContextInspection = {
+  readonly sections: readonly InspectedSection[];
+  readonly totalTokens: number;
+  readonly budget: ContextBudget;
+};
+
+/**
+ * Derive the context-inspector view from an assembled prompt: every section (included and pruned)
+ * with its bucket, provenance and token cost — so the UI can attribute which context (and which
+ * memory entries, via provenance) influenced a turn, and show what was dropped and why.
+ */
+export const inspectAssembledPrompt = (assembled: AssembledPrompt): ContextInspection => {
+  const prunedReason = new Map(assembled.pruned.map((p) => [p.section, p.reason] as const));
+  const view = (section: ContextSection, included: boolean): InspectedSection => ({
+    title: section.title,
+    providerId: section.providerId,
+    kind: section.kind ?? "user-context",
+    provenance: section.provenance,
+    estimatedTokens: section.estimatedTokens,
+    sensitivity: section.sensitivity,
+    included,
+    ...(prunedReason.has(section) ? { prunedReason: prunedReason.get(section)! } : {}),
+  });
+  return {
+    sections: [
+      ...assembled.sections.map((s) => view(s, true)),
+      ...assembled.pruned.map((p) => view(p.section, false)),
+    ],
+    totalTokens: assembled.totalTokens,
+    budget: assembled.preview.budget,
+  };
+};

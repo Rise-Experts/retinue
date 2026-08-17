@@ -88,12 +88,32 @@ export const typeDefs = /* GraphQL */ `
     decision: String!
   }
 
+  "A section that shaped a turn's prompt — for the context inspector (#39)."
+  type InspectedSection {
+    title: String!
+    providerId: String!
+    kind: String!
+    provenance: String!
+    estimatedTokens: Int!
+    sensitivity: String!
+    included: Boolean!
+    prunedReason: String
+  }
+
+  type ContextInspection {
+    sections: [InspectedSection!]!
+    totalTokens: Int!
+    budget: JSON!
+  }
+
   type Query {
     conversations(limit: Int!, cursor: String): ConversationPage!
     conversation(id: ID!): Conversation
     run(id: ID!): Run
     toolCatalog(preloaded: [String!]!, categories: [String!]!, excluded: [String!]!): ToolCatalog!
     usage(runId: ID): UsageTotals!
+    "What context shaped a turn — attributes memory/tools/history that influenced the prompt."
+    conversationContext(conversationId: ID!, runId: ID): ContextInspection
   }
 
   type Mutation {

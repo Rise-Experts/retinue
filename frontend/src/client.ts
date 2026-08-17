@@ -5,7 +5,7 @@
  */
 
 import type { ApprovalDecision } from "@agentkit/backend";
-import type { ConversationSummary, Message, RunEvent } from "./types/index.js";
+import type { ConversationSummary, ContextInspection, Message, RunEvent } from "./types/index.js";
 
 export type { ApprovalDecision };
 
@@ -22,4 +22,6 @@ export interface AgentkitClient {
   subscribeRun(input: { runId: string; conversationId: string; after: number }): AsyncIterable<RunEvent>;
   uploadAttachment?(file: Blob, filename: string, onProgress?: (fraction: number) => void): Promise<{ fileId: string }>;
   getArtifact?(input: { artifactId: string }): Promise<{ title: string; versionId: string; content: string }>;
+  /** The context inspection for a conversation/run — what shaped the prompt (Context panel, #39). */
+  getConversationContext?(input: { conversationId: string; runId?: string }): Promise<ContextInspection>;
 }
