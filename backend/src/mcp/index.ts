@@ -107,3 +107,6 @@ export type McpResourceRef = {
   readonly uri: string;
   readonly mimeType?: string;
 };
+
+export * from "./egress.js";
+export * from "./provider.js";

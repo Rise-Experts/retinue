@@ -110,3 +110,6 @@ export * from "./thread-summary.js";
 
 /** HITL reference adapters (interactions + approval grants). */
 export * from "./hitl.js";
+
+/** MCP connection reference adapter. */
+export * from "./mcp.js";
