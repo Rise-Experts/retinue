@@ -7,24 +7,32 @@
  * recoverable. The guarantees it enforces (per the acceptance criteria):
  *
  * - **Atomic claim** — a lease-based `RunStore.claim` means two workers never process one run.
- * - **Refresh loses nothing** — parts are checkpointed as they stream, so a reconnecting client
- *   catches up from the latest checkpoint plus events after its cursor.
+ * - **Refresh loses nothing** — parts are checkpointed and appended to the durable `RunEventLog`
+ *   as they stream, so a reconnecting client catches up from its cursor with no gap.
  * - **Safe crash recovery** — a re-claim reloads the checkpoint and *finalizes* (never re-runs)
  *   tool calls that were mid-flight, so no external action fires twice.
  * - **Cooperative cancellation** — a durable cancel request stops the engine and finalizes cleanly.
  *
- * Retrying transient provider failures is the engine's job (`runWithRetry`); the worker just
- * relays the `run.retry-pending` notifications it emits. Retried *external* writes are made safe by
- * idempotency keys (`../idempotency`), not by this layer.
+ * Streaming state is projected through the one canonical reducer (`reduceRunEvent`), the same fold a
+ * client uses, so the checkpoint and any client rebuild identical state. Retrying transient provider
+ * failures is the engine's job (`runWithRetry`); the worker just relays the `run.retry-pending`
+ * notifications it emits. Retried *external* writes are made safe by idempotency keys.
  */
 
 import type { ErrorPart } from "../core/content-parts.js";
 import type { ExecutionContext } from "../core/context.js";
 import { AgentPlatformError, type PlatformError } from "../core/errors.js";
-import type { RealtimePublisher, RunEvent } from "../core/events.js";
+import {
+  EMPTY_RUN_STREAM_STATE,
+  reduceRunEvent,
+  type RealtimePublisher,
+  type RunEvent,
+  type RunEventLog,
+  type RunStreamState,
+} from "../core/events.js";
 import type { MessageId, MessagePartId, RunId } from "../core/ids.js";
 import type { CheckpointStore, RunStore } from "../persistence/index.js";
-import { emptyCheckpoint, type RunCheckpoint } from "./checkpoint.js";
+import type { RunCheckpoint } from "./checkpoint.js";
 import { type DistributedLockStore, type Run } from "./index.js";
 import { toPlatformError } from "./retry.js";
 
@@ -68,6 +76,8 @@ export type DurableWorkerDeps = {
   readonly checkpoints: CheckpointStore;
   readonly publisher: RealtimePublisher;
   readonly engine: AgentEngine;
+  /** Durable per-run event log for reconnect catch-up. Optional but required for gap-free reconnect. */
+  readonly eventLog?: RunEventLog;
   /** Host builds the execution context; identity never comes from model output. */
   readonly buildContext: (run: Run) => ExecutionContext | Promise<ExecutionContext>;
   readonly workerId: string;
@@ -96,53 +106,8 @@ class ClaimLostError extends Error {
   }
 }
 
-const isToolCallEvent = (
-  t: EngineEvent["type"],
-): t is "tool.started" | "tool.completed" | "tool.failed" =>
+const isToolCallEvent = (t: EngineEvent["type"]): boolean =>
   t === "tool.started" || t === "tool.completed" || t === "tool.failed";
-
-/** Fold a stamped event into the accumulating checkpoint. Pure. */
-const fold = (cp: RunCheckpoint, event: RunEvent): RunCheckpoint => {
-  const base = { ...cp, sequence: event.sequence, updatedAt: event.occurredAt };
-  switch (event.type) {
-    case "part.added":
-      return { ...base, parts: [...cp.parts, event.part] };
-    case "part.updated": {
-      const exists = cp.parts.some((p) => p.id === event.part.id);
-      return {
-        ...base,
-        parts: exists
-          ? cp.parts.map((p) => (p.id === event.part.id ? event.part : p))
-          : [...cp.parts, event.part],
-      };
-    }
-    case "tool.started":
-      return {
-        ...base,
-        pendingToolCalls: [
-          ...cp.pendingToolCalls,
-          { toolCallId: event.toolCallId, toolName: event.toolName, startedAt: event.occurredAt },
-        ],
-      };
-    case "tool.completed":
-    case "tool.failed":
-      return {
-        ...base,
-        pendingToolCalls: cp.pendingToolCalls.filter((t) => t.toolCallId !== event.toolCallId),
-      };
-    case "usage.updated":
-      return {
-        ...base,
-        usage: {
-          inputTokens: cp.usage.inputTokens + event.inputTokens,
-          outputTokens: cp.usage.outputTokens + event.outputTokens,
-          costMinorUnits: cp.usage.costMinorUnits + (event.costMinorUnits ?? 0),
-        },
-      };
-    default:
-      return base;
-  }
-};
 
 export const createDurableWorker = (deps: DurableWorkerDeps) => {
   const now = deps.now ?? Date.now;
@@ -157,20 +122,41 @@ export const createDurableWorker = (deps: DurableWorkerDeps) => {
     const tenantId = run.tenantId;
     const context = await deps.buildContext(run);
     const channel = channelFor(run);
-    let cp = (await checkpoints.latest({ tenantId, runId: run.id })) ?? emptyCheckpoint(run.id, clock());
+    const initial = await checkpoints.latest({ tenantId, runId: run.id });
+    let state: RunStreamState = initial
+      ? {
+          ...EMPTY_RUN_STREAM_STATE,
+          parts: initial.parts,
+          pendingToolCalls: initial.pendingToolCalls,
+          usage: initial.usage,
+          sequence: initial.sequence,
+        }
+      : EMPTY_RUN_STREAM_STATE;
+    const recovered = state.sequence > 0;
     let cancelRequested = run.cancelRequestedAt !== undefined;
     let lastKeepalive = now();
 
+    const toCheckpoint = (): RunCheckpoint => ({
+      runId: run.id,
+      sequence: state.sequence,
+      parts: state.parts,
+      step: 0,
+      pendingToolCalls: state.pendingToolCalls,
+      usage: state.usage,
+      updatedAt: clock(),
+    });
+
     const emit = async (body: EngineEvent): Promise<void> => {
-      const event = { ...body, runId: run.id, sequence: cp.sequence + 1, occurredAt: clock() } as RunEvent;
-      cp = fold(cp, event);
+      const event = { ...body, runId: run.id, sequence: state.sequence + 1, occurredAt: clock() } as RunEvent;
+      state = reduceRunEvent(state, event);
       await publisher.publish(channel, event);
+      if (deps.eventLog) await deps.eventLog.append({ tenantId, event });
     };
-    const persist = () => checkpoints.save({ tenantId, checkpoint: cp });
+    const persist = () => checkpoints.save({ tenantId, checkpoint: toCheckpoint() });
 
     /** Finalize any tool calls started but never completed — as interrupted errors, never re-run. */
     const finalizePending = async (): Promise<void> => {
-      for (const pending of cp.pendingToolCalls) {
+      for (const pending of state.pendingToolCalls) {
         const error: PlatformError = {
           code: "cancelled",
           message: `Tool call '${pending.toolName}' was interrupted before it completed`,
@@ -200,40 +186,34 @@ export const createDurableWorker = (deps: DurableWorkerDeps) => {
 
     // Recovery: a re-claimed run carries dangling tool calls in its checkpoint. Finalize them once,
     // before the engine resumes, so it observes them as failed and never re-fires the side effect.
-    if (cp.pendingToolCalls.length > 0) await finalizePending();
+    if (state.pendingToolCalls.length > 0) await finalizePending();
 
     try {
       const started = await runs.transition({ tenantId, id: run.id, workerId, to: "running", now: clock() });
-      await emit({ type: "run.started" } as EngineEvent);
+      await emit({ type: "run.started" });
       await persist();
 
       const signal: CancellationSignal = { isCancelled: () => cancelRequested };
-      const iterable = engine.run({ run: started, context, resume: cp.sequence > 0 ? cp : null, signal });
+      const iterable = engine.run({ run: started, context, resume: recovered ? toCheckpoint() : null, signal });
 
       for await (const body of iterable) {
         await emit(body);
-        if (isToolCallEvent(body.type) || body.type === "run.retry-pending") {
-          await persist(); // durable before the engine executes / between attempts
-        } else {
-          await persist();
-        }
-        await heartbeat();
+        await persist(); // durable before the engine proceeds (tool.started) / between retry attempts
+        if (!isToolCallEvent(body.type)) await heartbeat();
         if (cancelRequested) break;
       }
 
       if (cancelRequested) {
         await finalizePending();
-        await persist();
         const cancelled = await runs.transition({ tenantId, id: run.id, workerId, to: "cancelled", now: clock() });
-        await emit({ type: "run.cancelled" } as EngineEvent);
+        await emit({ type: "run.cancelled" });
         await persist();
         return { run: cancelled, outcome: "cancelled" };
       }
 
       await finalizePending();
-      await persist();
       const completed = await runs.transition({ tenantId, id: run.id, workerId, to: "completed", now: clock() });
-      await emit({ type: "run.completed" } as EngineEvent);
+      await emit({ type: "run.completed" });
       await persist();
       return { run: completed, outcome: "completed" };
     } catch (thrown) {
@@ -242,9 +222,8 @@ export const createDurableWorker = (deps: DurableWorkerDeps) => {
       }
       const error = toPlatformError(thrown);
       await finalizePending();
-      await persist();
       const failed = await runs.transition({ tenantId, id: run.id, workerId, to: "failed", now: clock(), error });
-      await emit({ type: "run.failed", error } as EngineEvent);
+      await emit({ type: "run.failed", error });
       await persist();
       return { run: failed, outcome: "failed" };
     }

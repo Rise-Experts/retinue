@@ -9,6 +9,7 @@
 import { AgentPlatformError } from "../../core/errors.js";
 import type { TenantScope } from "../../core/context.js";
 import type { RunId, TenantId } from "../../core/ids.js";
+import type { RunEvent, RunEventLog } from "../../core/events.js";
 import type { CheckpointStore, NewRun, RunStore } from "../../persistence/index.js";
 import {
   canTransition,
@@ -154,6 +155,37 @@ export const createMemoryCheckpointStore = (): CheckpointStore => {
       rows.set(checkpoint.runId, checkpoint);
     },
   } satisfies CheckpointStore;
+};
+
+/** Append-only in-memory `RunEventLog` — the durable catch-up half of reconnect, for tests/dev. */
+export const createMemoryRunEventLog = (): RunEventLog => {
+  const byTenant = new Map<string, Map<string, RunEvent[]>>();
+  const runLog = (tenantId: string, runId: string) => {
+    let tenant = byTenant.get(tenantId);
+    if (!tenant) byTenant.set(tenantId, (tenant = new Map()));
+    let log = tenant.get(runId);
+    if (!log) tenant.set(runId, (log = []));
+    return log;
+  };
+  return {
+    async append({ tenantId, event }) {
+      const log = runLog(tenantId, event.runId);
+      // Idempotent: never store a sequence twice (a retried append is a no-op).
+      if (log.length > 0 && log[log.length - 1]!.sequence >= event.sequence) {
+        if (log.some((e) => e.sequence === event.sequence)) return;
+      }
+      log.push(event);
+    },
+    async listAfter({ tenantId, runId, after, limit }) {
+      const log = runLog(tenantId, runId).filter((e) => e.sequence > after);
+      log.sort((a, b) => a.sequence - b.sequence);
+      return limit === undefined ? log : log.slice(0, limit);
+    },
+    async latestSequence({ tenantId, runId }) {
+      const log = runLog(tenantId, runId);
+      return log.reduce((max, e) => Math.max(max, e.sequence), 0);
+    },
+  } satisfies RunEventLog;
 };
 
 /**
