@@ -33,11 +33,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - name: Install workspace (so TypeDoc can resolve backend/frontend dependencies)
-        run: npm ci
       - name: Install (website)
         run: npm ci
         working-directory: website
       - name: Build docs site
+        # prebuild installs the workspace (npm --prefix .. ci) so TypeDoc resolves backend deps
         run: npm run build
         working-directory: website
