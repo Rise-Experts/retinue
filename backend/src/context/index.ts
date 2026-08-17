@@ -6,6 +6,9 @@ import type { ExecutionContext } from "../core/context.js";
 
 export type ContextSensitivity = "public" | "internal" | "confidential" | "restricted";
 
+/** Budget bucket a section draws from. Mirrors the fields of `ContextBudget`. */
+export type ContextKind = "base-policy" | "user-context" | "tools" | "skills" | "knowledge" | "history";
+
 export type ContextSection = {
   readonly providerId: string;
   readonly title: string;
@@ -18,6 +21,11 @@ export type ContextSection = {
   readonly sensitivity: ContextSensitivity;
   readonly cacheable: boolean;
   readonly expiresAt?: string;
+  /** Budget bucket. Defaults to `user-context` when a provider does not specify one. */
+  readonly kind?: ContextKind;
+  /** When set, this section is eligible for pruning in that stage. Unset ⇒ preserved (recent turns,
+   * open tool continuity, base policy). */
+  readonly pruneStage?: PruneStage;
 };
 
 export interface ContextProvider {
@@ -59,3 +67,5 @@ export type PromptPreview = {
   readonly totalTokens: number;
   readonly budget: ContextBudget;
 };
+
+export * from "./assembler.js";
