@@ -30,6 +30,45 @@ export interface ConversationStore {
   list(input: TenantScope & PageRequest): Promise<Page<Conversation>>;
 }
 
+/**
+ * Cross-run working memory for a thread (`docs/13-sessions-and-threads.md`). Bounded, versioned,
+ * written by the runtime/tools — never raw model output. **Frozen v1.**
+ */
+export type SessionState = {
+  readonly conversationId: ConversationId;
+  readonly version: number;
+  readonly data: Readonly<Record<string, unknown>>;
+  readonly updatedAt: string;
+};
+
+export interface SessionStateStore {
+  get(input: TenantScope & { conversationId: ConversationId }): Promise<SessionState | null>;
+  /** Optimistic concurrency: rejects when `expectedVersion` is stale. */
+  put(
+    input: TenantScope & {
+      conversationId: ConversationId;
+      expectedVersion: number;
+      data: Readonly<Record<string, unknown>>;
+    },
+  ): Promise<SessionState>;
+}
+
+/** Compacted older history (`docs/13`). Recent turns stay verbatim; this is versioned. */
+export type ThreadSummary = {
+  readonly conversationId: ConversationId;
+  readonly version: number;
+  readonly summary: string;
+  readonly coversUpToMessageId: MessageId;
+  readonly createdAt: string;
+};
+
+export interface ThreadSummaryStore {
+  latest(input: TenantScope & { conversationId: ConversationId }): Promise<ThreadSummary | null>;
+  append(
+    input: TenantScope & { conversationId: ConversationId; summary: string; coversUpToMessageId: MessageId },
+  ): Promise<ThreadSummary>;
+}
+
 export interface RunStore {
   findById(input: TenantScope & { id: RunId }): Promise<Run | null>;
   /** Atomic claim. Returns null when another worker already holds the run. */
