@@ -39,3 +39,6 @@ export type AgentManifest = {
   readonly contextProviderIds: readonly string[];
   readonly limits: ExecutionLimits;
 };
+
+export * from "./engine.js";
+export * from "./agent.js";
