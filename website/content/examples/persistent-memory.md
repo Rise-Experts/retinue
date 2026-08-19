@@ -2,40 +2,52 @@
 sidebar_position: 2
 ---
 
-# Example: persistent memory
+# Example: persistent user memory
 
-An agent that remembers a user across separate conversations.
+Facts a user tells the agent persist across conversations, scoped to that principal, and are fed back
+into later prompts through a budgeted context provider.
 
 ```ts
-import { createAgent } from "@agentkit/runtime";
-import { postgresStore } from "@agentkit/persistence";
+import {
+  createAgent,
+  createMemoryPrincipalMemoryStore,
+  createPrincipalMemoryProvider,
+  commitExtractedMemories,
+} from "@agentkit/backend";
+import { asId } from "@agentkit/backend";
 
-const store = postgresStore({ url: process.env.DATABASE_URL, schema: "auto" });
+const memory = createMemoryPrincipalMemoryStore();
+const tenantId = asId("acme");
+const principalId = asId("user-1");
+
 const agent = createAgent({
-  manifest: { id: "assistant", name: "Assistant", instructions: "Be helpful and concise.",
-    modelPolicy: { role: "smart" } },
-  store,
+  manifest: {
+    id: "assistant",
+    name: "Assistant",
+    instructions: "You are a helpful assistant. Use what you know about the user.",
+    modelPolicy: { role: "smart" },
+  },
+  tenantId: "acme",
+  // Relevant memories for the principal are retrieved under budget and added to the prompt.
+  contextProviders: [createPrincipalMemoryProvider({ store: memory })],
 });
 
-const tenantId = "acme";
-const principalId = "user-123";
+// Commit a validated, de-duplicated memory (raw model output is never stored directly):
+await commitExtractedMemories(memory, {
+  tenantId,
+  principalId,
+  candidates: [{ text: "Prefers answers in metric units", tags: ["preferences"] }],
+});
 
-// Conversation A — the user states a preference.
-await agent.run({ tenantId, principalId, conversationId: "A",
-  message: "Remember I prefer TypeScript examples." });
-
-// …later, a brand new conversation B — the agent still knows.
-const reply = await agent.run({ tenantId, principalId, conversationId: "B",
-  message: "Show me how to read a file." });
-// → responds with a TypeScript example, because user memory carried across threads.
+// A later, unrelated conversation for the same principal sees that memory:
+const reply = await agent.run({
+  conversationId: "B",
+  principalId: "user-1",
+  message: "How far is it from London to Paris?",
+});
+console.log(reply.text); // answers in kilometers
 ```
 
-## What made this work
-
-- `principalId` scopes **user memory** — it follows the person, not the thread.
-- The preference was captured once and retrieved as a **budgeted context section** in the new
-  conversation, ranked below the live turn.
-- `schema: "auto"` provisioned the tables on first run (development); production uses managed
-  migrations.
-
-See **[Persistent memory](../guides/persistent-memory)** for control and isolation details.
+Memory is isolated per `(tenant, principal)`, never visible to another; disabled or deleted entries
+never resurface; and every entry carries a provenance the context inspector can attribute. See the
+**[Memory concept](../concepts/memory)**.

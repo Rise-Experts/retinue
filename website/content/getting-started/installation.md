@@ -7,23 +7,25 @@ sidebar_position: 1
 ## What you need
 
 - **Node.js 20+**
-- A model provider API key (e.g. `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`)
-- For the server profile: PostgreSQL/Supabase and Redis (durable runs & jobs)
+- A model provider API key (e.g. `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`)
+- For the server profile only: PostgreSQL/Supabase and Redis (durable runs & jobs)
 
 ## Install
 
-@agentkit ships as focused packages under the `@agentkit` scope — install only what you use.
+@agentkit ships as two packages:
 
 ```bash
-# core contracts + runtime + a model provider
-npm install @agentkit/core @agentkit/runtime @agentkit/models
+# backend: contracts, runtime, engine, tools, adapters, embedded agent facade
+npm install @agentkit/backend
 
-# storage (start with in-memory; swap for postgres/supabase later)
-npm install @agentkit/persistence
-
-# headless React client (optional, for a UI)
-npm install @agentkit/react
+# headless React client (optional, for a UI) — React is a peer dependency
+npm install @agentkit/frontend react
 ```
+
+`@agentkit/backend` bundles everything server-side: the durable runtime, the default AI-SDK engine,
+the tool registry, the model registry and the reference in-memory adapters. Swap in the Postgres /
+Supabase adapters for production. `@agentkit/frontend` is transport-agnostic headless state — hooks,
+reducers, localization — plus an optional UI component set.
 
 ## Two profiles
 
@@ -31,14 +33,14 @@ npm install @agentkit/react
 
 | Profile | Use for | Adds |
 |---|---|---|
-| **Embedded** | scripts, jobs, single-tenant apps, tests | in-process, synchronous, persistent sessions |
-| **Server** ("AgentOS") | multi-tenant products with a live UI | BullMQ + Redis, GraphQL, realtime, recovery |
+| **Embedded** | scripts, jobs, single-tenant apps, tests | in-process, `createAgent().run()`, persistent sessions |
+| **Server** ("AgentOS") | multi-tenant products with a live UI | BullMQ + Redis, GraphQL/SSE, realtime, HITL, recovery |
 
-The embedded profile needs no server infrastructure — just a store. See
-**[Configuration](configuration)** for wiring, then the **[Quick Start](quick-start)**.
+The embedded profile needs no server infrastructure. See **[Quick Start](quick-start)** to run your
+first agent, then **[Configuration](configuration)** for the server profile.
 
 ## Verify
 
 ```bash
-node -e "import('@agentkit/core').then(() => console.log('agentkit ready'))"
+node -e "import('@agentkit/backend').then(() => console.log('agentkit ready'))"
 ```

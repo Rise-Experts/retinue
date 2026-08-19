@@ -15,9 +15,16 @@ How @agentkit keeps a model from doing something it shouldn't.
 ## Approval decisions
 
 ```ts
-await platform.decideApproval({
+import { createApprovalService } from "@agentkit/backend";
+
+const approvals = createApprovalService({ interactions, grants, dispatcher });
+
+await approvals.decide({
+  tenantId,
   interactionId,
-  decision: "allow-once", // | "allow-conversation" | "allow-always" | "deny"
+  runId,
+  conversationId,                 // scopes an "allow-conversation" grant to this thread only
+  decision: "allow-once",         // | "allow-conversation" | "allow-always" | "deny"
 });
 ```
 
@@ -44,7 +51,7 @@ and reason.
 
 ## Checklist for a safe tool
 
-- [ ] Correct `effect` (`external-write` / `destructive` where appropriate)
-- [ ] `idempotent: true` and a stable idempotency key
-- [ ] Input validated by schema
+- [ ] Correct `effect` (`external-write` / `destructive` where appropriate) — `defineTool` then sets
+      `approvalPolicy: "always"` and requires an idempotency key automatically
+- [ ] `inputSchema` validates the input (a zod schema)
 - [ ] Wraps an existing service rather than duplicating it

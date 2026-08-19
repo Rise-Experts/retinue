@@ -4,47 +4,75 @@ sidebar_position: 3
 
 # Configuration
 
-The **server** profile is composed through a single root. You pass the ports (infrastructure
-capabilities); @agentkit provides the runtime.
+## Embedded profile
+
+`createAgent` is the batteries-included entry point. It defaults every port to a reference in-memory
+adapter; override only what you need:
 
 ```ts
-import { createAgentPlatform } from "@agentkit/runtime";
+import { createAgent } from "@agentkit/backend";
 
-const platform = createAgentPlatform({
-  modelRegistry,        // providers + models + pricing
-  stores,               // conversation, run, message, session-state, … (a storage adapter)
-  jobDispatcher,        // BullMQ (server) or inline (embedded)
-  realtimePublisher,    // Supabase Realtime / Redis pub-sub
-  lockStore,            // distributed lock for run claiming
-  authorizationPolicy,  // who may do what
-  usageRecorder,        // token + cost accounting
-  vectorIndex,          // retrieval
-  blobStore,            // files & spilled tool output
+const agent = createAgent({
+  manifest: { id: "assistant", name: "Assistant", instructions: "…", modelPolicy: { role: "smart" } },
+  models,                // your model catalog (defaults to a small Anthropic catalog)
+  roleAssignments,       // which model ids back "fast" / "smart"
+  providerCredentials,   // per-provider keys (BYO keys), e.g. { anthropic: { apiKey } }
+  tools,                 // ToolProvider[]
+  contextProviders,      // ContextProvider[] (memory, retrieval, …)
+  authorization,         // AuthorizationPolicy (defaults to allow-all in embedded)
+  tenantId,
+});
+```
+
+## Server profile ("AgentOS")
+
+The server profile composes the same pieces explicitly — the durable worker driven by a real queue,
+production adapters, and the HITL/usage services — so many runs execute concurrently with recovery
+and a live UI:
+
+```ts
+import {
+  createDurableWorker,
+  createModelRegistry,
+  createProviderFactory,
+  createToolRegistry,
+  createDefaultEngine,
+  createUsageRecorder,
+} from "@agentkit/backend";
+
+const worker = createDurableWorker({
+  runs,                  // RunStore (Postgres)
+  checkpoints,           // CheckpointStore
+  eventLog,              // RunEventLog (catch-up on reconnect)
+  publisher,             // RealtimePublisher (Supabase Realtime / Redis)
+  engine: createDefaultEngine({ /* loadManifest, resolveModel, loadHistory, buildTools */ }),
+  buildContext,          // build the ExecutionContext from your auth
+  workerId: process.env.HOSTNAME!,
 });
 
-platform.registerToolProvider(domainToolProvider);
-platform.registerContextProvider(domainContextProvider);
-platform.registerAgent(assistant);
-platform.registerMcpServer(tenantMcpConnection);
+// A BullMQ processor calls worker.process({ tenantId, runId }) for each queued run.
 ```
+
+The GraphQL schema + thin resolvers (`typeDefs`, `createResolvers`) and the SSE transport
+(`openRunEventSse`) sit on top; the frontend package consumes them. See the
+**[Durable runtime concept](../concepts/durable-runtime)** and the API reference.
 
 ## Adapters
 
-Every capability is a **port**; you choose the adapter. Start in-memory, move to production
-adapters without changing agent or tool code.
+Every capability is a **port**; you choose the adapter. Start in-memory, move to production adapters
+without changing agent or tool code.
 
 | Port | Development | Production |
 |---|---|---|
 | Stores | in-memory | PostgreSQL / Supabase (RLS) |
 | Job dispatcher | inline | BullMQ + Redis |
-| Vector index | in-memory | pgvector / Qdrant |
-| Blob store | local filesystem | S3-compatible |
+| Realtime | in-memory event bus | Supabase Realtime / Redis pub-sub |
+| Blob store | in-memory | S3-compatible |
 
 ## Automatic schema
 
-Development adapters can **provision their own schema on startup** (`auto` mode), so a fresh
-database is usable with no manual migration step. Production defaults to managed migrations
-(`off`).
+Development adapters can **provision their own schema on startup** (`auto` mode), so a fresh database
+is usable with no manual migration step. Production defaults to managed migrations (`off`).
 
 ## Environment
 
@@ -54,5 +82,5 @@ DATABASE_URL=postgres://...  # server profile
 REDIS_URL=redis://...        # server profile
 ```
 
-Model **IDs are never hardcoded** into agents — an agent asks for a `fast` or `smart` role and
-the registry resolves it by capability, cost ceiling, and data residency.
+Model **IDs are never hardcoded** into agents — an agent asks for a `fast` or `smart` role and the
+registry resolves it by capability, cost ceiling, and data residency.

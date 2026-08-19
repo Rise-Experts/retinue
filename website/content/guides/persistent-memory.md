@@ -11,47 +11,55 @@ Make an agent remember a user across conversations.
 - **Session** memory is automatic — a thread continues where it left off.
 - **User** memory follows a person across *all* their threads. That's what this guide adds.
 
-## Remember a user-stated fact
+## Wire the memory store + provider
 
 ```ts
-await platform.memory.remember({
-  tenantId, principalId,
-  text: "Prefers a formal tone",
-  source: "user-stated",
+import {
+  createAgent,
+  createMemoryPrincipalMemoryStore,
+  createPrincipalMemoryProvider,
+} from "@agentkit/backend";
+
+const memory = createMemoryPrincipalMemoryStore(); // swap for a Postgres adapter in production
+
+const agent = createAgent({
+  manifest: { id: "assistant", name: "Assistant", instructions: "…", modelPolicy: { role: "smart" } },
+  contextProviders: [createPrincipalMemoryProvider({ store: memory, maxEntries: 8 })],
 });
 ```
 
-## Extraction (automatic)
+## Remember a fact (validated + de-duplicated)
 
-After a turn, an extraction step *proposes* candidate facts; @agentkit **validates and dedupes**
-them against existing entries before committing. Raw model output is never stored directly.
+An extraction step *proposes* candidate facts; `commitExtractedMemories` **validates and dedupes**
+them against existing entries before committing — raw model output is never stored directly.
+
+```ts
+import { commitExtractedMemories } from "@agentkit/backend";
+
+await commitExtractedMemories(memory, {
+  tenantId,
+  principalId,
+  candidates: [{ text: "Prefers a formal tone", tags: ["preferences"] }],
+});
+```
 
 ## Retrieval into a run
 
-You don't fetch memory manually — a **context provider** injects the entries relevant to the
-current turn, ranked *below* recent turns so it never crowds the live conversation.
-
-```ts
-const results = await platform.memory.search({
-  tenantId, principalId,
-  query: "communication preference",
-  limit: 5,
-});
-```
-
-## Configuration
-
-| Option | Type | Default | Description |
-|---|---|---|---|
-| `principalId` | string | required | who the memory belongs to |
-| `limit` | number | 5 | max entries retrieved |
-| `threshold` | number | 0.7 | relevance cut-off |
+You don't fetch memory manually — the context provider injects the entries relevant to the current
+turn, drawn from the **user-context budget** so it never crowds out recent turns or session state.
 
 ## User control
 
-Users can **list, edit, delete, and disable** their memory, and the context inspector shows
-which entries influenced a turn. Deletion propagates immediately — a deleted fact can't resurface
-in a later prompt.
+Users can **list, edit, disable, and delete** their memory directly on the store:
+
+```ts
+const page = await memory.list({ tenantId, principalId, limit: 50 });
+await memory.update({ tenantId, principalId, id, expectedVersion, patch: { disabled: true } });
+await memory.delete({ tenantId, principalId, id }); // hard delete — can't resurface in a later prompt
+```
+
+Disabled and deleted entries never surface to the provider, and each retrieved entry carries a
+`principal-memory:<id>` provenance the context inspector attributes.
 
 ## Isolation
 

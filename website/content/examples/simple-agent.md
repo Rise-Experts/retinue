@@ -7,8 +7,7 @@ sidebar_position: 1
 A complete, minimal embedded agent — no server.
 
 ```ts
-import { createAgent } from "@agentkit/runtime";
-import { memoryStore } from "@agentkit/persistence";
+import { createAgent } from "@agentkit/backend";
 
 const agent = createAgent({
   manifest: {
@@ -17,7 +16,6 @@ const agent = createAgent({
     instructions: "You are a concise, helpful assistant.",
     modelPolicy: { role: "smart" },
   },
-  store: memoryStore(),
 });
 
 async function main() {
@@ -25,18 +23,15 @@ async function main() {
     conversationId: "demo",
     message: "Give me three name ideas for a note-taking app.",
   });
-  console.log(text(first));
+  console.log(first.text);
 
   // The thread remembers the previous turn:
   const second = await agent.run({
     conversationId: "demo",
     message: "Make them one word each.",
   });
-  console.log(text(second));
+  console.log(second.text);
 }
-
-const text = (r) =>
-  r.parts.filter((p) => p.type === "text").map((p) => p.text).join("\n");
 
 main();
 ```
@@ -47,5 +42,6 @@ Run it:
 ANTHROPIC_API_KEY=... npx tsx simple-agent.ts
 ```
 
-To make this durable and multi-user, swap `memoryStore()` for a Postgres adapter and compose the
-**server profile** — see **[Configuration](../getting-started/configuration)**.
+To make this durable and multi-user, swap the default in-memory adapters for the Postgres/Supabase
+adapters and drive the worker from a real queue (the **server profile**) — same engine, same
+contracts. See **[Configuration](../getting-started/configuration)**.

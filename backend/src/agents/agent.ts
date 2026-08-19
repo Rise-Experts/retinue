@@ -25,6 +25,7 @@ import {
 } from "../models/index.js";
 import type { ModelProvider } from "../models/index.js";
 import type { AuthorizationPolicy } from "../authorization/index.js";
+import { gatherSections, type ContextProvider } from "../context/index.js";
 import { createToolRegistry, type ToolProvider } from "../tools/index.js";
 import { createDurableWorker, type AgentEngine, type ProcessOutcome, type Run } from "../runtime/index.js";
 import {
@@ -87,6 +88,8 @@ export type CreateAgentConfig = {
   readonly roleAssignments?: ModelRoleAssignments;
   readonly providerCredentials?: Partial<Record<ModelProvider, ProviderCredentials>>;
   readonly tools?: readonly ToolProvider[];
+  /** Context providers (e.g. principal memory, retrieval) whose sections are prepended to the prompt. */
+  readonly contextProviders?: readonly ContextProvider[];
   readonly authorization?: AuthorizationPolicy;
   readonly tenantId?: string;
   /** Test/advanced seam: override how a manifest resolves to a model (e.g. a mock model). */
@@ -146,11 +149,22 @@ export const createAgent = (config: CreateAgentConfig) => {
       };
     });
 
+  const contextProviders = config.contextProviders ?? [];
   const engine = config.engine ?? createDefaultEngine({
     async loadManifest() {
       return manifest; // single-manifest embedded agent
     },
     resolveModel,
+    ...(contextProviders.length > 0
+      ? {
+          systemPrompt: async (m: AgentManifest, context: ExecutionContext) => {
+            const sections = await gatherSections(context, contextProviders);
+            if (sections.length === 0) return m.instructions;
+            const ctxText = sections.map((s) => `## ${s.title}\n${s.body}`).join("\n\n");
+            return `${m.instructions}\n\n# Context\n${ctxText}`;
+          },
+        }
+      : {}),
     async loadHistory(context) {
       const page = await messages.listByConversation({ tenantId: context.tenantId, conversationId: context.conversationId!, limit: 1_000 });
       return page.items.map((m) => ({

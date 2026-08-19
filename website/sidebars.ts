@@ -24,8 +24,10 @@ const sidebars: SidebarsConfig = {
         "concepts/tools",
         "concepts/memory",
         "concepts/sessions",
+        "concepts/durable-runtime",
         "concepts/human-in-the-loop",
         "concepts/retrieval",
+        "concepts/frontend",
       ],
     },
     {
