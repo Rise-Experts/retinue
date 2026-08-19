@@ -21,6 +21,7 @@
     "evals:coverage": "node evals/coverage.mjs",
     "check:boundaries": "node scripts/check-boundaries.mjs",
     "docs:build": "npm --prefix website ci && npm --prefix website run build",
+    "deploy": "npm run docs:build && npx wrangler deploy",
     "clean": "npm run clean --workspaces --if-present && rm -rf tsconfig.tsbuildinfo"
   },
   "devDependencies": {
