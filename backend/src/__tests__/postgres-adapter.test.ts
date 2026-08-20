@@ -31,6 +31,19 @@ const freshStore = () => {
 // The Postgres adapter must pass the exact same suite as the in-memory adapter.
 conversationStoreConformance(freshStore);
 
+/**
+ * COVERAGE, STATED PLAINLY (#91): `ConversationStore` is the **only** port with a Postgres
+ * implementation today — `MIGRATIONS` contains just `0001_conversations`, and
+ * `createPostgresConversationStore` is the only store factory in `src/adapters/postgres/`. The other
+ * 18 harnesses in the widened suite therefore have nothing to run against here yet; they activate
+ * one by one as REQ-010→014 land (#93 onward), each of which adds a factory and a line below.
+ *
+ * This comment exists because the previous state of this file — one harness, no note — read as
+ * "the Postgres adapter passes the conformance suite", which is how #20 could close green against
+ * the criterion "passes the full conformance suite" with a single table implemented. The
+ * adapter × port matrix in #92 makes this machine-checkable; until then, it is written down.
+ */
+
 describe("postgres migrations + delete semantics", () => {
   const t1 = "t1" as TenantId;
   const c1 = "c1" as ConversationId;
