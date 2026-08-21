@@ -58,6 +58,24 @@ export const REGISTERED_PORTS: readonly PortCoverage[] = [
 ];
 
 /**
+ * Registered ports whose harness is **not** required to assert cross-tenant isolation, with the
+ * reason. Everything else must: governing principle 1 says every tenant-sensitive operation receives
+ * an explicit tenant context, and the `AgentStore` leak #91 found proves the type system alone does
+ * not enforce it — a store can accept `TenantScope` and quietly ignore it.
+ *
+ * Keep this list as short as the truth allows. An entry here is a claim that the port has nothing
+ * tenant-scoped to leak, not that testing it would be inconvenient.
+ */
+export const ISOLATION_EXEMPT_PORTS: readonly { readonly port: string; readonly reason: string }[] = [
+  {
+    port: "UnitOfWork",
+    reason:
+      "run<T>(fn) takes no tenant parameter and holds no data of its own, so there is nothing " +
+      "tenant-scoped to isolate. The stores it wraps are each covered by their own harness.",
+  },
+];
+
+/**
  * Method-less placeholder interfaces, deliberately without a harness. An empty harness would pass
  * vacuously and read as coverage, so the guard test instead fails if one of these gains a method —
  * turning "we forgot to widen the suite" into a build failure. Each lands with its own SPEC:
@@ -103,4 +121,19 @@ export const SCANNED_PORT_MODULES: readonly string[] = [
   "src/principal-memory/index.ts",
   "src/mcp/provider.ts",
   "src/runtime/index.ts",
+];
+
+/**
+ * The harness sources the isolation guard reads. Listed explicitly rather than globbed so a harness
+ * file that is added but never wired in shows up as a missing harness rather than being skipped.
+ */
+export const HARNESS_MODULES: readonly string[] = [
+  "src/testing/conformance/conversation-store.ts",
+  "src/testing/conformance/run-store.ts",
+  "src/testing/conformance/run-event-log.ts",
+  "src/testing/conformance/checkpoint-store.ts",
+  "src/testing/conformance/run-coordinator.ts",
+  "src/testing/conformance/session-state.ts",
+  "src/testing/conformance/records.ts",
+  "src/testing/conformance/hitl.ts",
 ];

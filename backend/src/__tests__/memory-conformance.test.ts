@@ -130,8 +130,8 @@ const manifest = (id: string, version: number): AgentManifest => ({
 
 agentStoreConformance(
   () => createMemoryAgentStore(),
-  async (store, { agentId, version }) => {
-    (store as ReturnType<typeof createMemoryAgentStore>).put(manifest(agentId, version));
+  async (store, { tenantId, agentId, version }) => {
+    (store as ReturnType<typeof createMemoryAgentStore>).put(tenantId, manifest(agentId, version));
   },
 );
 

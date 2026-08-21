@@ -15,6 +15,8 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   DEFERRED_INFRASTRUCTURE_PORTS,
+  HARNESS_MODULES,
+  ISOLATION_EXEMPT_PORTS,
   NON_STORAGE_PORTS,
   PLACEHOLDER_PORTS,
   REGISTERED_PORTS,
@@ -111,5 +113,57 @@ describe("conformance coverage guard", () => {
     const harnesses = REGISTERED_PORTS.map((p) => p.harness);
     expect(new Set(harnesses).size).toBe(harnesses.length);
     expect(new Set(REGISTERED_PORTS.map((p) => p.port)).size).toBe(REGISTERED_PORTS.length);
+  });
+});
+
+/**
+ * The isolation guard. The `AgentStore` leak #91 surfaced was invisible to the type system: the
+ * method accepted `TenantScope` and destructured only `{ agentId, version }`. Nothing but an
+ * explicit cross-tenant assertion catches that, so every tenant-scoped harness must carry one and
+ * this test fails if one loses it.
+ */
+describe("conformance isolation guard", () => {
+  /** Harness bodies, split out of the harness sources by `export function XConformance`. */
+  const harnessBodies = (): ReadonlyMap<string, string> => {
+    const bodies = new Map<string, string>();
+    for (const file of HARNESS_MODULES) {
+      const source = readFileSync(resolve(PACKAGE_ROOT, file), "utf8");
+      const parts = source.split(/\nexport function (\w+Conformance)/);
+      for (let i = 1; i < parts.length; i += 2) bodies.set(parts[i]!, parts[i + 1] ?? "");
+    }
+    return bodies;
+  };
+
+  const exempt = new Set(ISOLATION_EXEMPT_PORTS.map((e) => e.port));
+
+  it("locates every registered harness in the sources — not vacuously passing", () => {
+    const bodies = harnessBodies();
+    const missing = REGISTERED_PORTS.filter((p) => !bodies.has(p.harness)).map((p) => p.harness);
+    expect(missing, "harness named in REGISTERED_PORTS but not found in HARNESS_MODULES").toEqual([]);
+  });
+
+  it("every tenant-scoped harness asserts a cross-tenant read returns nothing", () => {
+    const bodies = harnessBodies();
+    const withoutIsolation = REGISTERED_PORTS.filter(({ port, harness }) => {
+      if (exempt.has(port)) return false;
+      const body = bodies.get(harness) ?? "";
+      // A second tenant (T2/t2) or second principal must appear in an assertion. Case-sensitive on
+      // purpose: the moved conversation-store harness uses `t2`, the newer ones use `T2`.
+      return !/\b[Tt]2\b/.test(body) && !/\bP2\b/.test(body);
+    });
+    expect(
+      withoutIsolation.map((p) => `${p.port} (${p.harness})`),
+      "Each of these harnesses must assert that a read in another tenant's context returns " +
+        "nothing — or be given a reasoned entry in ISOLATION_EXEMPT_PORTS. See the AgentStore " +
+        "leak #91 found: TenantScope on the signature does not mean the adapter honours it.",
+    ).toEqual([]);
+  });
+
+  it("keeps the exemption list honest — every exempt port is actually registered", () => {
+    const registeredNames = new Set(REGISTERED_PORTS.map((p) => p.port));
+    for (const { port, reason } of ISOLATION_EXEMPT_PORTS) {
+      expect(registeredNames.has(port), `${port} is exempt but not a registered port`).toBe(true);
+      expect(reason.length, `${port}'s exemption needs a stated reason`).toBeGreaterThan(20);
+    }
   });
 });

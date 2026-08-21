@@ -106,27 +106,33 @@ export function agentStoreConformance(
     });
 
     /**
-     * KNOWN DIVERGENCE — surfaced by #91, deliberately left failing-by-design rather than fixed
-     * here (a fix is production code, outside a test-only SPEC).
+     * Surfaced by #91 as a real leak and fixed: `createMemoryAgentStore` keyed its map by
+     * `id@version` alone and destructured only `{ agentId, version }`, so one tenant could resolve
+     * another tenant's manifest. It now partitions by tenant like every sibling store.
      *
-     * `createMemoryAgentStore.findByVersion` destructures only `{ agentId, version }` and ignores
-     * `tenantId`; its map is keyed `id@version`. So one tenant can resolve another tenant's agent
-     * manifest. Two readings, and the product needs to pick one:
-     *
-     *  a) It is a leak. `AgentStore.findByVersion` takes `TenantScope` and governing principle 1
-     *     says every tenant-sensitive operation receives an explicit tenant context — so the
-     *     adapter should partition by tenant like every sibling store does.
-     *  b) Agent manifests are intentionally global platform definitions. `AgentManifest` has no
-     *     `tenantId` field and the factory takes a flat list, which supports this reading — but
-     *     then `TenantScope` on the signature is misleading and should be justified in the port
-     *     docstring, and this test should be replaced by a documented exemption.
-     *
-     * `it.fails` keeps the question visible in every run instead of hiding it in a skip. When the
-     * decision lands, either the adapter is fixed (drop `.fails`) or the test is replaced.
+     * Kept deliberately as a regression test rather than deleted — an agent manifest carries no
+     * `tenantId` of its own, so nothing in the type system stops this from being reintroduced.
      */
-    it.fails("enforces tenant isolation — see KNOWN DIVERGENCE above (#91)", async () => {
+    it("enforces tenant isolation", async () => {
       const store = makeStore();
       await seed(store, { tenantId: T1, agentId: "a", version: 1 });
+      expect(await store.findByVersion({ tenantId: T2, agentId: "a", version: 1 })).toBeNull();
+    });
+
+    it("keeps same-id manifests separate per tenant", async () => {
+      const store = makeStore();
+      await seed(store, { tenantId: T1, agentId: "shared", version: 1 });
+      await seed(store, { tenantId: T2, agentId: "shared", version: 1 });
+      // Both tenants may legitimately own an agent with the same id; neither may see the other's.
+      expect(await store.findByVersion({ tenantId: T1, agentId: "shared", version: 1 })).not.toBeNull();
+      expect(await store.findByVersion({ tenantId: T2, agentId: "shared", version: 1 })).not.toBeNull();
+    });
+
+    it("does not leak a version one tenant owns and the other does not", async () => {
+      const store = makeStore();
+      await seed(store, { tenantId: T1, agentId: "a", version: 1 });
+      await seed(store, { tenantId: T2, agentId: "a", version: 2 });
+      expect(await store.findByVersion({ tenantId: T1, agentId: "a", version: 2 })).toBeNull();
       expect(await store.findByVersion({ tenantId: T2, agentId: "a", version: 1 })).toBeNull();
     });
   });
