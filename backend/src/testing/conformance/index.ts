@@ -92,8 +92,8 @@ export const PLACEHOLDER_PORTS: readonly string[] = [
 ];
 
 /**
- * Infrastructure ports that are not storage. Their real adapters land with REQ-015 (#101 BullMQ
- * dispatcher, #102 Redis lock), at which point they join `REGISTERED_PORTS`. Listed so the omission
+ * Infrastructure ports that are not storage. Their real adapters land with REQ-015 (#105 BullMQ
+ * dispatcher, #106 Redis lock), at which point they join `REGISTERED_PORTS`. Listed so the omission
  * is recorded rather than silent.
  */
 export const DEFERRED_INFRASTRUCTURE_PORTS: readonly string[] = ["JobDispatcher", "DistributedLockStore"];
@@ -121,6 +121,72 @@ export const SCANNED_PORT_MODULES: readonly string[] = [
   "src/principal-memory/index.ts",
   "src/mcp/provider.ts",
   "src/runtime/index.ts",
+];
+
+/** The adapters the conformance matrix reports on. */
+export const MATRIX_ADAPTERS = ["memory", "postgres", "supabase"] as const;
+
+export type MatrixAdapter = (typeof MATRIX_ADAPTERS)[number];
+
+/**
+ * Which ports each adapter implements today, and — for each it does not — the SPEC that will add
+ * it. This is the data behind the matrix's `NOT-IMPLEMENTED` cell and behind AC-3 of #92.
+ *
+ * The distinction that matters: a **classified** absence (listed here with a tracking issue) is a
+ * known gap and is allowed; an **unclassified** absence (a registered port missing from both lists)
+ * is an omission and fails the build. Without that split, either the matrix is permanently red until
+ * #100 lands, or a forgotten adapter silently reads as covered — and #20 closing green against
+ * "passes the full conformance suite" is what the second failure mode looks like in practice.
+ */
+export type AdapterCoverage = {
+  readonly adapter: MatrixAdapter;
+  readonly implemented: readonly string[];
+  readonly notImplemented: readonly { readonly port: string; readonly trackedBy: string }[];
+};
+
+/** Ports with no Postgres store yet, each against the SPEC that adds it (REQ-010→013). */
+const POSTGRES_PENDING: readonly { readonly port: string; readonly trackedBy: string }[] = [
+  { port: "RunStore", trackedBy: "#93" },
+  { port: "RunEventLog", trackedBy: "#94" },
+  { port: "CheckpointStore", trackedBy: "#95" },
+  { port: "MessageStore", trackedBy: "#96" },
+  { port: "AgentStore", trackedBy: "#96" },
+  { port: "ConversationBindingStore", trackedBy: "#96" },
+  { port: "SessionStateStore", trackedBy: "#97" },
+  { port: "ThreadSummaryStore", trackedBy: "#97" },
+  { port: "ConversationRunCoordinator", trackedBy: "#98" },
+  { port: "UnitOfWork", trackedBy: "#98" },
+  { port: "InteractionStore", trackedBy: "#99" },
+  { port: "ApprovalGrantStore", trackedBy: "#99" },
+  { port: "UsageStore", trackedBy: "#100" },
+  { port: "IdempotencyStore", trackedBy: "#100" },
+  { port: "SkillStore", trackedBy: "#101" },
+  { port: "McpConnectionStore", trackedBy: "#101" },
+  { port: "PrincipalMemoryStore", trackedBy: "#102" },
+  { port: "BlobStore", trackedBy: "#102" },
+];
+
+export const ADAPTER_COVERAGE: readonly AdapterCoverage[] = [
+  {
+    adapter: "memory",
+    // The reference implementation: it implements every port, which is what makes it the baseline
+    // the other adapters are compared against.
+    implemented: REGISTERED_PORTS.map((p) => p.port),
+    notImplemented: [],
+  },
+  {
+    adapter: "postgres",
+    implemented: ["ConversationStore"],
+    notImplemented: POSTGRES_PENDING,
+  },
+  {
+    adapter: "supabase",
+    // `createSupabaseConversationStore` is an alias re-export of the Postgres store
+    // (`adapters/supabase/index.ts`), so Supabase inherits Postgres's coverage rather than being a
+    // second implementation. #104 brings the remaining Postgres stores across with RLS applied.
+    implemented: ["ConversationStore"],
+    notImplemented: POSTGRES_PENDING.map((p) => ({ port: p.port, trackedBy: "#104" })),
+  },
 ];
 
 /**

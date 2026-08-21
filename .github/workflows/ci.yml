@@ -26,6 +26,50 @@ jobs:
       - name: Eval dataset coverage
         run: npm run evals:coverage
 
+  # The conformance matrix (#92). Separate job because it needs a real PostgreSQL server: PGlite
+  # cannot exercise advisory locks or SKIP LOCKED, and those are exactly the primitives the run
+  # coordinator and lease-based claim depend on. Required, not advisory — an advisory gate is not a
+  # gate, which is the lesson of #20 closing green against "passes the full conformance suite".
+  conformance-matrix:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: agentkit_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install
+        run: npm install
+      - name: Conformance suite (real PostgreSQL)
+        env:
+          AGENTKIT_TEST_PG_URL: postgres://postgres:postgres@localhost:5432/agentkit_test
+        run: npm run conformance:report
+      - name: Publish matrix
+        # always(): a regression must still publish the table, or the job fails without showing
+        # which cell broke. This step also fails on an unaccounted cell, so it is a gate too.
+        if: always()
+        run: npm run conformance:matrix
+      - name: Upload matrix
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: conformance-matrix
+          path: |
+            backend/.conformance/conformance-matrix.json
+            backend/.conformance/conformance-matrix.md
+          if-no-files-found: error
+
   docs:
     runs-on: ubuntu-latest
     steps:

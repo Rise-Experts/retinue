@@ -2,7 +2,7 @@
   "name": "@agentkit/monorepo",
   "version": "0.0.0",
   "private": true,
-  "description": "Reusable AI agent platform — npm-workspaces monorepo (see docs/).",
+  "description": "Reusable AI agent platform \u2014 npm-workspaces monorepo (see docs/).",
   "license": "UNLICENSED",
   "type": "module",
   "workspaces": [
@@ -22,7 +22,10 @@
     "check:boundaries": "node scripts/check-boundaries.mjs",
     "docs:build": "npm --prefix website ci && npm --prefix website run build",
     "deploy": "npm run docs:build && npx wrangler deploy",
-    "clean": "npm run clean --workspaces --if-present && rm -rf tsconfig.tsbuildinfo"
+    "clean": "npm run clean --workspaces --if-present && rm -rf tsconfig.tsbuildinfo",
+    "conformance:matrix": "node scripts/conformance-matrix.mjs backend/.conformance/vitest.json",
+    "conformance:report": "npm run test -w @agentkit/backend -- --reporter=json --outputFile=.conformance/vitest.json",
+    "conformance": "npm run conformance:report; npm run conformance:matrix"
   },
   "devDependencies": {
     "typescript": "^5"
