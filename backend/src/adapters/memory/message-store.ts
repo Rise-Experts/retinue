@@ -34,15 +34,32 @@ export const createMemoryMessageStore = (): MessageStore & { append(tenantId: st
   };
 };
 
-export const createMemoryAgentStore = (manifests: readonly AgentManifest[] = []): AgentStore & { put(m: AgentManifest): void } => {
-  const byKey = new Map<string, AgentManifest>();
+/** A manifest and the tenant that owns it. Manifests carry no `tenantId`, so ownership is explicit here. */
+export type AgentStoreEntry = {
+  readonly tenantId: string;
+  readonly manifest: AgentManifest;
+};
+
+export const createMemoryAgentStore = (
+  entries: readonly AgentStoreEntry[] = [],
+): AgentStore & { put(tenantId: string, manifest: AgentManifest): void } => {
+  // tenantId → (id@version → manifest). Partitioning by tenant makes cross-tenant reads
+  // structurally impossible, matching every sibling store in this package. Keying only by
+  // `id@version` let one tenant resolve another's manifest — the leak the #91 harness surfaced.
+  const byTenant = new Map<string, Map<string, AgentManifest>>();
+  const tenant = (t: string) => {
+    let m = byTenant.get(t);
+    if (!m) byTenant.set(t, (m = new Map()));
+    return m;
+  };
   const key = (id: string, v: number) => `${id}@${v}`;
-  const put = (m: AgentManifest) => byKey.set(key(m.id, m.version), m);
-  for (const m of manifests) put(m);
+  const put = (tenantId: string, manifest: AgentManifest) =>
+    void tenant(tenantId).set(key(manifest.id, manifest.version), manifest);
+  for (const entry of entries) put(entry.tenantId, entry.manifest);
   return {
     put,
-    async findByVersion({ agentId, version }) {
-      return byKey.get(key(agentId, version)) ?? null;
+    async findByVersion({ tenantId, agentId, version }) {
+      return byTenant.get(tenantId)?.get(key(agentId, version)) ?? null;
     },
   };
 };
