@@ -9,14 +9,16 @@
  * TypeScript interfaces do not exist at runtime, so the guard reads the port sources directly.
  */
 
-import { readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
+  ADAPTER_COVERAGE,
   DEFERRED_INFRASTRUCTURE_PORTS,
   HARNESS_MODULES,
   ISOLATION_EXEMPT_PORTS,
+  MATRIX_ADAPTERS,
   NON_STORAGE_PORTS,
   PLACEHOLDER_PORTS,
   REGISTERED_PORTS,
@@ -159,11 +161,114 @@ describe("conformance isolation guard", () => {
     ).toEqual([]);
   });
 
+  /**
+   * The matrix keys each cell off the describe title, so the `${Port} conformance` convention is
+   * load-bearing rather than cosmetic. Guarded here: a renamed describe would silently drop that
+   * port's row from the published matrix, which would read as "not covered" instead of failing.
+   */
+  it("names every harness describe block `<Port> conformance`, which the matrix keys on", () => {
+    const bodies = harnessBodies();
+    const wrong: string[] = [];
+    for (const { port, harness } of REGISTERED_PORTS) {
+      const body = bodies.get(harness) ?? "";
+      if (!body.includes(`describe("${port} conformance"`)) wrong.push(`${port} (${harness})`);
+    }
+    expect(
+      wrong,
+      'Each harness must open with describe("<Port> conformance", …) — scripts/conformance-matrix.mjs ' +
+        "maps that title back to the port to build the adapter × port table.",
+    ).toEqual([]);
+  });
+
   it("keeps the exemption list honest — every exempt port is actually registered", () => {
     const registeredNames = new Set(REGISTERED_PORTS.map((p) => p.port));
     for (const { port, reason } of ISOLATION_EXEMPT_PORTS) {
       expect(registeredNames.has(port), `${port} is exempt but not a registered port`).toBe(true);
       expect(reason.length, `${port}'s exemption needs a stated reason`).toBeGreaterThan(20);
     }
+  });
+});
+
+/**
+ * The adapter-coverage guard — AC-3 of #92, in its amended form.
+ *
+ * Every adapter must account for every registered port: either it implements it, or it declares the
+ * gap against the SPEC that will close it. A registered port missing from both lists is an
+ * unclassified absence and fails the build. That is the difference between "we know this is not done
+ * yet" and "we forgot", which is precisely the distinction #20 lacked when it closed green.
+ */
+describe("adapter coverage guard", () => {
+  const allPorts = REGISTERED_PORTS.map((p) => p.port);
+
+  it("covers every adapter the matrix reports on", () => {
+    expect(ADAPTER_COVERAGE.map((a) => a.adapter).sort()).toEqual([...MATRIX_ADAPTERS].sort());
+  });
+
+  it("every adapter accounts for every registered port — no unclassified absence", () => {
+    for (const { adapter, implemented, notImplemented } of ADAPTER_COVERAGE) {
+      const accounted = new Set([...implemented, ...notImplemented.map((n) => n.port)]);
+      const unaccounted = allPorts.filter((p) => !accounted.has(p));
+      expect(
+        unaccounted,
+        `Adapter "${adapter}" neither implements nor declares a gap for these ports. Add them to ` +
+          `ADAPTER_COVERAGE — either as implemented (and wire the harness into its test entrypoint) ` +
+          `or as notImplemented with the issue that will add them.`,
+      ).toEqual([]);
+    }
+  });
+
+  it("never claims a port both ways", () => {
+    for (const { adapter, implemented, notImplemented } of ADAPTER_COVERAGE) {
+      const both = implemented.filter((p) => notImplemented.some((n) => n.port === p));
+      expect(both, `Adapter "${adapter}" lists these ports as both implemented and pending`).toEqual([]);
+    }
+  });
+
+  it("never references a port that is not registered", () => {
+    const known = new Set(allPorts);
+    for (const { adapter, implemented, notImplemented } of ADAPTER_COVERAGE) {
+      const unknown = [...implemented, ...notImplemented.map((n) => n.port)].filter((p) => !known.has(p));
+      expect(unknown, `Adapter "${adapter}" references ports that are not in REGISTERED_PORTS`).toEqual([]);
+    }
+  });
+
+  it("tracks every gap to a plausible issue reference", () => {
+    for (const { adapter, notImplemented } of ADAPTER_COVERAGE) {
+      for (const { port, trackedBy } of notImplemented) {
+        expect(
+          trackedBy,
+          `${adapter}/${port} needs a tracking issue like "#93", so the gap is followable`,
+        ).toMatch(/^#\d+$/);
+      }
+    }
+  });
+
+  /**
+   * Emits the registry for `scripts/conformance-matrix.mjs`. A test writing a file is deliberate:
+   * `src/testing/**` is excluded from the build (correctly — the harness must not ship), so the
+   * matrix script cannot import the registry from `dist`. Re-deriving it by parsing the TypeScript
+   * would give the matrix a second, drifting source of truth. Emitting it here keeps exactly one.
+   */
+  it("emits the registry the matrix generator consumes", () => {
+    const out = resolve(PACKAGE_ROOT, ".conformance");
+    mkdirSync(out, { recursive: true });
+    const payload = {
+      ports: REGISTERED_PORTS,
+      adapters: ADAPTER_COVERAGE,
+      isolationExempt: ISOLATION_EXEMPT_PORTS,
+      placeholders: PLACEHOLDER_PORTS,
+      deferredInfrastructure: DEFERRED_INFRASTRUCTURE_PORTS,
+    };
+    writeFileSync(resolve(out, "registry.json"), `${JSON.stringify(payload, null, 2)}\n`);
+    expect(existsSync(resolve(out, "registry.json"))).toBe(true);
+  });
+
+  it("keeps the memory adapter as the complete reference implementation", () => {
+    const memory = ADAPTER_COVERAGE.find((a) => a.adapter === "memory");
+    expect(memory).toBeDefined();
+    // If the reference adapter ever stops implementing everything, the matrix loses its baseline
+    // and "identical behaviour across adapters" becomes unmeasurable.
+    expect(memory?.notImplemented).toEqual([]);
+    expect([...(memory?.implemented ?? [])].sort()).toEqual([...allPorts].sort());
   });
 });
