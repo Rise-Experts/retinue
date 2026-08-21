@@ -31,6 +31,51 @@ export const MIGRATIONS: readonly Migration[] = [
     ],
     down: [`DROP TABLE IF EXISTS conversations`],
   },
+  {
+    // #93 — durable run lifecycle. Columns mirror the `Run` type in `src/runtime/index.ts`; the
+    // SPEC's original list named `attempt`/`claimed_at`/`heartbeat_at`, which do not exist on `Run`.
+    // The lease is `keepalive_at` + `lease_expires_at`, and retry attempts live in the retry policy
+    // rather than the row.
+    id: "0002_runs",
+    up: [
+      `CREATE TABLE IF NOT EXISTS runs (
+        tenant_id           text        NOT NULL,
+        id                  text        NOT NULL,
+        conversation_id     text        NOT NULL,
+        agent_id            text        NOT NULL,
+        agent_version       integer     NOT NULL,
+        status              text        NOT NULL,
+        created_at          timestamptz NOT NULL,
+        started_at          timestamptz,
+        finished_at         timestamptz,
+        error               jsonb,
+        claimed_by          text,
+        keepalive_at        timestamptz,
+        lease_expires_at    timestamptz,
+        cancel_requested_at timestamptz,
+        PRIMARY KEY (tenant_id, id),
+        -- Mirrors RUN_STATUSES (src/runtime/index.ts), which is hyphenated. The GraphQL enum is
+        -- underscored; a constraint built from that spelling would reject every waiting-state write.
+        CONSTRAINT runs_status_check CHECK (status IN (
+          'queued', 'running', 'waiting-for-question', 'waiting-for-approval',
+          'retry-pending', 'completed', 'failed', 'cancelled'
+        ))
+      )`,
+      // Conversation history, newest-last, stable under concurrent inserts.
+      `CREATE INDEX IF NOT EXISTS runs_tenant_conversation_created_idx
+        ON runs (tenant_id, conversation_id, created_at, id)`,
+      // The reaper sweep. Deliberately NOT tenant-leading: `reapExpired` is cross-tenant by design
+      // (a background reaper has no tenant), so a tenant-first index could not serve it. Partial on
+      // 'running' because no other status can hold a live lease.
+      `CREATE INDEX IF NOT EXISTS runs_running_lease_idx
+        ON runs (lease_expires_at) WHERE status = 'running'`,
+    ],
+    down: [
+      `DROP INDEX IF EXISTS runs_running_lease_idx`,
+      `DROP INDEX IF EXISTS runs_tenant_conversation_created_idx`,
+      `DROP TABLE IF EXISTS runs`,
+    ],
+  },
 ];
 
 export const migrate = async (sql: SqlExecutor): Promise<void> => {
