@@ -144,9 +144,15 @@ export type AdapterCoverage = {
   readonly notImplemented: readonly { readonly port: string; readonly trackedBy: string }[];
 };
 
+/**
+ * The ports `adapters/supabase/index.ts` actually alias from the Postgres adapter. Keep this in step
+ * with the aliases there: a port Postgres implements is not automatically a Supabase claim, because
+ * #104 verifies the Supabase column with row-level security applied, which Postgres alone does not.
+ */
+const SUPABASE_ALIASED: readonly string[] = ["ConversationStore"];
+
 /** Ports with no Postgres store yet, each against the SPEC that adds it (REQ-010→013). */
 const POSTGRES_PENDING: readonly { readonly port: string; readonly trackedBy: string }[] = [
-  { port: "RunStore", trackedBy: "#93" },
   { port: "RunEventLog", trackedBy: "#94" },
   { port: "CheckpointStore", trackedBy: "#95" },
   { port: "MessageStore", trackedBy: "#96" },
@@ -176,16 +182,23 @@ export const ADAPTER_COVERAGE: readonly AdapterCoverage[] = [
   },
   {
     adapter: "postgres",
-    implemented: ["ConversationStore"],
+    implemented: ["ConversationStore", "RunStore"],
     notImplemented: POSTGRES_PENDING,
   },
   {
     adapter: "supabase",
     // `createSupabaseConversationStore` is an alias re-export of the Postgres store
     // (`adapters/supabase/index.ts`), so Supabase inherits Postgres's coverage rather than being a
-    // second implementation. #104 brings the remaining Postgres stores across with RLS applied.
-    implemented: ["ConversationStore"],
-    notImplemented: POSTGRES_PENDING.map((p) => ({ port: p.port, trackedBy: "#104" })),
+    // second implementation. #104 brings the remaining stores across with RLS applied.
+    //
+    // Derived rather than listed: a Postgres store landing (#93 → #102) must not silently become a
+    // Supabase claim, but it must not become an *unclassified* absence either. Deriving the gap from
+    // what this adapter actually aliases keeps the column honest as Postgres fills in.
+    implemented: SUPABASE_ALIASED,
+    notImplemented: REGISTERED_PORTS.filter((p) => !SUPABASE_ALIASED.includes(p.port)).map((p) => ({
+      port: p.port,
+      trackedBy: "#104",
+    })),
   },
 ];
 
