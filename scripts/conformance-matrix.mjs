@@ -20,7 +20,7 @@
  * Usage: node scripts/conformance-matrix.mjs <vitest-report.json> [--out DIR] [--summary FILE]
  */
 
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 
 const args = process.argv.slice(2);
@@ -50,6 +50,36 @@ if (!existsSync(registryPath)) {
 
 const registry = JSON.parse(readFileSync(registryPath, "utf8"));
 const report = JSON.parse(readFileSync(resolve(reportPath), "utf8"));
+
+/**
+ * Refuse a stale report. `.conformance/` is gitignored, so a report from an earlier run survives —
+ * and a matrix built from it publishes yesterday's verdict as today's. This bit during #95: a report
+ * left over from a deliberately-broken negative test reported two adapters failing while the suite
+ * was green. CI never sees it (fresh checkout), which is exactly why it needs catching locally.
+ */
+const newestSourceMtime = () => {
+  let newest = 0;
+  const walk = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.name === "node_modules" || entry.name === "dist" || entry.name.startsWith(".")) continue;
+      const full = resolve(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.name.endsWith(".ts")) newest = Math.max(newest, statSync(full).mtimeMs);
+    }
+  };
+  walk(resolve("backend/src"));
+  return newest;
+};
+
+const reportMtime = statSync(resolve(reportPath)).mtimeMs;
+const sourceMtime = newestSourceMtime();
+if (reportMtime < sourceMtime) {
+  fail(
+    `the report at ${reportPath} predates the newest source file by ` +
+      `${Math.round((sourceMtime - reportMtime) / 1000)}s. Publishing it would report a stale ` +
+      "verdict as current. Re-run: npm run conformance:report",
+  );
+}
 
 const PORTS = registry.ports.map((p) => p.port);
 const ADAPTERS = registry.adapters.map((a) => a.adapter);
