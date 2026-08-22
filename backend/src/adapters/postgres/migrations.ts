@@ -132,6 +132,73 @@ export const MIGRATIONS: readonly Migration[] = [
     ],
     down: [`DROP TABLE IF EXISTS checkpoints`],
   },
+  {
+    // #96 — the conversation itself: its messages, the agent manifests, and the binding that says
+    // which agent version owns a thread.
+    id: "0005_messages_agents",
+    up: [
+      `CREATE TABLE IF NOT EXISTS messages (
+        tenant_id       text        NOT NULL,
+        id              text        NOT NULL,
+        conversation_id text        NOT NULL,
+        run_id          text,
+        role            text        NOT NULL,
+        parts           jsonb       NOT NULL,
+        created_at      timestamptz NOT NULL,
+        PRIMARY KEY (tenant_id, id),
+        CONSTRAINT messages_conversation_fk
+          FOREIGN KEY (tenant_id, conversation_id) REFERENCES conversations (tenant_id, id)
+          ON DELETE CASCADE
+      )`,
+      // The composite ordering the stable cursor pages on. `id` breaks ties, which is what makes
+      // paging safe under concurrent inserts sharing a created_at — a timestamp alone would let a
+      // row slip between pages.
+      `CREATE INDEX IF NOT EXISTS messages_tenant_conversation_created_idx
+        ON messages (tenant_id, conversation_id, created_at, id)`,
+      // One row per version: a thread pinned to v1 must still resolve v1 after v2 is registered.
+      // Tenant-leading — this is the store whose in-memory version leaked across tenants (#91).
+      `CREATE TABLE IF NOT EXISTS agents (
+        tenant_id  text        NOT NULL,
+        id         text        NOT NULL,
+        version    integer     NOT NULL,
+        manifest   jsonb       NOT NULL,
+        created_at timestamptz NOT NULL,
+        updated_at timestamptz NOT NULL,
+        PRIMARY KEY (tenant_id, id, version),
+        CONSTRAINT agents_version_positive CHECK (version > 0)
+      )`,
+      // agent_version_policy was absent from the SPEC. Without it a binding cannot express what it
+      // exists to express, and agent_version is NULL for a 'latest' binding — hence nullable, with a
+      // constraint tying the two together instead of leaving the pair free to contradict itself.
+      //
+      // No foreign key to `agents`: a 'latest' binding carries no version, so a composite
+      // (agent_id, agent_version) reference cannot be enforced for it, and binding to an agent whose
+      // manifest is not yet registered is legitimate.
+      `CREATE TABLE IF NOT EXISTS conversation_bindings (
+        tenant_id            text        NOT NULL,
+        conversation_id      text        NOT NULL,
+        agent_id             text        NOT NULL,
+        agent_version_policy text        NOT NULL,
+        agent_version        integer,
+        bound_at             timestamptz NOT NULL,
+        PRIMARY KEY (tenant_id, conversation_id),
+        CONSTRAINT conversation_bindings_conversation_fk
+          FOREIGN KEY (tenant_id, conversation_id) REFERENCES conversations (tenant_id, id)
+          ON DELETE CASCADE,
+        CONSTRAINT conversation_bindings_policy_check
+          CHECK (agent_version_policy IN ('pinned', 'latest')),
+        CONSTRAINT conversation_bindings_pinned_has_version
+          CHECK ((agent_version_policy = 'pinned' AND agent_version IS NOT NULL)
+              OR (agent_version_policy = 'latest'))
+      )`,
+    ],
+    down: [
+      `DROP TABLE IF EXISTS conversation_bindings`,
+      `DROP TABLE IF EXISTS agents`,
+      `DROP INDEX IF EXISTS messages_tenant_conversation_created_idx`,
+      `DROP TABLE IF EXISTS messages`,
+    ],
+  },
 ];
 
 export const migrate = async (sql: SqlExecutor): Promise<void> => {

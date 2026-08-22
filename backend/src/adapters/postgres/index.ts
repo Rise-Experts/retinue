@@ -11,6 +11,7 @@ export * from "./conversation-store.js";
 export * from "./run-store.js";
 export * from "./run-event-log.js";
 export * from "./checkpoint-store.js";
+export * from "./message-store.js";
 export * from "./pg-executor.js";
 
 /** Capabilities a PostgreSQL deployment can advertise (docs/02 capability declarations). */

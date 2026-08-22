@@ -18,6 +18,7 @@ import type {
   UnitOfWork,
 } from "../../persistence/index.js";
 import { gatedIt, type AdapterDeclaration } from "./capability.js";
+import { withConversation, type FixtureOrStore } from "./parents.js";
 
 const T1 = asId<TenantId>("conf-tenant-1");
 const T2 = asId<TenantId>("conf-tenant-2");
@@ -75,15 +76,20 @@ export function sessionStateStoreConformance(
 }
 
 export function conversationBindingStoreConformance(
-  makeStore: () => ConversationBindingStore,
+  makeFixture: () => FixtureOrStore<ConversationBindingStore>,
 ): void {
+  // A binding belongs to a conversation, and Postgres enforces that with a foreign key (#96). The
+  // in-memory adapter has no such constraint and passes no seeder — see ./parents.ts.
+  const open = () => withConversation(makeFixture(), [{ tenantId: T1, conversationId: C1 }]);
+
   describe("ConversationBindingStore conformance", () => {
     it("returns null for an unbound conversation rather than a default", async () => {
-      expect(await makeStore().get({ tenantId: T1, conversationId: C1 })).toBeNull();
+      const store = await open();
+      expect(await store.get({ tenantId: T1, conversationId: C1 })).toBeNull();
     });
 
     it("round-trips a pinned binding including the version", async () => {
-      const store = makeStore();
+      const store = await open();
       await store.bind({
         tenantId: T1,
         conversationId: C1,
@@ -99,7 +105,7 @@ export function conversationBindingStoreConformance(
     });
 
     it("round-trips a latest-policy binding", async () => {
-      const store = makeStore();
+      const store = await open();
       await store.bind({ tenantId: T1, conversationId: C1, agentId: AGENT, agentVersionPolicy: "latest" });
       expect(await store.get({ tenantId: T1, conversationId: C1 })).toMatchObject({
         agentVersionPolicy: "latest",
@@ -107,7 +113,7 @@ export function conversationBindingStoreConformance(
     });
 
     it("re-binding is idempotent — the last write wins, without error", async () => {
-      const store = makeStore();
+      const store = await open();
       await store.bind({ tenantId: T1, conversationId: C1, agentId: AGENT, agentVersionPolicy: "latest" });
       await store.bind({
         tenantId: T1,
@@ -120,7 +126,7 @@ export function conversationBindingStoreConformance(
     });
 
     it("enforces tenant isolation", async () => {
-      const store = makeStore();
+      const store = await open();
       await store.bind({ tenantId: T1, conversationId: C1, agentId: AGENT, agentVersionPolicy: "latest" });
       expect(await store.get({ tenantId: T2, conversationId: C1 })).toBeNull();
     });
