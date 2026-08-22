@@ -102,6 +102,36 @@ export const MIGRATIONS: readonly Migration[] = [
     ],
     down: [`DROP TABLE IF EXISTS run_events`],
   },
+  {
+    // #95 — the resume point a recovered worker restarts from.
+    //
+    // Keyed per run, NOT per sequence. The port documents `save` as overwriting the run's checkpoint
+    // and `latest(runId)` is the only read, so a (tenant_id, run_id, sequence) key would store a row
+    // per agent-loop step on a table nothing reads historically — run_events-shaped growth with no
+    // reader. One slot per run, upserted, matching the reference adapter.
+    //
+    // `step` is the agent-loop index (an integer bounded by ExecutionLimits.maxSteps), not text.
+    //
+    // ON DELETE CASCADE: deleting a run must not be able to leave an orphan checkpoint, and nothing
+    // that deletes a run should have to know checkpoints exist. RESTRICT would make run deletion
+    // fail while a checkpoint lives, which is strictly worse.
+    id: "0004_checkpoints",
+    up: [
+      `CREATE TABLE IF NOT EXISTS checkpoints (
+        tenant_id  text        NOT NULL,
+        run_id     text        NOT NULL,
+        sequence   integer     NOT NULL,
+        step       integer     NOT NULL,
+        state      jsonb       NOT NULL,
+        updated_at timestamptz NOT NULL,
+        PRIMARY KEY (tenant_id, run_id),
+        CONSTRAINT checkpoints_run_fk
+          FOREIGN KEY (tenant_id, run_id) REFERENCES runs (tenant_id, id) ON DELETE CASCADE,
+        CONSTRAINT checkpoints_counters_non_negative CHECK (sequence >= 0 AND step >= 0)
+      )`,
+    ],
+    down: [`DROP TABLE IF EXISTS checkpoints`],
+  },
 ];
 
 export const migrate = async (sql: SqlExecutor): Promise<void> => {

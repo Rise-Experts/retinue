@@ -19,15 +19,20 @@ import { PGlite } from "@electric-sql/pglite";
 import { afterAll, describe, expect, it } from "vitest";
 import {
   createPostgresConversationStore,
+  createPostgresCheckpointStore,
   createPostgresRunEventLog,
   createPostgresRunStore,
   migrate,
   type SqlExecutor,
 } from "../adapters/postgres/index.js";
+import { asId } from "../core/ids.js";
+import type { AgentId, ConversationId } from "../core/ids.js";
 import { ADAPTER_COVERAGE } from "../testing/conformance/index.js";
 import { conversationStoreConformance } from "../testing/conformance/conversation-store.js";
 import { runStoreConformance } from "../testing/conformance/run-store.js";
 import { runEventLogConformance } from "../testing/conformance/run-event-log.js";
+import { checkpointStoreConformance } from "../testing/conformance/checkpoint-store.js";
+import { crossPortInvariants } from "../testing/conformance/invariants.js";
 
 const PG_URL = process.env["AGENTKIT_TEST_PG_URL"];
 
@@ -108,6 +113,23 @@ const coverage = ADAPTER_COVERAGE.find((a) => a.adapter === "postgres");
 conversationStoreConformance(() => createPostgresConversationStore(freshExecutor()));
 runStoreConformance(() => createPostgresRunStore(freshExecutor()));
 runEventLogConformance(() => createPostgresRunEventLog(freshExecutor()));
+checkpointStoreConformance(() => {
+  // One executor shared by the store and the seeder: the Postgres schema puts a foreign key from
+  // checkpoints to runs, so the parent row has to exist in the same database the store writes to.
+  const sql = freshExecutor();
+  return {
+    store: createPostgresCheckpointStore(sql),
+    async seedRun({ tenantId, runId }) {
+      await createPostgresRunStore(sql).create({
+        tenantId,
+        id: runId,
+        conversationId: asId<ConversationId>("conf-convo-for-checkpoints"),
+        agentId: asId<AgentId>("conf-agent-for-checkpoints"),
+        agentVersion: 1,
+      });
+    },
+  };
+});
 
 // ---------------------------------------------------------------------------------------------
 // The registry contract. Not a placeholder — these assertions are what make the matrix's
@@ -123,15 +145,30 @@ describe("postgres adapter coverage", () => {
 
   it("implements exactly the ports the registry claims", () => {
     expect(coverage).toBeDefined();
-    expect([...(coverage?.implemented ?? [])]).toEqual(["ConversationStore", "RunStore", "RunEventLog"]);
+    expect([...(coverage?.implemented ?? [])]).toEqual(["ConversationStore", "RunStore", "RunEventLog", "CheckpointStore"]);
   });
 
   it("tracks every unimplemented port to the SPEC that will add it", () => {
     for (const { port, trackedBy } of coverage?.notImplemented ?? []) {
       expect(trackedBy, `${port} must name the issue that will add its Postgres store`).toMatch(/^#\d+$/);
     }
-    // 19 registered ports, 3 implemented ⇒ 16 declared gaps. A drift here means the registry and
+    // 19 registered ports, 4 implemented ⇒ 15 declared gaps. A drift here means the registry and
     // reality have parted company.
-    expect(coverage?.notImplemented.length).toBe(16);
+    expect(coverage?.notImplemented.length).toBe(15);
   });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Cross-port invariants — the defects that live between two stores, not inside either. Runs on
+// Postgres for the first time here: runs + events + checkpoints all exist as of #95. `usage` is
+// omitted until #100, and the usage-dependent case stands down by name rather than silently.
+// ---------------------------------------------------------------------------------------------
+
+crossPortInvariants(() => {
+  const sql = freshExecutor();
+  return {
+    runs: createPostgresRunStore(sql),
+    events: createPostgresRunEventLog(sql),
+    checkpoints: createPostgresCheckpointStore(sql),
+  };
 });
