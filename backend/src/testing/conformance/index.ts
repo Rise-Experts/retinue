@@ -15,6 +15,7 @@
  */
 
 export * from "./capability.js";
+export * from "./parents.js";
 export * from "./conversation-store.js";
 export * from "./run-store.js";
 export * from "./run-event-log.js";
@@ -153,9 +154,6 @@ const SUPABASE_ALIASED: readonly string[] = ["ConversationStore"];
 
 /** Ports with no Postgres store yet, each against the SPEC that adds it (REQ-010→013). */
 const POSTGRES_PENDING: readonly { readonly port: string; readonly trackedBy: string }[] = [
-  { port: "MessageStore", trackedBy: "#96" },
-  { port: "AgentStore", trackedBy: "#96" },
-  { port: "ConversationBindingStore", trackedBy: "#96" },
   { port: "SessionStateStore", trackedBy: "#97" },
   { port: "ThreadSummaryStore", trackedBy: "#97" },
   { port: "ConversationRunCoordinator", trackedBy: "#98" },
@@ -180,7 +178,15 @@ export const ADAPTER_COVERAGE: readonly AdapterCoverage[] = [
   },
   {
     adapter: "postgres",
-    implemented: ["ConversationStore", "RunStore", "RunEventLog", "CheckpointStore"],
+    implemented: [
+      "ConversationStore",
+      "RunStore",
+      "RunEventLog",
+      "CheckpointStore",
+      "MessageStore",
+      "AgentStore",
+      "ConversationBindingStore",
+    ],
     notImplemented: POSTGRES_PENDING,
   },
   {

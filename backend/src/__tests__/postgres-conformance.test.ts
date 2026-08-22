@@ -19,20 +19,26 @@ import { PGlite } from "@electric-sql/pglite";
 import { afterAll, describe, expect, it } from "vitest";
 import {
   createPostgresConversationStore,
+  createPostgresAgentStore,
   createPostgresCheckpointStore,
+  createPostgresConversationBindingStore,
+  createPostgresMessageStore,
   createPostgresRunEventLog,
   createPostgresRunStore,
   migrate,
   type SqlExecutor,
 } from "../adapters/postgres/index.js";
 import { asId } from "../core/ids.js";
-import type { AgentId, ConversationId } from "../core/ids.js";
+import type { AgentId, ConversationId, MessageId, MessagePartId } from "../core/ids.js";
+import type { AgentManifest } from "../agents/index.js";
 import { ADAPTER_COVERAGE } from "../testing/conformance/index.js";
 import { conversationStoreConformance } from "../testing/conformance/conversation-store.js";
 import { runStoreConformance } from "../testing/conformance/run-store.js";
 import { runEventLogConformance } from "../testing/conformance/run-event-log.js";
 import { checkpointStoreConformance } from "../testing/conformance/checkpoint-store.js";
 import { crossPortInvariants } from "../testing/conformance/invariants.js";
+import { agentStoreConformance, messageStoreConformance } from "../testing/conformance/records.js";
+import { conversationBindingStoreConformance } from "../testing/conformance/session-state.js";
 
 const PG_URL = process.env["AGENTKIT_TEST_PG_URL"];
 
@@ -104,6 +110,22 @@ afterAll(async () => {
   for (const close of closers) await close();
 });
 
+/** Minimal valid manifest for the AgentStore harness — the store round-trips it as opaque jsonb. */
+const agentManifest = (id: string, version: number): AgentManifest => ({
+  id,
+  version,
+  name: `agent ${id} v${version}`,
+  description: "conformance fixture",
+  instructions: "be useful",
+  modelPolicy: { preferred: "claude-opus-5" },
+  responseFormat: { kind: "text" },
+  toolPolicy: { allow: [] },
+  skillPolicy: { allow: [] },
+  authorizationPolicyId: "default",
+  contextProviderIds: [],
+  limits: { maxSteps: 4, maxToolCalls: 8, maxWallClockMs: 60_000 },
+});
+
 const coverage = ADAPTER_COVERAGE.find((a) => a.adapter === "postgres");
 
 // ---------------------------------------------------------------------------------------------
@@ -113,6 +135,57 @@ const coverage = ADAPTER_COVERAGE.find((a) => a.adapter === "postgres");
 conversationStoreConformance(() => createPostgresConversationStore(freshExecutor()));
 runStoreConformance(() => createPostgresRunStore(freshExecutor()));
 runEventLogConformance(() => createPostgresRunEventLog(freshExecutor()));
+// A conversation must exist before a message or binding can reference it (foreign keys, #96), so
+// each of these seeds its parent through the shared `parents` helper.
+messageStoreConformance(
+  () => {
+    const sql = freshExecutor();
+    return {
+      store: createPostgresMessageStore(sql),
+      async seedConversation({ tenantId, conversationId }) {
+        await createPostgresConversationStore(sql).create({ tenantId, id: conversationId, title: "for messages" });
+      },
+    };
+  },
+  async (store, { tenantId, conversationId, count }) => {
+    const s = store as ReturnType<typeof createPostgresMessageStore>;
+    for (let n = 0; n < count; n += 1) {
+      await s.append(tenantId, {
+        id: asId<MessageId>(`m${n}`),
+        conversationId,
+        role: "user",
+        parts: [
+          {
+            id: asId<MessagePartId>(`p${n}`),
+            type: "text",
+            schemaVersion: 1,
+            createdAt: `2020-01-01T00:00:${String(n).padStart(2, "0")}.000Z`,
+            text: `message ${n}`,
+          },
+        ],
+        createdAt: `2020-01-01T00:00:${String(n).padStart(2, "0")}.000Z`,
+      });
+    }
+  },
+);
+
+agentStoreConformance(
+  () => createPostgresAgentStore(freshExecutor()),
+  async (store, { tenantId, agentId, version }) => {
+    await (store as ReturnType<typeof createPostgresAgentStore>).put(tenantId, agentManifest(agentId, version));
+  },
+);
+
+conversationBindingStoreConformance(() => {
+  const sql = freshExecutor();
+  return {
+    store: createPostgresConversationBindingStore(sql),
+    async seedConversation({ tenantId, conversationId }) {
+      await createPostgresConversationStore(sql).create({ tenantId, id: conversationId, title: "for binding" });
+    },
+  };
+});
+
 checkpointStoreConformance(() => {
   // One executor shared by the store and the seeder: the Postgres schema puts a foreign key from
   // checkpoints to runs, so the parent row has to exist in the same database the store writes to.
@@ -145,16 +218,24 @@ describe("postgres adapter coverage", () => {
 
   it("implements exactly the ports the registry claims", () => {
     expect(coverage).toBeDefined();
-    expect([...(coverage?.implemented ?? [])]).toEqual(["ConversationStore", "RunStore", "RunEventLog", "CheckpointStore"]);
+    expect([...(coverage?.implemented ?? [])]).toEqual([
+      "ConversationStore",
+      "RunStore",
+      "RunEventLog",
+      "CheckpointStore",
+      "MessageStore",
+      "AgentStore",
+      "ConversationBindingStore",
+    ]);
   });
 
   it("tracks every unimplemented port to the SPEC that will add it", () => {
     for (const { port, trackedBy } of coverage?.notImplemented ?? []) {
       expect(trackedBy, `${port} must name the issue that will add its Postgres store`).toMatch(/^#\d+$/);
     }
-    // 19 registered ports, 4 implemented ⇒ 15 declared gaps. A drift here means the registry and
+    // 19 registered ports, 7 implemented ⇒ 12 declared gaps. A drift here means the registry and
     // reality have parted company.
-    expect(coverage?.notImplemented.length).toBe(15);
+    expect(coverage?.notImplemented.length).toBe(12);
   });
 });
 

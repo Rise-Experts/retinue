@@ -11,6 +11,7 @@
  */
 
 import { describe, expect, it } from "vitest";
+import { withConversation, type FixtureOrStore } from "./parents.js";
 import { asId } from "../../core/ids.js";
 import type { MessageId, PrincipalId, RunId, TenantId, ToolCallId } from "../../core/ids.js";
 import type {
@@ -32,24 +33,30 @@ const RUN = asId<RunId>("conf-run-1");
 const C1 = asId<ConversationId>("conf-convo-1");
 
 export function messageStoreConformance(
-  makeStore: () => MessageStore,
+  makeFixture: () => FixtureOrStore<MessageStore>,
   seed: (store: MessageStore, input: { tenantId: TenantId; conversationId: ConversationId; count: number }) => Promise<void>,
 ): void {
+  // A message references a conversation, and Postgres enforces that with a foreign key (#96). The
+  // seed callback only receives the store, so it cannot create the parent itself — the fixture's
+  // `seedConversation` does, sharing the adapter's executor. See ./parents.ts.
+  const open = (conversationId: ConversationId = C1) =>
+    withConversation(makeFixture(), [{ tenantId: T1, conversationId }]);
+
   describe("MessageStore conformance", () => {
     it("returns null for an unknown id", async () => {
-      const store = makeStore();
+      const store = await open();
       expect(await store.findById({ tenantId: T1, id: asId<MessageId>("nope") })).toBeNull();
     });
 
     it("lists a conversation's messages in order", async () => {
-      const store = makeStore();
+      const store = await open();
       await seed(store, { tenantId: T1, conversationId: C1, count: 3 });
       const page = await store.listByConversation({ tenantId: T1, conversationId: C1, limit: 10 });
       expect(page.items).toHaveLength(3);
     });
 
     it("pages by stable cursor with no overlap between pages", async () => {
-      const store = makeStore();
+      const store = await open();
       await seed(store, { tenantId: T1, conversationId: C1, count: 5 });
       const first = await store.listByConversation({ tenantId: T1, conversationId: C1, limit: 2 });
       expect(first.items).toHaveLength(2);
@@ -65,7 +72,7 @@ export function messageStoreConformance(
     });
 
     it("preserves typed content parts through a round-trip", async () => {
-      const store = makeStore();
+      const store = await open();
       await seed(store, { tenantId: T1, conversationId: C1, count: 1 });
       const page = await store.listByConversation({ tenantId: T1, conversationId: C1, limit: 1 });
       const message = page.items[0];
@@ -74,7 +81,7 @@ export function messageStoreConformance(
     });
 
     it("enforces tenant isolation", async () => {
-      const store = makeStore();
+      const store = await open();
       await seed(store, { tenantId: T1, conversationId: C1, count: 2 });
       const other = await store.listByConversation({ tenantId: T2, conversationId: C1, limit: 10 });
       expect(other.items).toHaveLength(0);

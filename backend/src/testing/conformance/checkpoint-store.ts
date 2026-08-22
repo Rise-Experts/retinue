@@ -5,10 +5,9 @@
  *
  * **Referential integrity (#95).** A checkpoint belongs to a run, and an adapter is entitled to
  * enforce that — the Postgres schema does, with a foreign key, because an orphan checkpoint is
- * meaningless. The in-memory adapter holds no such constraint. So the fixture may supply `seedRun`,
- * which the harness calls before every save; adapters without referential integrity omit it and
- * nothing changes for them. Without this the suite would have forced a choice between "the harness
- * passes" and "orphan checkpoints are impossible", and the second is the property that matters.
+ * meaningless. The in-memory adapter holds no such constraint. The fixture may therefore supply
+ * `seedRun`, via the shared `parents` helper (#96 generalised what started here); adapters without
+ * referential integrity omit it and nothing changes for them.
  */
 
 import { describe, expect, it } from "vitest";
@@ -16,6 +15,7 @@ import { asId } from "../../core/ids.js";
 import type { RunId, TenantId } from "../../core/ids.js";
 import type { CheckpointStore } from "../../persistence/index.js";
 import { emptyCheckpoint, type RunCheckpoint } from "../../runtime/checkpoint.js";
+import { withRun, type FixtureOrStore } from "./parents.js";
 
 const T1 = asId<TenantId>("conf-tenant-1");
 const T2 = asId<TenantId>("conf-tenant-2");
@@ -27,23 +27,9 @@ const at = (runId: RunId, sequence: number, step = 0): RunCheckpoint => ({
   step,
 });
 
-/**
- * What an adapter supplies. `seedRun` creates whatever parent row the adapter's constraints require;
- * returning the store and the seeder together lets both share one executor.
- */
-export type CheckpointFixture = {
-  readonly store: CheckpointStore;
-  readonly seedRun?: (input: { readonly tenantId: TenantId; readonly runId: RunId }) => Promise<void>;
-};
-
-export function checkpointStoreConformance(makeFixture: () => CheckpointStore | CheckpointFixture): void {
-  /** Accepts a bare store (adapters with no referential integrity) or a full fixture. */
-  const open = async (runIds: readonly { tenantId: TenantId; runId: RunId }[] = [{ tenantId: T1, runId: RUN }]) => {
-    const made = makeFixture();
-    const fixture: CheckpointFixture = "store" in made ? made : { store: made };
-    if (fixture.seedRun) for (const r of runIds) await fixture.seedRun(r);
-    return fixture.store;
-  };
+export function checkpointStoreConformance(makeFixture: () => FixtureOrStore<CheckpointStore>): void {
+  const open = (runIds: readonly { tenantId: TenantId; runId: RunId }[] = [{ tenantId: T1, runId: RUN }]) =>
+    withRun(makeFixture(), runIds);
 
   describe("CheckpointStore conformance", () => {
     it("returns null before anything is saved", async () => {
