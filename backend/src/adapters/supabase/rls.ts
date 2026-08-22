@@ -1,27 +1,140 @@
 /**
- * Row-Level Security for Supabase — `docs/02` + `docs/11`.
+ * Row-Level Security — `docs/02` + `docs/11`.
  *
  * Enforces tenant isolation *at the database*, independent of any app-level `WHERE`. The policy
- * predicate `tenant_id = current_setting('app.tenant_id')` is exactly the filter the
- * authorization `scope()` produces (see `tenantRlsFilter`), so the two agree by construction.
- * Supabase connects as a non-superuser role, so the policy applies (superusers bypass RLS).
+ * predicate `tenant_id = current_setting('app.tenant_id')` is exactly the filter the authorization
+ * `scope()` produces (see `tenantRlsFilter`), so the two agree by construction — and if the
+ * application filter is ever forgotten, the database still refuses.
+ *
+ * Until #103 this covered exactly one table, because `conversations` was the only table when it was
+ * written. There are now 19, and a table without a policy means a Supabase deployment relies on
+ * application filtering alone — the single point of failure REQ-014 exists to remove.
+ *
+ * **Policies are generated from the registry below rather than written out**, so adding a table's
+ * policy is a one-line entry and the statements cannot drift from the list. The coverage gate in
+ * `supabase-rls.test.ts` derives the table list from `MIGRATIONS`, so a new table cannot ship
+ * uncovered and a stale entry for a dropped table fails too.
  */
+import { MIGRATIONS } from "../postgres/migrations.js";
 import type { SqlExecutor } from "../postgres/sql.js";
 
-export const RLS_STATEMENTS: readonly string[] = [
-  `ALTER TABLE conversations ENABLE ROW LEVEL SECURITY`,
-  `ALTER TABLE conversations FORCE ROW LEVEL SECURITY`,
-  `DROP POLICY IF EXISTS tenant_isolation ON conversations`,
-  `CREATE POLICY tenant_isolation ON conversations
-     USING (tenant_id = current_setting('app.tenant_id', true))
-     WITH CHECK (tenant_id = current_setting('app.tenant_id', true))`,
+/**
+ * A table whose rows belong to a tenant, plus any predicate beyond the tenant match.
+ *
+ * `extraPredicate` exists for one case today. Tenant-only scoping on `principal_memory` would leak
+ * one user's memories to every other user of the same customer, which is the opposite of what
+ * per-principal memory is for.
+ */
+export type RlsTable = {
+  readonly table: string;
+  readonly extraPredicate?: string;
+};
+
+/**
+ * The principal predicate is written so an **absent** setting matches nothing.
+ *
+ * `current_setting('app.principal_id', true)` returns NULL when unset, and `principal_id = NULL` is
+ * NULL — which the policy treats as false. That is the behaviour we want: a connection with no
+ * principal bound sees no memories at all, rather than seeing every row whose `principal_id` happens
+ * to equal the empty string. Getting this backwards is how a background job ends up able to read
+ * everyone's memory.
+ */
+const PRINCIPAL_PREDICATE = `principal_id = current_setting('app.principal_id', true)`;
+
+export const TENANT_SCOPED_TABLES: readonly RlsTable[] = [
+  { table: "conversations" },
+  { table: "runs" },
+  { table: "run_events" },
+  { table: "checkpoints" },
+  { table: "messages" },
+  { table: "agents" },
+  { table: "conversation_bindings" },
+  { table: "session_state" },
+  { table: "thread_summaries" },
+  { table: "conversation_run_slots" },
+  // Two tables, not one: #99 split questions from approvals because PendingQuestion and
+  // PendingApproval share only three fields. The SPEC's list named a single `interactions`.
+  { table: "interaction_questions" },
+  { table: "interaction_approvals" },
+  { table: "approval_grants" },
+  { table: "usage_records" },
+  { table: "idempotency_keys" },
+  { table: "skills" },
+  { table: "mcp_connections" },
+  { table: "principal_memory", extraPredicate: PRINCIPAL_PREDICATE },
+  // `blobs`, not the SPEC's `blob_refs`: BlobStore stores the value, and the metadata-and-pointer
+  // design belongs to FileMetadataStore (#129) / ArtifactStore (#133).
+  { table: "blobs" },
 ];
+
+/**
+ * Tables that deliberately have no tenant policy, each with the reason.
+ *
+ * Classified rather than skipped. A silent omission is indistinguishable from a forgotten table,
+ * which is exactly what the coverage gate exists to catch — so an exemption has to be a decision
+ * someone wrote down.
+ */
+export const RLS_EXEMPT_TABLES: readonly { readonly table: string; readonly reason: string }[] = [
+  {
+    table: "schema_migrations",
+    reason:
+      "Records which migrations have been applied. Deployment state, not customer data, and it holds " +
+      "no tenant_id to scope on. A migration runner must read it before any tenant context exists.",
+  },
+];
+
+const policyFor = ({ table, extraPredicate }: RlsTable): readonly string[] => {
+  const tenant = `tenant_id = current_setting('app.tenant_id', true)`;
+  const predicate = extraPredicate === undefined ? tenant : `${tenant} AND ${extraPredicate}`;
+  return [
+    `ALTER TABLE ${table} ENABLE ROW LEVEL SECURITY`,
+    // FORCE matters more than it looks. Without it the table owner bypasses every policy — and the
+    // owner is the role that runs migrations, and in many deployments the role the app connects as.
+    // An isolation test would then pass while proving nothing.
+    `ALTER TABLE ${table} FORCE ROW LEVEL SECURITY`,
+    `DROP POLICY IF EXISTS tenant_isolation ON ${table}`,
+    `CREATE POLICY tenant_isolation ON ${table}
+       USING (${predicate})
+       WITH CHECK (${predicate})`,
+  ];
+};
+
+export const RLS_STATEMENTS: readonly string[] = TENANT_SCOPED_TABLES.flatMap(policyFor);
 
 export const applyRls = async (sql: SqlExecutor): Promise<void> => {
   for (const stmt of RLS_STATEMENTS) await sql.query(stmt);
 };
 
+/**
+ * Every table `MIGRATIONS` creates, in migration order.
+ *
+ * Derived rather than transcribed: the SPEC's hand-written list named `interactions` and `blob_refs`,
+ * neither of which exists, and missed `schema_migrations`. A list that can disagree with the schema
+ * will eventually disagree with the schema.
+ */
+export const tablesInMigrations = (): readonly string[] => {
+  const names: string[] = [];
+  for (const migration of MIGRATIONS) {
+    for (const statement of migration.up) {
+      const match = /CREATE TABLE (?:IF NOT EXISTS )?([a-z_][a-z0-9_]*)/i.exec(statement);
+      if (match?.[1] && !names.includes(match[1])) names.push(match[1]);
+    }
+  }
+  return names;
+};
+
 /** Bind the current session to a tenant so RLS scopes every subsequent query. */
 export const setTenantContext = async (sql: SqlExecutor, tenantId: string): Promise<void> => {
   await sql.query(`SELECT set_config('app.tenant_id', $1, false)`, [tenantId]);
+};
+
+/**
+ * Bind the current session to a principal, for the tables scoped to one.
+ *
+ * Separate from `setTenantContext` because most work has a tenant and no principal — a background
+ * reaper, a migration, a rollup. Those must not be able to read principal-scoped rows, and with this
+ * unset they cannot: the predicate compares against NULL and matches nothing.
+ */
+export const setPrincipalContext = async (sql: SqlExecutor, principalId: string): Promise<void> => {
+  await sql.query(`SELECT set_config('app.principal_id', $1, false)`, [principalId]);
 };
