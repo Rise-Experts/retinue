@@ -78,22 +78,48 @@ const pgliteExecutor = (db: PGlite): SqlExecutor => ({
 });
 
 /**
- * A real-server database against a schema isolated per store, so parallel cases cannot collide.
- * Imported lazily: `pg` must not be required for the PGlite path, or a local run without a database
- * would still pay for the driver.
+ * **One pool for the whole file**, created lazily.
+ *
+ * This used to be a pool per executor, which is a pool per *test*: the harnesses call their factory
+ * inside each case, so ~100 cases meant ~100 pools, each holding at least one connection against a
+ * default `max_connections` of 100. #100 pushed it over and CI failed with `sorry, too many clients
+ * already` — on `UsageStore` and `IdempotencyStore`, simply because they are registered last. A local
+ * run passed only because `pg`'s 10s idle timeout freed slots fast enough, which is luck, not a
+ * property.
+ *
+ * Isolation is preserved by giving each executor its own **schema** on the shared pool, which is what
+ * it was really relying on all along — the separate pools were never what kept tests apart.
  */
-const serverDatabase = async (url: string): Promise<{ base: SqlExecutor; opener: ConnectionOpener }> => {
-  const { Pool } = await import("pg");
-  const pool = new Pool({ connectionString: url });
-  // A dedicated schema per executor keeps concurrent conformance runs from sharing tables.
-  const schema = `conf_${Math.abs(hashString(`${process.pid}:${closers.length}`))}`;
-  const client = await pool.connect();
-  await client.query(`CREATE SCHEMA IF NOT EXISTS ${schema}`);
-  client.release();
-  closers.push(async () => {
-    await pool.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`).catch(() => undefined);
-    await pool.end();
-  });
+const schemas: string[] = [];
+let poolPromise: Promise<import("pg").Pool> | null = null;
+
+const sharedPool = () =>
+  (poolPromise ??= (async () => {
+    const { Pool } = await import("pg");
+    // Bounded well below max_connections. A transaction holds one connection while reads through the
+    // base executor check out another, so a couple per active test; 8 leaves ample headroom for the
+    // other test files running in parallel, each with their own small pool.
+    const pool = new Pool({ connectionString: PG_URL, max: 8 });
+    closers.push(async () => {
+      for (const schema of schemas) {
+        await pool.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`).catch(() => undefined);
+      }
+      await pool.end().catch(() => undefined);
+    });
+    return pool;
+  })());
+
+/**
+ * A schema-isolated database on the shared pool. Numbered rather than hashed: a counter cannot
+ * collide, which is the only thing the previous hash was buying, and it makes a failing schema name
+ * readable in a log.
+ */
+const serverDatabase = async (): Promise<{ base: SqlExecutor; opener: ConnectionOpener }> => {
+  const pool = await sharedPool();
+  const schema = `conf_${schemas.length + 1}`;
+  schemas.push(schema);
+  await pool.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
+  await pool.query(`CREATE SCHEMA ${schema}`);
   return {
     base: {
       async query<Row>(text: string, params?: readonly unknown[]): Promise<Row[]> {
@@ -111,13 +137,6 @@ const serverDatabase = async (url: string): Promise<{ base: SqlExecutor; opener:
   };
 };
 
-/** Small deterministic hash — avoids Math.random so a failing run is reproducible from its seed. */
-function hashString(input: string): number {
-  let h = 0;
-  for (let i = 0; i < input.length; i += 1) h = (h * 31 + input.charCodeAt(i)) | 0;
-  return h;
-}
-
 /**
  * A migrated database per store, as a transaction-aware pair.
  *
@@ -133,7 +152,7 @@ const freshDatabase = (): { sql: SqlExecutor; runner: TransactionRunner } => {
   const init = () =>
     (ready ??= (async () => {
       const { base, opener } = PG_URL
-        ? await serverDatabase(PG_URL)
+        ? await serverDatabase()
         : (() => {
             const executor = pgliteExecutor(new PGlite());
             return { base: executor, opener: createSingleConnectionOpener(executor) };
