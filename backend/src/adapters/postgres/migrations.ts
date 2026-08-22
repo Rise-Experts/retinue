@@ -76,6 +76,32 @@ export const MIGRATIONS: readonly Migration[] = [
       `DROP TABLE IF EXISTS runs`,
     ],
   },
+  {
+    // #94 — the durable event log behind streaming catch-up and crash recovery.
+    //
+    // The composite primary key is the load-bearing constraint: it makes a duplicate sequence
+    // impossible, which is what turns `append` into the idempotent no-op the port promises (via
+    // ON CONFLICT DO NOTHING). It does *not* make gaps impossible — gapless numbering is the
+    // emitter's contract, and no schema can compel it.
+    //
+    // No conversation column: `RunEvent` carries no `conversationId` (see `EventBase` in
+    // src/core/events.ts), so the conversation-level index the SPEC suggested cannot be built.
+    // Replay is per-run and the primary key serves it directly.
+    id: "0003_run_events",
+    up: [
+      `CREATE TABLE IF NOT EXISTS run_events (
+        tenant_id  text        NOT NULL,
+        run_id     text        NOT NULL,
+        sequence   integer     NOT NULL,
+        type       text        NOT NULL,
+        event      jsonb       NOT NULL,
+        created_at timestamptz NOT NULL DEFAULT now(),
+        PRIMARY KEY (tenant_id, run_id, sequence),
+        CONSTRAINT run_events_sequence_positive CHECK (sequence > 0)
+      )`,
+    ],
+    down: [`DROP TABLE IF EXISTS run_events`],
+  },
 ];
 
 export const migrate = async (sql: SqlExecutor): Promise<void> => {
