@@ -24,6 +24,8 @@ import {
   createPostgresConversationBindingStore,
   createPostgresMessageStore,
   createPostgresRunEventLog,
+  createPostgresSessionStateStore,
+  createPostgresThreadSummaryStore,
   createPostgresRunStore,
   migrate,
   type SqlExecutor,
@@ -38,7 +40,11 @@ import { runEventLogConformance } from "../testing/conformance/run-event-log.js"
 import { checkpointStoreConformance } from "../testing/conformance/checkpoint-store.js";
 import { crossPortInvariants } from "../testing/conformance/invariants.js";
 import { agentStoreConformance, messageStoreConformance } from "../testing/conformance/records.js";
-import { conversationBindingStoreConformance } from "../testing/conformance/session-state.js";
+import {
+  conversationBindingStoreConformance,
+  sessionStateStoreConformance,
+  threadSummaryStoreConformance,
+} from "../testing/conformance/session-state.js";
 
 const PG_URL = process.env["AGENTKIT_TEST_PG_URL"];
 
@@ -186,6 +192,27 @@ conversationBindingStoreConformance(() => {
   };
 });
 
+// Both reference a conversation (foreign keys, #97), so each seeds its parent via `parents`.
+sessionStateStoreConformance(() => {
+  const sql = freshExecutor();
+  return {
+    store: createPostgresSessionStateStore(sql),
+    async seedConversation({ tenantId, conversationId }) {
+      await createPostgresConversationStore(sql).create({ tenantId, id: conversationId, title: "for session state" });
+    },
+  };
+});
+
+threadSummaryStoreConformance(() => {
+  const sql = freshExecutor();
+  return {
+    store: createPostgresThreadSummaryStore(sql),
+    async seedConversation({ tenantId, conversationId }) {
+      await createPostgresConversationStore(sql).create({ tenantId, id: conversationId, title: "for summaries" });
+    },
+  };
+});
+
 checkpointStoreConformance(() => {
   // One executor shared by the store and the seeder: the Postgres schema puts a foreign key from
   // checkpoints to runs, so the parent row has to exist in the same database the store writes to.
@@ -226,6 +253,8 @@ describe("postgres adapter coverage", () => {
       "MessageStore",
       "AgentStore",
       "ConversationBindingStore",
+      "SessionStateStore",
+      "ThreadSummaryStore",
     ]);
   });
 
@@ -233,9 +262,9 @@ describe("postgres adapter coverage", () => {
     for (const { port, trackedBy } of coverage?.notImplemented ?? []) {
       expect(trackedBy, `${port} must name the issue that will add its Postgres store`).toMatch(/^#\d+$/);
     }
-    // 19 registered ports, 7 implemented ⇒ 12 declared gaps. A drift here means the registry and
+    // 19 registered ports, 9 implemented ⇒ 10 declared gaps. A drift here means the registry and
     // reality have parted company.
-    expect(coverage?.notImplemented.length).toBe(12);
+    expect(coverage?.notImplemented.length).toBe(10);
   });
 });
 

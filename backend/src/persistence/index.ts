@@ -74,6 +74,14 @@ export type SessionState = {
   readonly updatedAt: string;
 };
 
+/**
+ * The ceiling on session state, defined here rather than in an adapter (#97). It is a domain limit —
+ * session state is bounded working memory, not a document store — and every adapter must enforce the
+ * same one. It previously lived in `adapters/memory/sessions.ts`, which made two adapters agreeing on
+ * it a coincidence rather than a property.
+ */
+export const DEFAULT_SESSION_STATE_MAX_BYTES = 64 * 1024;
+
 export interface SessionStateStore {
   get(input: TenantScope & { conversationId: ConversationId }): Promise<SessionState | null>;
   /** Optimistic concurrency: rejects when `expectedVersion` is stale. */

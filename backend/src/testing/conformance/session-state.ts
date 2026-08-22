@@ -27,30 +27,34 @@ const AGENT = asId<AgentId>("conf-agent-1");
 const MSG = asId<MessageId>("conf-msg-1");
 
 export function sessionStateStoreConformance(
-  makeStore: () => SessionStateStore,
+  makeFixture: () => FixtureOrStore<SessionStateStore>,
   options: { readonly maxBytes?: number } = {},
 ): void {
+  // Session state references a conversation, and Postgres enforces it with a foreign key (#97).
+  const open = () => withConversation(makeFixture(), [{ tenantId: T1, conversationId: C1 }]);
+
   describe("SessionStateStore conformance", () => {
     it("returns null before anything is written", async () => {
-      expect(await makeStore().get({ tenantId: T1, conversationId: C1 })).toBeNull();
+      const store = await open();
+      expect(await store.get({ tenantId: T1, conversationId: C1 })).toBeNull();
     });
 
     it("writes at expectedVersion 0 and reads back version 1", async () => {
-      const store = makeStore();
+      const store = await open();
       const put = await store.put({ tenantId: T1, conversationId: C1, expectedVersion: 0, data: { a: 1 } });
       expect(put).toMatchObject({ version: 1, data: { a: 1 } });
       expect(await store.get({ tenantId: T1, conversationId: C1 })).toMatchObject({ version: 1 });
     });
 
     it("increments the version on each write", async () => {
-      const store = makeStore();
+      const store = await open();
       await store.put({ tenantId: T1, conversationId: C1, expectedVersion: 0, data: { n: 1 } });
       const second = await store.put({ tenantId: T1, conversationId: C1, expectedVersion: 1, data: { n: 2 } });
       expect(second.version).toBe(2);
     });
 
     it("rejects a stale expectedVersion, so concurrent runs cannot clobber each other", async () => {
-      const store = makeStore();
+      const store = await open();
       await store.put({ tenantId: T1, conversationId: C1, expectedVersion: 0, data: { n: 1 } });
       await expect(
         store.put({ tenantId: T1, conversationId: C1, expectedVersion: 0, data: { n: 99 } }),
@@ -59,7 +63,7 @@ export function sessionStateStoreConformance(
     });
 
     it("rejects a write beyond the size ceiling — working memory, not a document store", async () => {
-      const store = makeStore();
+      const store = await open();
       const maxBytes = options.maxBytes ?? 64 * 1024;
       const oversized = { blob: "x".repeat(maxBytes + 1_000) };
       await expect(
@@ -68,7 +72,7 @@ export function sessionStateStoreConformance(
     });
 
     it("enforces tenant isolation", async () => {
-      const store = makeStore();
+      const store = await open();
       await store.put({ tenantId: T1, conversationId: C1, expectedVersion: 0, data: { a: 1 } });
       expect(await store.get({ tenantId: T2, conversationId: C1 })).toBeNull();
     });
@@ -133,14 +137,20 @@ export function conversationBindingStoreConformance(
   });
 }
 
-export function threadSummaryStoreConformance(makeStore: () => ThreadSummaryStore): void {
+export function threadSummaryStoreConformance(
+  makeFixture: () => FixtureOrStore<ThreadSummaryStore>,
+): void {
+  // Same foreign key as session state (#97).
+  const open = () => withConversation(makeFixture(), [{ tenantId: T1, conversationId: C1 }]);
+
   describe("ThreadSummaryStore conformance", () => {
     it("returns null before any summary exists", async () => {
-      expect(await makeStore().latest({ tenantId: T1, conversationId: C1 })).toBeNull();
+      const store = await open();
+      expect(await store.latest({ tenantId: T1, conversationId: C1 })).toBeNull();
     });
 
     it("appends version 1 first", async () => {
-      const store = makeStore();
+      const store = await open();
       const s = await store.append({
         tenantId: T1,
         conversationId: C1,
@@ -151,7 +161,7 @@ export function threadSummaryStoreConformance(makeStore: () => ThreadSummaryStor
     });
 
     it("versions successive summaries rather than overwriting", async () => {
-      const store = makeStore();
+      const store = await open();
       await store.append({ tenantId: T1, conversationId: C1, summary: "first", coversUpToMessageId: MSG });
       const second = await store.append({
         tenantId: T1,
@@ -164,13 +174,13 @@ export function threadSummaryStoreConformance(makeStore: () => ThreadSummaryStor
     });
 
     it("records how far the summary covers, so recent turns stay verbatim", async () => {
-      const store = makeStore();
+      const store = await open();
       await store.append({ tenantId: T1, conversationId: C1, summary: "s", coversUpToMessageId: MSG });
       expect((await store.latest({ tenantId: T1, conversationId: C1 }))?.coversUpToMessageId).toBe(MSG);
     });
 
     it("enforces tenant isolation", async () => {
-      const store = makeStore();
+      const store = await open();
       await store.append({ tenantId: T1, conversationId: C1, summary: "s", coversUpToMessageId: MSG });
       expect(await store.latest({ tenantId: T2, conversationId: C1 })).toBeNull();
     });

@@ -199,6 +199,48 @@ export const MIGRATIONS: readonly Migration[] = [
       `DROP TABLE IF EXISTS messages`,
     ],
   },
+  {
+    // #97 — cross-turn working memory and compacted history.
+    id: "0006_session_state",
+    up: [
+      // One row per conversation, guarded by `version`. The version is the whole point: two runs on
+      // one conversation must not interleave into a lost update, and the compare-and-set happens in
+      // the UPDATE's WHERE clause rather than in the caller.
+      `CREATE TABLE IF NOT EXISTS session_state (
+        tenant_id       text        NOT NULL,
+        conversation_id text        NOT NULL,
+        state           jsonb       NOT NULL,
+        version         integer     NOT NULL,
+        updated_at      timestamptz NOT NULL,
+        PRIMARY KEY (tenant_id, conversation_id),
+        CONSTRAINT session_state_conversation_fk
+          FOREIGN KEY (tenant_id, conversation_id) REFERENCES conversations (tenant_id, id)
+          ON DELETE CASCADE,
+        CONSTRAINT session_state_version_positive CHECK (version > 0)
+      )`,
+      // Corrected against `ThreadSummary` (src/persistence/index.ts). The SPEC had
+      // `covers_up_to timestamptz`, `summary jsonb` and a `token_estimate` column:
+      //   - the field is `coversUpToMessageId`, a message id — a summary covers history up to a
+      //     specific *message*, which is what lets the assembler keep everything after it verbatim.
+      //     A timestamp cannot identify that boundary.
+      //   - `summary` is a string, so text.
+      //   - nothing on the type could populate `token_estimate`.
+      `CREATE TABLE IF NOT EXISTS thread_summaries (
+        tenant_id                text        NOT NULL,
+        conversation_id          text        NOT NULL,
+        version                  integer     NOT NULL,
+        summary                  text        NOT NULL,
+        covers_up_to_message_id  text        NOT NULL,
+        created_at               timestamptz NOT NULL,
+        PRIMARY KEY (tenant_id, conversation_id, version),
+        CONSTRAINT thread_summaries_conversation_fk
+          FOREIGN KEY (tenant_id, conversation_id) REFERENCES conversations (tenant_id, id)
+          ON DELETE CASCADE,
+        CONSTRAINT thread_summaries_version_positive CHECK (version > 0)
+      )`,
+    ],
+    down: [`DROP TABLE IF EXISTS thread_summaries`, `DROP TABLE IF EXISTS session_state`],
+  },
 ];
 
 export const migrate = async (sql: SqlExecutor): Promise<void> => {
