@@ -17,6 +17,7 @@
  */
 import { MIGRATIONS } from "../postgres/migrations.js";
 import type { SqlExecutor } from "../postgres/sql.js";
+import type { TransactionRunner } from "../postgres/transaction.js";
 
 /**
  * A table whose rows belong to a tenant, plus any predicate beyond the tenant match.
@@ -123,13 +124,50 @@ export const tablesInMigrations = (): readonly string[] => {
   return names;
 };
 
-/** Bind the current session to a tenant so RLS scopes every subsequent query. */
+/**
+ * Bind the **session** to a tenant. Safe only on a direct connection.
+ *
+ * `is_local = false` makes the setting outlive the current transaction, which is right for a
+ * connection this process owns exclusively — and **dangerous behind a transaction-mode pooler**, which
+ * is how Supabase's pooler port works. There, a backend is handed to a different client after each
+ * transaction while the session GUC stays set, so tenant A's binding is still in place when tenant B's
+ * query lands on that backend, and B's queries are evaluated against A's tenant id.
+ *
+ * That is a cross-tenant read produced by the mechanism introduced to prevent cross-tenant reads, and
+ * it is worse than having no policy at all, because the policy makes it look handled.
+ *
+ * Prefer `withTenantContext` unless you are certain the connection is not pooled. See the open
+ * question on #104 about removing this entirely.
+ */
 export const setTenantContext = async (sql: SqlExecutor, tenantId: string): Promise<void> => {
   await sql.query(`SELECT set_config('app.tenant_id', $1, false)`, [tenantId]);
 };
 
 /**
- * Bind the current session to a principal, for the tables scoped to one.
+ * Run `fn` with the tenant (and optionally the principal) bound **for the duration of one
+ * transaction**, which is the only binding that is safe behind a pooler.
+ *
+ * `is_local = true` scopes the setting to the transaction, so it is discarded at commit or rollback
+ * and cannot be observed by whoever gets the backend next. The transaction comes from #98's
+ * `TransactionRunner`, and the executor handed to `fn` is the transaction's — so stores built over a
+ * `scoped()` executor participate without knowing any of this exists.
+ */
+export const withTenantContext = async <T>(
+  runner: TransactionRunner,
+  scope: { readonly tenantId: string; readonly principalId?: string },
+  fn: (sql: SqlExecutor) => Promise<T>,
+): Promise<T> =>
+  runner.transaction(async (sql) => {
+    await sql.query(`SELECT set_config('app.tenant_id', $1, true)`, [scope.tenantId]);
+    if (scope.principalId !== undefined) {
+      await sql.query(`SELECT set_config('app.principal_id', $1, true)`, [scope.principalId]);
+    }
+    return fn(sql);
+  });
+
+/**
+ * Bind the **session** to a principal. Same pooling caveat as `setTenantContext` — prefer passing
+ * `principalId` to `withTenantContext`.
  *
  * Separate from `setTenantContext` because most work has a tenant and no principal — a background
  * reaper, a migration, a rollup. Those must not be able to read principal-scoped rows, and with this

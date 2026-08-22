@@ -1,71 +1,343 @@
 /**
- * Supabase conformance entrypoint (#92) — the Supabase column of the adapter × port matrix.
+ * Supabase conformance entrypoint (#92, widened to all 19 ports by #104).
  *
- * This column needs no hosted Supabase project and no CI secrets, which resolves the open question
- * the SPEC left for DevOps. `createSupabaseConversationStore` is an alias re-export of
- * `createPostgresConversationStore` (`adapters/supabase/index.ts`), so the Supabase store *is* the
- * Postgres store — one implementation, no drift. What is genuinely Supabase-specific is row-level
- * security and Realtime, and those keep their own cases in `supabase-adapter.test.ts`.
+ * This column needs no hosted Supabase project and no CI secrets. Every Supabase store is an **alias**
+ * of the PostgreSQL implementation, so the column's real job is to prove two things the alias approach
+ * depends on: that each alias still resolves to the Postgres function, and that the stores behave
+ * identically when reached through the Supabase surface.
  *
- * The column is still worth running rather than assuming: the alias could be repointed, and RLS
- * changes the executor's effective privileges, so "same code" is a claim the suite should keep
- * checking rather than trust.
+ * **Why this column does not run under RLS**, since "run the whole harness with policies on" sounds
+ * strictly better: the harnesses touch two tenants inside a single test — that is how they assert
+ * isolation. Under `FORCE`d row-level security a session is bound to one tenant, so those writes would
+ * be refused for reasons unrelated to the property under test, and the suite would be measuring the
+ * harness rather than the store. RLS is verified exhaustively and per-table by `supabase-rls.test.ts`,
+ * and the cases at the bottom of this file cover store behaviour *under* a bound tenant.
  */
 
 import { PGlite } from "@electric-sql/pglite";
 import { describe, expect, it } from "vitest";
-import { createSupabaseConversationStore, migrate, type SqlExecutor } from "../index.js";
-import { createPostgresConversationStore } from "../adapters/postgres/index.js";
-import { ADAPTER_COVERAGE } from "../testing/conformance/index.js";
+import * as supabase from "../adapters/supabase/index.js";
+import * as postgres from "../adapters/postgres/index.js";
+import {
+  createSingleConnectionOpener,
+  createTransactionScope,
+  migrate,
+  type SqlExecutor,
+  type TransactionRunner,
+} from "../adapters/postgres/index.js";
+import { asId } from "../core/ids.js";
+import type { AgentId, ConversationId, MessageId, MessagePartId, SkillId } from "../core/ids.js";
+import type { AgentManifest } from "../agents/index.js";
+import { ADAPTER_COVERAGE, REGISTERED_PORTS } from "../testing/conformance/index.js";
 import { conversationStoreConformance } from "../testing/conformance/conversation-store.js";
+import { runStoreConformance } from "../testing/conformance/run-store.js";
+import { runEventLogConformance } from "../testing/conformance/run-event-log.js";
+import { checkpointStoreConformance } from "../testing/conformance/checkpoint-store.js";
+import { agentStoreConformance, messageStoreConformance } from "../testing/conformance/records.js";
+import {
+  blobStoreConformance,
+  idempotencyStoreConformance,
+  mcpConnectionStoreConformance,
+  principalMemoryStoreConformance,
+  skillStoreConformance,
+} from "../testing/conformance/records.js";
+import {
+  conversationBindingStoreConformance,
+  sessionStateStoreConformance,
+  threadSummaryStoreConformance,
+  unitOfWorkConformance,
+} from "../testing/conformance/session-state.js";
+import { conversationRunCoordinatorConformance } from "../testing/conformance/run-coordinator.js";
+import {
+  approvalGrantStoreConformance,
+  interactionStoreConformance,
+  usageStoreConformance,
+} from "../testing/conformance/hitl.js";
 
 const pgliteSql = (db: PGlite): SqlExecutor => ({
   query: (text, params) => db.query(text, params ? [...params] : undefined).then((r) => r.rows as never),
 });
 
-const freshExecutor = (): SqlExecutor => {
-  let ready: Promise<SqlExecutor> | null = null;
+/** A migrated database plus its transaction runner, lazily so store creation stays synchronous. */
+const freshDatabase = (): { sql: SqlExecutor; runner: TransactionRunner } => {
+  let ready: Promise<{ sql: SqlExecutor; runner: TransactionRunner }> | null = null;
   const init = () =>
     (ready ??= (async () => {
-      const sql = pgliteSql(new PGlite());
-      await migrate(sql);
-      return sql;
+      const base = pgliteSql(new PGlite());
+      await migrate(base);
+      const scope = createTransactionScope(createSingleConnectionOpener(base));
+      return { sql: scope.scoped(base), runner: scope.runner };
     })());
   return {
-    async query(text, params) {
-      return (await init()).query(text, params);
+    sql: {
+      async query(text, params) {
+        return (await init()).sql.query(text, params);
+      },
+    },
+    runner: {
+      async transaction(fn) {
+        return (await init()).runner.transaction(fn);
+      },
     },
   };
 };
 
+const freshExecutor = (): SqlExecutor => freshDatabase().sql;
+
+const agentManifest = (id: string, version: number): AgentManifest => ({
+  id,
+  version,
+  name: `agent ${id} v${version}`,
+  description: "conformance fixture",
+  instructions: "be useful",
+  modelPolicy: { preferred: "claude-opus-5" },
+  responseFormat: { kind: "text" },
+  toolPolicy: { allow: [] },
+  skillPolicy: { allow: [] },
+  authorizationPolicyId: "default",
+  contextProviderIds: [],
+  limits: { maxSteps: 4, maxToolCalls: 8, maxWallClockMs: 60_000 },
+});
+
 const coverage = ADAPTER_COVERAGE.find((a) => a.adapter === "supabase");
 
 // ---------------------------------------------------------------------------------------------
-// Implemented ports.
+// All 19 ports, through the Supabase surface.
 // ---------------------------------------------------------------------------------------------
 
-conversationStoreConformance(() => createSupabaseConversationStore(freshExecutor()));
+conversationStoreConformance(() => supabase.createSupabaseConversationStore(freshExecutor()));
+runStoreConformance(() => supabase.createSupabaseRunStore(freshExecutor()));
+runEventLogConformance(() => supabase.createSupabaseRunEventLog(freshExecutor()));
+
+messageStoreConformance(
+  () => {
+    const sql = freshExecutor();
+    return {
+      store: supabase.createSupabaseMessageStore(sql),
+      async seedConversation({ tenantId, conversationId }) {
+        await supabase
+          .createSupabaseConversationStore(sql)
+          .create({ tenantId, id: conversationId, title: "for messages" });
+      },
+    };
+  },
+  async (store, { tenantId, conversationId, count }) => {
+    const s = store as ReturnType<typeof supabase.createSupabaseMessageStore>;
+    for (let n = 0; n < count; n += 1) {
+      await s.append(tenantId, {
+        id: asId<MessageId>(`m${n}`),
+        conversationId,
+        role: "user",
+        parts: [
+          {
+            id: asId<MessagePartId>(`p${n}`),
+            type: "text",
+            schemaVersion: 1,
+            createdAt: `2020-01-01T00:00:${String(n).padStart(2, "0")}.000Z`,
+            text: `message ${n}`,
+          },
+        ],
+        createdAt: `2020-01-01T00:00:${String(n).padStart(2, "0")}.000Z`,
+      });
+    }
+  },
+);
+
+agentStoreConformance(
+  () => supabase.createSupabaseAgentStore(freshExecutor()),
+  async (store, { tenantId, agentId, version }) => {
+    await (store as ReturnType<typeof supabase.createSupabaseAgentStore>).put(
+      tenantId,
+      agentManifest(agentId, version),
+    );
+  },
+);
+
+const withConversationSeeder = <T>(make: (sql: SqlExecutor) => T, title: string) => () => {
+  const sql = freshExecutor();
+  return {
+    store: make(sql),
+    async seedConversation({ tenantId, conversationId }: { tenantId: never; conversationId: never }) {
+      await supabase.createSupabaseConversationStore(sql).create({ tenantId, id: conversationId, title });
+    },
+  };
+};
+
+conversationBindingStoreConformance(
+  withConversationSeeder((sql) => supabase.createSupabaseConversationBindingStore(sql), "for binding"),
+);
+sessionStateStoreConformance(
+  withConversationSeeder((sql) => supabase.createSupabaseSessionStateStore(sql), "for session state"),
+);
+threadSummaryStoreConformance(
+  withConversationSeeder((sql) => supabase.createSupabaseThreadSummaryStore(sql), "for summaries"),
+);
+
+checkpointStoreConformance(() => {
+  const sql = freshExecutor();
+  return {
+    store: supabase.createSupabaseCheckpointStore(sql),
+    async seedRun({ tenantId, runId }) {
+      await supabase.createSupabaseRunStore(sql).create({
+        tenantId,
+        id: runId,
+        conversationId: asId<ConversationId>("conf-convo-for-checkpoints"),
+        agentId: asId<AgentId>("conf-agent-for-checkpoints"),
+        agentVersion: 1,
+      });
+    },
+  };
+});
+
+conversationRunCoordinatorConformance(
+  () => {
+    const { sql, runner } = freshDatabase();
+    return {
+      store: supabase.createSupabaseConversationRunCoordinator(sql, runner),
+      async seedConversation({ tenantId, conversationId }) {
+        await supabase
+          .createSupabaseConversationStore(sql)
+          .create({ tenantId, id: conversationId, title: "for run coordination" });
+      },
+      sibling: () => supabase.createSupabaseConversationRunCoordinator(sql, runner),
+    };
+  },
+  { capabilities: supabase.SUPABASE_CAPABILITIES },
+);
+
+unitOfWorkConformance(() => {
+  const { sql, runner } = freshDatabase();
+  return {
+    unitOfWork: supabase.createSupabaseUnitOfWork(runner),
+    sessions: supabase.createSupabaseSessionStateStore(sql),
+    async seedConversation({ tenantId, conversationId }) {
+      await supabase
+        .createSupabaseConversationStore(sql)
+        .create({ tenantId, id: conversationId, title: "for unit of work" });
+    },
+  };
+}, { capabilities: supabase.SUPABASE_CAPABILITIES });
+
+const withRunSeeder = <T>(make: (sql: SqlExecutor) => T) => () => {
+  const sql = freshExecutor();
+  return {
+    store: make(sql),
+    async seedRun({ tenantId, runId }: { tenantId: never; runId: never }) {
+      await supabase.createSupabaseRunStore(sql).create({
+        tenantId,
+        id: runId,
+        conversationId: asId<ConversationId>("conf-convo-1"),
+        agentId: asId<AgentId>("conf-agent-for-hitl"),
+        agentVersion: 1,
+      });
+    },
+  };
+};
+
+interactionStoreConformance(withRunSeeder((sql) => supabase.createSupabaseInteractionStore(sql)));
+approvalGrantStoreConformance(() => supabase.createSupabaseApprovalGrantStore(freshExecutor()));
+usageStoreConformance(withRunSeeder((sql) => supabase.createSupabaseUsageStore(sql)));
+idempotencyStoreConformance(() => supabase.createSupabaseIdempotencyStore(freshExecutor()));
+
+skillStoreConformance(
+  () => supabase.createSupabaseSkillStore(freshExecutor()),
+  async (store, { tenantId, name, version }) => {
+    await (store as ReturnType<typeof supabase.createSupabaseSkillStore>).add(tenantId, {
+      id: asId<SkillId>(`${name}-${version}`),
+      name,
+      description: "A conformance-suite fixture skill used to verify store behaviour.",
+      source: "tenant",
+      version,
+      instructions: "text only, no executable content",
+      status: "active",
+      tenantId,
+      createdAt: "2020-01-01T00:00:00.000Z",
+    });
+  },
+);
+
+mcpConnectionStoreConformance(
+  () => supabase.createSupabaseMcpConnectionStore(freshExecutor(), { allowedSchemes: ["https"] }),
+  async (store, { tenantId, id }) => {
+    await store.register({
+      tenantId,
+      connection: {
+        id,
+        tenantId,
+        label: `server ${id}`,
+        transport: "streamable-http",
+        endpoint: "https://mcp.example.com/rpc",
+        auth: { kind: "bearer", credentialRef: "secret://tenant/mcp-token" },
+        enabled: true,
+        createdAt: "2020-01-01T00:00:00.000Z",
+      },
+    });
+  },
+);
+
+principalMemoryStoreConformance(() => supabase.createSupabasePrincipalMemoryStore(freshExecutor()));
+blobStoreConformance(() => supabase.createSupabaseBlobStore(freshExecutor()));
 
 // ---------------------------------------------------------------------------------------------
 // The alias contract and the registry contract.
 // ---------------------------------------------------------------------------------------------
 
+/** Every Supabase factory and the Postgres factory it must be. */
+const ALIASES: readonly (readonly [keyof typeof supabase, keyof typeof postgres])[] = [
+  ["createSupabaseConversationStore", "createPostgresConversationStore"],
+  ["createSupabaseRunStore", "createPostgresRunStore"],
+  ["createSupabaseRunEventLog", "createPostgresRunEventLog"],
+  ["createSupabaseCheckpointStore", "createPostgresCheckpointStore"],
+  ["createSupabaseMessageStore", "createPostgresMessageStore"],
+  ["createSupabaseAgentStore", "createPostgresAgentStore"],
+  ["createSupabaseConversationBindingStore", "createPostgresConversationBindingStore"],
+  ["createSupabaseSessionStateStore", "createPostgresSessionStateStore"],
+  ["createSupabaseThreadSummaryStore", "createPostgresThreadSummaryStore"],
+  ["createSupabaseConversationRunCoordinator", "createPostgresConversationRunCoordinator"],
+  ["createSupabaseUnitOfWork", "createPostgresUnitOfWork"],
+  ["createSupabaseInteractionStore", "createPostgresInteractionStore"],
+  ["createSupabaseApprovalGrantStore", "createPostgresApprovalGrantStore"],
+  ["createSupabaseUsageStore", "createPostgresUsageStore"],
+  ["createSupabaseIdempotencyStore", "createPostgresIdempotencyStore"],
+  ["createSupabaseSkillStore", "createPostgresSkillStore"],
+  ["createSupabaseMcpConnectionStore", "createPostgresMcpConnectionStore"],
+  ["createSupabasePrincipalMemoryStore", "createPostgresPrincipalMemoryStore"],
+  ["createSupabaseBlobStore", "createPostgresBlobStore"],
+];
+
 describe("supabase adapter coverage", () => {
-  it("is the Postgres store, not a second implementation", () => {
-    // If this ever stops holding, Supabase becomes a real second adapter and every port it claims
-    // needs its own conformance run rather than inheriting Postgres's.
-    expect(createSupabaseConversationStore).toBe(createPostgresConversationStore);
+  it("is the Postgres implementation for every port, not a second one", () => {
+    // AC-5 in its strongest available form. If any of these stops holding, Supabase becomes a real
+    // second adapter and "identical results" would need proving per port rather than by identity.
+    for (const [alias, target] of ALIASES) {
+      expect(supabase[alias], `${alias} must be ${target}`).toBe(postgres[target]);
+    }
+    // One alias per registered port, so a new port cannot be added without an alias or a decision.
+    expect(ALIASES).toHaveLength(REGISTERED_PORTS.length);
   });
 
   it("implements exactly the ports the registry claims", () => {
     expect(coverage).toBeDefined();
-    expect([...(coverage?.implemented ?? [])]).toEqual(["ConversationStore"]);
+    expect([...(coverage?.implemented ?? [])]).toEqual(REGISTERED_PORTS.map((p) => p.port));
   });
 
-  it("tracks every unimplemented port to #104, which brings the Postgres stores across", () => {
-    expect(coverage?.notImplemented.length).toBe(18);
-    for (const { port, trackedBy } of coverage?.notImplemented ?? []) {
-      expect(trackedBy, `${port} must name its tracking issue`).toBe("#104");
-    }
+  it("has no remaining declared gaps", () => {
+    // AC-6: the column is verified rather than tracked. The assertion stays so a newly registered
+    // port without an alias shows up as a gap instead of silently reading as covered.
+    expect(coverage?.notImplemented).toEqual([]);
+  });
+
+  it("declares only capabilities something actually backs", () => {
+    // AC-2. `full-text-search` came off: nothing implements it in either adapter, so it was a claim
+    // with nothing behind it. `distributed-locking` stayed on, against the SPEC's expectation --
+    // #98's coordinator is a slot table with FOR UPDATE in a short transaction, not an advisory lock,
+    // which is exactly what transaction pooling supports.
+    expect(supabase.SUPABASE_CAPABILITIES).toEqual([
+      "transactions",
+      "row-level-security",
+      "distributed-locking",
+      "realtime",
+    ]);
+    expect(supabase.SUPABASE_CAPABILITIES).not.toContain("full-text-search");
   });
 });

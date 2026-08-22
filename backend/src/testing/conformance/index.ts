@@ -146,11 +146,14 @@ export type AdapterCoverage = {
 };
 
 /**
- * The ports `adapters/supabase/index.ts` actually alias from the Postgres adapter. Keep this in step
- * with the aliases there: a port Postgres implements is not automatically a Supabase claim, because
- * #104 verifies the Supabase column with row-level security applied, which Postgres alone does not.
+ * The ports `adapters/supabase/index.ts` aliases from the Postgres adapter — all of them as of #104.
+ *
+ * Derived from `REGISTERED_PORTS` rather than listed, now that the answer is "all", so a newly
+ * registered port cannot quietly become an unclassified Supabase gap. The alias identity itself is
+ * asserted per port in `supabase-conformance.test.ts`, which is what keeps this honest: if an alias
+ * were repointed to a second implementation, that test fails rather than this list going stale.
  */
-const SUPABASE_ALIASED: readonly string[] = ["ConversationStore"];
+const SUPABASE_ALIASED: readonly string[] = REGISTERED_PORTS.map((p) => p.port);
 
 /** Ports with no Postgres store yet, each against the SPEC that adds it (REQ-010→013). */
 const POSTGRES_PENDING: readonly { readonly port: string; readonly trackedBy: string }[] = [
