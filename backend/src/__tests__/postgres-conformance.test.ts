@@ -33,6 +33,8 @@ import {
   createPostgresApprovalGrantStore,
   createPostgresUsageStore,
   createPostgresIdempotencyStore,
+  createPostgresSkillStore,
+  createPostgresMcpConnectionStore,
   createPoolOpener,
   createSingleConnectionOpener,
   createTransactionScope,
@@ -43,7 +45,7 @@ import {
   type TransactionRunner,
 } from "../adapters/postgres/index.js";
 import { asId } from "../core/ids.js";
-import type { AgentId, ConversationId, MessageId, MessagePartId } from "../core/ids.js";
+import type { AgentId, ConversationId, MessageId, MessagePartId, SkillId } from "../core/ids.js";
 import type { AgentManifest } from "../agents/index.js";
 import { ADAPTER_COVERAGE } from "../testing/conformance/index.js";
 import { conversationStoreConformance } from "../testing/conformance/conversation-store.js";
@@ -64,7 +66,11 @@ import {
   interactionStoreConformance,
   usageStoreConformance,
 } from "../testing/conformance/hitl.js";
-import { idempotencyStoreConformance } from "../testing/conformance/records.js";
+import {
+  idempotencyStoreConformance,
+  mcpConnectionStoreConformance,
+  skillStoreConformance,
+} from "../testing/conformance/records.js";
 
 const PG_URL = process.env["AGENTKIT_TEST_PG_URL"];
 
@@ -376,6 +382,45 @@ usageStoreConformance(() => {
 
 idempotencyStoreConformance(() => createPostgresIdempotencyStore(freshExecutor()));
 
+// Tenant configuration, #101. Neither table references a run or a conversation, so no seeders.
+skillStoreConformance(
+  () => createPostgresSkillStore(freshExecutor()),
+  async (store, { tenantId, name, version }) => {
+    await (store as ReturnType<typeof createPostgresSkillStore>).add(tenantId, {
+      id: asId<SkillId>(`${name}-${version}`),
+      name,
+      // SKILL_LIMITS.descriptionMinLength is 20, and the schema repeats it as a CHECK — so a shorter
+      // fixture would fail at the database, not only at validateSkillInput.
+      description: "A conformance-suite fixture skill used to verify store behaviour.",
+      source: "tenant",
+      version,
+      instructions: "text only, no executable content",
+      status: "active",
+      tenantId,
+      createdAt: "2020-01-01T00:00:00.000Z",
+    });
+  },
+);
+
+mcpConnectionStoreConformance(
+  () => createPostgresMcpConnectionStore(freshExecutor(), { allowedSchemes: ["https"] }),
+  async (store, { tenantId, id }) => {
+    await store.register({
+      tenantId,
+      connection: {
+        id,
+        tenantId,
+        label: `server ${id}`,
+        transport: "streamable-http",
+        endpoint: "https://mcp.example.com/rpc",
+        auth: { kind: "bearer", credentialRef: "secret://tenant/mcp-token" },
+        enabled: true,
+        createdAt: "2020-01-01T00:00:00.000Z",
+      },
+    });
+  },
+);
+
 // ---------------------------------------------------------------------------------------------
 // The registry contract. Not a placeholder — these assertions are what make the matrix's
 // NOT-IMPLEMENTED cells trustworthy rather than a guess.
@@ -406,6 +451,8 @@ describe("postgres adapter coverage", () => {
       "ApprovalGrantStore",
       "UsageStore",
       "IdempotencyStore",
+      "SkillStore",
+      "McpConnectionStore",
     ]);
   });
 
@@ -413,9 +460,9 @@ describe("postgres adapter coverage", () => {
     for (const { port, trackedBy } of coverage?.notImplemented ?? []) {
       expect(trackedBy, `${port} must name the issue that will add its Postgres store`).toMatch(/^#\d+$/);
     }
-    // 19 registered ports, 15 implemented ⇒ 4 declared gaps. A drift here means the registry and
+    // 19 registered ports, 17 implemented ⇒ 2 declared gaps. A drift here means the registry and
     // reality have parted company.
-    expect(coverage?.notImplemented.length).toBe(4);
+    expect(coverage?.notImplemented.length).toBe(2);
   });
 });
 

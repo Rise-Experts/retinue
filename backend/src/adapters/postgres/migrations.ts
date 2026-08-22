@@ -447,6 +447,85 @@ export const MIGRATIONS: readonly Migration[] = [
     ],
     down: [`DROP TABLE IF EXISTS idempotency_keys`, `DROP TABLE IF EXISTS usage_records`],
   },
+  {
+    // #101 — tenant configuration: versioned skills and registered outbound MCP servers.
+    //
+    // Corrected against SkillVersion (src/skills/index.ts) and McpServerConnection (src/mcp/index.ts).
+    // The SPEC named `content` for `instructions`, omitted `description` -- which is the field
+    // discovery actually puts in model context, so listCatalog could not return a usable entry
+    // without it -- omitted `source`, and proposed `enabled boolean` for a three-state `status`
+    // (draft/active/archived) that a boolean cannot represent.
+    //
+    // The primary key is on (tenant_id, name, version), not (tenant_id, id, version): findVersion
+    // looks up by name and version, and the reference adapter keys on name@version.
+    id: "0010_skills_mcp",
+    up: [
+      `CREATE TABLE IF NOT EXISTS skills (
+        tenant_id    text        NOT NULL,
+        id           text        NOT NULL,
+        name         text        NOT NULL,
+        description  text        NOT NULL,
+        source       text        NOT NULL,
+        version      integer     NOT NULL,
+        instructions text        NOT NULL,
+        status       text        NOT NULL,
+        created_at   timestamptz NOT NULL,
+        created_by   text,
+        PRIMARY KEY (tenant_id, name, version),
+        CONSTRAINT skills_id_unique UNIQUE (tenant_id, id),
+        -- Mirrors SKILL_SOURCES and SkillStatus.
+        CONSTRAINT skills_source_check CHECK (source IN ('built-in', 'tenant', 'plugin')),
+        CONSTRAINT skills_status_check CHECK (status IN ('draft', 'active', 'archived')),
+        CONSTRAINT skills_version_positive CHECK (version > 0),
+        -- Mirrors SKILL_LIMITS. The store already runs validateSkillInput, so these exist for the
+        -- path that bypasses it: a migration, a data fix, anything writing SQL directly. A limit
+        -- enforced only in application code is a limit that holds until someone opens psql.
+        CONSTRAINT skills_name_slug CHECK (
+          name ~ '^[a-z0-9]+(-[a-z0-9]+)*$' AND length(name) <= 64
+        ),
+        CONSTRAINT skills_description_bounds CHECK (length(description) BETWEEN 20 AND 1024),
+        CONSTRAINT skills_instructions_bounds CHECK (length(instructions) <= 20000)
+      )`,
+      // Discovery reads the latest *active* version per name, so the index is partial on active and
+      // descends by version -- the shape that answers the catalog query without a sort.
+      `CREATE INDEX IF NOT EXISTS skills_active_catalog_idx
+        ON skills (tenant_id, name, version DESC) WHERE status = 'active'`,
+      // No egress_policy column: the egress policy is a parameter of the *store*
+      // (createMemoryMcpConnectionStore(egress)) -- a deployment-level rule, not per-row data.
+      // Nothing could populate it. No updated_at either; the type has no such field.
+      `CREATE TABLE IF NOT EXISTS mcp_connections (
+        tenant_id           text        NOT NULL,
+        id                  text        NOT NULL,
+        label               text        NOT NULL,
+        transport           text        NOT NULL,
+        endpoint            text        NOT NULL,
+        auth_kind           text        NOT NULL,
+        -- A reference, never a value. McpAuth has no field capable of holding a secret and neither
+        -- does this table -- which is a stronger guarantee than a pattern trying to recognise one.
+        auth_credential_ref text,
+        enabled             boolean     NOT NULL,
+        created_at          timestamptz NOT NULL,
+        last_handshake_at   timestamptz,
+        last_error          text,
+        PRIMARY KEY (tenant_id, id),
+        -- Mirrors MCP_TRANSPORTS.
+        CONSTRAINT mcp_connections_transport_check
+          CHECK (transport IN ('stdio', 'streamable-http', 'sse')),
+        CONSTRAINT mcp_connections_auth_kind_check
+          CHECK (auth_kind IN ('none', 'bearer', 'oauth')),
+        -- The discriminated union's shape, enforced by the database rather than trusted: 'none'
+        -- carries no reference, and the two that need one cannot be stored without it. Half a
+        -- bearer connection would fail at handshake time, far from the write that caused it.
+        CONSTRAINT mcp_connections_auth_ref_pairing CHECK (
+          (auth_kind = 'none' AND auth_credential_ref IS NULL)
+          OR (auth_kind IN ('bearer', 'oauth') AND auth_credential_ref IS NOT NULL)
+        )
+      )`,
+      `CREATE INDEX IF NOT EXISTS mcp_connections_enabled_idx
+        ON mcp_connections (tenant_id, id) WHERE enabled`,
+    ],
+    down: [`DROP TABLE IF EXISTS mcp_connections`, `DROP TABLE IF EXISTS skills`],
+  },
 ];
 
 export const migrate = async (sql: SqlExecutor): Promise<void> => {
