@@ -27,8 +27,16 @@ import {
   createPostgresSessionStateStore,
   createPostgresThreadSummaryStore,
   createPostgresRunStore,
+  createPostgresConversationRunCoordinator,
+  createPostgresUnitOfWork,
+  createPoolOpener,
+  createSingleConnectionOpener,
+  createTransactionScope,
   migrate,
+  POSTGRES_CAPABILITIES,
+  type ConnectionOpener,
   type SqlExecutor,
+  type TransactionRunner,
 } from "../adapters/postgres/index.js";
 import { asId } from "../core/ids.js";
 import type { AgentId, ConversationId, MessageId, MessagePartId } from "../core/ids.js";
@@ -44,7 +52,9 @@ import {
   conversationBindingStoreConformance,
   sessionStateStoreConformance,
   threadSummaryStoreConformance,
+  unitOfWorkConformance,
 } from "../testing/conformance/session-state.js";
+import { conversationRunCoordinatorConformance } from "../testing/conformance/run-coordinator.js";
 
 const PG_URL = process.env["AGENTKIT_TEST_PG_URL"];
 
@@ -58,34 +68,36 @@ const pgliteExecutor = (db: PGlite): SqlExecutor => ({
 });
 
 /**
- * A real-server executor against a schema isolated per store, so parallel cases cannot collide.
+ * A real-server database against a schema isolated per store, so parallel cases cannot collide.
  * Imported lazily: `pg` must not be required for the PGlite path, or a local run without a database
  * would still pay for the driver.
  */
-const serverExecutor = async (url: string): Promise<SqlExecutor> => {
+const serverDatabase = async (url: string): Promise<{ base: SqlExecutor; opener: ConnectionOpener }> => {
   const { Pool } = await import("pg");
   const pool = new Pool({ connectionString: url });
   // A dedicated schema per executor keeps concurrent conformance runs from sharing tables.
   const schema = `conf_${Math.abs(hashString(`${process.pid}:${closers.length}`))}`;
   const client = await pool.connect();
   await client.query(`CREATE SCHEMA IF NOT EXISTS ${schema}`);
-  await client.query(`SET search_path TO ${schema}`);
   client.release();
   closers.push(async () => {
     await pool.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`).catch(() => undefined);
     await pool.end();
   });
   return {
-    async query<Row>(text: string, params?: readonly unknown[]): Promise<Row[]> {
-      const c = await pool.connect();
-      try {
-        await c.query(`SET search_path TO ${schema}`);
-        const r = await c.query(text, params ? [...params] : undefined);
-        return r.rows as Row[];
-      } finally {
-        c.release();
-      }
+    base: {
+      async query<Row>(text: string, params?: readonly unknown[]): Promise<Row[]> {
+        const c = await pool.connect();
+        try {
+          await c.query(`SET search_path TO ${schema}`);
+          const r = await c.query(text, params ? [...params] : undefined);
+          return r.rows as Row[];
+        } finally {
+          c.release();
+        }
+      },
     },
+    opener: createPoolOpener(pool, schema),
   };
 };
 
@@ -96,21 +108,46 @@ function hashString(input: string): number {
   return h;
 }
 
-/** A migrated executor per store. Migration runs lazily on first query, so store creation is sync. */
-const freshExecutor = (): SqlExecutor => {
-  let ready: Promise<SqlExecutor> | null = null;
+/**
+ * A migrated database per store, as a transaction-aware pair.
+ *
+ * The executor handed out is the scope's `scoped()` wrapper, so a store built over it automatically
+ * joins whatever transaction the runner has open (#98). That is what lets `unitOfWorkConformance`
+ * construct the unit of work and the session store independently — through the port's zero-argument
+ * `run(fn)` there is no other way for the store to learn about the transaction.
+ *
+ * Both halves stay lazy: migration runs on first use, so store creation remains synchronous.
+ */
+const freshDatabase = (): { sql: SqlExecutor; runner: TransactionRunner } => {
+  let ready: Promise<{ sql: SqlExecutor; runner: TransactionRunner }> | null = null;
   const init = () =>
     (ready ??= (async () => {
-      const sql = PG_URL ? await serverExecutor(PG_URL) : pgliteExecutor(new PGlite());
-      await migrate(sql);
-      return sql;
+      const { base, opener } = PG_URL
+        ? await serverDatabase(PG_URL)
+        : (() => {
+            const executor = pgliteExecutor(new PGlite());
+            return { base: executor, opener: createSingleConnectionOpener(executor) };
+          })();
+      await migrate(base);
+      const scope = createTransactionScope(opener);
+      return { sql: scope.scoped(base), runner: scope.runner };
     })());
   return {
-    async query(text, params) {
-      return (await init()).query(text, params);
+    sql: {
+      async query(text, params) {
+        return (await init()).sql.query(text, params);
+      },
+    },
+    runner: {
+      async transaction(fn) {
+        return (await init()).runner.transaction(fn);
+      },
     },
   };
 };
+
+/** Most harnesses need only the executor. */
+const freshExecutor = (): SqlExecutor => freshDatabase().sql;
 
 afterAll(async () => {
   for (const close of closers) await close();
@@ -231,6 +268,45 @@ checkpointStoreConformance(() => {
   };
 });
 
+// The coordinator and the unit of work, the two ports #98 adds.
+//
+// Both get the *same* database as their session store where it matters: the unit of work's rollback
+// case only means anything if the store it wraps writes through the same connection, which is what
+// `freshDatabase()`'s scoped executor arranges.
+conversationRunCoordinatorConformance(() => {
+  const { sql, runner } = freshDatabase();
+  return {
+    store: createPostgresConversationRunCoordinator(sql, runner),
+    async seedConversation({ tenantId, conversationId }) {
+      await createPostgresConversationStore(sql).create({
+        tenantId,
+        id: conversationId,
+        title: "for run coordination",
+      });
+    },
+    // A second coordinator over the same database — what makes the gated `distributed-locking` case
+    // able to tell backend-held state from object-held state.
+    sibling: () => createPostgresConversationRunCoordinator(sql, runner),
+  };
+}, { capabilities: POSTGRES_CAPABILITIES });
+
+// One database for both halves. Two separate factories would put the transaction and the write in
+// different places, and the rollback assertion would then pass for the wrong reason.
+unitOfWorkConformance(() => {
+  const { sql, runner } = freshDatabase();
+  return {
+    unitOfWork: createPostgresUnitOfWork(runner),
+    sessions: createPostgresSessionStateStore(sql),
+    async seedConversation({ tenantId, conversationId }) {
+      await createPostgresConversationStore(sql).create({
+        tenantId,
+        id: conversationId,
+        title: "for unit of work",
+      });
+    },
+  };
+}, { capabilities: POSTGRES_CAPABILITIES });
+
 // ---------------------------------------------------------------------------------------------
 // The registry contract. Not a placeholder — these assertions are what make the matrix's
 // NOT-IMPLEMENTED cells trustworthy rather than a guess.
@@ -255,6 +331,8 @@ describe("postgres adapter coverage", () => {
       "ConversationBindingStore",
       "SessionStateStore",
       "ThreadSummaryStore",
+      "ConversationRunCoordinator",
+      "UnitOfWork",
     ]);
   });
 
@@ -262,9 +340,9 @@ describe("postgres adapter coverage", () => {
     for (const { port, trackedBy } of coverage?.notImplemented ?? []) {
       expect(trackedBy, `${port} must name the issue that will add its Postgres store`).toMatch(/^#\d+$/);
     }
-    // 19 registered ports, 9 implemented ⇒ 10 declared gaps. A drift here means the registry and
+    // 19 registered ports, 11 implemented ⇒ 8 declared gaps. A drift here means the registry and
     // reality have parted company.
-    expect(coverage?.notImplemented.length).toBe(10);
+    expect(coverage?.notImplemented.length).toBe(8);
   });
 });
 

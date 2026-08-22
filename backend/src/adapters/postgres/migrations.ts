@@ -241,6 +241,38 @@ export const MIGRATIONS: readonly Migration[] = [
     ],
     down: [`DROP TABLE IF EXISTS thread_summaries`, `DROP TABLE IF EXISTS session_state`],
   },
+  {
+    // #98 — per-conversation run serialization.
+    //
+    // A slot table rather than advisory locks, and the reasoning is not close. An advisory xact lock
+    // lives exactly as long as its transaction, but the active slot must live as long as the *run* —
+    // which includes `waiting-for-question` and `waiting-for-approval`, states that exist to wait for
+    // a human and can last hours. Holding a transaction open that long pins a connection and blocks
+    // VACUUM across the database. Worse, the port promises a FIFO `position` and a `depth`, and a
+    // lock has no ordering, no membership and no introspection — the queue has to live in a row
+    // regardless, at which point the lock adds nothing. Postgres advisory locks are also not FIFO.
+    id: "0007_run_coordination",
+    up: [
+      `CREATE TABLE IF NOT EXISTS conversation_run_slots (
+        tenant_id       text        NOT NULL,
+        conversation_id text        NOT NULL,
+        -- Nullable: an idle conversation has a row with no holder. Deliberately NOT a foreign key to
+        -- the runs table: claimOrEnqueue is legitimately called before the run row is committed, so the
+        -- reference cannot be enforced without breaking the caller it exists to serve.
+        active_run_id   text,
+        queued          jsonb       NOT NULL DEFAULT '[]'::jsonb,
+        updated_at      timestamptz NOT NULL,
+        PRIMARY KEY (tenant_id, conversation_id),
+        CONSTRAINT conversation_run_slots_conversation_fk
+          FOREIGN KEY (tenant_id, conversation_id) REFERENCES conversations (tenant_id, id)
+          ON DELETE CASCADE,
+        -- The queue is an ordered array. Without this a malformed write could store an object and
+        -- every position/depth answer afterwards would be silently wrong.
+        CONSTRAINT conversation_run_slots_queued_is_array CHECK (jsonb_typeof(queued) = 'array')
+      )`,
+    ],
+    down: [`DROP TABLE IF EXISTS conversation_run_slots`],
+  },
 ];
 
 export const migrate = async (sql: SqlExecutor): Promise<void> => {

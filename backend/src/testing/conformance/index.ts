@@ -154,8 +154,6 @@ const SUPABASE_ALIASED: readonly string[] = ["ConversationStore"];
 
 /** Ports with no Postgres store yet, each against the SPEC that adds it (REQ-010→013). */
 const POSTGRES_PENDING: readonly { readonly port: string; readonly trackedBy: string }[] = [
-  { port: "ConversationRunCoordinator", trackedBy: "#98" },
-  { port: "UnitOfWork", trackedBy: "#98" },
   { port: "InteractionStore", trackedBy: "#99" },
   { port: "ApprovalGrantStore", trackedBy: "#99" },
   { port: "UsageStore", trackedBy: "#100" },
@@ -186,6 +184,8 @@ export const ADAPTER_COVERAGE: readonly AdapterCoverage[] = [
       "ConversationBindingStore",
       "SessionStateStore",
       "ThreadSummaryStore",
+      "ConversationRunCoordinator",
+      "UnitOfWork",
     ],
     notImplemented: POSTGRES_PENDING,
   },

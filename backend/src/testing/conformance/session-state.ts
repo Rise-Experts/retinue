@@ -187,19 +187,47 @@ export function threadSummaryStoreConformance(
   });
 }
 
+/**
+ * A unit of work together with the store it must roll back, from **one** backend.
+ *
+ * The previous signature took two independent factories, which was fine for the reference adapter
+ * (its compensations are in-process) and quietly wrong for Postgres: two factories produce two
+ * databases, so the transaction and the write would land in different places and the rollback
+ * assertion would pass or fail for reasons unrelated to transactions. A single fixture makes the
+ * shared backend a requirement of the type rather than something each adapter has to remember.
+ */
+export type UnitOfWorkFixture = {
+  readonly unitOfWork: UnitOfWork;
+  readonly sessions: SessionStateStore;
+  /** Seeds the conversation the session-state foreign key requires (#97). Omitted when there is none. */
+  readonly seedConversation?: (input: {
+    readonly tenantId: TenantId;
+    readonly conversationId: ConversationId;
+  }) => Promise<void>;
+};
+
 export function unitOfWorkConformance(
-  makeUnitOfWork: () => UnitOfWork,
-  makeSessionStateStore: () => SessionStateStore,
+  makeFixture: () => UnitOfWorkFixture,
   declaration?: AdapterDeclaration,
 ): void {
+  /** A fresh backend per test, with its parent row seeded — so no case depends on another's order. */
+  const open = async (): Promise<UnitOfWorkFixture> => {
+    const fixture = makeFixture();
+    // Committed before any transaction opens, so a rolled-back unit does not take the parent with it.
+    await fixture.seedConversation?.({ tenantId: T1, conversationId: C1 });
+    return fixture;
+  };
+
   describe("UnitOfWork conformance", () => {
     it("returns the callback's value on success", async () => {
-      expect(await makeUnitOfWork().run(async () => 42)).toBe(42);
+      const { unitOfWork } = await open();
+      expect(await unitOfWork.run(async () => 42)).toBe(42);
     });
 
     it("propagates the callback's error", async () => {
+      const { unitOfWork } = await open();
       await expect(
-        makeUnitOfWork().run(async () => {
+        unitOfWork.run(async () => {
           throw new Error("boom");
         }),
       ).rejects.toThrow("boom");
@@ -212,16 +240,18 @@ export function unitOfWorkConformance(
      * its own `runTx(tx => tx.onRollback(...))`, which the bare port cannot express — so through
      * `run()` alone it rolls back nothing. Callers that rely on automatic rollback are therefore
      * only portable to adapters declaring `transactions`. See the PR discussion on #91.
+     *
+     * As of #98 Postgres is the first adapter for which this gate opens, so the case finally runs
+     * somewhere instead of standing down everywhere — which is what AC-5 of #98 is really about.
      */
     gatedIt(
       declaration,
       "transactions",
       "leaves no partial write behind when the unit fails",
       async () => {
-        const uow = makeUnitOfWork();
-        const sessions = makeSessionStateStore();
+        const { unitOfWork, sessions } = await open();
         await expect(
-          uow.run(async () => {
+          unitOfWork.run(async () => {
             await sessions.put({ tenantId: T1, conversationId: C1, expectedVersion: 0, data: { staged: true } });
             throw new Error("fail after the write");
           }),
@@ -232,9 +262,8 @@ export function unitOfWorkConformance(
     );
 
     it("commits the write when the unit succeeds", async () => {
-      const uow = makeUnitOfWork();
-      const sessions = makeSessionStateStore();
-      await uow.run(async () => {
+      const { unitOfWork, sessions } = await open();
+      await unitOfWork.run(async () => {
         await sessions.put({ tenantId: T1, conversationId: C1, expectedVersion: 0, data: { committed: true } });
       });
       expect((await sessions.get({ tenantId: T1, conversationId: C1 }))?.data).toEqual({ committed: true });

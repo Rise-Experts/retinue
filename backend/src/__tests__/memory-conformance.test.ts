@@ -82,10 +82,11 @@ sessionStateStoreConformance(() => createMemorySessionStateStore(), {
 });
 conversationBindingStoreConformance(() => createMemoryConversationBindingStore());
 threadSummaryStoreConformance(() => createMemoryThreadSummaryStore());
+// No declaration passed: the in-memory coordinator's state is a Map in the object, so it cannot
+// satisfy `distributed-locking` and must not claim it. The gated sibling case stands down by name.
 conversationRunCoordinatorConformance(() => createMemoryConversationRunCoordinator());
 unitOfWorkConformance(
-  () => createMemoryUnitOfWork(),
-  () => createMemorySessionStateStore(),
+  () => ({ unitOfWork: createMemoryUnitOfWork(), sessions: createMemorySessionStateStore() }),
   MEMORY_DECLARATION,
 );
 
