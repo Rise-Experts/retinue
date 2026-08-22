@@ -29,6 +29,8 @@ import {
   createPostgresRunStore,
   createPostgresConversationRunCoordinator,
   createPostgresUnitOfWork,
+  createPostgresInteractionStore,
+  createPostgresApprovalGrantStore,
   createPoolOpener,
   createSingleConnectionOpener,
   createTransactionScope,
@@ -55,6 +57,10 @@ import {
   unitOfWorkConformance,
 } from "../testing/conformance/session-state.js";
 import { conversationRunCoordinatorConformance } from "../testing/conformance/run-coordinator.js";
+import {
+  approvalGrantStoreConformance,
+  interactionStoreConformance,
+} from "../testing/conformance/hitl.js";
 
 const PG_URL = process.env["AGENTKIT_TEST_PG_URL"];
 
@@ -307,6 +313,26 @@ unitOfWorkConformance(() => {
   };
 }, { capabilities: POSTGRES_CAPABILITIES });
 
+// The HITL pair, #99. A question and an approval both belong to a run (foreign key), so each seeds
+// its parent — an orphan approval would be an authorisation with nothing to authorise.
+interactionStoreConformance(() => {
+  const sql = freshExecutor();
+  return {
+    store: createPostgresInteractionStore(sql),
+    async seedRun({ tenantId, runId }) {
+      await createPostgresRunStore(sql).create({
+        tenantId,
+        id: runId,
+        conversationId: asId<ConversationId>("conf-convo-for-hitl"),
+        agentId: asId<AgentId>("conf-agent-for-hitl"),
+        agentVersion: 1,
+      });
+    },
+  };
+});
+
+approvalGrantStoreConformance(() => createPostgresApprovalGrantStore(freshExecutor()));
+
 // ---------------------------------------------------------------------------------------------
 // The registry contract. Not a placeholder — these assertions are what make the matrix's
 // NOT-IMPLEMENTED cells trustworthy rather than a guess.
@@ -333,6 +359,8 @@ describe("postgres adapter coverage", () => {
       "ThreadSummaryStore",
       "ConversationRunCoordinator",
       "UnitOfWork",
+      "InteractionStore",
+      "ApprovalGrantStore",
     ]);
   });
 
@@ -340,9 +368,9 @@ describe("postgres adapter coverage", () => {
     for (const { port, trackedBy } of coverage?.notImplemented ?? []) {
       expect(trackedBy, `${port} must name the issue that will add its Postgres store`).toMatch(/^#\d+$/);
     }
-    // 19 registered ports, 11 implemented ⇒ 8 declared gaps. A drift here means the registry and
+    // 19 registered ports, 13 implemented ⇒ 6 declared gaps. A drift here means the registry and
     // reality have parted company.
-    expect(coverage?.notImplemented.length).toBe(8);
+    expect(coverage?.notImplemented.length).toBe(6);
   });
 });
 

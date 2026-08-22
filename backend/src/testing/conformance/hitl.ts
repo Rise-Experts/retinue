@@ -26,6 +26,7 @@ import type {
 import type { ApprovalGrant, PendingApproval, PendingQuestion } from "../../hitl/index.js";
 import type { ApprovalGrantStore, InteractionStore, UsageStore } from "../../persistence/index.js";
 import type { UsageEvent } from "../../usage/index.js";
+import { withRun, type FixtureOrStore } from "./parents.js";
 
 const T1 = asId<TenantId>("conf-tenant-1");
 const T2 = asId<TenantId>("conf-tenant-2");
@@ -55,16 +56,23 @@ const approval = (id: string): PendingApproval => ({
   idempotencyKey: "idem-1",
 });
 
-export function interactionStoreConformance(makeStore: () => InteractionStore): void {
+export function interactionStoreConformance(
+  makeFixture: () => FixtureOrStore<InteractionStore>,
+): void {
+  // A question and an approval both belong to a run, and the Postgres schema enforces it with a
+  // foreign key (#99) — an orphan approval would be an authorisation with nothing to authorise. The
+  // in-memory adapter has no such constraint and passes no seeder; see ./parents.ts.
+  const open = () => withRun(makeFixture(), [{ tenantId: T1, runId: RUN }]);
+
   describe("InteractionStore conformance", () => {
     it("finds a pending question by run", async () => {
-      const store = makeStore();
+      const store = await open();
       await store.createQuestion({ tenantId: T1, question: question("q1") });
       expect(await store.findPendingQuestion({ tenantId: T1, runId: RUN })).toMatchObject({ id: "q1" });
     });
 
     it("answering reports alreadyResolved false the first time", async () => {
-      const store = makeStore();
+      const store = await open();
       await store.createQuestion({ tenantId: T1, question: question("q1") });
       const first = await store.answerQuestion({
         tenantId: T1,
@@ -76,7 +84,7 @@ export function interactionStoreConformance(makeStore: () => InteractionStore): 
     });
 
     it("a duplicate answer reports alreadyResolved true and changes nothing", async () => {
-      const store = makeStore();
+      const store = await open();
       await store.createQuestion({ tenantId: T1, question: question("q1") });
       await store.answerQuestion({
         tenantId: T1,
@@ -96,7 +104,7 @@ export function interactionStoreConformance(makeStore: () => InteractionStore): 
     });
 
     it("an answered question is no longer pending", async () => {
-      const store = makeStore();
+      const store = await open();
       await store.createQuestion({ tenantId: T1, question: question("q1") });
       await store.answerQuestion({
         tenantId: T1,
@@ -108,7 +116,7 @@ export function interactionStoreConformance(makeStore: () => InteractionStore): 
     });
 
     it("finds a pending approval by run", async () => {
-      const store = makeStore();
+      const store = await open();
       await store.createApproval({ tenantId: T1, approval: approval("a1") });
       expect(await store.findPendingApproval({ tenantId: T1, runId: RUN })).toMatchObject({
         id: "a1",
@@ -117,7 +125,7 @@ export function interactionStoreConformance(makeStore: () => InteractionStore): 
     });
 
     it("deciding is idempotent — a duplicate decision cannot flip the outcome", async () => {
-      const store = makeStore();
+      const store = await open();
       await store.createApproval({ tenantId: T1, approval: approval("a1") });
       const first = await store.decideApproval({
         tenantId: T1,
@@ -137,14 +145,14 @@ export function interactionStoreConformance(makeStore: () => InteractionStore): 
     });
 
     it("preserves the stored normalized input, so resumption never runs regenerated arguments", async () => {
-      const store = makeStore();
+      const store = await open();
       await store.createApproval({ tenantId: T1, approval: approval("a1") });
       const pending = await store.findPendingApproval({ tenantId: T1, runId: RUN });
       expect(pending?.normalizedInput).toEqual({ draftId: "d1" });
     });
 
     it("enforces tenant isolation", async () => {
-      const store = makeStore();
+      const store = await open();
       await store.createQuestion({ tenantId: T1, question: question("q1") });
       await store.createApproval({ tenantId: T1, approval: approval("a1") });
       expect(await store.findPendingQuestion({ tenantId: T2, runId: RUN })).toBeNull();
@@ -153,7 +161,12 @@ export function interactionStoreConformance(makeStore: () => InteractionStore): 
   });
 }
 
-export function approvalGrantStoreConformance(makeStore: () => ApprovalGrantStore): void {
+export function approvalGrantStoreConformance(
+  makeFixture: () => FixtureOrStore<ApprovalGrantStore>,
+): void {
+  // Grants are standing tenant-level permissions with no run and no required conversation row, so
+  // there is no parent to seed — the fixture form is accepted only for symmetry with its sibling.
+  const open = () => withRun(makeFixture(), []);
   const grant = (id: string, over: Partial<ApprovalGrant> = {}): ApprovalGrant => ({
     id: asId<ApprovalGrantId>(id),
     tenantId: T1,
@@ -166,12 +179,12 @@ export function approvalGrantStoreConformance(makeStore: () => ApprovalGrantStor
   describe("ApprovalGrantStore conformance", () => {
     it("returns null when no grant exists", async () => {
       expect(
-        await makeStore().findActive({ tenantId: T1, toolNameOrCategory: "publish_post", now: NOW }),
+        await (await open()).findActive({ tenantId: T1, toolNameOrCategory: "publish_post", now: NOW }),
       ).toBeNull();
     });
 
     it("finds an active tenant-wide grant", async () => {
-      const store = makeStore();
+      const store = await open();
       await store.grant({ tenantId: T1, grant: grant("g1") });
       expect(
         await store.findActive({ tenantId: T1, toolNameOrCategory: "publish_post", now: NOW }),
@@ -179,7 +192,7 @@ export function approvalGrantStoreConformance(makeStore: () => ApprovalGrantStor
     });
 
     it("a conversation-scoped grant matches only its own conversation", async () => {
-      const store = makeStore();
+      const store = await open();
       await store.grant({
         tenantId: T1,
         grant: grant("g1", { scope: "conversation", conversationId: C1 }),
@@ -203,7 +216,7 @@ export function approvalGrantStoreConformance(makeStore: () => ApprovalGrantStor
     });
 
     it("a conversation-scoped grant never leaks tenant-wide when no conversation is supplied", async () => {
-      const store = makeStore();
+      const store = await open();
       await store.grant({
         tenantId: T1,
         grant: grant("g1", { scope: "conversation", conversationId: C1 }),
@@ -214,7 +227,7 @@ export function approvalGrantStoreConformance(makeStore: () => ApprovalGrantStor
     });
 
     it("an expired grant is not active", async () => {
-      const store = makeStore();
+      const store = await open();
       await store.grant({ tenantId: T1, grant: grant("g1", { expiresAt: NOW }) });
       expect(
         await store.findActive({ tenantId: T1, toolNameOrCategory: "publish_post", now: LATER }),
@@ -222,7 +235,7 @@ export function approvalGrantStoreConformance(makeStore: () => ApprovalGrantStor
     });
 
     it("a revoked grant is not active", async () => {
-      const store = makeStore();
+      const store = await open();
       await store.grant({ tenantId: T1, grant: grant("g1") });
       await store.revoke({ tenantId: T1, grantId: asId<ApprovalGrantId>("g1"), at: NOW });
       expect(
@@ -231,7 +244,7 @@ export function approvalGrantStoreConformance(makeStore: () => ApprovalGrantStor
     });
 
     it("does not match a different tool", async () => {
-      const store = makeStore();
+      const store = await open();
       await store.grant({ tenantId: T1, grant: grant("g1") });
       expect(
         await store.findActive({ tenantId: T1, toolNameOrCategory: "delete_everything", now: NOW }),
@@ -239,7 +252,7 @@ export function approvalGrantStoreConformance(makeStore: () => ApprovalGrantStor
     });
 
     it("enforces tenant isolation", async () => {
-      const store = makeStore();
+      const store = await open();
       await store.grant({ tenantId: T1, grant: grant("g1") });
       expect(
         await store.findActive({ tenantId: T2, toolNameOrCategory: "publish_post", now: NOW }),

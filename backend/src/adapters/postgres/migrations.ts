@@ -273,6 +273,109 @@ export const MIGRATIONS: readonly Migration[] = [
     ],
     down: [`DROP TABLE IF EXISTS conversation_run_slots`],
   },
+  {
+    // #99 — durable questions, approvals and standing grants.
+    //
+    // Two interaction tables, not the one the SPEC proposed. PendingQuestion and PendingApproval
+    // (src/hitl/index.ts) share three fields; six of the approval's need to be real columns or
+    // constraints, idempotency_key above all, since the replay guarantee rests on a unique index over
+    // it. A single table with a jsonb payload could not carry that constraint.
+    //
+    // No conversation_id on either: neither type has one (they are scoped by tenant + run), the same
+    // correction run_events needed in #94.
+    //
+    // No status column either. A question is pending exactly when answered_at IS NULL. A stored
+    // status is a second source of truth for one fact, and it fails silently — a row marked pending
+    // with an answer already recorded. The partial indexes below serve the waiting-run lookup the
+    // status column was meant for, and stay the size of the backlog rather than of all history.
+    id: "0008_hitl",
+    up: [
+      `CREATE TABLE IF NOT EXISTS interaction_questions (
+        tenant_id   text        NOT NULL,
+        id          text        NOT NULL,
+        run_id      text        NOT NULL,
+        questions   jsonb       NOT NULL,
+        created_at  timestamptz NOT NULL,
+        answered_at timestamptz,
+        answers     jsonb,
+        PRIMARY KEY (tenant_id, id),
+        CONSTRAINT interaction_questions_run_fk
+          FOREIGN KEY (tenant_id, run_id) REFERENCES runs (tenant_id, id) ON DELETE CASCADE,
+        -- Answered means both fields, or neither. A half-written resolution would read as answered
+        -- while carrying no answer, and the resuming run would execute on nothing.
+        CONSTRAINT interaction_questions_answer_complete CHECK (
+          (answered_at IS NULL AND answers IS NULL) OR (answered_at IS NOT NULL AND answers IS NOT NULL)
+        )
+      )`,
+      // Partial, and deliberately not unique: findPendingQuestion returns a single question, so at
+      // most one pending per run is plausibly the real invariant — but the port does not say so and
+      // the reference adapter permits several. Enforcing it here would be stricter than the contract.
+      // Flagged as an open question on #99 rather than decided unilaterally in an index.
+      `CREATE INDEX IF NOT EXISTS interaction_questions_pending_run_idx
+        ON interaction_questions (tenant_id, run_id) WHERE answered_at IS NULL`,
+      `CREATE TABLE IF NOT EXISTS interaction_approvals (
+        tenant_id                  text        NOT NULL,
+        id                         text        NOT NULL,
+        run_id                     text        NOT NULL,
+        tool_name                  text        NOT NULL,
+        normalized_input           jsonb       NOT NULL,
+        risk_category              text        NOT NULL,
+        summary                    text        NOT NULL,
+        estimated_cost_minor_units integer,
+        expires_at                 timestamptz NOT NULL,
+        idempotency_key            text        NOT NULL,
+        decided_at                 timestamptz,
+        decision                   text,
+        PRIMARY KEY (tenant_id, id),
+        CONSTRAINT interaction_approvals_run_fk
+          FOREIGN KEY (tenant_id, run_id) REFERENCES runs (tenant_id, id) ON DELETE CASCADE,
+        CONSTRAINT interaction_approvals_decision_complete CHECK (
+          (decided_at IS NULL AND decision IS NULL) OR (decided_at IS NOT NULL AND decision IS NOT NULL)
+        ),
+        -- Mirrors APPROVAL_DECISIONS (src/hitl/index.ts).
+        CONSTRAINT interaction_approvals_decision_check CHECK (
+          decision IS NULL OR decision IN ('allow-once', 'allow-conversation', 'allow-always', 'deny')
+        )
+      )`,
+      // The enforcement point for AC-2. A replayed approval must not be able to authorise the same
+      // side effect twice, and the database is the only place that holds across processes -- an
+      // in-process check cannot. The SPEC put this index on approval_grants, where idempotency_key
+      // does not exist, which would have left the guarantee unenforced while looking implemented.
+      `CREATE UNIQUE INDEX IF NOT EXISTS interaction_approvals_idempotency_idx
+        ON interaction_approvals (tenant_id, idempotency_key)`,
+      `CREATE INDEX IF NOT EXISTS interaction_approvals_pending_run_idx
+        ON interaction_approvals (tenant_id, run_id) WHERE decided_at IS NULL`,
+      // Standing grants. No run_id, effect, request, decision, decided_by, decided_at or
+      // idempotency_key: none of them exist on ApprovalGrant. A grant is a standing permission, not a
+      // decision record -- the decision lives on the approval.
+      `CREATE TABLE IF NOT EXISTS approval_grants (
+        tenant_id             text        NOT NULL,
+        id                    text        NOT NULL,
+        scope                 text        NOT NULL,
+        tool_name_or_category text        NOT NULL,
+        conversation_id       text,
+        granted_at            timestamptz NOT NULL,
+        expires_at            timestamptz,
+        revoked_at            timestamptz,
+        PRIMARY KEY (tenant_id, id),
+        -- Mirrors ApprovalScope (src/hitl/index.ts).
+        CONSTRAINT approval_grants_scope_check
+          CHECK (scope IN ('principal', 'tenant', 'category', 'conversation')),
+        -- A conversation-scoped grant with no conversation could match nothing at best, and at worst
+        -- a query that forgot the scope check would treat it as tenant-wide -- turning a
+        -- one-conversation approval into a standing one, which the port forbids by name.
+        CONSTRAINT approval_grants_conversation_scope_has_conversation
+          CHECK (scope <> 'conversation' OR conversation_id IS NOT NULL)
+      )`,
+      `CREATE INDEX IF NOT EXISTS approval_grants_active_idx
+        ON approval_grants (tenant_id, tool_name_or_category) WHERE revoked_at IS NULL`,
+    ],
+    down: [
+      `DROP TABLE IF EXISTS approval_grants`,
+      `DROP TABLE IF EXISTS interaction_approvals`,
+      `DROP TABLE IF EXISTS interaction_questions`,
+    ],
+  },
 ];
 
 export const migrate = async (sql: SqlExecutor): Promise<void> => {
