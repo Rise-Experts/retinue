@@ -13,7 +13,8 @@
 import { describe, expect, it } from "vitest";
 import { withConversation, type FixtureOrStore } from "./parents.js";
 import { asId } from "../../core/ids.js";
-import type { MessageId, PrincipalId, RunId, TenantId, ToolCallId } from "../../core/ids.js";
+import type {
+  BlobRef, MessageId, PrincipalId, RunId, TenantId, ToolCallId } from "../../core/ids.js";
 import type {
   AgentStore,
   BlobStore,
@@ -191,11 +192,15 @@ export function blobStoreConformance(makeStore: () => BlobStore): void {
       expect(await store.get({ tenantId: T1, ref })).toEqual({ large: "payload" });
     });
 
-    it("returns null for an unknown ref", async () => {
+    it("returns null for a ref that was never issued", async () => {
       const store = makeStore();
-      const ref = await store.put({ tenantId: T1, value: 1 });
-      const other = makeStore();
-      expect(await other.get({ tenantId: T1, ref })).toBeNull();
+      // Previously this asked a *second store instance* for a ref the first had issued, which for an
+      // in-memory adapter means "unknown" and for a durable one means the opposite — a second store
+      // over the same database should find it. It passed only because the Postgres wiring hands each
+      // factory call a fresh database, so it was testing instance identity rather than absence.
+      // Fabricating a ref tests what the name says, and is correct for both (#102).
+      await store.put({ tenantId: T1, value: 1 });
+      expect(await store.get({ tenantId: T1, ref: asId<BlobRef>("blob:never-issued:0") })).toBeNull();
     });
 
     it("a ref from one tenant never resolves another tenant's bytes", async () => {

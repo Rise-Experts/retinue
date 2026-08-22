@@ -526,6 +526,68 @@ export const MIGRATIONS: readonly Migration[] = [
     ],
     down: [`DROP TABLE IF EXISTS mcp_connections`, `DROP TABLE IF EXISTS skills`],
   },
+  {
+    // #102 — per-user memory and the tool-output offload. Completes the Postgres column.
+    //
+    // Corrected against PrincipalMemoryEntry. The SPEC had `content text, source text` and nothing
+    // else: `content` is `text`, `source` has no field to populate it, and it omitted `tags`,
+    // `salience`, `version` and `disabled_at` -- all four load-bearing. Without `salience` retrieve
+    // cannot order "most salient first"; without `version` the optimistic-concurrency guard on
+    // update cannot exist; and without `disabled_at` there is nowhere to record that a user switched
+    // a memory off, so a disabled memory would keep influencing every turn.
+    id: "0011_principal_memory_blobs",
+    up: [
+      `CREATE TABLE IF NOT EXISTS principal_memory (
+        tenant_id    text        NOT NULL,
+        principal_id text        NOT NULL,
+        id           text        NOT NULL,
+        text         text        NOT NULL,
+        tags         jsonb       NOT NULL DEFAULT '[]'::jsonb,
+        salience     integer     NOT NULL,
+        version      integer     NOT NULL,
+        created_at   timestamptz NOT NULL,
+        updated_at   timestamptz NOT NULL,
+        disabled_at  timestamptz,
+        -- Principal-leading, so scoping is structural rather than a filter someone can forget. The
+        -- SPEC got this right and the reasoning is worth keeping: there is no key shape here that
+        -- permits a cross-principal read by accident.
+        PRIMARY KEY (tenant_id, principal_id, id),
+        CONSTRAINT principal_memory_version_positive CHECK (version > 0),
+        CONSTRAINT principal_memory_tags_is_array CHECK (jsonb_typeof(tags) = 'array'),
+        -- Mirrors MEMORY_LIMITS (src/principal-memory/index.ts). Enforced here as well as in the
+        -- extraction gate, because the gate is application code and this is not.
+        CONSTRAINT principal_memory_text_bounds CHECK (length(text) BETWEEN 1 AND 1000),
+        CONSTRAINT principal_memory_tag_count CHECK (jsonb_array_length(tags) <= 8)
+      )`,
+      // list() pages by (created_at, id).
+      `CREATE INDEX IF NOT EXISTS principal_memory_list_idx
+        ON principal_memory (tenant_id, principal_id, created_at, id)`,
+      // retrieve() reads active entries, most salient first. Partial on active because a disabled
+      // entry must never be a candidate -- the index cannot return what it does not contain.
+      `CREATE INDEX IF NOT EXISTS principal_memory_retrieve_idx
+        ON principal_memory (tenant_id, principal_id, salience DESC) WHERE disabled_at IS NULL`,
+      // The ref generator. A sequence rather than a process-local counter: the reference adapter's
+      // counter resets with the process, which for a durable store would hand out a ref that already
+      // belongs to someone else's value after a restart.
+      `CREATE SEQUENCE IF NOT EXISTS blob_ref_seq`,
+      // The value itself, not a pointer. BlobStore is `put(value) -> ref` / `get(ref) -> value`, so a
+      // metadata-and-pointer row could not serve get() at all -- there is nothing in the port to
+      // fetch bytes with. The metadata table the SPEC described belongs to FileMetadataStore (#129)
+      // or ArtifactStore (#133), which exist as deliberate placeholders.
+      `CREATE TABLE IF NOT EXISTS blobs (
+        tenant_id  text        NOT NULL,
+        ref        text        NOT NULL,
+        value      jsonb       NOT NULL,
+        created_at timestamptz NOT NULL DEFAULT now(),
+        PRIMARY KEY (tenant_id, ref)
+      )`,
+    ],
+    down: [
+      `DROP TABLE IF EXISTS blobs`,
+      `DROP SEQUENCE IF EXISTS blob_ref_seq`,
+      `DROP TABLE IF EXISTS principal_memory`,
+    ],
+  },
 ];
 
 export const migrate = async (sql: SqlExecutor): Promise<void> => {

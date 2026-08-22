@@ -35,6 +35,8 @@ import {
   createPostgresIdempotencyStore,
   createPostgresSkillStore,
   createPostgresMcpConnectionStore,
+  createPostgresPrincipalMemoryStore,
+  createPostgresBlobStore,
   createPoolOpener,
   createSingleConnectionOpener,
   createTransactionScope,
@@ -67,8 +69,10 @@ import {
   usageStoreConformance,
 } from "../testing/conformance/hitl.js";
 import {
+  blobStoreConformance,
   idempotencyStoreConformance,
   mcpConnectionStoreConformance,
+  principalMemoryStoreConformance,
   skillStoreConformance,
 } from "../testing/conformance/records.js";
 
@@ -421,6 +425,10 @@ mcpConnectionStoreConformance(
   },
 );
 
+// The last two ports, #102. Neither references a run or a conversation, so no seeders.
+principalMemoryStoreConformance(() => createPostgresPrincipalMemoryStore(freshExecutor()));
+blobStoreConformance(() => createPostgresBlobStore(freshExecutor()));
+
 // ---------------------------------------------------------------------------------------------
 // The registry contract. Not a placeholder — these assertions are what make the matrix's
 // NOT-IMPLEMENTED cells trustworthy rather than a guess.
@@ -453,6 +461,8 @@ describe("postgres adapter coverage", () => {
       "IdempotencyStore",
       "SkillStore",
       "McpConnectionStore",
+      "PrincipalMemoryStore",
+      "BlobStore",
     ]);
   });
 
@@ -460,9 +470,10 @@ describe("postgres adapter coverage", () => {
     for (const { port, trackedBy } of coverage?.notImplemented ?? []) {
       expect(trackedBy, `${port} must name the issue that will add its Postgres store`).toMatch(/^#\d+$/);
     }
-    // 19 registered ports, 17 implemented ⇒ 2 declared gaps. A drift here means the registry and
-    // reality have parted company.
-    expect(coverage?.notImplemented.length).toBe(2);
+    // 19 registered ports, all 19 implemented as of #102 ⇒ no declared gaps. The loop above is now
+    // vacuous, which is the point: it stays so the assertion still fires the moment a new port is
+    // registered without a Postgres store, rather than being deleted and having to be remembered.
+    expect(coverage?.notImplemented.length).toBe(0);
   });
 });
 
