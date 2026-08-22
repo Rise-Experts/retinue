@@ -27,6 +27,19 @@ export type UsageEvent = {
   readonly occurredAt: string;
 };
 
+/**
+ * The key an append is idempotent on: `(runId, stepId)` when a step is known, else the event id.
+ *
+ * Lives here rather than in an adapter so every adapter dedupes identically **by construction**. The
+ * reference adapter owned a private copy of this, which meant "both adapters agree" was a
+ * coincidence — the same situation `DEFAULT_SESSION_STATE_MAX_BYTES` was in before #97 moved it to
+ * the port. A recovered run re-recording a step it already logged must be a no-op in every adapter,
+ * because the alternative is double-counting real money.
+ */
+export const usageDedupeKey = (
+  event: Pick<UsageEvent, "id" | "runId"> & { readonly stepId?: string },
+): string => (event.stepId === undefined ? event.id : `${event.runId}:${event.stepId}`);
+
 /** What a caller supplies; the recorder stamps `id`, `tenantId` and `occurredAt`. */
 export type UsageEventInput = Omit<UsageEvent, "id" | "tenantId" | "occurredAt">;
 

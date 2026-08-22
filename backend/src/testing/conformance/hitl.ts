@@ -261,7 +261,16 @@ export function approvalGrantStoreConformance(
   });
 }
 
-export function usageStoreConformance(makeStore: () => UsageStore): void {
+export function usageStoreConformance(
+  makeFixture: () => FixtureOrStore<UsageStore>,
+): void {
+  // A usage record belongs to a run, and the Postgres schema enforces it (#100) — an orphan cost
+  // record is a charge attributable to nothing. The harness uses two runs, so both are seeded.
+  const open = () =>
+    withRun(makeFixture(), [
+      { tenantId: T1, runId: RUN },
+      { tenantId: T1, runId: asId<RunId>("conf-run-2") },
+    ]);
   const event = (id: string, over: Partial<UsageEvent> = {}): UsageEvent => ({
     id,
     tenantId: T1,
@@ -281,14 +290,14 @@ export function usageStoreConformance(makeStore: () => UsageStore): void {
 
   describe("UsageStore conformance", () => {
     it("appends an event and lists it by run", async () => {
-      const store = makeStore();
+      const store = await open();
       await store.append({ tenantId: T1, event: event("u1") });
       const page = await store.listByRun({ tenantId: T1, runId: RUN, limit: 10 });
       expect(page.items).toHaveLength(1);
     });
 
     it("totals sum exactly, with integer minor units", async () => {
-      const store = makeStore();
+      const store = await open();
       await store.append({ tenantId: T1, event: event("u1") });
       await store.append({ tenantId: T1, event: event("u2", { stepId: "step-2" }) });
       const totals = await store.totals({ tenantId: T1, runId: RUN });
@@ -300,7 +309,7 @@ export function usageStoreConformance(makeStore: () => UsageStore): void {
     });
 
     it("is idempotent on a repeated append, so a recovered run never double-counts", async () => {
-      const store = makeStore();
+      const store = await open();
       await store.append({ tenantId: T1, event: event("u1") });
       await store.append({ tenantId: T1, event: event("u1") });
       const totals = await store.totals({ tenantId: T1, runId: RUN });
@@ -309,7 +318,7 @@ export function usageStoreConformance(makeStore: () => UsageStore): void {
     });
 
     it("scopes totals to a run", async () => {
-      const store = makeStore();
+      const store = await open();
       const otherRun = asId<RunId>("conf-run-2");
       await store.append({ tenantId: T1, event: event("u1") });
       await store.append({ tenantId: T1, event: event("u2", { runId: otherRun }) });
@@ -318,7 +327,7 @@ export function usageStoreConformance(makeStore: () => UsageStore): void {
     });
 
     it("pages listByRun by stable cursor", async () => {
-      const store = makeStore();
+      const store = await open();
       for (const n of [1, 2, 3, 4, 5]) {
         await store.append({ tenantId: T1, event: event(`u${n}`, { stepId: `step-${n}` }) });
       }
@@ -335,7 +344,7 @@ export function usageStoreConformance(makeStore: () => UsageStore): void {
     });
 
     it("enforces tenant isolation", async () => {
-      const store = makeStore();
+      const store = await open();
       await store.append({ tenantId: T1, event: event("u1") });
       expect((await store.listByRun({ tenantId: T2, runId: RUN, limit: 10 })).items).toHaveLength(0);
       expect((await store.totals({ tenantId: T2, runId: RUN })).eventCount).toBe(0);

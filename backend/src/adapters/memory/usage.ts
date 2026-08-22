@@ -9,6 +9,7 @@
 
 import type { Page } from "../../core/context.js";
 import type { UsageStore, UsageTotals } from "../../persistence/index.js";
+import { usageDedupeKey } from "../../usage/index.js";
 import type { UsageEvent } from "../../usage/index.js";
 
 const ZERO_TOTALS: UsageTotals = {
@@ -20,9 +21,7 @@ const ZERO_TOTALS: UsageTotals = {
   eventCount: 0,
 };
 
-const dedupeKey = (event: UsageEvent): string =>
-  event.stepId !== undefined ? `${event.runId}:${event.stepId}` : event.id;
-
+// Imported from the port (#100) rather than defined here, so the Postgres adapter cannot drift.
 export const createMemoryUsageStore = (): UsageStore => {
   // tenantId → (dedupeKey → event). Partitioning by tenant makes cross-tenant reads impossible.
   const byTenant = new Map<string, Map<string, UsageEvent>>();
@@ -35,7 +34,7 @@ export const createMemoryUsageStore = (): UsageStore => {
   return {
     async append({ tenantId, event }) {
       const rows = tenant(tenantId);
-      const key = dedupeKey(event);
+      const key = usageDedupeKey(event);
       if (rows.has(key)) return; // idempotent: a re-recorded step is a no-op
       rows.set(key, event);
     },

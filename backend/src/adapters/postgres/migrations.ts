@@ -376,6 +376,77 @@ export const MIGRATIONS: readonly Migration[] = [
       `DROP TABLE IF EXISTS interaction_questions`,
     ],
   },
+  {
+    // #100 — the cost ledger and the replay guard.
+    //
+    // Corrected against UsageEvent (src/usage/index.ts). The SPEC proposed `cost_micros bigint`; the
+    // field is `costMinorUnits`, documented as integer minor units of the tenant's accounting
+    // currency. Minor units are 10^-2, micros are 10^-6, so that column name sets up a 10000x error
+    // in precisely the rollups the SPEC says depend on it being exact.
+    //
+    // It also omitted `currency`, which is required and without which a minor-unit integer means
+    // nothing -- 250 is EUR 2.50 or JPY 250 -- so a rollup summing across currencies would be
+    // confidently wrong. And it omitted `step_id`, which is load-bearing: appends are idempotent on
+    // (runId, stepId), so without it a recovered run double-counts.
+    //
+    // `principal_id` was dropped: no such field exists on the type.
+    id: "0009_usage_idempotency",
+    up: [
+      `CREATE TABLE IF NOT EXISTS usage_records (
+        tenant_id           text        NOT NULL,
+        id                  text        NOT NULL,
+        -- Computed by usageDedupeKey (src/usage/index.ts), which both adapters import, so the
+        -- idempotency rule cannot drift between them. Stored rather than expressed as an index on
+        -- COALESCE so the rule lives in one function instead of in one function and one index.
+        dedupe_key          text        NOT NULL,
+        run_id              text        NOT NULL,
+        conversation_id     text,
+        step_id             text,
+        tool_call_id        text,
+        model_id            text        NOT NULL,
+        input_tokens        integer     NOT NULL,
+        output_tokens       integer     NOT NULL,
+        cached_input_tokens integer     NOT NULL,
+        reasoning_tokens    integer,
+        cost_minor_units    integer     NOT NULL,
+        currency            text        NOT NULL,
+        occurred_at         timestamptz NOT NULL,
+        PRIMARY KEY (tenant_id, id),
+        CONSTRAINT usage_records_run_fk
+          FOREIGN KEY (tenant_id, run_id) REFERENCES runs (tenant_id, id) ON DELETE CASCADE,
+        -- Integer columns are what make AC-3 true. A float column would sum with drift, and the
+        -- drift would land in an invoice.
+        CONSTRAINT usage_records_non_negative CHECK (
+          input_tokens >= 0 AND output_tokens >= 0 AND cached_input_tokens >= 0
+          AND (reasoning_tokens IS NULL OR reasoning_tokens >= 0) AND cost_minor_units >= 0
+        )
+      )`,
+      // The append-idempotency guarantee. A recovered run that re-records a step it already logged
+      // must be a no-op, because the alternative is double-billing.
+      `CREATE UNIQUE INDEX IF NOT EXISTS usage_records_dedupe_idx
+        ON usage_records (tenant_id, dedupe_key)`,
+      // Run listing, keyset-paged. `id` breaks ties so a page boundary cannot drop or repeat a row.
+      `CREATE INDEX IF NOT EXISTS usage_records_run_occurred_idx
+        ON usage_records (tenant_id, run_id, occurred_at, id)`,
+      // The rollup index REQ-031 will need. Tenant-leading and time-ordered.
+      `CREATE INDEX IF NOT EXISTS usage_records_tenant_occurred_idx
+        ON usage_records (tenant_id, occurred_at, id)`,
+      // No `scope` column: nothing in IdempotencyStore has one. No `expires_at` either -- `put`
+      // takes no TTL and the port has no prune method, so nothing could populate it and an
+      // always-NULL expiry column would read as a retention policy that does not exist. Retention is
+      // flagged as an open question on #100; `created_at` plus its index is the mechanism a prune
+      // needs, which is what AC-5 actually requires.
+      `CREATE TABLE IF NOT EXISTS idempotency_keys (
+        tenant_id  text        NOT NULL,
+        key        text        NOT NULL,
+        result     jsonb       NOT NULL,
+        created_at timestamptz NOT NULL,
+        PRIMARY KEY (tenant_id, key)
+      )`,
+      `CREATE INDEX IF NOT EXISTS idempotency_keys_created_idx ON idempotency_keys (created_at)`,
+    ],
+    down: [`DROP TABLE IF EXISTS idempotency_keys`, `DROP TABLE IF EXISTS usage_records`],
+  },
 ];
 
 export const migrate = async (sql: SqlExecutor): Promise<void> => {

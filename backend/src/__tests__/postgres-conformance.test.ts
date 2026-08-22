@@ -31,6 +31,8 @@ import {
   createPostgresUnitOfWork,
   createPostgresInteractionStore,
   createPostgresApprovalGrantStore,
+  createPostgresUsageStore,
+  createPostgresIdempotencyStore,
   createPoolOpener,
   createSingleConnectionOpener,
   createTransactionScope,
@@ -60,7 +62,9 @@ import { conversationRunCoordinatorConformance } from "../testing/conformance/ru
 import {
   approvalGrantStoreConformance,
   interactionStoreConformance,
+  usageStoreConformance,
 } from "../testing/conformance/hitl.js";
+import { idempotencyStoreConformance } from "../testing/conformance/records.js";
 
 const PG_URL = process.env["AGENTKIT_TEST_PG_URL"];
 
@@ -333,6 +337,26 @@ interactionStoreConformance(() => {
 
 approvalGrantStoreConformance(() => createPostgresApprovalGrantStore(freshExecutor()));
 
+// The cost ledger and the replay guard, #100. Usage rows reference a run; idempotency keys have no
+// parent, so only the first needs a seeder.
+usageStoreConformance(() => {
+  const sql = freshExecutor();
+  return {
+    store: createPostgresUsageStore(sql),
+    async seedRun({ tenantId, runId }) {
+      await createPostgresRunStore(sql).create({
+        tenantId,
+        id: runId,
+        conversationId: asId<ConversationId>("conf-convo-1"),
+        agentId: asId<AgentId>("conf-agent-for-usage"),
+        agentVersion: 1,
+      });
+    },
+  };
+});
+
+idempotencyStoreConformance(() => createPostgresIdempotencyStore(freshExecutor()));
+
 // ---------------------------------------------------------------------------------------------
 // The registry contract. Not a placeholder — these assertions are what make the matrix's
 // NOT-IMPLEMENTED cells trustworthy rather than a guess.
@@ -361,6 +385,8 @@ describe("postgres adapter coverage", () => {
       "UnitOfWork",
       "InteractionStore",
       "ApprovalGrantStore",
+      "UsageStore",
+      "IdempotencyStore",
     ]);
   });
 
@@ -368,9 +394,9 @@ describe("postgres adapter coverage", () => {
     for (const { port, trackedBy } of coverage?.notImplemented ?? []) {
       expect(trackedBy, `${port} must name the issue that will add its Postgres store`).toMatch(/^#\d+$/);
     }
-    // 19 registered ports, 13 implemented ⇒ 6 declared gaps. A drift here means the registry and
+    // 19 registered ports, 15 implemented ⇒ 4 declared gaps. A drift here means the registry and
     // reality have parted company.
-    expect(coverage?.notImplemented.length).toBe(6);
+    expect(coverage?.notImplemented.length).toBe(4);
   });
 });
 
@@ -386,5 +412,7 @@ crossPortInvariants(() => {
     runs: createPostgresRunStore(sql),
     events: createPostgresRunEventLog(sql),
     checkpoints: createPostgresCheckpointStore(sql),
+    // Included as of #100 — the usage-dependent invariant stood down by name until the store existed.
+    usage: createPostgresUsageStore(sql),
   };
 });

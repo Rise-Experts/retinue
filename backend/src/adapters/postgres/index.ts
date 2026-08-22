@@ -17,6 +17,7 @@ export * from "./transaction.js";
 export * from "./run-coordinator.js";
 export * from "./unit-of-work.js";
 export * from "./hitl.js";
+export * from "./usage.js";
 export * from "./pg-executor.js";
 
 /** Capabilities a PostgreSQL deployment can advertise (docs/02 capability declarations). */
