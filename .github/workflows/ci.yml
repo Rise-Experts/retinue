@@ -12,6 +12,18 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    services:
+      # #105's ACs -- work surviving with no worker, BullMQ's own jobId dedup, and a typed error on an
+      # unreachable Redis -- cannot be shown by a fake queue. Without this service those cases skip by
+      # name in CI and the guarantees would only ever be verified on someone's laptop.
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -22,6 +34,8 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
       - name: Test
+        env:
+          AGENTKIT_TEST_REDIS_URL: redis://localhost:6379
         run: npm test
       - name: Build
         run: npm run build

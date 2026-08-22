@@ -30,6 +30,8 @@
     "@ai-sdk/openai": "^4.0.42",
     "@ai-sdk/openai-compatible": "^3.0.31",
     "ai": "^7.0.66",
+    "bullmq": "^6.2.0",
+    "ioredis": "^6.0.0",
     "pg": "^8.23.0",
     "zod": "^3.25.76"
   },
