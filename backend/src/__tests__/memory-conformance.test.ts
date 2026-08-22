@@ -39,8 +39,10 @@ import {
   createMemoryConversationRunCoordinator,
   createMemorySessionStateStore,
   createMemoryUnitOfWork,
-  DEFAULT_SESSION_STATE_MAX_BYTES,
 } from "../adapters/memory/sessions.js";
+// The ceiling moved to the port in #97, so both adapters enforce one value rather than each owning a
+// copy that could drift.
+import { DEFAULT_SESSION_STATE_MAX_BYTES } from "../persistence/index.js";
 import {
   agentStoreConformance,
   approvalGrantStoreConformance,
