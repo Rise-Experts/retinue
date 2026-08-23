@@ -25,6 +25,15 @@ const providerMetadata = z.record(z.string(), z.unknown()).optional();
  */
 export const MAX_REFERENCE_METADATA_BYTES = 2048;
 
+/**
+ * The longest excerpt a citation may carry (#137).
+ *
+ * A citation is evidence for a claim, not a copy of the source. Unbounded, it becomes a way to store a document
+ * inside a message — bypassing every limit that applies to documents — and a transcript whose size grows with
+ * the corpus. 2000 characters is several paragraphs: far more than a claim needs and far less than a document.
+ */
+export const MAX_CITATION_EXCERPT = 2000;
+
 /** A `data:` URI is bytes wearing a string's clothes, so it is refused wherever it appears in the bag. */
 const carriesInlineData = (value: unknown): boolean =>
   typeof value === "string"
@@ -98,7 +107,40 @@ const messagePartSchema = z.discriminatedUnion("type", [
     fileId: idString, mediaType: z.string(), width: z.number().optional(), height: z.number().optional(),
     altText: z.string().optional(),
   }),
-  z.object({ ...base, type: z.literal("citation"), sourceId: z.string(), quote: z.string(), locator: z.string().optional() }),
+  // #137. `excerpt` has a length cap because a citation is *evidence* for a claim, not a copy of the source:
+  // unbounded, it becomes a way to store a document inside a message and bypass every limit on documents.
+  z.object({
+    ...base,
+    type: z.literal("citation"),
+    origin: z.discriminatedUnion("kind", [
+      z.object({
+        kind: z.literal("retrieval"),
+        sourceType: z.enum(["file", "artifact", "message", "external"]),
+        sourceId: idString,
+        chunkId: idString,
+        chunkIndex: z.number().int().nonnegative(),
+        locator: z.string().optional(),
+      }),
+      z.object({
+        kind: z.literal("web"),
+        // Absolute, and http(s) only. A `data:` or `file:` citation is not a source anyone can open, and a
+        // relative URL resolves against whatever page happens to render it.
+        url: z.string().url().refine((u) => /^https?:\/\//i.test(u), {
+          message: "a web citation's url must be http or https",
+        }),
+        title: z.string().optional(),
+      }),
+    ]),
+    excerpt: z.string().min(1).max(MAX_CITATION_EXCERPT),
+    retrievedAt: z.string(),
+    supports: z.array(idString),
+    charRange: z
+      .object({ start: z.number().int().nonnegative(), end: z.number().int().nonnegative() })
+      // An inverted range is a bug that would silently produce an empty highlight, which reads as "the passage
+      // is not in the source".
+      .refine((r) => r.end > r.start, { message: "charRange.end must be greater than charRange.start" })
+      .optional(),
+  }),
   z.object({ ...base, type: z.literal("source"), sourceId: z.string(), title: z.string(), url: z.string().optional() }),
   z.object({ ...base, type: z.literal("artifact"), artifactId: idString, versionId: idString, title: z.string() }),
   z.object({ ...base, type: z.literal("status"), status: z.string(), detail: z.string().optional() }),

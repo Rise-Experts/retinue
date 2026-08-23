@@ -28,6 +28,7 @@ are open to change.
 | `artifacts` | [05](../docs/05-knowledge-and-documents.md) | Named, versioned assistant output: content by reference, compare-and-set versioning, required provenance, restore, and conversation-scoped access |
 | `export` | [05](../docs/05-knowledge-and-documents.md) | Deterministic PDF and Markdown rendering, one export per version per format, downloads through the mediated file path |
 | `knowledge` | [05](../docs/05-knowledge-and-documents.md) | Structure-aware chunking, the batched embedding pipeline, incremental resumable re-indexing, the freshness target, and hybrid rank-fusion retrieval with an honest empty result |
+| `citations` | [05](../docs/05-knowledge-and-documents.md) | Per-claim provenance as a durable snapshot, groundedness derived from the citation graph, permission checked at citation time |
 
 ## Rules these contracts encode
 

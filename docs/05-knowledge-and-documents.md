@@ -668,3 +668,74 @@ lexical and has no subwords, so it finds identifiers *better* than a real model 
 make it fail would be measuring the rigging. What is proven here is the property fusion is responsible for: it
 takes the better of two signals on every query and is never dragged down by the worse one. The strict win over
 semantic-only needs a real embedding model, and eval cases exist for it.
+
+## Citations and per-claim provenance (#137)
+
+`research-and-citation` already says what should happen. This makes it structural.
+
+### A citation is a snapshot, not a pointer
+
+`excerpt`, `title` and `retrievedAt` live **on the part**. An answer given months ago must stay auditable after
+its source is gone — a document deleted, a URL dead, a chunk re-indexed under a new id — and a citation that
+resolved by *fetching* would stop being evidence exactly when someone needs it. The duplication is the feature:
+this records what was read, not what is there now.
+
+`resolveCitation` therefore takes only the part and does no lookup. Tested by deleting the source and resolving
+the stored citation, which is the only way to prove it is a snapshot.
+
+### Groundedness is derived, not flagged
+
+A text part is grounded exactly when some citation names it in `supports`. There is no boolean on the text
+part, because that would be a second place for the same fact — and the two would drift the first time a
+citation was withheld, leaving a claim that says "grounded" with nothing behind it. That is worse than an
+honestly ungrounded claim.
+
+A frontend distinguishes the two by set membership, with no inspection of the prose. A claim that *mentions* a
+source is not grounded; one a citation names is.
+
+`danglingCitations` finds the shape a bug takes: citations in a list at the bottom, no individual statement
+traceable. An answer that *looks* cited is the failure REQ-030 exists to prevent.
+
+### Permission is checked at citation time
+
+Retrieval and rendering are different moments, and a permission can change between them. A citation emitted on
+the strength of a retrieval-time check is a citation that outlives the access that justified it — and a
+citation carries an *excerpt*, so it leaks the text, not merely the existence of the source.
+
+Two consequences worth naming:
+
+- A retrieval citation with no `authSubject` is **withheld**, not emitted. Failing closed is the only safe
+  direction; the alternative emits an excerpt nobody authorised.
+- The `authSubject` is deliberately **not** stored on the part. A durable part must not carry a permission
+  claim nobody re-evaluates: months later the subject may mean something different, and a reader trusting it
+  would be trusting a stale check.
+
+A web citation is *not* checked. Its URL is public by construction, and asking a policy about a resource it has
+never heard of is asking a question most policies answer by denying — which would silently suppress every web
+citation.
+
+`emit` reports a `withheld` count. A withheld citation leaves its claim looking ungrounded, and a caller that
+cannot distinguish *"nothing supported this"* from *"you may not see what supported this"* will present the two
+identically — so the count is there for a caller that would rather drop the claim.
+
+### One representation, two origins
+
+`CitationOrigin` is a closed union with a `retrieval` and a `web` arm, shaped to accept ShareFlow's
+`SourcePassage` without adaptation. Two part types would mean two renderers, two schemas and eventually two
+behaviours for "click the citation". The arms differ only in what *resolving* means — a chunk id resolves
+inside the platform, a URL outside it — and that difference is real, so it is a discriminant rather than a pile
+of optional fields.
+
+`citationHref` returns `null` for a retrieval citation rather than inventing a link: a chunk id is not a URL,
+and the host decides how to open one. The excerpt shows either way, which is the point of the snapshot.
+
+### Bounds
+
+`excerpt` is capped at 2000 characters and trimmed on a word boundary with an explicit ellipsis. A citation is
+*evidence for a claim*, not a copy of the source: unbounded, it becomes a way to store a document inside a
+message — bypassing every limit that applies to documents — and a transcript whose size grows with the corpus.
+A citation ending mid-word reads as corrupt, and a reader cannot tell whether the source said something else.
+
+A web citation's URL must be absolute `http`/`https`. A `data:` or `file:` citation is not a source anyone can
+open, and a relative URL resolves against whatever page happens to render it. An inverted `charRange` is
+refused, because it silently produces an empty highlight — which reads as *"the passage is not in the source"*.

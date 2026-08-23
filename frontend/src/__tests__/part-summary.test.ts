@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { formatByteSize, partKey, partSummary } from "../ui/part-summary.js";
+import {
+  citationHref,
+  citationLabel,
+  formatByteSize,
+  groundedPartIds,
+  partKey,
+  partSummary,
+} from "../ui/part-summary.js";
 import type { MessagePart } from "../types/index.js";
 
 const p = <T extends MessagePart>(x: T): T => x;
@@ -60,5 +67,96 @@ describe("attachment references (#130)", () => {
     const summary = partSummary(file({ filename: "secrets.csv" }));
     expect(summary.preview).toBe("secrets.csv · 4.0 KB");
     expect(Object.keys(file())).not.toContain("content");
+  });
+});
+
+describe("citations (#137)", () => {
+  const retrievalCitation = (overrides: Record<string, unknown> = {}) =>
+    p({
+      id: "c1",
+      type: "citation",
+      schemaVersion: 2,
+      createdAt: "t",
+      origin: {
+        kind: "retrieval",
+        sourceType: "file",
+        sourceId: "report",
+        chunkId: "file:report:2",
+        chunkIndex: 2,
+        locator: "Quarterly Review > By region",
+      },
+      excerpt: "Revenue rose nine percent across EMEA.",
+      retrievedAt: "2026-08-23T09:30:00.000Z",
+      supports: ["t1"],
+      ...overrides,
+    } as MessagePart);
+
+  const webCitation = (overrides: Record<string, unknown> = {}) =>
+    p({
+      id: "c2",
+      type: "citation",
+      schemaVersion: 2,
+      createdAt: "t",
+      origin: { kind: "web", url: "https://example.test/report", title: "Annual report" },
+      excerpt: "Revenue rose nine percent.",
+      retrievedAt: "2026-08-23T09:30:00.000Z",
+      supports: ["t1"],
+      ...overrides,
+    } as MessagePart);
+
+  it("renders both origins through one branch", () => {
+    // AC-6. Two part types would mean two renderers and eventually two behaviours for clicking a citation.
+    expect(partSummary(retrievalCitation())).toMatchObject({ kind: "reference" });
+    expect(partSummary(webCitation())).toMatchObject({ kind: "reference" });
+  });
+
+  it("labels a citation with where it came from, then what it said", () => {
+    // A reader scanning citations wants *where from* before *what*.
+    expect(partSummary(retrievalCitation()).preview).toBe(
+      'Quarterly Review > By region: “Revenue rose nine percent across EMEA.”',
+    );
+    expect(partSummary(webCitation()).preview).toBe('Annual report: “Revenue rose nine percent.”');
+  });
+
+  it("names the passage when the chunker found no heading", () => {
+    // Never a bare document name: a document-level citation is an invitation to go and find the passage.
+    const noLocator = retrievalCitation({
+      origin: { kind: "retrieval", sourceType: "file", sourceId: "report", chunkId: "file:report:2", chunkIndex: 2 },
+    });
+    expect(citationLabel(noLocator as never)).toBe("report — passage 3");
+  });
+
+  it("falls back to the URL when a web source has no title", () => {
+    const untitled = webCitation({ origin: { kind: "web", url: "https://example.test/a" } });
+    expect(citationLabel(untitled as never)).toBe("https://example.test/a");
+  });
+
+  it("links a web citation and refuses to invent a link for a chunk", () => {
+    // A chunk id is not a URL. Inventing one would produce a link that does not work; the excerpt is shown
+    // either way, which is the point of the snapshot.
+    expect(citationHref(webCitation() as never)).toBe("https://example.test/report");
+    expect(citationHref(retrievalCitation() as never)).toBeNull();
+  });
+
+  it("renders after the source is gone, because nothing is looked up", () => {
+    // AC-4 from the rendering side: the label and the excerpt come from the part, so a months-old answer
+    // renders identically whether or not the document still exists.
+    const summary = partSummary(retrievalCitation());
+    expect(summary.preview).toContain("Revenue rose nine percent");
+  });
+
+  it("distinguishes a grounded claim from an ungrounded one without reading the prose", () => {
+    // AC-3. A claim that *mentions* a source is not grounded; one a citation names is.
+    const grounded = p({ id: "t1", type: "text", schemaVersion: 1, createdAt: "t", text: "Revenue rose." } as MessagePart);
+    const looksCited = p({
+      id: "t2",
+      type: "text",
+      schemaVersion: 1,
+      createdAt: "t",
+      text: "According to the Q3 report [1], revenue rose.",
+    } as MessagePart);
+    const ids = groundedPartIds([grounded, looksCited, retrievalCitation()]);
+    expect(ids.has("t1")).toBe(true);
+    expect(ids.has("t2")).toBe(false);
   });
 });

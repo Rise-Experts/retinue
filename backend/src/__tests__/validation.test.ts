@@ -18,7 +18,13 @@ const samples: Record<string, MessagePart> = {
   approval: { id: "p6", type: "approval", schemaVersion: 1, createdAt: "t", interactionId: "i2", toolName: "publish_post", summary: "publish", riskCategory: "external-write" } as MessagePart,
   file: { id: "p7", type: "file", schemaVersion: 1, createdAt: "t", fileId: "f1", filename: "a.pdf", mediaType: "application/pdf", byteSize: 10 } as MessagePart,
   image: { id: "p8", type: "image", schemaVersion: 1, createdAt: "t", fileId: "f2", mediaType: "image/png", width: 100, height: 50 } as MessagePart,
-  citation: { id: "p9", type: "citation", schemaVersion: 1, createdAt: "t", sourceId: "s1", quote: "q", locator: "p.2" } as MessagePart,
+  // #137. Self-contained on purpose: the excerpt and the retrieval time live on the part so an audit months
+  // later works after the source is gone.
+  citation: {
+    id: "p9", type: "citation", schemaVersion: 2, createdAt: "t",
+    origin: { kind: "retrieval", sourceType: "file", sourceId: "s1", chunkId: "file:s1:2", chunkIndex: 2, locator: "Report > Findings" },
+    excerpt: "Revenue rose nine percent.", retrievedAt: "2026-08-23T10:00:00.000Z", supports: ["p1"],
+  } as MessagePart,
   source: { id: "p10", type: "source", schemaVersion: 1, createdAt: "t", sourceId: "s1", title: "Doc", url: "https://x" } as MessagePart,
   artifact: { id: "p11", type: "artifact", schemaVersion: 1, createdAt: "t", artifactId: "a1", versionId: "v1", title: "Report" } as MessagePart,
   status: { id: "p12", type: "status", schemaVersion: 1, createdAt: "t", status: "running", detail: "step 1" } as MessagePart,
@@ -34,6 +40,26 @@ describe("message part validation", () => {
     for (const part of Object.values(samples)) {
       expect(parseMessagePart(serializeMessagePart(part))).toEqual(part);
     }
+  });
+
+  /**
+   * Variants of a part type that `samples` cannot hold.
+   *
+   * `samples` is keyed by part type and a guard asserts the keys *are* the part types — which is what keeps a
+   * new part type from going untested. A second shape of an existing type therefore lives here rather than
+   * weakening that guard.
+   */
+  const variants: readonly MessagePart[] = [
+    {
+      id: "p9w", type: "citation", schemaVersion: 2, createdAt: "t",
+      origin: { kind: "web", url: "https://example.test/report", title: "Annual report" },
+      excerpt: "Revenue rose nine percent.", retrievedAt: "2026-08-23T10:00:00.000Z", supports: ["p1"],
+      charRange: { start: 10, end: 40 },
+    } as MessagePart,
+  ];
+
+  it("round-trips a web citation, which is the other arm of the same part", () => {
+    for (const part of variants) expect(parseMessagePart(serializeMessagePart(part))).toEqual(part);
   });
 
   it("rejects an unknown part type", () => {

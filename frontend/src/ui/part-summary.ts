@@ -83,7 +83,9 @@ export const partSummary = (part: MessagePart): { kind: PartRenderKind; preview:
     case "image":
       return { kind, preview: part.altText ?? "image" };
     case "citation":
-      return { kind, preview: `“${part.quote.slice(0, 80)}”` };
+      // The label first, then the excerpt: a reader scanning citations wants to know *where from* before
+      // *what*. One branch for both origins — the shape is shared (#137), and only the link differs.
+      return { kind, preview: `${citationLabel(part)}: “${part.excerpt.slice(0, 80)}”` };
     case "source":
       return { kind, preview: part.title };
     case "artifact":
@@ -93,6 +95,47 @@ export const partSummary = (part: MessagePart): { kind: PartRenderKind; preview:
     case "error":
       return { kind, preview: part.error.message };
   }
+};
+
+/**
+ * What a citation is labelled with (#137).
+ *
+ * Derived from the stored part alone, with no lookup, which is what lets a months-old answer render after its
+ * source is gone. A heading path when the chunker found one, then a title, then the URL — in decreasing
+ * specificity, and never a bare document name, because a document-level citation is an invitation to go and
+ * find the passage yourself.
+ */
+export const citationLabel = (part: Extract<MessagePart, { type: "citation" }>): string =>
+  part.origin.kind === "retrieval"
+    ? (part.origin.locator ?? `${part.origin.sourceId} — passage ${part.origin.chunkIndex + 1}`)
+    : (part.origin.title ?? part.origin.url);
+
+/**
+ * Where a citation links, or `null` when it links nowhere.
+ *
+ * `null` for a retrieval citation because a chunk id is not a URL: the host decides how to open one, and
+ * inventing a link here would produce one that does not work. The excerpt is still shown either way — that is
+ * the point of the snapshot.
+ */
+export const citationHref = (part: Extract<MessagePart, { type: "citation" }>): string | null =>
+  part.origin.kind === "web" ? part.origin.url : null;
+
+/**
+ * The ids of text parts a message's citations ground — AC-3.
+ *
+ * Derived from the citation graph, so a renderer distinguishes a grounded claim from an ungrounded one without
+ * inspecting the prose. A claim that *mentions* a source is not grounded; one a citation names is.
+ *
+ * A copy of the backend's `groundedPartIds`, because R2 restricts this package to type-only imports from it.
+ * Kept identical in behaviour and pinned by a test on both sides.
+ */
+export const groundedPartIds = (parts: readonly MessagePart[]): ReadonlySet<string> => {
+  const grounded = new Set<string>();
+  for (const part of parts) {
+    if (part.type !== "citation") continue;
+    for (const supported of part.supports) grounded.add(supported);
+  }
+  return grounded;
 };
 
 /** Stable React key for a part. */
