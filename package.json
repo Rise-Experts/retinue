@@ -28,7 +28,8 @@
     "conformance:matrix": "node scripts/conformance-matrix.mjs backend/.conformance/vitest.json",
     "conformance:report": "rm -rf backend/.conformance/vitest.json && npm run test -w @agentkit/backend -- --reporter=json --outputFile=.conformance/vitest.json",
     "conformance": "npm run conformance:report; npm run conformance:matrix",
-    "release:gate": "node scripts/release-gate.mjs"
+    "release:gate": "node scripts/release-gate.mjs",
+    "loadtest": "node scripts/loadtest.mjs"
   },
   "devDependencies": {
     "typescript": "^5"

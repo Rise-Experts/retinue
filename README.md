@@ -64,6 +64,13 @@ so no caller can put a prompt in it. Its fields are an **allowlist**, so a field
 without anyone having predicted it. See `docs/09-quality-and-release.md` for the rest, including what is not yet
 wired.
 
+## Load and resilience
+
+`npm run loadtest -- --pg <url> --mode staircase|soak|inject` drives real workers against a real PostgreSQL
+server and writes a JSON report. The measured envelope, the failure-injection results and a runbook per failure
+mode are in [`docs/16-load-and-resilience.md`](docs/16-load-and-resilience.md) — including what has *not* been
+measured, which is a deployed HTTP instance and a multi-hour soak.
+
 ## Boundaries
 
 Per [`docs/01-architecture.md`](docs/01-architecture.md), these packages must build and

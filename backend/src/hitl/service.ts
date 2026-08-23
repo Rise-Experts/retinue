@@ -17,7 +17,7 @@
 import type { ExecutionContext } from "../core/context.js";
 import type { ConversationId, InteractionId, RunId, TenantId } from "../core/ids.js";
 import { asId } from "../core/ids.js";
-import type { ApprovalGrantStore, InteractionStore } from "../persistence/index.js";
+import type { ApprovalGrantStore, InteractionStore, RunStore } from "../persistence/index.js";
 import type { JobDispatcher } from "../runtime/index.js";
 import type {
   ApprovalDecision,
@@ -40,6 +40,13 @@ export type QuestionSpec = { readonly key: string; readonly prompt: string; read
 export const createQuestionService = (deps: {
   readonly interactions: InteractionStore;
   readonly dispatcher: JobDispatcher;
+  /**
+   * The run store, so answering can put the run back to `queued` (#144).
+   *
+   * Optional only so an existing caller keeps compiling; without it the resume enqueues a run the worker cannot
+   * claim, and the run waits forever. See `resumeRun` below.
+   */
+  readonly runs?: RunStore;
   readonly clock?: Clock;
   readonly idFactory?: IdFactory;
 }) => {
@@ -72,10 +79,41 @@ export const createQuestionService = (deps: {
         at: clock(),
       });
       if (alreadyResolved) return { resumed: false };
-      await deps.dispatcher.enqueueRun({ tenantId: input.tenantId, runId: input.runId });
+      await resumeRun(deps, { tenantId: input.tenantId, runId: input.runId, at: clock() });
       return { resumed: true };
     },
   };
+};
+
+/**
+ * Put a paused run back on the queue — status *then* job.
+ *
+ * **A bug the load harness found (#144).** `decide` and `answer` used to enqueue and nothing else. But
+ * `RunStore.claim` accepts only `queued` or a `running` run with an expired lease, and pausing a run for a human
+ * leaves it in `waiting-for-approval` — so the enqueued job was handed to a worker, the claim matched no row, the
+ * run was skipped, and it waited forever. Sixty-five of a hundred and sixty runs in one load step, silently.
+ *
+ * It survived because the unit tests assert `resumed: true` and that a job was enqueued, which was exactly true
+ * and not the same as the run resuming. Only driving a real worker against a real store showed it.
+ *
+ * The transition comes **first**: enqueueing before it lets a worker pick the job up while the run is still
+ * paused, fail the claim, and drop the only job that would have resumed it.
+ *
+ * `workerId` is the actor's name rather than a worker's. `transition` guards on `claimedBy`, and pausing a run
+ * releases the claim — so the field is unconstrained here and the honest value is who is doing this.
+ */
+const resumeRun = async (
+  deps: { readonly runs?: RunStore; readonly dispatcher: JobDispatcher },
+  input: { readonly tenantId: TenantId; readonly runId: RunId; readonly at: string },
+): Promise<void> => {
+  await deps.runs?.transition({
+    tenantId: input.tenantId,
+    id: input.runId,
+    workerId: "hitl",
+    to: "queued",
+    now: input.at,
+  });
+  await deps.dispatcher.enqueueRun({ tenantId: input.tenantId, runId: input.runId });
 };
 
 type TenantScopeInput = { tenantId: TenantId };
@@ -108,6 +146,8 @@ export const createApprovalService = (deps: {
   readonly interactions: InteractionStore;
   readonly grants: ApprovalGrantStore;
   readonly dispatcher: JobDispatcher;
+  /** As on `createQuestionService`: without it the resumed run is never claimable. See `resumeRun`. */
+  readonly runs?: RunStore;
   readonly clock?: Clock;
   readonly idFactory?: IdFactory;
 }) => {
@@ -167,7 +207,7 @@ export const createApprovalService = (deps: {
         await deps.grants.grant({ tenantId: input.tenantId, grant });
       }
       // Both allow and deny queue a continuation; the resumed engine reads the decision and acts.
-      await deps.dispatcher.enqueueRun({ tenantId: input.tenantId, runId: input.runId });
+      await resumeRun(deps, { tenantId: input.tenantId, runId: input.runId, at: clock() });
       return grant ? { resumed: true, grant } : { resumed: true };
     },
   };

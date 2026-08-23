@@ -236,3 +236,121 @@ describe("approvals — one-time authorization", () => {
     expect(await gate.isAllowed(ctx(), TOOL, { interactionId: asId<InteractionId>("forged") })).toBe(false);
   });
 });
+
+/**
+ * Resuming a paused run — the bug the #144 load harness found.
+ *
+ * `decide` and `answer` recorded the decision and enqueued the run, and nothing else. But `RunStore.claim`
+ * accepts only `queued`, or `running` with an expired lease, and pausing a run for a human leaves it in
+ * `waiting-for-approval`. So the job was handed to a worker, the claim matched no row, the run was skipped, and
+ * it waited forever — sixty-five of one hundred and sixty runs in a single load step.
+ *
+ * **It survived because of how the tests above are written.** They assert `resumed: true` and that a job was
+ * enqueued. Both were exactly true, and neither is the run resuming. That is the gap these tests close: they
+ * assert the *status transition*, which is the thing that makes the enqueued job usable.
+ */
+describe("resuming a paused run (#144)", () => {
+  const recordingRuns = () => {
+    const transitions: { id: RunId; to: string }[] = [];
+    const runs = {
+      async transition({ id, to }: { id: RunId; to: string }) {
+        transitions.push({ id, to });
+        return {} as never;
+      },
+    } as never;
+    return { transitions, runs };
+  };
+
+  it("moves an approved run back to queued before enqueueing it", async () => {
+    const interactions = createMemoryInteractionStore();
+    const grants = createMemoryApprovalGrantStore();
+    const { enqueued, dispatcher } = recordingDispatcher();
+    const { transitions, runs } = recordingRuns();
+    const svc = createApprovalService({ interactions, grants, dispatcher, runs, clock: () => "t", idFactory: () => "a1" });
+
+    const approval = await svc.request(ctx(), RUN, {
+      toolName: "publish", normalizedInput: {}, riskCategory: "external-write",
+      summary: "s", expiresAt: "t9", idempotencyKey: "k1",
+    });
+    const { resumed } = await svc.decide({ tenantId: T, interactionId: approval.id, runId: RUN, decision: "allow-once" });
+
+    expect(resumed).toBe(true);
+    // The transition is the part that was missing. Without it the enqueued job is unusable: the worker's claim
+    // matches no row and the run is silently skipped.
+    expect(transitions).toEqual([{ id: RUN, to: "queued" }]);
+    expect(enqueued).toEqual([RUN]);
+  });
+
+  it("transitions before enqueueing, not after", async () => {
+    const interactions = createMemoryInteractionStore();
+    const grants = createMemoryApprovalGrantStore();
+    const order: string[] = [];
+    const dispatcher: JobDispatcher = { async enqueueRun() { order.push("enqueue"); } };
+    const runs = { async transition() { order.push("transition"); return {} as never; } } as never;
+    const svc = createApprovalService({ interactions, grants, dispatcher, runs, clock: () => "t", idFactory: () => "a1" });
+
+    const approval = await svc.request(ctx(), RUN, {
+      toolName: "publish", normalizedInput: {}, riskCategory: "external-write",
+      summary: "s", expiresAt: "t9", idempotencyKey: "k1",
+    });
+    await svc.decide({ tenantId: T, interactionId: approval.id, runId: RUN, decision: "deny" });
+
+    // The other order lets a worker pick the job up while the run is still paused, fail the claim, and drop the
+    // only job that would have resumed it.
+    expect(order).toEqual(["transition", "enqueue"]);
+  });
+
+  it("does the same for an answered question", async () => {
+    const interactions = createMemoryInteractionStore();
+    const { enqueued, dispatcher } = recordingDispatcher();
+    const { transitions, runs } = recordingRuns();
+    const svc = createQuestionService({ interactions, dispatcher, runs, clock: () => "t", idFactory: () => "q1" });
+
+    const question = await svc.ask(ctx(), RUN, [{ key: "k", prompt: "why?" }]);
+    await svc.answer({ tenantId: T, interactionId: question.id, runId: RUN, answers: { k: "because" } });
+
+    // `waiting-for-answer` has exactly the same problem as `waiting-for-approval`, and fixing only the approval
+    // path would have left a bug that reproduces on a different traffic mix.
+    expect(transitions).toEqual([{ id: RUN, to: "queued" }]);
+    expect(enqueued).toEqual([RUN]);
+  });
+
+  it("does not transition or enqueue on a second decision", async () => {
+    const interactions = createMemoryInteractionStore();
+    const grants = createMemoryApprovalGrantStore();
+    const { enqueued, dispatcher } = recordingDispatcher();
+    const { transitions, runs } = recordingRuns();
+    const svc = createApprovalService({ interactions, grants, dispatcher, runs, clock: () => "t", idFactory: () => "a1" });
+
+    const approval = await svc.request(ctx(), RUN, {
+      toolName: "publish", normalizedInput: {}, riskCategory: "external-write",
+      summary: "s", expiresAt: "t9", idempotencyKey: "k1",
+    });
+    await svc.decide({ tenantId: T, interactionId: approval.id, runId: RUN, decision: "allow-once" });
+    const second = await svc.decide({ tenantId: T, interactionId: approval.id, runId: RUN, decision: "allow-once" });
+
+    // The exactly-once guarantee must survive the fix: a second decision transitioning a *running* run back to
+    // queued would abandon a run mid-flight, which is a worse bug than the one being fixed.
+    expect(second.resumed).toBe(false);
+    expect(transitions).toHaveLength(1);
+    expect(enqueued).toHaveLength(1);
+  });
+
+  it("still resumes when no run store is wired, so an existing caller keeps working", async () => {
+    const interactions = createMemoryInteractionStore();
+    const grants = createMemoryApprovalGrantStore();
+    const { enqueued, dispatcher } = recordingDispatcher();
+    const svc = createApprovalService({ interactions, grants, dispatcher, clock: () => "t", idFactory: () => "a1" });
+
+    const approval = await svc.request(ctx(), RUN, {
+      toolName: "publish", normalizedInput: {}, riskCategory: "external-write",
+      summary: "s", expiresAt: "t9", idempotencyKey: "k1",
+    });
+    // Optional so the change is not breaking. The run will not actually resume without it — which is why the
+    // dependency is documented on the type as required in practice rather than being quietly optional.
+    await expect(
+      svc.decide({ tenantId: T, interactionId: approval.id, runId: RUN, decision: "allow-once" }),
+    ).resolves.toMatchObject({ resumed: true });
+    expect(enqueued).toEqual([RUN]);
+  });
+});
