@@ -69,6 +69,25 @@ Two more from Campaigns:
   daily campaign over a year produces 31 — and an assistant that inferred the count from the dates
   would report 365. The field exists so the cap is visible; recomputing it locally would duplicate the
   logic it exists to expose.
+From the context providers (#121):
+
+- **Five of the eight read the same seam the tools read.** Campaign, accounts, current post, examples and
+  performance all come from ports #115–#120 already declared. A context provider with its own query is
+  how *"the context said the account was healthy and the tool then refused"* happens.
+- **The claim policy is `base-policy`, which the assembler never prunes.** In `user-context` it would be
+  prunable, so an oversized brand profile could push the constraint out of the prompt — and the model
+  would then produce the forbidden claim with nothing having gone wrong anywhere. Failing loudly is the
+  correct outcome if it does not fit.
+- **`findForbiddenClaims` is a floor, not a guarantee.** It matches literal phrasings, so the prompt-side
+  instruction is not redundant — that is the half that handles rewording. It also over-matches in the
+  recoverable direction, on purpose.
+- **Performance insights are off by default.** `ExecutionContext` carries identity, not intent, so a
+  provider cannot know whether *this* request needs analytics — and adding a hint field would open the
+  channel its own docstring forbids. The per-request form is the assistant asking, which is #125.
+- **`shareflow.products` was removed.** docs/07 lists products and offers; nothing in ShareFlow stores
+  them, so the id sat in the manifest with no provider behind it — exactly the silent gap #114's own
+  comment warned about. A test now asserts every id has a provider.
+
 From Engagement and Leads:
 
 - **A reply is keyed on the comment, not the call** — the same reasoning as publishing. ShareFlow already
@@ -147,7 +166,7 @@ From Accounts:
 |---|---|
 | `services/` | the seam: `ConnectorService`, `ContentService`, `MediaService`, `PublishingService` |
 | `tools/` | the `ToolProvider` and the closed category vocabulary from docs/07 |
-| `context/` | the shared `ContextSection` builder for docs/07's context providers |
+| `context/` | the eight providers from docs/07, the shared section builder, and the forbidden-claim checker |
 | `skills/` | built-in skills, validated at import time by the platform's own validator |
 | `manifests/` | the Social Assistant — `id` neutral, branding in the display name |
 
@@ -177,8 +196,8 @@ stops the process starting, rather than producing a confusing catalog on someone
 ## Status
 
 The seam and the scaffolding (#114); Posts (#115); Campaigns (#116); Accounts (#117); Media (#118);
-Publishing (#119); Engagement and Leads (#120). Context providers, skills, content generation, research
-and analytics land in #121–#125.
+Publishing (#119); Engagement and Leads (#120); context providers (#121). Skills, content generation,
+research and analytics land in #122–#125.
 
 `npm test` in this workspace runs `tsc -b` first. That is deliberate: this package value-imports
 `@agentkit/backend`, whose entry point is `dist/`, so `vitest run` on its own tests whatever was last

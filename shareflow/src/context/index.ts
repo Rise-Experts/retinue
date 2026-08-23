@@ -65,11 +65,18 @@ export const shareFlowSection = (input: ShareFlowSectionInput): ContextSection =
  * The provider ids docs/07 calls for, as a closed set for the same reason as the tool categories: an
  * `AgentManifest.contextProviderIds` entry that matches nothing produces an assistant missing context
  * it was configured to have, with no error anywhere.
+ *
+ * **`shareflow.products` was removed in #121**, and that is this comment's own warning coming true.
+ * docs/07 lists products, offers and differentiators as a context category, and nothing in ShareFlow
+ * stores them — so the id was in the manifest with no provider behind it, which is exactly the silent
+ * gap described above. `shareflow.claims` replaced it: that one has a provider, and no storage yet.
+ *
+ * A test asserts every id here has a provider, so the list cannot drift out of step again.
  */
 export const SHAREFLOW_CONTEXT_PROVIDER_IDS = [
+  "shareflow.claims",
   "shareflow.brand",
   "shareflow.audience",
-  "shareflow.products",
   "shareflow.campaign",
   "shareflow.accounts",
   "shareflow.current-post",
@@ -78,3 +85,6 @@ export const SHAREFLOW_CONTEXT_PROVIDER_IDS = [
 ] as const;
 
 export type ShareFlowContextProviderId = (typeof SHAREFLOW_CONTEXT_PROVIDER_IDS)[number];
+
+export * from "./claims.js";
+export * from "./providers.js";

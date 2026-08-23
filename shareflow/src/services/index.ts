@@ -1024,6 +1024,84 @@ export interface LeadService {
  * One object rather than several constructor arguments, so adding the analytics and research services
  * (#124, #125) stays an additive change here instead of a signature change at every registration site.
  */
+
+// ---------------------------------------------------------------------------------------------------
+// Brand service — the context docs/07 lists first: brand, voice, audience, claims, examples (#121).
+// ---------------------------------------------------------------------------------------------------
+
+/**
+ * The workspace's brand configuration.
+ *
+ * Exactly the six columns `workspace_ai_profile` has — no more, because there is no more. In particular
+ * `audience` is **one free-text field, not segments**: docs/07 asks for "audience segments" and the store
+ * holds a paragraph. Promising a structure the store cannot fill would make the adapter invent one.
+ */
+export type BrandProfile = {
+  readonly brandName?: string;
+  readonly company?: string;
+  readonly website?: string;
+  /** Free text. Not a list of segments — see above. */
+  readonly audience?: string;
+  readonly voice?: string;
+  readonly customInstructions?: string;
+};
+
+/** A phrase the brand may not use, and why. */
+export type ForbiddenClaim = {
+  /** The literal phrasing to refuse. Matched case-insensitively on word boundaries. */
+  readonly phrase: string;
+  /** Why, for the refusal message. "Not cleared by legal" is more useful than "forbidden". */
+  readonly reason?: string;
+};
+
+/**
+ * What the brand may and may not assert.
+ *
+ * **No record for this exists in ShareFlow.** `workspace_ai_profile` has six columns and none of them is
+ * a claims list; today a restriction can only be prose inside `custom_instructions`, which is exactly
+ * what #121's AC-2 rules out. This port is the shape the storage needs to take, and until it does an
+ * adapter returns empty lists — which the checker treats as "nothing forbidden", not as "nothing
+ * checked". That distinction is worth keeping in mind when reading a clean validation result.
+ */
+export type ClaimPolicy = {
+  /** Claims explicitly cleared for use. Advisory: they inform generation, they do not gate it. */
+  readonly approved: readonly string[];
+  /** Claims that must be refused. Enforced at the tool layer, not only in the prompt. */
+  readonly forbidden: readonly ForbiddenClaim[];
+};
+
+/**
+ * One of the workspace's own posts, as a voice example.
+ *
+ * Excerpt plus the id, keeping `getVoiceExamples`' proportions — four examples of 400 characters — rather
+ * than inventing new ones. The id is there so the assistant can read the whole post if it needs to,
+ * which is the reference half of reference-not-inject.
+ */
+export type VoiceExample = {
+  readonly postDraftId?: PostDraftId;
+  readonly excerpt: string;
+};
+
+export interface BrandService {
+  getBrandProfile(context: ExecutionContext): Promise<BrandProfile>;
+
+  getClaimPolicy(context: ExecutionContext): Promise<ClaimPolicy>;
+
+  /** The workspace's own best and flagged posts. Heuristic selection is ShareFlow's, not ours. */
+  listVoiceExamples(
+    context: ExecutionContext,
+    input: { readonly limit: number },
+  ): Promise<readonly VoiceExample[]>;
+
+  /**
+   * A compact "what is working" brief, or null when there is nothing to say.
+   *
+   * **Expensive**: ShareFlow's version joins metrics across sixty rows. Never called on a routine
+   * request — see the note on `createPerformanceContextProvider`.
+   */
+  getPerformanceBrief(context: ExecutionContext): Promise<string | null>;
+}
+
 export type ShareFlowServices = {
   readonly connectors: ConnectorService;
   readonly content: ContentService;
@@ -1031,4 +1109,5 @@ export type ShareFlowServices = {
   readonly publishing: PublishingService;
   readonly engagement: EngagementService;
   readonly leads: LeadService;
+  readonly brand: BrandService;
 };
