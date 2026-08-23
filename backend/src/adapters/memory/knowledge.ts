@@ -17,9 +17,11 @@
 
 import type { Page } from "../../core/context.js";
 import { AgentPlatformError } from "../../core/errors.js";
-import { EMBEDDING_DIMENSIONS } from "../../persistence/index.js";
+import { EMBEDDING_DIMENSIONS, stripStopwords } from "../../persistence/index.js";
 import type {
   EmbeddingModelRef,
+  KeywordIndex,
+  KeywordSearchHit,
   KnowledgeChunk,
   KnowledgeChunkWithEmbedding,
   KnowledgeSourceType,
@@ -178,8 +180,87 @@ export const createMemoryKnowledgeBackend = () => {
     },
   };
 
-  return { store, index };
+  /**
+   * BM25 over the same rows.
+   *
+   * A real ranking function rather than a substring match, because the whole point of #136 is that keyword and
+   * semantic retrieval have *different* strengths — and a substring matcher has none. BM25 gives rarer terms
+   * more weight and saturates on repetition, which is what makes `ERR-4021` beat a document that says
+   * "error" forty times.
+   *
+   * `k1 = 1.2, b = 0.75` are the standard parameters and the same operating point Postgres's `ts_rank_cd`
+   * approximates, so the reference adapter and the production one rank alike on the cases that matter.
+   */
+  const keyword: KeywordIndex = {
+    async search({ tenantId, query, authSubjects, limit, minScore, sourceTypes }) {
+      const allowed = new Set(authSubjects);
+      const types = sourceTypes === undefined ? null : new Set(sourceTypes);
+      // Filtered *before* scoring, so an excluded chunk never enters the corpus statistics either — otherwise
+      // it would shift every other document's IDF and influence ranking without appearing.
+      const corpus = [...tenantMap(byTenant, tenantId).values()].filter(
+        (c) => allowed.has(c.authSubject) && (types === null || types.has(c.sourceType)),
+      );
+      if (corpus.length === 0) return [];
+
+      // Stopwords come off the *query*, not the index: the index keeps everything so an exact identifier is
+      // still findable, and the query drops the terms that carry no signal. See `KEYWORD_STOPWORDS`.
+      const terms = tokenize(stripStopwords(query));
+      if (terms.length === 0) return [];
+
+      const docs = corpus.map((chunk) => ({ chunk, tokens: tokenize(chunk.content) }));
+      const avgLength = docs.reduce((n, d) => n + d.tokens.length, 0) / docs.length;
+      const documentFrequency = new Map<string, number>();
+      for (const term of new Set(terms)) {
+        documentFrequency.set(term, docs.filter((d) => d.tokens.includes(term)).length);
+      }
+
+      const K1 = 1.2;
+      const B = 0.75;
+      const raw = docs.map(({ chunk, tokens }) => {
+        let score = 0;
+        for (const term of new Set(terms)) {
+          const tf = tokens.filter((t) => t === term).length;
+          if (tf === 0) continue;
+          const df = documentFrequency.get(term) ?? 0;
+          // The +0.5/+0.5 smoothing is Robertson's; without it a term present in every document gets a
+          // negative weight and a matching document scores *worse* than a non-matching one.
+          const idf = Math.log(1 + (docs.length - df + 0.5) / (df + 0.5));
+          const norm = tf * (K1 + 1);
+          const denom = tf + K1 * (1 - B + (B * tokens.length) / (avgLength || 1));
+          score += idf * (norm / denom);
+        }
+        return { chunk, score };
+      });
+
+      const best = Math.max(...raw.map((r) => r.score), 0);
+      // Normalised against the best hit in this result set, so `minScore` means "relative to the best match
+      // here" for both signals. An absolute BM25 threshold would be meaningless: the scale depends on the
+      // corpus.
+      const hits: KeywordSearchHit[] = raw
+        .filter((r) => r.score > 0)
+        .map((r) => ({ chunk: withoutEmbedding(r.chunk), score: best === 0 ? 0 : r.score / best }))
+        .filter((h) => minScore === undefined || h.score >= minScore);
+
+      return hits
+        // Ties broken by id, so two equally-matching chunks come back in a stable order and a measured figure
+        // does not move between runs.
+        .sort((a, b) => (b.score !== a.score ? b.score - a.score : a.chunk.id.localeCompare(b.chunk.id)))
+        .slice(0, limit);
+    },
+  };
+
+  return { store, index, keyword };
 };
+
+/**
+ * Tokens for BM25.
+ *
+ * Lowercased, split on non-alphanumerics, and **`-` is kept inside a token** — `ERR-4021` and `Q3-2026` are
+ * single terms, and splitting them is how an exact-code query stops matching the document containing that
+ * exact code. That is the one case keyword retrieval exists for.
+ */
+export const tokenize = (text: string): readonly string[] =>
+  (text.toLowerCase().match(/[a-z0-9]+(?:-[a-z0-9]+)*/g) ?? []).filter((t) => t.length > 1 || /[0-9]/.test(t));
 
 const sameModel = (a: EmbeddingModelRef, b: EmbeddingModelRef): boolean =>
   a.modelId === b.modelId && a.version === b.version && a.dimensions === b.dimensions;
@@ -193,3 +274,4 @@ const withoutEmbedding = (chunk: Stored): KnowledgeChunk => {
 
 export const createMemoryKnowledgeStore = (): KnowledgeStore => createMemoryKnowledgeBackend().store;
 export const createMemoryVectorIndex = (): VectorIndex => createMemoryKnowledgeBackend().index;
+export const createMemoryKeywordIndex = (): KeywordIndex => createMemoryKnowledgeBackend().keyword;

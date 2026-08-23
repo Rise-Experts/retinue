@@ -22,6 +22,7 @@ import type { TenantId } from "../../core/ids.js";
 import { asId } from "../../core/ids.js";
 import type {
   EmbeddingModelRef,
+  KeywordIndex,
   KnowledgeChunkWithEmbedding,
   KnowledgeStore,
   VectorIndex,
@@ -73,6 +74,8 @@ const chunk = (
 export type KnowledgeFixture = {
   readonly store: KnowledgeStore;
   readonly index: VectorIndex;
+  /** Present once #136's keyword index exists; the harness for it is gated on the same capability. */
+  readonly keyword?: KeywordIndex;
 };
 
 export function knowledgeStoreConformance(
@@ -428,6 +431,261 @@ export function vectorIndexConformance(
         limit: 1,
       });
       expect(hits.map((h) => h.chunk.id)).toEqual(["new-7"]);
+    });
+  });
+}
+
+export function keywordIndexConformance(
+  make: () => KnowledgeFixture | Promise<KnowledgeFixture>,
+  declaration?: AdapterDeclaration,
+): void {
+  describe("KeywordIndex conformance", () => {
+    const it = (name: string, fn: () => Promise<void>) => gatedIt(declaration, "vector-search", name, fn);
+
+    /**
+     * A corpus with an exact identifier, a near-miss, and a distractor.
+     *
+     * The identifier is the whole reason this port exists: `ERR-4021` embeds as a string that looks like other
+     * strings, so no vector index reliably finds it. The near-miss (`ERR-4022`) is what a substring matcher or
+     * a stemmed configuration would return alongside it.
+     */
+    const seeded = async (): Promise<KnowledgeFixture> => {
+      const fixture = await make();
+      await fixture.store.replaceSource({
+        tenantId: T1,
+        sourceType: "file",
+        sourceId: "runbook",
+        chunks: [
+          chunk({
+            index: 0,
+            id: "exact",
+            content: "Error ERR-4021 means the upstream billing service refused the request.",
+            authSubject: "convo-1",
+          }),
+          chunk({
+            index: 1,
+            id: "near",
+            content: "Error ERR-4022 means the upstream billing service timed out.",
+            authSubject: "convo-1",
+          }),
+          chunk({
+            index: 2,
+            id: "noise",
+            content: "The billing service runs in three regions and is monitored continuously.",
+            authSubject: "convo-1",
+          }),
+          chunk({
+            index: 3,
+            id: "restricted",
+            content: "Error ERR-4021 also appears in the confidential incident report.",
+            authSubject: "convo-restricted",
+          }),
+        ],
+      });
+      await fixture.store.replaceSource({
+        tenantId: T2,
+        sourceType: "file",
+        sourceId: "runbook",
+        chunks: [
+          chunk({
+            index: 0,
+            id: "foreign",
+            content: "Error ERR-4021 in another tenant's runbook entirely.",
+            authSubject: "convo-1",
+          }),
+        ],
+      });
+      return fixture;
+    };
+
+    const search = async (
+      fixture: KnowledgeFixture,
+      input: Parameters<KeywordIndex["search"]>[0],
+    ) => (fixture.keyword === undefined ? [] : fixture.keyword.search(input));
+
+    it("finds an exact identifier and ranks it above its near neighbour", async () => {
+      // AC-1's exact-term half, and the case that justifies the whole port.
+      const fixture = await seeded();
+      const hits = await search(fixture, {
+        tenantId: T1,
+        query: "ERR-4021",
+        authSubjects: ["convo-1"],
+        limit: 5,
+      });
+      expect(hits[0]?.chunk.id).toBe("exact");
+      // The near-miss must not outrank it, and ideally must not match at all: `ERR-4022` is a different token.
+      expect(hits.map((h) => h.chunk.id)).not.toContain("near");
+    });
+
+    it("excludes a chunk whose subject was not asked for", async () => {
+      // AC-3, for the keyword signal. `restricted` contains the query term verbatim, so it would be a top hit
+      // if the filter were applied after the match.
+      const fixture = await seeded();
+      const hits = await search(fixture, {
+        tenantId: T1,
+        query: "ERR-4021",
+        authSubjects: ["convo-1"],
+        limit: 10,
+      });
+      expect(hits.map((h) => h.chunk.id)).not.toContain("restricted");
+    });
+
+    it("returns nothing for an empty subject list", async () => {
+      const fixture = await seeded();
+      expect(
+        await search(fixture, { tenantId: T1, query: "ERR-4021", authSubjects: [], limit: 10 }),
+      ).toEqual([]);
+    });
+
+    it("does not return another tenant's chunk", async () => {
+      const fixture = await seeded();
+      const hits = await search(fixture, {
+        tenantId: T1,
+        query: "ERR-4021",
+        authSubjects: ["convo-1"],
+        limit: 10,
+      });
+      expect(hits.map((h) => h.chunk.id)).not.toContain("foreign");
+    });
+
+    it("returns nothing when no chunk contains the terms", async () => {
+      // AC-4 at the port level: an empty result rather than the least-bad match. A keyword index that returned
+      // its closest row would hand a model something to cite about a subject the corpus never mentions.
+      const fixture = await seeded();
+      expect(
+        await search(fixture, {
+          tenantId: T1,
+          query: "kubernetes helm chart",
+          authSubjects: ["convo-1"],
+          limit: 10,
+        }),
+      ).toEqual([]);
+    });
+
+    it("returns nothing for an empty query rather than everything", async () => {
+      const fixture = await seeded();
+      expect(
+        await search(fixture, { tenantId: T1, query: "   ", authSubjects: ["convo-1"], limit: 10 }),
+      ).toEqual([]);
+    });
+
+    it("returns nothing for a query made only of stopwords", async () => {
+      // `simple` text search keeps stopwords — that is the price of not stemming, which is what preserves
+      // `ERR-4021`. So they come off the *query*, and a search for "the" is a search for nothing rather than a
+      // ranking of whichever document says "the" most often. Pinned in the shared harness because both
+      // adapters must agree: found by measuring hybrid retrieval, where a decoy sharing only "was" and "the"
+      // outranked the document that answered the question.
+      const fixture = await seeded();
+      for (const query of ["the", "was the", "what is the", "and or the"]) {
+        expect(
+          await search(fixture, { tenantId: T1, query, authSubjects: ["convo-1"], limit: 10 }),
+        ).toEqual([]);
+      }
+    });
+
+    it("does not let stopwords in a query decide the ranking", async () => {
+      // The same defect from the other side: with stopwords retained, "was the billing service down" ranks by
+      // how often a document says "the". The `noise` chunk mentions the billing service and nothing about an
+      // error; the `exact` chunk answers the question.
+      const fixture = await seeded();
+      const hits = await search(fixture, {
+        tenantId: T1,
+        query: "what was the ERR-4021 error about",
+        authSubjects: ["convo-1"],
+        limit: 5,
+      });
+      expect(hits[0]?.chunk.id).toBe("exact");
+    });
+
+    it("survives punctuation a user would actually type", async () => {
+      // A search box that errors on a stray quote is a search box that errors. Postgres's `to_tsquery` throws
+      // on all of these; `websearch_to_tsquery` does not, and that is why the adapter uses it.
+      const fixture = await seeded();
+      for (const query of ['billing "unclosed', "billing & ", "&&&", "billing |", "-", "billing OR"]) {
+        await expect(
+          search(fixture, { tenantId: T1, query, authSubjects: ["convo-1"], limit: 5 }),
+        ).resolves.toBeInstanceOf(Array);
+      }
+    });
+
+    it("scores between zero and one, best first", async () => {
+      // Normalised so a caller fusing this with a cosine similarity does not have to know that one scale is
+      // bounded and the other is not.
+      const fixture = await seeded();
+      const hits = await search(fixture, {
+        tenantId: T1,
+        query: "billing service",
+        authSubjects: ["convo-1"],
+        limit: 10,
+      });
+      expect(hits.length).toBeGreaterThan(0);
+      for (const hit of hits) {
+        expect(hit.score).toBeGreaterThanOrEqual(0);
+        expect(hit.score).toBeLessThanOrEqual(1);
+      }
+      const scores = hits.map((h) => h.score);
+      expect([...scores].sort((a, b) => b - a)).toEqual(scores);
+    });
+
+    it("honours the limit and the minimum score", async () => {
+      const fixture = await seeded();
+      expect(
+        await search(fixture, {
+          tenantId: T1,
+          query: "billing service",
+          authSubjects: ["convo-1"],
+          limit: 1,
+        }),
+      ).toHaveLength(1);
+      const strict = await search(fixture, {
+        tenantId: T1,
+        query: "billing service",
+        authSubjects: ["convo-1"],
+        limit: 10,
+        minScore: 0.99,
+      });
+      // Every returned hit clears the floor — the actual contract. An earlier version asserted *at most one*
+      // hit, which is not the contract: two chunks matching identically tie at the top score, and Postgres's
+      // `ts_rank_cd` does exactly that for the two `ERR-40xx` lines. A harness must not encode one adapter's
+      // tie-breaking as a guarantee.
+      for (const hit of strict) expect(hit.score).toBeGreaterThanOrEqual(0.99);
+      // And the floor is genuinely applied rather than the loop above being vacuous. Asserted with a floor
+      // *above* any normalised score, because "the floor excludes something" depends on the corpus: all three
+      // chunks here contain both terms, and Postgres's cover density ranks them identically — which is correct,
+      // and which an earlier version of this assertion mistook for the floor not working.
+      expect(
+        await search(fixture, {
+          tenantId: T1,
+          query: "billing service",
+          authSubjects: ["convo-1"],
+          limit: 10,
+          minScore: 1.01,
+        }),
+      ).toEqual([]);
+    });
+
+    it("filters by source type when asked", async () => {
+      const fixture = await seeded();
+      expect(
+        await search(fixture, {
+          tenantId: T1,
+          query: "billing",
+          authSubjects: ["convo-1"],
+          limit: 10,
+          sourceTypes: ["artifact"],
+        }),
+      ).toEqual([]);
+    });
+
+    it("never returns a vector with a hit", async () => {
+      const fixture = await seeded();
+      const hits = await search(fixture, {
+        tenantId: T1,
+        query: "billing",
+        authSubjects: ["convo-1"],
+        limit: 10,
+      });
+      for (const hit of hits) expect(Object.keys(hit.chunk)).not.toContain("embedding");
     });
   });
 }

@@ -66,6 +66,7 @@ export const REGISTERED_PORTS: readonly PortCoverage[] = [
   { port: "ArtifactExportStore", harness: "artifactExportStoreConformance" },
   { port: "KnowledgeStore", harness: "knowledgeStoreConformance" },
   { port: "VectorIndex", harness: "vectorIndexConformance" },
+  { port: "KeywordIndex", harness: "keywordIndexConformance" },
 ];
 
 /**
@@ -95,7 +96,7 @@ export const ISOLATION_EXEMPT_PORTS: readonly { readonly port: string; readonly 
  * `FileMetadataStore` left this list in #129, which is the mechanism working as intended: it gained methods
  * and the guard would have failed had a harness not come with them.
  */
-export const PLACEHOLDER_PORTS: readonly string[] = ["EvaluationStore", "KeywordIndex"];
+export const PLACEHOLDER_PORTS: readonly string[] = ["EvaluationStore"];
 
 /**
  * Infrastructure ports that are not storage. Their real adapters land with REQ-015 (#105 BullMQ
@@ -241,6 +242,7 @@ export const ADAPTER_COVERAGE: readonly AdapterCoverage[] = [
       "ArtifactExportStore",
       "KnowledgeStore",
       "VectorIndex",
+      "KeywordIndex",
     ],
     notImplemented: POSTGRES_PENDING,
     notApplicable: [RELATIONAL_CONTENT_EXEMPTION],

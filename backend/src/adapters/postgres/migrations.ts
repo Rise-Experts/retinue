@@ -907,8 +907,23 @@ export const VECTOR_MIGRATIONS: readonly Migration[] = [
       `CREATE INDEX IF NOT EXISTS knowledge_chunks_embedding_idx
         ON knowledge_chunks USING hnsw (embedding vector_cosine_ops)
         WITH (m = 16, ef_construction = 64)`,
+      // #136. Full-text search over the same rows, so semantic and keyword retrieval share one
+      // permission-filtered source of truth. A GIN index on a *generated* column rather than an expression
+      // index: an expression index has to be written identically in every query to be used, and one query
+      // spelled slightly differently silently sequential-scans -- which is a performance cliff nobody notices
+      // until the corpus is large.
+      //
+      // `simple` rather than `english`, deliberately. The English configuration stems, so `renewals` and
+      // `renewal` match -- which is what the *vector* signal is for. Keyword retrieval exists for exact terms
+      // (`ERR-4021`, `Q3-2026`), and a stemmer is precisely what destroys them. Two signals with two jobs.
+      `ALTER TABLE knowledge_chunks
+        ADD COLUMN IF NOT EXISTS content_tsv tsvector
+        GENERATED ALWAYS AS (to_tsvector('simple', content)) STORED`,
+      `CREATE INDEX IF NOT EXISTS knowledge_chunks_fts_idx
+        ON knowledge_chunks USING gin (content_tsv)`,
     ],
     down: [
+      `DROP INDEX IF EXISTS knowledge_chunks_fts_idx`,
       `DROP INDEX IF EXISTS knowledge_chunks_embedding_idx`,
       `DROP INDEX IF EXISTS knowledge_chunks_model_idx`,
       `DROP INDEX IF EXISTS knowledge_chunks_source_idx`,

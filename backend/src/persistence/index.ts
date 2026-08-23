@@ -872,9 +872,32 @@ export interface KnowledgeStore {
 
 export type VectorSearchHit = {
   readonly chunk: KnowledgeChunk;
-  /** 0–1, higher is closer. Normalised here so a caller never has to know the metric. */
+  /**
+   * 0–1, higher is closer. Normalised so a caller never has to know the metric.
+   *
+   * **0.5 means unrelated**, not "no match". The mapping is `(cosine + 1) / 2`, so orthogonal vectors — two
+   * texts with nothing in common — score exactly 0.5, and only actively *opposite* vectors score below it.
+   * That is why a vector index with no `minScore` returns every chunk it is asked for: there is no such thing
+   * as a non-match, only a distant one. Any caller that needs "found nothing" must supply a floor above 0.5,
+   * which is what `SEMANTIC_RELEVANCE_FLOOR` is for.
+   */
   readonly score: number;
 };
+
+/**
+ * The floor above which a vector hit is worth having (#136).
+ *
+ * 0.5 is orthogonal — see `VectorSearchHit.score` — so anything at or below it shares nothing with the query.
+ * 0.55 is comfortably above that and still admits a weak-but-real match. Without a floor, retrieval always
+ * returns *something*, and a model handed the least-bad chunk cites it: this constant is what makes an honest
+ * empty result possible at all.
+ *
+ * Deliberately absolute, unlike the fusion floor which is relative to the best hit. They answer different
+ * questions — "is this hit any good" and "is this hit much worse than the best" — and one instrument cannot do
+ * both: a relative floor can never reject a result set that is uniformly poor, because something is always the
+ * best of it.
+ */
+export const SEMANTIC_RELEVANCE_FLOOR = 0.55;
 
 export interface VectorIndex {
   /**
@@ -896,7 +919,82 @@ export interface VectorIndex {
   ): Promise<readonly VectorSearchHit[]>;
 }
 
-export interface KeywordIndex {}
+/**
+ * Words a keyword query drops (#136).
+ *
+ * On the port, like `EMBEDDING_DIMENSIONS`, because both adapters need the same list and a copy in each is a
+ * copy that drifts.
+ *
+ * **Why the query and not the index.** Postgres's `simple` text configuration is chosen deliberately over
+ * `english`: `english` stems, and stemming is exactly what destroys `ERR-4021` and `Q3-2026` — the terms
+ * keyword retrieval exists to find. But `simple` also keeps stopwords, so `was the site down` matches whichever
+ * document says `the` most often. Found by measuring hybrid against semantic-only, where a decoy sharing only
+ * `was` and `the` outranked the document that actually answered the question.
+ *
+ * Stripping them from the *query* keeps identifiers intact in the index while removing the terms that carry no
+ * retrieval signal. Small and English-only, which is honest: a deployment in another language needs its own
+ * list, and pretending otherwise would be worse than the list being visibly incomplete.
+ */
+export const KEYWORD_STOPWORDS: ReadonlySet<string> = new Set([
+  "a", "about", "all", "also", "an", "and", "any", "are", "as", "at", "be", "been", "but", "by", "can",
+  "did", "do", "does", "for", "from", "had", "has", "have", "how", "i", "if", "in", "into", "is", "it",
+  "its", "just", "me", "my", "no", "not", "of", "on", "or", "our", "out", "over", "so", "some", "than",
+  "that", "the", "their", "them", "then", "there", "these", "they", "this", "to", "up", "us", "was",
+  "we", "were", "what", "when", "where", "which", "who", "why", "will", "with", "would", "you", "your",
+]);
+
+/**
+ * A keyword query with its stopwords removed.
+ *
+ * Returns the empty string when nothing survives, which callers treat as "no query" — a search for `the` is a
+ * search for nothing, and returning every document would be the worst possible answer.
+ */
+export const stripStopwords = (query: string): string =>
+  (query.toLowerCase().match(/[a-z0-9]+(?:-[a-z0-9]+)*/g) ?? [])
+    .filter((term) => !KEYWORD_STOPWORDS.has(term))
+    .join(" ");
+
+export type KeywordSearchHit = {
+  readonly chunk: KnowledgeChunk;
+  /**
+   * 0–1, higher is a better lexical match.
+   *
+   * Normalised so a caller fusing this with a vector score does not have to know that one is a cosine
+   * similarity and the other a `ts_rank_cd` — two unbounded, incomparable scales fused directly would let
+   * whichever happened to be larger dominate.
+   */
+  readonly score: number;
+};
+
+/**
+ * Exact-term retrieval over the same chunks the vector index searches (#136).
+ *
+ * The same rows on purpose: semantic and keyword retrieval share **one permission-filtered source of truth**,
+ * so a chunk cannot be visible to one signal and invisible to the other. Two indexes over two copies would
+ * eventually disagree about what exists, and the disagreement would be a permission gap.
+ *
+ * It exists because semantic search misses what it was never trained on — a product code, an error number, a
+ * campaign identifier. An embedding of `ERR-4021` is an embedding of a string that looks like other strings.
+ */
+export interface KeywordIndex {
+  /**
+   * Lexical search, filtered by permission **inside** the query.
+   *
+   * `authSubjects` is required for the same reason it is on `VectorIndex`: an optional filter is one someone
+   * omits, and an excluded chunk must not merely be absent from the results — it must never have been a
+   * candidate, or its presence still shows in a count.
+   */
+  search(
+    input: TenantScope & {
+      /** The user's terms, as typed. Parsed by the adapter, never interpolated into SQL. */
+      query: string;
+      authSubjects: readonly string[];
+      limit: number;
+      minScore?: number;
+      sourceTypes?: readonly KnowledgeSourceType[];
+    },
+  ): Promise<readonly KeywordSearchHit[]>;
+}
 
 
 /**

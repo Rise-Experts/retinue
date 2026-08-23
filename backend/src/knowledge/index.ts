@@ -248,3 +248,4 @@ export const createEmbeddingPipeline = (deps: EmbeddingPipelineDeps) => {
 export type EmbeddingPipeline = ReturnType<typeof createEmbeddingPipeline>;
 
 export * from "./chunking.js";
+export * from "./retrieval.js";

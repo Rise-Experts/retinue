@@ -42,6 +42,7 @@ import {
 import { artifactStoreConformance } from "../testing/conformance/artifacts.js";
 import { artifactExportStoreConformance } from "../testing/conformance/artifact-exports.js";
 import {
+  keywordIndexConformance,
   knowledgeStoreConformance,
   vectorIndexConformance,
 } from "../testing/conformance/knowledge.js";
@@ -337,10 +338,12 @@ const vectorFixture = async () => {
   return {
     store: supabase.createSupabaseKnowledgeStore(sql),
     index: supabase.createSupabaseVectorIndex(sql),
+    keyword: supabase.createSupabaseKeywordIndex(sql),
   };
 };
 knowledgeStoreConformance(vectorFixture, VECTOR_DECLARATION);
 vectorIndexConformance(vectorFixture, VECTOR_DECLARATION);
+keywordIndexConformance(vectorFixture, VECTOR_DECLARATION);
 
 artifactExportStoreConformance(() => {
   const sql = freshExecutor();
@@ -406,6 +409,7 @@ const ALIASES: readonly (readonly [keyof typeof supabase, keyof typeof postgres]
   ["createSupabaseArtifactExportStore", "createPostgresArtifactExportStore"],
   ["createSupabaseKnowledgeStore", "createPostgresKnowledgeStore"],
   ["createSupabaseVectorIndex", "createPostgresVectorIndex"],
+  ["createSupabaseKeywordIndex", "createPostgresKeywordIndex"],
 ];
 
 /**

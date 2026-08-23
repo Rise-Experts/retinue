@@ -63,6 +63,7 @@ import {
   fileMetadataStoreConformance,
   idempotencyStoreConformance,
   interactionStoreConformance,
+  keywordIndexConformance,
   knowledgeStoreConformance,
   mcpConnectionStoreConformance,
   messageStoreConformance,
@@ -184,6 +185,7 @@ artifactExportStoreConformance(() => createMemoryArtifactExportStore());
 const VECTOR_CAPABLE = { capabilities: ["vector-search"] } as const;
 knowledgeStoreConformance(() => createMemoryKnowledgeBackend(), VECTOR_CAPABLE);
 vectorIndexConformance(() => createMemoryKnowledgeBackend(), VECTOR_CAPABLE);
+keywordIndexConformance(() => createMemoryKnowledgeBackend(), VECTOR_CAPABLE);
 fileContentStoreConformance(() => createMemoryFileContentStore());
 idempotencyStoreConformance(() => createMemoryIdempotencyStore());
 principalMemoryStoreConformance(() => createMemoryPrincipalMemoryStore());

@@ -583,3 +583,88 @@ are gated on the `vector-search` capability, so on a database without pgvector e
 *named* skip rather than vanishing: an invisible skip is indistinguishable from coverage. Its RLS policies are
 a separate list (`applyVectorRls`) applied by whoever ran that migration, and asserted in the RLS test — "it is
 behind a flag" is how a tenant-scoped table without RLS survives review.
+
+## Hybrid retrieval (#136)
+
+Semantic search misses what it was never trained on — a product code, an error number, a campaign identifier.
+An embedding of `ERR-4021` is an embedding of a string that looks like other strings. Keyword search misses
+everything phrased differently from the document. Neither is sufficient.
+
+### One source of truth, two signals
+
+`KeywordIndex` searches **the same `knowledge_chunks` rows** the vector index searches. Two indexes over two
+copies would eventually disagree about what exists, and that disagreement would be a permission gap.
+
+**`simple`, not `english`.** The English text-search configuration stems, so `renewals` matches `renewal` —
+which is what the *vector* signal is for. Keyword retrieval exists for exact terms, and a stemmer is precisely
+what destroys `ERR-4021` and `Q3-2026`. Two signals, two jobs.
+
+The price of `simple` is that it keeps stopwords, so `was the site down` would rank by how often a document
+says `the`. That is paid by stripping stopwords from the **query**, not the index — identifiers stay intact and
+the terms carrying no signal come off. Found by measuring hybrid against semantic-only, where a decoy sharing
+only `was` and `the` outranked the document that answered the question.
+
+The generated `content_tsv` column is indexed rather than an expression: an expression index must be written
+identically in every query to be used, and one query spelled differently silently sequential-scans — a
+performance cliff nobody notices until the corpus is large.
+
+### Fusion is reciprocal rank, not weighted score
+
+The two scores are not comparable. A cosine similarity is bounded and roughly linear in relevance;
+`ts_rank_cd` is unbounded and corpus-dependent. Adding them with weights means picking a constant that is
+wrong for some corpus, and the failure is *silent*: one signal quietly dominates and the hybrid is the worse
+of the two.
+
+RRF uses only the **rank**, so it needs no calibration and cannot be dominated:
+
+```
+score(d) = Σ over signals of 1 / (K + rank(d))
+```
+
+`K = 60` is Cormack, Clarke and Buettcher's value. It is large relative to the ranks that matter, which
+flattens the gap between rank 1 and rank 2 and lets *agreement between signals* outweigh one signal's
+confidence — a document both signals liked beats one that either loved.
+
+### Two floors, because they answer different questions
+
+- `SEMANTIC_RELEVANCE_FLOOR` (0.55) is **absolute**, applied inside the vector search. Necessary because
+  `(cosine + 1) / 2` puts *unrelated* at 0.5, not 0: a vector index with no floor returns every chunk it is
+  asked for, so there is no such thing as "no semantic match", only a distant one.
+- `DEFAULT_RELEVANCE_FLOOR` (0.4) is **relative** to the best fused hit, applied after fusion.
+
+One instrument cannot do both. A relative floor can never reject a uniformly poor result set, because
+something is always the best of it — which is exactly how "an honest empty result" fails to work.
+
+### The empty result is a type, not a convention
+
+`RetrievalOutcome` is a union. "Found nothing" has no `hits` field to read as a weak answer, so a caller cannot
+accidentally hand a model the least-bad match — which it would cite. The reasons are separate values because
+the sentence differs: *"you have access to nothing matching that"* is not *"nothing matches"*, and
+*"nothing is a close enough match"* is not *"nothing mentions it"*. Telling a user the wrong one sends them
+rephrasing a query that can never work.
+
+### The reranker is switchable because its value is a claim
+
+A cross-encoder is materially more expensive than the retrieval it reorders, so *"we rerank"* without a
+measured contribution is a cost nobody justified. `Reranker` is optional; absent means fusion order stands.
+The built-in one promotes candidates containing the query's *identifier-shaped* terms — the signal fusion is
+weakest on, because rank fusion cannot know that one signal matched an exact code rather than a common word.
+It boosts only on terms containing a digit or a hyphen; boosting on a common word appearing verbatim would just
+re-rank by word frequency.
+
+A reranker returning nothing falls back to fusion order. A silent empty result there would look exactly like
+the honest-empty path working, which is the worst way for it to fail.
+
+### What the measurement shows, and what it cannot
+
+Three modes over one fixed query set, precision@1: **keyword 0.33, semantic 1.0, hybrid 1.0**. Hybrid is never
+worse than either signal and strictly beats keyword-only; every exact identifier is found *by* the keyword
+signal, which is the attribution that matters.
+
+On this set hybrid **ties** semantic-only, and that is worth stating rather than engineering away. The reason
+semantic search loses on an exact identifier in production is *subword tokenisation*: a real model splits
+`ERR-4021` into pieces it shares with `ERR-4022`, making the two nearly indistinguishable. The test embedder is
+lexical and has no subwords, so it finds identifiers *better* than a real model does — and a corpus rigged to
+make it fail would be measuring the rigging. What is proven here is the property fusion is responsible for: it
+takes the better of two signals on every query and is never dragged down by the worse one. The strict win over
+semantic-only needs a real embedding model, and eval cases exist for it.

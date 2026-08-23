@@ -20,12 +20,15 @@ import { AgentPlatformError } from "../../core/errors.js";
 import type { Page } from "../../core/context.js";
 import type {
   EmbeddingModelRef,
+  KeywordIndex,
+  KeywordSearchHit,
   KnowledgeChunk,
   KnowledgeSourceType,
   KnowledgeStore,
   VectorIndex,
   VectorSearchHit,
 } from "../../persistence/index.js";
+import { stripStopwords } from "../../persistence/index.js";
 import { VECTOR_DIMENSIONS } from "./migrations.js";
 import type { SqlExecutor } from "./sql.js";
 
@@ -252,3 +255,66 @@ export const createPostgresVectorIndex = (sql: SqlExecutor): VectorIndex => ({
 /** Re-exported so a caller comparing a stored chunk's model to the current one does it the same way. */
 export const sameEmbeddingModel = (a: EmbeddingModelRef, b: EmbeddingModelRef): boolean =>
   a.modelId === b.modelId && a.version === b.version && a.dimensions === b.dimensions;
+
+/**
+ * Postgres full-text `KeywordIndex` (#136).
+ *
+ * Over `knowledge_chunks.content_tsv`, the same rows the vector index searches, so a chunk cannot be visible to
+ * one signal and invisible to the other.
+ *
+ * **`websearch_to_tsquery`, not `to_tsquery`.** The latter throws on ordinary user input — an unbalanced quote,
+ * a bare `&`, a trailing operator — and a search box that errors on a stray character is a search box that
+ * errors. `websearch_to_tsquery` accepts anything and interprets quotes and `or` the way a person expects.
+ *
+ * **The score is normalised against the best hit in the result set**, not against an absolute. `ts_rank_cd`
+ * has no upper bound and its scale depends on the corpus, so an absolute threshold would mean different things
+ * in different tenants — and fusing an unbounded score with a bounded cosine similarity would let the
+ * unbounded one dominate whenever it happened to be larger.
+ */
+export const createPostgresKeywordIndex = (sql: SqlExecutor): KeywordIndex => ({
+  async search({ tenantId, query, authSubjects, limit, minScore, sourceTypes }) {
+    // "No subjects" means nothing, not everything. Short-circuited so the database is never asked a question
+    // whose answer is already known.
+    if (authSubjects.length === 0) return [];
+    // Stopwords come off the query, not the index. `simple` is chosen over `english` so identifiers survive
+    // (`english` stems, which destroys `ERR-4021`), and the price of `simple` is that it keeps stopwords —
+    // paid here rather than by matching every document that says "the".
+    const terms = stripStopwords(query);
+    if (terms === "") return [];
+
+    const rows = await sql.query<Row & { rank: number | string }>(
+      `WITH q AS (SELECT websearch_to_tsquery('simple', $2) AS tsq),
+            scored AS (
+              SELECT ${COLUMNS},
+                     -- cd = cover density: it rewards query terms appearing close together, which is what
+                     -- distinguishes a chunk *about* the terms from one that mentions them separately.
+                     ts_rank_cd(content_tsv, q.tsq) AS rank
+                FROM knowledge_chunks, q
+               WHERE tenant_id = $1
+                 -- AC-3, for the keyword signal too: the permission predicate is in the same statement as the
+                 -- match, so an excluded chunk is never a candidate and never influences the ranking of the
+                 -- ones that are.
+                 AND auth_subject = ANY($3::text[])
+                 AND ($4::text[] IS NULL OR source_type = ANY($4::text[]))
+                 AND content_tsv @@ q.tsq
+            )
+       SELECT *, rank / NULLIF(MAX(rank) OVER (), 0) AS normalised
+         FROM scored
+        ORDER BY rank DESC, id
+        LIMIT $5`,
+      [tenantId, terms, authSubjects, sourceTypes === undefined ? null : [...sourceTypes], limit],
+    );
+
+    return rows
+      .map((r) => {
+        const normalised = (r as unknown as { normalised: number | string | null }).normalised;
+        return {
+          chunk: toChunk(r),
+          // `NULLIF(...,0)` yields null when every rank is zero, which cannot happen for a matching row but is
+          // cheaper to handle than to prove impossible.
+          score: normalised === null ? 0 : Number(normalised),
+        } satisfies KeywordSearchHit;
+      })
+      .filter((h) => minScore === undefined || h.score >= minScore);
+  },
+});

@@ -19,6 +19,7 @@ import { PGlite } from "@electric-sql/pglite";
 import { afterAll, describe, expect, it } from "vitest";
 import {
   createPostgresArtifactExportStore,
+  createPostgresKeywordIndex,
   createPostgresKnowledgeStore,
   createPostgresVectorIndex,
   createPostgresArtifactStore,
@@ -68,6 +69,7 @@ import { fileMetadataStoreConformance } from "../testing/conformance/files.js";
 import { artifactStoreConformance } from "../testing/conformance/artifacts.js";
 import { artifactExportStoreConformance } from "../testing/conformance/artifact-exports.js";
 import {
+  keywordIndexConformance,
   knowledgeStoreConformance,
   vectorIndexConformance,
 } from "../testing/conformance/knowledge.js";
@@ -507,11 +509,16 @@ const VECTOR_DECLARATION = vectorAvailable ? { capabilities: ["vector-search" as
 const vectorFixture = async () => {
   const sql = freshExecutor();
   await migrateVector(sql);
-  return { store: createPostgresKnowledgeStore(sql), index: createPostgresVectorIndex(sql) };
+  return {
+    store: createPostgresKnowledgeStore(sql),
+    index: createPostgresVectorIndex(sql),
+    keyword: createPostgresKeywordIndex(sql),
+  };
 };
 
 knowledgeStoreConformance(vectorFixture, VECTOR_DECLARATION);
 vectorIndexConformance(vectorFixture, VECTOR_DECLARATION);
+keywordIndexConformance(vectorFixture, VECTOR_DECLARATION);
 
 artifactExportStoreConformance(() => {
   const sql = freshExecutor();
@@ -591,6 +598,7 @@ describe("postgres adapter coverage", () => {
       "ArtifactExportStore",
       "KnowledgeStore",
       "VectorIndex",
+      "KeywordIndex",
     ]);
   });
 

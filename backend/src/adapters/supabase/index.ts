@@ -81,6 +81,7 @@ export { createPostgresArtifactExportStore as createSupabaseArtifactExportStore 
 export {
   createPostgresKnowledgeStore as createSupabaseKnowledgeStore,
   createPostgresVectorIndex as createSupabaseVectorIndex,
+  createPostgresKeywordIndex as createSupabaseKeywordIndex,
 } from "../postgres/knowledge.js";
 
 export * from "./rls.js";
