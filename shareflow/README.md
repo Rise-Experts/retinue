@@ -72,6 +72,22 @@ Two more from Campaigns:
   daily campaign over a year produces 31 — and an assistant that inferred the count from the dates
   would report 365. The field exists so the cap is visible; recomputing it locally would duplicate the
   logic it exists to expose.
+From the parity gates (#128) — **which do not close that issue**:
+
+- **Every gate is `proposed`, and the evaluator refuses to pass one that is not `agreed`.** AC-1's real
+  content is *"not decided after seeing the results"*, and a threshold chosen once the numbers are in is a
+  rationalisation. I can propose — I have seen no data — and I cannot agree, because an acceptable quality
+  bar is a product decision. Refusing to compute a pass against an unsigned gate makes that a precondition
+  rather than a hope.
+- **The analytics and engagement-read gates declare themselves unmeasurable.** Shadow mode compares
+  *writes*, and those workflows make none — a write-based gate would pass vacuously on every run, which is
+  a green tick nobody earned.
+- **`canRemoveOldRuntime` currently returns `allowed: false`, for six separate reasons.** The removal is 71
+  files in `social_integgration` — a different repository — and docs/README lists removing Agno before
+  parity as an explicit non-goal. What ships here is the machinery that refuses, not the removal.
+- **AC-3's decision-maker is unnamed and AC-6's data question is unanswered**, deliberately. A blank gets
+  filled; a plausible guess gets followed.
+
 From rollout (#127):
 
 - **There was no flag mechanism to reuse.** ShareFlow's existing flags are process-wide env vars, and one is
@@ -275,6 +291,7 @@ From Accounts:
 | `manifests/` | the Social Assistant — `id` neutral, branding in the display name |
 | `shadow/` | shadow-run recording and the per-workflow parity diff |
 | `rollout/` | per-workspace runtime flags, rollback, and the written procedure |
+| `parity/` | the parity gates, their evaluator, the cutover runbook and the removal gate |
 
 Nothing under `tools/` performs I/O; a ShareFlow tool is the envelope from `defineDelegatingTool` over
 a service method, and R7 fails the build on an attempt.
@@ -305,7 +322,13 @@ The seam and the scaffolding (#114); Posts (#115); Campaigns (#116); Accounts (#
 Publishing (#119); Engagement and Leads (#120); context providers (#121); the seven skills (#122);
 content generation (#123); research (#124); analytics (#125). **All eleven docs/07 tool categories and
 both net-new capabilities are implemented.** Shadow mode (#126) suppresses external writes in the
-envelope. What remains is per-workspace flags (#127) and the cutover (#128).
+envelope, #127 adds per-workspace rollout with a rehearsed rollback, and #128 defines the parity gates and
+the gate that blocks the Agno removal.
+
+**The removal itself is still blocked, and #128 remains open** — three of its acceptance criteria need a
+person (agreeing the thresholds, naming a decision-maker, deciding what happens to historical data) and one
+needs shadow data from a deployment running both runtimes, which does not exist yet.
+`canRemoveOldRuntime` returns `allowed: false` today, and lists every reason.
 
 `npm test` in this workspace runs `tsc -b` first. That is deliberate: this package value-imports
 `@agentkit/backend`, whose entry point is `dist/`, so `vitest run` on its own tests whatever was last
