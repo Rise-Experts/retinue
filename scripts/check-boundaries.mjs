@@ -13,7 +13,9 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, sep } from "node:path";
 
-const DEFAULT_ROOTS = ["backend", "frontend"];
+// `server` is the reference GraphQL host (#108). Scanned like the others: a workspace the
+// boundary checker does not read is a workspace with no boundary gate on it.
+const DEFAULT_ROOTS = ["backend", "server", "frontend"];
 const ADAPTER_NAMES = ["memory","postgres","supabase","pgvector","qdrant","s3","local-files","bullmq","redis","nextjs"];
 
 /** Collect every .ts file under a `src/` directory, skipping node_modules and dist. */

@@ -7,6 +7,7 @@
   "type": "module",
   "workspaces": [
     "backend",
+    "server",
     "frontend"
   ],
   "engines": {
