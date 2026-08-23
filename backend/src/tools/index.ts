@@ -37,6 +37,14 @@ export type ToolDescriptor = {
   readonly approvalPolicy: ApprovalPolicy;
   /** External and destructive tools must supply an idempotency key. */
   readonly requiresIdempotencyKey: boolean;
+  /**
+   * For a delegating tool (#113): the deterministic function this capability wraps.
+   *
+   * On the descriptor rather than only at the definition site, so "which existing function does this
+   * delegate to" is answerable wherever a tool is visible — a catalog dump, a log line, a review.
+   * Optional because a tool need not delegate; required by `defineDelegatingTool` for those that do.
+   */
+  readonly delegatesTo?: string;
 };
 
 /** What enters the model's context during discovery: no schemas, just enough to choose. */
@@ -97,5 +105,6 @@ export type MetaToolName = (typeof META_TOOLS)[number];
 
 export * from "./meta-tools.js";
 export * from "./registry.js";
+export * from "./delegating.js";
 
 export * from "./define.js";

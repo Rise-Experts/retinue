@@ -6,7 +6,11 @@
  */
 
 import type { ExecutionContext } from "../core/context.js";
-import { isAgentPlatformError, type PlatformError } from "../core/errors.js";
+// One definition of the error envelope, not two. `runtime/retry.ts` already exported
+// `toPlatformError`; this module had a private duplicate, and exporting that for #113's delegating
+// envelope made the package barrel ambiguous about which one it meant — the same collision
+// `DEFAULT_SESSION_STATE_MAX_BYTES` caused in #97. Importing the existing one instead.
+import { toPlatformError } from "../runtime/retry.js";
 import type { ApprovalPolicy, Tool, ToolDescriptor, ToolEffect, ToolProvider } from "./index.js";
 
 export type ToolSpec<I = unknown, O = unknown> = {
@@ -21,11 +25,6 @@ export type ToolSpec<I = unknown, O = unknown> = {
   readonly requiresIdempotencyKey?: boolean;
   execute(input: I, context: ExecutionContext): Promise<O> | O;
 };
-
-const toPlatformError = (value: unknown): PlatformError =>
-  isAgentPlatformError(value)
-    ? value.toPlatformError()
-    : { code: "internal", message: value instanceof Error ? value.message : String(value), retryable: false };
 
 /** Build a `Tool` from a plain spec: `execute` returns data (or throws); the envelope is handled here. */
 export const defineTool = <I = unknown, O = unknown>(spec: ToolSpec<I, O>): Tool<O> => {

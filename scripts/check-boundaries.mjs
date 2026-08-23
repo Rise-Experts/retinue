@@ -16,6 +16,17 @@ import { join, sep } from "node:path";
 // `server` is the reference GraphQL host (#108). Scanned like the others: a workspace the
 // boundary checker does not read is a workspace with no boundary gate on it.
 const DEFAULT_ROOTS = ["backend", "server", "frontend"];
+/**
+ * Modules that reach outside the process. Named explicitly rather than pattern-matched, so adding one
+ * is a decision someone made — a regex over "http" would also catch a local module called
+ * `http-status`.
+ */
+const IO_MODULES = new Set([
+  "node:http", "http", "node:https", "https", "node:net", "net", "node:dgram", "dgram",
+  "node:fs", "fs", "node:fs/promises", "fs/promises", "node:child_process", "child_process",
+  "undici", "axios", "node-fetch", "got", "pg", "ioredis", "bullmq",
+]);
+
 const ADAPTER_NAMES = ["memory","postgres","supabase","pgvector","qdrant","s3","local-files","bullmq","redis","nextjs"];
 
 /** Collect every .ts file under a `src/` directory, skipping node_modules and dist. */
@@ -62,6 +73,11 @@ export function scan(roots = DEFAULT_ROOTS) {
       const isCore = inLayer("core");
       const isPersistence = inLayer("persistence");
       const isModels = inLayer("models");
+      // Only the shipped envelope, not its tests. A test legitimately wires an in-memory store to
+      // exercise the pipeline, and test files are excluded from the published build — the rule is about
+      // what the envelope does in production, not what a test needs to construct one.
+      const isTest = /\/__tests__\/|\.test\.ts$/.test(path);
+      const isTools = inLayer("tools") && !isTest;
 
       for (const { specifier: spec, typeOnly } of imports(readFileSync(file, "utf8"))) {
         const add = (rule) => violations.push({ file: path, specifier: spec, rule });
@@ -87,6 +103,16 @@ export function scan(roots = DEFAULT_ROOTS) {
 
         // R6 — core must be self-contained (no imports escaping core/).
         if (isCore && spec.startsWith("../")) add("R6 core must not import outside core/");
+
+        // R7 — the tool envelope performs no I/O of its own (#113 AC-4).
+        //
+        // A delegating tool is "a thin, agent-facing envelope over a deterministic function": it adds
+        // authorisation, the approval gate and the idempotency key, then *delegates* the side effect.
+        // An envelope that reached the network itself would be doing the work it exists to delegate,
+        // and the guarantee would hold only as long as everyone remembered. This makes it a build
+        // failure instead of a convention.
+        if (isTools && !typeOnly && (IO_MODULES.has(spec) || /(^|\/)adapters?\//.test(spec)))
+          add("R7 the tools layer must delegate I/O, not perform it");
       }
     }
   }
