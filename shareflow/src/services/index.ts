@@ -193,12 +193,123 @@ export type PostDraftPatch = {
  */
 export const EDIT_REMEDY_DUPLICATE = "duplicate-then-edit" as const;
 
+/**
+ * How often a campaign posts.
+ *
+ * Kebab-case per docs/01's union rule; the store's value is `3x_week`. **The adapter maps between
+ * them** — noted here because it is exactly the kind of one-line translation that can go wrong
+ * silently, producing a campaign whose cadence fails a CHECK constraint at insert time.
+ */
+export const CAMPAIGN_CADENCES = ["daily", "3x-week", "weekly"] as const;
+export type CampaignCadence = (typeof CAMPAIGN_CADENCES)[number];
+
+/** How a campaign's posts are authored. `autopilot` and `assisted` ask for generated text. */
+export const CAMPAIGN_MODES = ["autopilot", "assisted", "manual"] as const;
+export type CampaignMode = (typeof CAMPAIGN_MODES)[number];
+
+/** Optional generated media attached to every post in the campaign. */
+export const CAMPAIGN_MEDIA_TYPES = ["none", "image", "video"] as const;
+export type CampaignMediaType = (typeof CAMPAIGN_MEDIA_TYPES)[number];
+
+/**
+ * Campaign lifecycle.
+ *
+ * **No tool may set this.** Like a post's review status, it is moved by the act of scheduling, not by
+ * an edit — an assistant that could write `scheduled` would be claiming an outcome it had not produced.
+ * `CampaignPatch` has no field for it.
+ */
+export const CAMPAIGN_STATUSES = ["draft", "scheduled", "done"] as const;
+export type CampaignStatus = (typeof CAMPAIGN_STATUSES)[number];
+
+/**
+ * A calendar date, `YYYY-MM-DD`.
+ *
+ * Distinct from an instant, and deliberately so: `campaigns.starts_on` and `ends_on` are `date`
+ * columns. A campaign runs over calendar days in the tenant's own reckoning, so an instant here would
+ * force a timezone decision that nothing in the record supports.
+ */
+export type CalendarDate = string;
+
 export type Campaign = {
   readonly id: CampaignId;
   readonly name: string;
+  /** Required in the store. The subject the campaign's posts are about. */
+  readonly theme: string;
   readonly goal?: string;
-  readonly startsAt?: string;
-  readonly endsAt?: string;
+  /** Longer free-text brief, when one was supplied. */
+  readonly brief?: string;
+  readonly tone?: string;
+  readonly startsOn: CalendarDate;
+  readonly endsOn: CalendarDate;
+  readonly cadence: CampaignCadence;
+  readonly channels: readonly PlatformId[];
+  readonly status: CampaignStatus;
+  readonly mode: CampaignMode;
+  readonly mediaType: CampaignMediaType;
+  /**
+   * How many posts this date range and cadence actually produce.
+   *
+   * **Computed by ShareFlow, never here.** `postCountFor` is *"capped at 31 so a runaway date range
+   * can't fan out an absurd sequence"* — so "daily for the next year" is 31 posts, not 365. Without
+   * this field the assistant would report a year of daily posts and have planned a month of them,
+   * which is the same class of silent failure as a truncated caption. Recomputing it locally would
+   * duplicate the logic the field exists to expose.
+   */
+  readonly plannedPostCount: number;
+  readonly createdAt: string;
+};
+
+/** Enough to pick a campaign out of a list. No brief, no goal prose. */
+export type CampaignSummary = {
+  readonly id: CampaignId;
+  readonly name: string;
+  readonly theme: string;
+  readonly status: CampaignStatus;
+  readonly startsOn: CalendarDate;
+  readonly endsOn: CalendarDate;
+  readonly cadence: CampaignCadence;
+  readonly channels: readonly PlatformId[];
+  readonly plannedPostCount: number;
+};
+
+/**
+ * A sparse patch, for the same reason `PostDraftPatch` is one: only the fields present are touched.
+ *
+ * No `status`, and no `plannedPostCount` — the second is derived, so accepting it would let a caller
+ * assert a post count the dates do not produce.
+ */
+export type CampaignPatch = {
+  readonly name?: string;
+  readonly theme?: string;
+  readonly goal?: string;
+  readonly brief?: string;
+  readonly tone?: string;
+  readonly startsOn?: CalendarDate;
+  readonly endsOn?: CalendarDate;
+  readonly cadence?: CampaignCadence;
+  readonly channels?: readonly PlatformId[];
+  readonly mode?: CampaignMode;
+  readonly mediaType?: CampaignMediaType;
+};
+
+/**
+ * One entry in a campaign's content calendar.
+ *
+ * Two deliberate differences from ShareFlow's `toCalendarPosts`, which is otherwise the precedent —
+ * it already excerpts rather than embedding (`caption.slice(0, 46)`):
+ *
+ * - **`scheduledAt` is the ISO instant, not a derived local date.** ShareFlow builds `YYYY-MM-DD` from
+ *   `Date#getFullYear/getMonth/getDate`, which is the *server's* timezone: a post scheduled 00:30 UTC
+ *   lands on the previous day for a server west of Greenwich. The frontend localizes, per docs/14.
+ * - **It carries the draft's id, never the draft.** A thirty-entry calendar must not be thirty captions.
+ */
+export type CampaignCalendarEntry = {
+  readonly postDraftId: PostDraftId;
+  /** Short, single-line. For recognising the post, not for reading it. */
+  readonly excerpt: string;
+  readonly scheduledAt: string;
+  readonly platformId: PlatformId;
+  readonly state: PublishTargetStatus["state"];
 };
 
 /**
@@ -276,22 +387,69 @@ export interface ContentService {
     },
   ): Promise<PostDraft>;
 
+  /** `not_found` for another tenant's campaign, for the same reason as `getDraft`. */
   getCampaign(context: ExecutionContext, input: { readonly id: CampaignId }): Promise<Campaign>;
 
   listCampaigns(
     context: ExecutionContext,
-    input: { readonly limit: number; readonly cursor?: string },
-  ): Promise<Page<Campaign>>;
+    input: {
+      readonly status?: CampaignStatus;
+      readonly limit: number;
+      readonly cursor?: string;
+    },
+  ): Promise<Page<CampaignSummary>>;
 
-  upsertCampaign(
+  /**
+   * A campaign's content calendar: its posts and when each destination is due.
+   *
+   * Separate from `listDrafts` because the question is different — "what is going out, and when" rather
+   * than "which drafts exist" — and because the entries are per *destination*, so a post to three
+   * channels is three rows with three states.
+   */
+  getCampaignCalendar(
+    context: ExecutionContext,
+    input: { readonly id: CampaignId; readonly limit: number; readonly cursor?: string },
+  ): Promise<Page<CampaignCalendarEntry>>;
+
+  /**
+   * Create a campaign.
+   *
+   * Separate from `updateCampaign` rather than one upsert. `name`, `theme`, `cadence` and both dates are
+   * `NOT NULL` in the store, so a create must require them — while an update must be sparse. One
+   * signature cannot be both without either breaking a goal-only edit or admitting a nameless campaign.
+   */
+  createCampaign(
     context: ExecutionContext,
     input: {
       readonly idempotencyKey: ServiceIdempotencyKey;
-      readonly id?: CampaignId;
       readonly name: string;
+      readonly theme: string;
+      readonly startsOn: CalendarDate;
+      readonly endsOn: CalendarDate;
+      readonly cadence: CampaignCadence;
+      readonly channels: readonly PlatformId[];
       readonly goal?: string;
-      readonly startsAt?: string;
-      readonly endsAt?: string;
+      readonly brief?: string;
+      readonly tone?: string;
+      readonly mode?: CampaignMode;
+      readonly mediaType?: CampaignMediaType;
+    },
+  ): Promise<Campaign>;
+
+  /**
+   * Apply a sparse patch.
+   *
+   * **Must reject `endsOn` earlier than the stored `startsOn` with `invalid_input`.** The store has
+   * `CHECK (ends_on >= starts_on)`, and a caller changing only one of the two has no access to the
+   * other — so the tool validates the pair when it has both and this is the only place the one-sided
+   * case can be caught. Left to the constraint, it would reach the model as a raw violation string.
+   */
+  updateCampaign(
+    context: ExecutionContext,
+    input: {
+      readonly idempotencyKey: ServiceIdempotencyKey;
+      readonly id: CampaignId;
+      readonly patch: CampaignPatch;
     },
   ): Promise<Campaign>;
 }

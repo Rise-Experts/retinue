@@ -30,6 +30,8 @@ all. Three further things about their shape decided the seam:
 |---|---|---|
 | `posts` (#115) | `list_post_drafts`, `get_post_draft` | `read` |
 | | `create_post_draft`, `update_post_draft`, `duplicate_post_draft` | `internal-write` |
+| `campaigns` (#116) | `list_campaigns`, `get_campaign`, `get_campaign_calendar` | `read` |
+| | `create_campaign`, `update_campaign` | `internal-write` |
 
 Three things about the Posts tools generalise to every category that follows:
 
@@ -45,10 +47,21 @@ Three things about the Posts tools generalise to every category that follows:
   `details.remedy = "duplicate-then-edit"` so the assistant can offer the recovery instead of
   reporting a dead end.
 
-Nothing in the Posts category can publish: every capability delegates to `ContentService` and none is
+Nothing in either category can publish: every capability delegates to `ContentService` and none is
 classified `external-write`. That guarantee holds only while the publishing tools (#119) *are*
 classified `external-write` — ShareFlow creates an assistant-authored post **approved**, deliberately,
 because the human-in-the-loop confirmation on publish is the gate rather than a review queue.
+
+Two more from Campaigns:
+
+- **`plannedPostCount` is returned, never computed here.** The store caps a fan-out at 31 posts, so a
+  daily campaign over a year produces 31 — and an assistant that inferred the count from the dates
+  would report 365. The field exists so the cap is visible; recomputing it locally would duplicate the
+  logic it exists to expose.
+- **No paid operations, and the catalog is pinned by a test.** ShareFlow has no ad account, spend or
+  boost anywhere, so there is nothing to withhold. What is worth recording is what would have to be
+  true before there were: an ad spend moves money out of the tenant's account, so it is an
+  `external-write` behind the approval gate, not a campaign edit with a budget field.
 
 ## Layout
 
@@ -85,8 +98,8 @@ stops the process starting, rather than producing a confusing catalog on someone
 
 ## Status
 
-The seam and the scaffolding (#114); the Posts category (#115). Campaigns, accounts, media,
-publishing, engagement, research and analytics land in #116–#125.
+The seam and the scaffolding (#114); Posts (#115); Campaigns (#116). Accounts, media, publishing,
+engagement, research and analytics land in #117–#125.
 
 `npm test` in this workspace runs `tsc -b` first. That is deliberate: this package value-imports
 `@agentkit/backend`, whose entry point is `dist/`, so `vitest run` on its own tests whatever was last

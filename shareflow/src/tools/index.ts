@@ -106,4 +106,5 @@ export const createShareFlowToolProvider = (input: {
 };
 
 export * from "./posts.js";
+export * from "./campaigns.js";
 
