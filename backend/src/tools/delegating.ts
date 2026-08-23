@@ -31,7 +31,7 @@ import type { ApprovalGate } from "../hitl/service.js";
 import { toPlatformError } from "../runtime/retry.js";
 import { defineTool, type ToolSpec } from "./define.js";
 import { zodishValidator, type SchemaValidator } from "./registry.js";
-import type { Tool, ToolEffect } from "./index.js";
+import type { ShadowRecorder, Tool, ToolEffect } from "./index.js";
 
 /** Effects that require an approval decision before the side effect happens. */
 const GATED_EFFECTS: ReadonlySet<ToolEffect> = new Set(["external-write", "destructive"]);
@@ -84,35 +84,6 @@ export type DelegateDetails = {
    */
   readonly idempotencyKey: IdempotencyKey;
 };
-
-/**
- * What a shadow run records instead of doing.
- *
- * A port rather than a store, because what "recording" means differs by deployment: a parity harness wants
- * it in memory, a migration wants it durable and comparable to the old runtime's output.
- */
-export type SuppressedWrite = {
-  readonly runId?: string;
-  readonly toolName: string;
-  /** The function that would have been called. */
-  readonly delegatesTo: string;
-  readonly effect: ToolEffect;
-  /** Validated input — what would have been sent. */
-  readonly input: unknown;
-  readonly idempotencyKey: IdempotencyKey;
-  /**
-   * Whether this action would have required a human's approval.
-   *
-   * Captured because suppression happens *before* the approval gate — a shadow run must not ask someone to
-   * approve something that will not happen, since that teaches them approving is meaningless. Recording it
-   * keeps the fact the parity report wants without asking the question.
-   */
-  readonly wouldRequireApproval: boolean;
-};
-
-export interface ShadowRecorder {
-  record(context: ExecutionContext, write: SuppressedWrite): Promise<void> | void;
-}
 
 export type DelegatingToolDeps = {
   readonly authorization: AuthorizationPolicy;

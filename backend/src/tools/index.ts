@@ -9,6 +9,7 @@
 import type { ExecutionContext } from "../core/context.js";
 import type { PlatformError } from "../core/errors.js";
 import type { BlobRef } from "../core/ids.js";
+import type { IdempotencyKey } from "../idempotency/index.js";
 
 /**
  * Effect classification. This drives the approval policy, so an unknown effect is
@@ -95,6 +96,40 @@ export type ToolExecutionInput = {
 export interface Tool<T = unknown> {
   readonly descriptor: ToolDescriptor;
   execute(input: ToolExecutionInput): Promise<ToolResult<T>>;
+}
+
+/**
+ * What a shadow run records instead of doing.
+ *
+ * A port rather than a store, because what "recording" means differs by deployment: a parity harness wants
+ * it in memory, a migration wants it durable and comparable to the old runtime's output.
+ *
+ * Here rather than in `delegating.ts` because **two layers suppress**: the registry (which covers every
+ * tool) and the delegating envelope (which covers the direct-execute path). One definition, for the reason
+ * #113's duplicate `toPlatformError` had to be collapsed — two would drift, and a recorder the two layers
+ * disagreed about would under-report exactly the writes it exists to catch.
+ */
+export type SuppressedWrite = {
+  readonly runId?: string;
+  readonly toolName: string;
+  /** The function that would have been called. */
+  readonly delegatesTo: string;
+  readonly effect: ToolEffect;
+  /** Validated input — what would have been sent. */
+  readonly input: unknown;
+  readonly idempotencyKey: IdempotencyKey;
+  /**
+   * Whether this action would have required a human's approval.
+   *
+   * Captured because suppression happens *before* the approval gate — a shadow run must not ask someone to
+   * approve something that will not happen, since that teaches them approving is meaningless. Recording it
+   * keeps the fact the parity report wants without asking the question.
+   */
+  readonly wouldRequireApproval: boolean;
+};
+
+export interface ShadowRecorder {
+  record(context: ExecutionContext, write: SuppressedWrite): Promise<void> | void;
 }
 
 /**

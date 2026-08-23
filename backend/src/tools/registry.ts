@@ -25,6 +25,7 @@ import type { BlobStore } from "../persistence/index.js";
 import { META_TOOL_DESCRIPTOR_LIST } from "./meta-tools.js";
 import type {
   OneTimeApprovalRef,
+  ShadowRecorder,
   Tool,
   ToolCatalogEntry,
   ToolDescriptor,
@@ -100,6 +101,18 @@ export type ToolRegistryConfig = {
   /** Results whose JSON exceeds this are spilled to `blobs` and referenced. Default 8 KiB. */
   readonly maxInlineOutputBytes?: number;
   readonly validator?: SchemaValidator;
+  /**
+   * Where a shadow run's suppressed writes go (#126).
+   *
+   * Here as well as on the delegating envelope, and the registry's is the one that matters. #126 put
+   * suppression only in the envelope, which covers **delegating tools only** — so a gated tool that is not
+   * one, every MCP-imported external write included, reached its own `execute` and performed a real write
+   * in a shadow run. That is a bigger hole than the missing parity record the approval-loop work found.
+   *
+   * Required when the run says it is shadow: `context.shadow === true` with no recorder is refused rather
+   * than performed, the same fail-closed rule as the envelope's.
+   */
+  readonly shadow?: ShadowRecorder;
 };
 
 export interface ToolRegistry {
@@ -167,6 +180,46 @@ export const createToolRegistry = (config: ToolRegistryConfig): ToolRegistry => 
       const d = tool.descriptor;
       // Re-authorize at execution even though it was discoverable earlier.
       await assertToolAuthorized(config.authorization, context, { name: d.name, category: d.category });
+
+      // Shadow mode, and **before** the approval gate (#126).
+      //
+      // Before it for the reason #126 gave: a shadow run must not ask a human to approve something that
+      // will not happen, because that teaches people approving is meaningless. And *here* rather than only
+      // in the envelope, because the envelope covers delegating tools and this covers every tool — an
+      // MCP-imported external write is gated, is not a delegating tool, and would otherwise execute for
+      // real in a shadow run.
+      //
+      // Suppressed on the effect, not on the approval policy: a `destructive` tool whose policy someone
+      // set to `never` is still something a shadow run must not do.
+      if (context.shadow === true && (d.effect === "external-write" || d.effect === "destructive")) {
+        if (!config.shadow)
+          return {
+            ok: false,
+            error: {
+              code: "capability_unavailable",
+              message: `Tool ${d.name} is a ${d.effect} and this run is in shadow mode with no recorder configured`,
+              retryable: false,
+            },
+          };
+        // Validated first, so what is recorded is what would have been sent rather than what the model
+        // typed. The gate has not run, so this is the earliest point the input is trustworthy.
+        const shadowValidated = validator.validate(d.inputSchema, input.input);
+        if (!shadowValidated.ok)
+          return { ok: false, error: invalidInput(`Invalid input for ${d.name}: ${shadowValidated.message}`) };
+        await config.shadow.record(context, {
+          ...(context.runId === undefined ? {} : { runId: context.runId }),
+          toolName: d.name,
+          // A non-delegating tool wraps nothing, and saying so is more useful than an empty string.
+          delegatesTo: d.delegatesTo ?? `${d.name} (not a delegating tool)`,
+          effect: d.effect,
+          input: shadowValidated.value,
+          idempotencyKey: (input.idempotencyKey ?? `shadow:${d.name}`) as never,
+          wouldRequireApproval: d.approvalPolicy !== "never",
+        });
+        // Not stored under the idempotency key: a suppressed call must not become the cached answer for a
+        // later real one.
+        return { ok: true, data: { suppressed: true, reason: "shadow-mode", wouldHaveCalled: d.name } };
+      }
 
       // Approval gate: a policy-classified tool cannot be executed directly without a standing grant.
       // Fail CLOSED — if no approval check is wired, a policy/always tool (e.g. every MCP external

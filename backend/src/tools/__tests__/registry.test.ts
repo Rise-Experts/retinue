@@ -249,3 +249,177 @@ describe("execute_tool — re-auth, validation, idempotency, spill", () => {
     expect(full).toMatchObject({ ok: true, data: { blob: "x".repeat(50_000) } });
   });
 });
+
+/**
+ * Shadow suppression at the registry (#126, fixed after the approval-loop work found the ordering).
+ *
+ * The test that matters here uses a tool that is **not** a delegating tool. #126 put suppression only in
+ * the delegating envelope, so a gated tool without one — every MCP-imported external write — reached its
+ * own `execute` and performed a real write in a shadow run. A test using a delegating tool would have
+ * passed against the broken version.
+ */
+describe("shadow mode", () => {
+  const gatedPlainTool = (effect: "external-write" | "destructive" | "internal-write") => {
+    let calls = 0;
+    const tool: Tool = {
+      descriptor: {
+        name: "mcp__acme__publish",
+        label: "Publish",
+        description: "publishes, irreversibly",
+        category: "imported",
+        inputSchema: {},
+        outputSchema: {},
+        effect,
+        approvalPolicy: effect === "internal-write" ? "never" : "always",
+        requiresIdempotencyKey: effect !== "internal-write",
+      },
+      async execute() {
+        calls += 1;
+        return { ok: true, data: { published: true } };
+      },
+    };
+    return { tool, calls: () => calls };
+  };
+
+  /** Its own policy, because the file's `policy` allows a fixed set of tool names. */
+  const importedToolPolicy = createAuthorizationPolicy({
+    roles: [{ roleId: "editor", permissions: [], tools: ["mcp__acme__publish"] }],
+  });
+
+  const shadowRegistry = (
+    tool: Tool,
+    recorded: unknown[],
+    options: { withRecorder?: boolean } = {},
+  ) =>
+    createToolRegistry({
+      providers: [{ id: "p", async listTools() { return [tool]; } }],
+      authorization: importedToolPolicy,
+      ...(options.withRecorder === false
+        ? {}
+        : {
+            shadow: {
+              record(_c: unknown, write: unknown) {
+                recorded.push(write);
+              },
+            },
+          }),
+    });
+
+  const shadowCtx = { ...ctx(["editor"]), shadow: true } as ExecutionContext;
+
+  it("suppresses a gated tool that is not a delegating tool", async () => {
+    // The hole #126 left. This tool has no envelope, so nothing else would have stopped it.
+    const recorded: unknown[] = [];
+    const { tool, calls } = gatedPlainTool("external-write");
+    const registry = shadowRegistry(tool, recorded);
+    const result = await registry.execute(shadowCtx, {
+      name: "mcp__acme__publish",
+      input: { draftId: "d1" },
+      idempotencyKey: "k1",
+    });
+    expect(result).toMatchObject({ ok: true, data: { suppressed: true, reason: "shadow-mode" } });
+    expect(calls()).toBe(0);
+    expect(recorded).toEqual([
+      expect.objectContaining({
+        toolName: "mcp__acme__publish",
+        effect: "external-write",
+        // Says so plainly rather than leaving an empty string: this tool wraps nothing.
+        delegatesTo: "mcp__acme__publish (not a delegating tool)",
+        wouldRequireApproval: true,
+      }),
+    ]);
+  });
+
+  it("suppresses a destructive tool whose approval policy someone set to never", async () => {
+    // Keyed on the *effect*, not the policy. A destructive tool nobody gated is still something a shadow
+    // run must not do.
+    const recorded: unknown[] = [];
+    const { tool, calls } = gatedPlainTool("destructive");
+    const relaxed: Tool = { ...tool, descriptor: { ...tool.descriptor, approvalPolicy: "never" } };
+    const result = await shadowRegistry(relaxed, recorded).execute(shadowCtx, {
+      name: "mcp__acme__publish",
+      input: {},
+      idempotencyKey: "k1",
+    });
+    expect(result).toMatchObject({ ok: true, data: { suppressed: true } });
+    expect(calls()).toBe(0);
+    expect(recorded).toHaveLength(1);
+  });
+
+  it("refuses when the run says shadow and nothing can record it", async () => {
+    // Fail closed, same as the envelope: announcing a shadow run with nowhere to record it is not a licence
+    // to publish.
+    const recorded: unknown[] = [];
+    const { tool, calls } = gatedPlainTool("external-write");
+    const registry = shadowRegistry(tool, recorded, { withRecorder: false });
+    expect(
+      await registry.execute(shadowCtx, { name: "mcp__acme__publish", input: {}, idempotencyKey: "k1" }),
+    ).toMatchObject({ ok: false, error: { code: "capability_unavailable" } });
+    expect(calls()).toBe(0);
+  });
+
+  it("leaves an internal write alone", async () => {
+    // docs/07 says shadow execution performs no external *writes*. An internal one still happens.
+    const recorded: unknown[] = [];
+    const { tool, calls } = gatedPlainTool("internal-write");
+    const result = await shadowRegistry(tool, recorded).execute(shadowCtx, {
+      name: "mcp__acme__publish",
+      input: {},
+    });
+    expect(result).toMatchObject({ ok: true, data: { published: true } });
+    expect(calls()).toBe(1);
+    expect(recorded).toEqual([]);
+  });
+
+  it("does not suppress a real run", async () => {
+    const recorded: unknown[] = [];
+    const { tool, calls } = gatedPlainTool("internal-write");
+    await shadowRegistry(tool, recorded).execute(ctx(["editor"]), { name: "mcp__acme__publish", input: {} });
+    expect(calls()).toBe(1);
+    expect(recorded).toEqual([]);
+  });
+
+  it("records the validated input, not what the model typed", async () => {
+    // The gate has not run at this point, so this is the earliest the input is trustworthy — and a parity
+    // report built from unvalidated arguments would compare noise.
+    const recorded: { input: unknown }[] = [];
+    const { tool } = gatedPlainTool("external-write");
+    const normalising: Tool = {
+      ...tool,
+      descriptor: {
+        ...tool.descriptor,
+        inputSchema: {
+          safeParse: (v: unknown) => ({
+            success: true,
+            data: { platform: String((v as { platform: string }).platform).toLowerCase() },
+          }),
+        },
+      },
+    };
+    await shadowRegistry(normalising, recorded).execute(shadowCtx, {
+      name: "mcp__acme__publish",
+      input: { platform: "LinkedIn" },
+      idempotencyKey: "k1",
+    });
+    expect(recorded[0]?.input).toEqual({ platform: "linkedin" });
+  });
+
+  it("rejects invalid input rather than recording it", async () => {
+    const recorded: unknown[] = [];
+    const { tool } = gatedPlainTool("external-write");
+    const strict: Tool = {
+      ...tool,
+      descriptor: {
+        ...tool.descriptor,
+        inputSchema: { safeParse: () => ({ success: false, error: { message: "draftId is required" } }) },
+      },
+    };
+    const result = await shadowRegistry(strict, recorded).execute(shadowCtx, {
+      name: "mcp__acme__publish",
+      input: {},
+      idempotencyKey: "k1",
+    });
+    expect(result).toMatchObject({ ok: false, error: { code: "invalid_input" } });
+    expect(recorded).toEqual([]);
+  });
+});

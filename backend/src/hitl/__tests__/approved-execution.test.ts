@@ -337,6 +337,13 @@ describe("a shadow run asks for nothing", () => {
       authorization,
       idempotency,
       approval: approvals,
+      // The registry suppresses now, and it is the layer that matters: the envelope covers delegating
+      // tools only, so an MCP-imported external write reached its own execute in a shadow run.
+      shadow: {
+        record(_c, write) {
+          recorded.push({ toolName: write.toolName, wouldRequireApproval: write.wouldRequireApproval });
+        },
+      },
     });
     let n = 0;
     const service = createApprovalService({
@@ -356,12 +363,16 @@ describe("a shadow run asks for nothing", () => {
     expect(published).toEqual([]);
     expect(await interactions.findPendingApproval({ tenantId: T, runId: RUN })).toBeNull();
 
-    // The known gap this test pins down rather than papers over: the registry gates before the envelope
-    // suppresses, so the call is refused instead of recorded and is therefore absent from the parity
-    // report. Where suppression belongs relative to the registry's gate is shadow mode's design
-    // decision, not the approval loop's — see the note in `approved-execution.ts`.
-    expect(recorded).toEqual([]);
-    if (outcome.outcome === "result") expect(outcome.result).toMatchObject({ ok: false, error: { code: "approval_required" } });
+    // The gap this test used to pin is closed. Suppression moved to the registry, *before* its gate, for a
+    // reason bigger than the missing parity record: the envelope covers delegating tools only, so a gated
+    // tool that is not one — every MCP-imported external write — reached its own execute and performed a
+    // real write in a shadow run.
+    //
+    // So the call is now recorded rather than refused, and it appears in the parity report where it
+    // belongs.
+    expect(recorded).toEqual([{ toolName: "publish_post", wouldRequireApproval: true }]);
+    if (outcome.outcome === "result")
+      expect(outcome.result).toMatchObject({ ok: true, data: { suppressed: true, reason: "shadow-mode" } });
   });
 });
 

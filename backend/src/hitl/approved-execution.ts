@@ -182,10 +182,13 @@ export const createRunApprovals = (deps: RunApprovalDeps) => {
        * Refusing rather than asking. Nothing executed — the gate already stopped it — so the run is no
        * less safe; it simply does not park a real human decision on a hypothetical action.
        *
-       * **Known gap, not fixed here.** Because the registry gates before the envelope suppresses, a
-       * gated delegating tool called through the registry in a shadow run is refused rather than
-       * recorded, so it is missing from the parity report. Where suppression belongs relative to the
-       * registry's gate is a change to shadow mode's own design, not to the approval loop.
+       * **The gap this guarded is now closed**, and this is belt and braces rather than the mechanism.
+       * Suppression moved into `registry.ts`, *before* its gate — for a reason larger than the missing
+       * parity record: the delegating envelope covers delegating tools only, so a gated tool that is not
+       * one (every MCP-imported external write) reached its own execute in a shadow run. With the registry
+       * suppressing, a gated call in a shadow run no longer refuses here, so this branch is unreachable
+       * through `deps.tools`. It stays as a fail-safe if suppression is ever moved again, and is labelled
+       * as one rather than left looking load-bearing.
        */
       if (ctx.shadow === true) return { outcome: "result", result };
 
