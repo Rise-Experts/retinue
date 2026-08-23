@@ -27,6 +27,7 @@ import {
   rollback,
   type SqlExecutor,
 } from "../adapters/postgres/index.js";
+import { freshPgliteSchema } from "../testing/pglite.js";
 
 const T1 = asId<TenantId>("pg-cfg-t1");
 const T2 = asId<TenantId>("pg-cfg-t2");
@@ -40,8 +41,7 @@ const pglite = (db: PGlite): SqlExecutor => ({
 });
 
 const migrated = async (): Promise<SqlExecutor> => {
-  const sql = pglite(new PGlite());
-  await migrate(sql);
+  const { sql } = await freshPgliteSchema();
   return sql;
 };
 
@@ -83,7 +83,7 @@ describe("migration 0010", () => {
   it("names the body column instructions and keeps description and source", async () => {
     const sql = await migrated();
     const cols = await sql.query<{ column_name: string; data_type: string }>(
-      `SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'skills'`,
+      `SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'skills' AND table_schema = current_schema()`,
     );
     const byName = new Map(cols.map((c) => [c.column_name, c.data_type]));
 
@@ -106,8 +106,10 @@ describe("migration 0010", () => {
     const key = await sql.query<{ column_name: string }>(
       `SELECT kcu.column_name
          FROM information_schema.table_constraints tc
-         JOIN information_schema.key_column_usage kcu ON kcu.constraint_name = tc.constraint_name
-        WHERE tc.table_name = 'skills' AND tc.constraint_type = 'PRIMARY KEY'
+         JOIN information_schema.key_column_usage kcu
+           ON kcu.constraint_name = tc.constraint_name
+          AND kcu.constraint_schema = tc.constraint_schema
+        WHERE tc.table_name = 'skills' AND tc.table_schema = current_schema() AND tc.constraint_type = 'PRIMARY KEY'
         ORDER BY kcu.ordinal_position`,
     );
     // The SPEC's (tenant_id, id, version) would not serve findVersion(name, version) at all.
@@ -117,7 +119,7 @@ describe("migration 0010", () => {
   it("carries no egress_policy or updated_at on mcp_connections", async () => {
     const sql = await migrated();
     const cols = await sql.query<{ column_name: string }>(
-      `SELECT column_name FROM information_schema.columns WHERE table_name = 'mcp_connections'`,
+      `SELECT column_name FROM information_schema.columns WHERE table_name = 'mcp_connections' AND table_schema = current_schema()`,
     );
     const names = new Set(cols.map((c) => c.column_name));
     // The egress policy is a parameter of the store — a deployment-level rule, not per-row data — so
@@ -395,7 +397,7 @@ describe("credentials are references, structurally", () => {
   it("has no column capable of holding a credential value", async () => {
     const sql = await migrated();
     const cols = await sql.query<{ column_name: string }>(
-      `SELECT column_name FROM information_schema.columns WHERE table_name = 'mcp_connections'`,
+      `SELECT column_name FROM information_schema.columns WHERE table_name = 'mcp_connections' AND table_schema = current_schema()`,
     );
     const names = cols.map((c) => c.column_name);
     // Exactly one auth-value column, and its name says reference. A pattern-matching constraint on

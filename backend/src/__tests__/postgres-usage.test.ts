@@ -29,6 +29,7 @@ import {
   rollback,
   type SqlExecutor,
 } from "../adapters/postgres/index.js";
+import { freshPgliteSchema } from "../testing/pglite.js";
 
 const T1 = asId<TenantId>("pg-u-t1");
 const T2 = asId<TenantId>("pg-u-t2");
@@ -62,8 +63,7 @@ const event = (id: string, over: Partial<UsageEvent> = {}): UsageEvent => ({
 
 /** A migrated database with the run usage records reference, plus a transaction scope for AC-2. */
 const seeded = async () => {
-  const base = pglite(new PGlite());
-  await migrate(base);
+  const { sql: base } = await freshPgliteSchema();
   const scope = createTransactionScope(createSingleConnectionOpener(base));
   const sql = scope.scoped(base);
   await createPostgresConversationStore(sql).create({ tenantId: T1, id: C1, title: "thread" });
@@ -79,8 +79,7 @@ const seeded = async () => {
 
 describe("migration 0009", () => {
   it("migrates up, rolls back, and re-migrates", async () => {
-    const sql = pglite(new PGlite());
-    await migrate(sql);
+    const { sql } = await freshPgliteSchema();
     for (const t of ["usage_records", "idempotency_keys"]) await sql.query(`SELECT 1 FROM ${t} LIMIT 1`);
     await rollback(sql);
     await expect(sql.query("SELECT 1 FROM usage_records LIMIT 1")).rejects.toThrow();
@@ -91,7 +90,7 @@ describe("migration 0009", () => {
   it("names the cost column in minor units, not micros, and carries the currency", async () => {
     const { sql } = await seeded();
     const cols = await sql.query<{ column_name: string; data_type: string }>(
-      `SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'usage_records'`,
+      `SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'usage_records' AND table_schema = current_schema()`,
     );
     const byName = new Map(cols.map((c) => [c.column_name, c.data_type]));
 
@@ -111,7 +110,7 @@ describe("migration 0009", () => {
   it("carries no scope or expires_at on idempotency_keys, because nothing could fill them", async () => {
     const { sql } = await seeded();
     const cols = await sql.query<{ column_name: string }>(
-      `SELECT column_name FROM information_schema.columns WHERE table_name = 'idempotency_keys'`,
+      `SELECT column_name FROM information_schema.columns WHERE table_name = 'idempotency_keys' AND table_schema = current_schema()`,
     );
     const names = new Set(cols.map((c) => c.column_name));
     // `put({tenantId, key, result})` takes no TTL and the port has no prune method. An always-NULL

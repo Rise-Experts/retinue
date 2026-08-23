@@ -13,6 +13,7 @@ import { asId } from "../core/ids.js";
 import type { MessageId, MessagePartId, RunId, TenantId, ToolCallId } from "../core/ids.js";
 import type { RunEvent } from "../core/events.js";
 import { createPostgresRunEventLog, migrate, rollback, type SqlExecutor } from "../adapters/postgres/index.js";
+import { freshPgliteSchema } from "../testing/pglite.js";
 
 const T1 = asId<TenantId>("pg-log-t1");
 const RUN = asId<RunId>("pg-log-r1");
@@ -25,8 +26,7 @@ const pglite = (db: PGlite): SqlExecutor => ({
 });
 
 const migrated = async (): Promise<SqlExecutor> => {
-  const sql = pglite(new PGlite());
-  await migrate(sql);
+  const { sql } = await freshPgliteSchema();
   return sql;
 };
 
@@ -44,15 +44,14 @@ describe("run_events migration 0003", () => {
       `SELECT kcu.column_name
          FROM information_schema.table_constraints tc
          JOIN information_schema.key_column_usage kcu ON kcu.constraint_name = tc.constraint_name
-        WHERE tc.table_name = 'run_events' AND tc.constraint_type = 'PRIMARY KEY'
+        WHERE tc.table_name = 'run_events' AND tc.table_schema = current_schema() AND tc.constraint_type = 'PRIMARY KEY'
         ORDER BY kcu.ordinal_position`,
     );
     expect(pk.map((r) => r.column_name)).toEqual(["tenant_id", "run_id", "sequence"]);
   });
 
   it("migrates up, rolls back, and re-migrates", async () => {
-    const sql = pglite(new PGlite());
-    await migrate(sql);
+    const { sql } = await freshPgliteSchema();
     await sql.query("SELECT 1 FROM run_events LIMIT 1");
     await rollback(sql);
     await expect(sql.query("SELECT 1 FROM run_events LIMIT 1")).rejects.toThrow();
@@ -181,9 +180,7 @@ describe("run_events index usage (EXPLAIN)", () => {
  */
 describe("append inside the caller's transaction", () => {
   it("leaves no event behind when the transaction rolls back", async () => {
-    const db = new PGlite();
-    const sql = pglite(db);
-    await migrate(sql);
+    const { db, sql } = await freshPgliteSchema();
     const log = createPostgresRunEventLog(sql);
 
     await db.query("BEGIN");
@@ -198,9 +195,7 @@ describe("append inside the caller's transaction", () => {
   });
 
   it("commits the event when the transaction commits", async () => {
-    const db = new PGlite();
-    const sql = pglite(db);
-    await migrate(sql);
+    const { db, sql } = await freshPgliteSchema();
     const log = createPostgresRunEventLog(sql);
 
     await db.query("BEGIN");

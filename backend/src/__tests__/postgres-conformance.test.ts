@@ -50,6 +50,7 @@ import { asId } from "../core/ids.js";
 import type { AgentId, ConversationId, MessageId, MessagePartId, SkillId } from "../core/ids.js";
 import type { AgentManifest } from "../agents/index.js";
 import { ADAPTER_COVERAGE } from "../testing/conformance/index.js";
+import { freshPgliteSchema } from "../testing/pglite.js";
 import { conversationStoreConformance } from "../testing/conformance/conversation-store.js";
 import { runStoreConformance } from "../testing/conformance/run-store.js";
 import { runEventLogConformance } from "../testing/conformance/run-event-log.js";
@@ -161,13 +162,19 @@ const freshDatabase = (): { sql: SqlExecutor; runner: TransactionRunner } => {
   let ready: Promise<{ sql: SqlExecutor; runner: TransactionRunner }> | null = null;
   const init = () =>
     (ready ??= (async () => {
-      const { base, opener } = PG_URL
-        ? await serverDatabase()
-        : (() => {
-            const executor = pgliteExecutor(new PGlite());
-            return { base: executor, opener: createSingleConnectionOpener(executor) };
+      // PGlite path: a fresh *schema* on a shared instance rather than a fresh instance. Boot is
+      // 432ms and migrating is 20ms, so booting per test was ~95% overhead — see testing/pglite.ts.
+      const { base, opener, migrated } = PG_URL
+        ? { ...(await serverDatabase()), migrated: false }
+        : await (async () => {
+            const created = await freshPgliteSchema();
+            return {
+              base: created.sql,
+              opener: createSingleConnectionOpener(created.sql),
+              migrated: true,
+            };
           })();
-      await migrate(base);
+      if (!migrated) await migrate(base);
       const scope = createTransactionScope(opener);
       return { sql: scope.scoped(base), runner: scope.runner };
     })());

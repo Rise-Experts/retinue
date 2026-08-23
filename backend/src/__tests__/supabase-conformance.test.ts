@@ -29,6 +29,7 @@ import { asId } from "../core/ids.js";
 import type { AgentId, ConversationId, MessageId, MessagePartId, SkillId } from "../core/ids.js";
 import type { AgentManifest } from "../agents/index.js";
 import { ADAPTER_COVERAGE, REGISTERED_PORTS } from "../testing/conformance/index.js";
+import { freshPgliteSchema } from "../testing/pglite.js";
 import { conversationStoreConformance } from "../testing/conformance/conversation-store.js";
 import { runStoreConformance } from "../testing/conformance/run-store.js";
 import { runEventLogConformance } from "../testing/conformance/run-event-log.js";
@@ -58,13 +59,17 @@ const pgliteSql = (db: PGlite): SqlExecutor => ({
   query: (text, params) => db.query(text, params ? [...params] : undefined).then((r) => r.rows as never),
 });
 
-/** A migrated database plus its transaction runner, lazily so store creation stays synchronous. */
+/**
+ * A migrated database plus its transaction runner, lazily so store creation stays synchronous.
+ *
+ * A fresh *schema* on a shared PGlite instance rather than a fresh instance: boot is 432ms and
+ * migrating is 20ms, so a per-test instance was almost entirely overhead. See testing/pglite.ts.
+ */
 const freshDatabase = (): { sql: SqlExecutor; runner: TransactionRunner } => {
   let ready: Promise<{ sql: SqlExecutor; runner: TransactionRunner }> | null = null;
   const init = () =>
     (ready ??= (async () => {
-      const base = pgliteSql(new PGlite());
-      await migrate(base);
+      const { sql: base } = await freshPgliteSchema();
       const scope = createTransactionScope(createSingleConnectionOpener(base));
       return { sql: scope.scoped(base), runner: scope.runner };
     })());

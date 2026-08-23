@@ -20,6 +20,7 @@ import {
   rollback,
   type SqlExecutor,
 } from "../adapters/postgres/index.js";
+import { freshPgliteSchema } from "../testing/pglite.js";
 import { DEFAULT_SESSION_STATE_MAX_BYTES } from "../persistence/index.js";
 
 const T1 = asId<TenantId>("pg-ss-t1");
@@ -35,8 +36,7 @@ const pglite = (db: PGlite): SqlExecutor => ({
 });
 
 const seeded = async (): Promise<SqlExecutor> => {
-  const sql = pglite(new PGlite());
-  await migrate(sql);
+  const { sql } = await freshPgliteSchema();
   await createPostgresConversationStore(sql).create({ tenantId: T1, id: C1, title: "thread" });
   return sql;
 };
@@ -45,7 +45,7 @@ describe("migration 0006", () => {
   it("stores the summary boundary as a message id, not a timestamp", async () => {
     const sql = await seeded();
     const cols = await sql.query<{ column_name: string; data_type: string }>(
-      `SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'thread_summaries'`,
+      `SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'thread_summaries' AND table_schema = current_schema()`,
     );
     const byName = new Map(cols.map((c) => [c.column_name, c.data_type]));
     // The SPEC had `covers_up_to timestamptz`. A summary covers history up to a specific *message*;
@@ -58,8 +58,7 @@ describe("migration 0006", () => {
   });
 
   it("migrates up, rolls back, and re-migrates", async () => {
-    const sql = pglite(new PGlite());
-    await migrate(sql);
+    const { sql } = await freshPgliteSchema();
     for (const t of ["session_state", "thread_summaries"]) await sql.query(`SELECT 1 FROM ${t} LIMIT 1`);
     await rollback(sql);
     await expect(sql.query("SELECT 1 FROM session_state LIMIT 1")).rejects.toThrow();
@@ -81,8 +80,7 @@ describe("migration 0006", () => {
   });
 
   it("refuses state for a conversation that does not exist", async () => {
-    const sql = pglite(new PGlite());
-    await migrate(sql);
+    const { sql } = await freshPgliteSchema();
     await expect(
       createPostgresSessionStateStore(sql).put({
         tenantId: T1,
@@ -149,9 +147,7 @@ describe("session state round-trip and bounds", () => {
  */
 describe("session state inside the caller's transaction", () => {
   it("leaves nothing behind when the transaction rolls back", async () => {
-    const db = new PGlite();
-    const sql = pglite(db);
-    await migrate(sql);
+    const { db, sql } = await freshPgliteSchema();
     await createPostgresConversationStore(sql).create({ tenantId: T1, id: C1, title: "t" });
     const store = createPostgresSessionStateStore(sql);
 

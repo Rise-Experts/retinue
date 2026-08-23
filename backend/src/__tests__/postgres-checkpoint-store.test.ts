@@ -31,6 +31,7 @@ import {
   rollback,
   type SqlExecutor,
 } from "../adapters/postgres/index.js";
+import { freshPgliteSchema } from "../testing/pglite.js";
 import { emptyCheckpoint, type RunCheckpoint } from "../runtime/checkpoint.js";
 import { createDurableWorker, deriveRunMessageId, type AgentEngine } from "../runtime/worker.js";
 
@@ -48,8 +49,7 @@ const pglite = (db: PGlite): SqlExecutor => ({
 });
 
 const migrated = async (): Promise<SqlExecutor> => {
-  const sql = pglite(new PGlite());
-  await migrate(sql);
+  const { sql } = await freshPgliteSchema();
   return sql;
 };
 
@@ -69,7 +69,7 @@ describe("checkpoints migration 0004", () => {
       `SELECT kcu.column_name
          FROM information_schema.table_constraints tc
          JOIN information_schema.key_column_usage kcu ON kcu.constraint_name = tc.constraint_name
-        WHERE tc.table_name = 'checkpoints' AND tc.constraint_type = 'PRIMARY KEY'
+        WHERE tc.table_name = 'checkpoints' AND tc.table_schema = current_schema() AND tc.constraint_type = 'PRIMARY KEY'
         ORDER BY kcu.ordinal_position`,
     );
     // The SPEC asked for (tenant_id, run_id, sequence). `save` overwrites and `latest` is the only
@@ -78,8 +78,7 @@ describe("checkpoints migration 0004", () => {
   });
 
   it("migrates up, rolls back, and re-migrates", async () => {
-    const sql = pglite(new PGlite());
-    await migrate(sql);
+    const { sql } = await freshPgliteSchema();
     await sql.query("SELECT 1 FROM checkpoints LIMIT 1");
     await rollback(sql);
     await expect(sql.query("SELECT 1 FROM checkpoints LIMIT 1")).rejects.toThrow();

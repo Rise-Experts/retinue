@@ -16,6 +16,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { asId } from "../core/ids.js";
 import type { AgentId, ConversationId, RunId, TenantId } from "../core/ids.js";
 import { createPostgresRunStore, migrate, rollback, type SqlExecutor } from "../adapters/postgres/index.js";
+import { freshPgliteSchema } from "../testing/pglite.js";
 
 const T1 = asId<TenantId>("pg-run-t1");
 const CONVO = asId<ConversationId>("pg-run-c1");
@@ -29,8 +30,7 @@ const pglite = (db: PGlite): SqlExecutor => ({
 });
 
 const migrated = async (): Promise<SqlExecutor> => {
-  const sql = pglite(new PGlite());
-  await migrate(sql);
+  const { sql } = await freshPgliteSchema();
   return sql;
 };
 
@@ -47,7 +47,7 @@ describe("runs migration 0002", () => {
   it("creates the table with the columns the Run type needs", async () => {
     const sql = await migrated();
     const cols = await sql.query<{ column_name: string; is_nullable: string }>(
-      `SELECT column_name, is_nullable FROM information_schema.columns WHERE table_name = 'runs'`,
+      `SELECT column_name, is_nullable FROM information_schema.columns WHERE table_name = 'runs' AND table_schema = current_schema()`,
     );
     const names = cols.map((c) => c.column_name).sort();
     expect(names).toEqual(
@@ -73,13 +73,12 @@ describe("runs migration 0002", () => {
   });
 
   it("migrates up, rolls back (table and indexes gone), and re-migrates", async () => {
-    const sql = pglite(new PGlite());
-    await migrate(sql);
+    const { sql } = await freshPgliteSchema();
     await sql.query("SELECT 1 FROM runs LIMIT 1");
     await rollback(sql);
     await expect(sql.query("SELECT 1 FROM runs LIMIT 1")).rejects.toThrow();
     const idx = await sql.query<{ indexname: string }>(
-      `SELECT indexname FROM pg_indexes WHERE tablename = 'runs'`,
+      `SELECT indexname FROM pg_indexes WHERE tablename = 'runs' AND schemaname = current_schema()`,
     );
     expect(idx).toHaveLength(0);
     await migrate(sql); // reversible: up again works

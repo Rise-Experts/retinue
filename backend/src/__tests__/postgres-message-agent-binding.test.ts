@@ -29,6 +29,7 @@ import {
   rollback,
   type SqlExecutor,
 } from "../adapters/postgres/index.js";
+import { freshPgliteSchema } from "../testing/pglite.js";
 
 const T1 = asId<TenantId>("pg-msg-t1");
 const T2 = asId<TenantId>("pg-msg-t2");
@@ -42,8 +43,7 @@ const pglite = (db: PGlite): SqlExecutor => ({
 });
 
 const migrated = async (): Promise<SqlExecutor> => {
-  const sql = pglite(new PGlite());
-  await migrate(sql);
+  const { sql } = await freshPgliteSchema();
   return sql;
 };
 
@@ -80,7 +80,7 @@ describe("migration 0005", () => {
       `SELECT kcu.column_name
          FROM information_schema.table_constraints tc
          JOIN information_schema.key_column_usage kcu ON kcu.constraint_name = tc.constraint_name
-        WHERE tc.table_name = 'agents' AND tc.constraint_type = 'PRIMARY KEY'
+        WHERE tc.table_name = 'agents' AND tc.table_schema = current_schema() AND tc.constraint_type = 'PRIMARY KEY'
         ORDER BY kcu.ordinal_position`,
     );
     // The SPEC gave no primary key at all; findByVersion({agentId, version}) implies this one.
@@ -90,7 +90,7 @@ describe("migration 0005", () => {
   it("stores the binding policy the SPEC omitted", async () => {
     const sql = await migrated();
     const cols = await sql.query<{ column_name: string }>(
-      `SELECT column_name FROM information_schema.columns WHERE table_name = 'conversation_bindings'`,
+      `SELECT column_name FROM information_schema.columns WHERE table_name = 'conversation_bindings' AND table_schema = current_schema()`,
     );
     expect(cols.map((c) => c.column_name)).toContain("agent_version_policy");
   });
@@ -121,8 +121,7 @@ describe("migration 0005", () => {
   });
 
   it("migrates up, rolls back, and re-migrates", async () => {
-    const sql = pglite(new PGlite());
-    await migrate(sql);
+    const { sql } = await freshPgliteSchema();
     for (const t of ["messages", "agents", "conversation_bindings"]) {
       await sql.query(`SELECT 1 FROM ${t} LIMIT 1`);
     }

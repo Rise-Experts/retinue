@@ -24,6 +24,7 @@ import {
   rollback,
   type SqlExecutor,
 } from "../adapters/postgres/index.js";
+import { freshPgliteSchema } from "../testing/pglite.js";
 
 const T1 = asId<TenantId>("pg-hitl-t1");
 const C1 = asId<ConversationId>("pg-hitl-c1");
@@ -62,9 +63,7 @@ const approval = (id: string, over: Partial<PendingApproval> = {}): PendingAppro
 
 /** A migrated PGlite database with the run the interaction foreign keys require. */
 const seeded = async (): Promise<{ db: PGlite; sql: SqlExecutor }> => {
-  const db = new PGlite();
-  const sql = pglite(db);
-  await migrate(sql);
+  const { db, sql } = await freshPgliteSchema();
   await createPostgresConversationStore(sql).create({ tenantId: T1, id: C1, title: "thread" });
   await createPostgresRunStore(sql).create({
     tenantId: T1,
@@ -78,8 +77,7 @@ const seeded = async (): Promise<{ db: PGlite; sql: SqlExecutor }> => {
 
 describe("migration 0008", () => {
   it("migrates up, rolls back, and re-migrates", async () => {
-    const sql = pglite(new PGlite());
-    await migrate(sql);
+    const { sql } = await freshPgliteSchema();
     for (const t of ["interaction_questions", "interaction_approvals", "approval_grants"]) {
       await sql.query(`SELECT 1 FROM ${t} LIMIT 1`);
     }
@@ -93,7 +91,7 @@ describe("migration 0008", () => {
     const { sql } = await seeded();
     const cols = await sql.query<{ table_name: string; column_name: string }>(
       `SELECT table_name, column_name FROM information_schema.columns
-        WHERE table_name IN ('interaction_questions', 'interaction_approvals')`,
+        WHERE table_name IN ('interaction_questions', 'interaction_approvals') AND table_schema = current_schema()`,
     );
     const names = new Set(cols.map((c) => `${c.table_name}.${c.column_name}`));
     // The SPEC proposed both. Neither PendingQuestion nor PendingApproval carries a conversation id,
@@ -109,7 +107,7 @@ describe("migration 0008", () => {
   it("keeps the idempotency key on approvals, where the field actually lives", async () => {
     const { sql } = await seeded();
     const cols = await sql.query<{ column_name: string }>(
-      `SELECT column_name FROM information_schema.columns WHERE table_name = 'approval_grants'`,
+      `SELECT column_name FROM information_schema.columns WHERE table_name = 'approval_grants' AND table_schema = current_schema()`,
     );
     const names = new Set(cols.map((c) => c.column_name));
     // ApprovalGrant has none of these. The SPEC listed them all; a grant is a standing permission,
@@ -268,7 +266,7 @@ describe("durability across a new store instance", () => {
     // audit trail cannot be stored. A nullable decided_by column would always be NULL — an audit
     // column that reads as an audit trail while holding nothing. See the open question on #99.
     const cols = await sql.query<{ column_name: string }>(
-      `SELECT column_name FROM information_schema.columns WHERE table_name = 'interaction_approvals'`,
+      `SELECT column_name FROM information_schema.columns WHERE table_name = 'interaction_approvals' AND table_schema = current_schema()`,
     );
     expect(cols.map((c) => c.column_name)).not.toContain("decided_by");
   });

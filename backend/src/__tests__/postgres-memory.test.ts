@@ -24,6 +24,7 @@ import {
   rollback,
   type SqlExecutor,
 } from "../adapters/postgres/index.js";
+import { freshPgliteSchema } from "../testing/pglite.js";
 
 const T1 = asId<TenantId>("pg-mem-t1");
 const T2 = asId<TenantId>("pg-mem-t2");
@@ -37,8 +38,7 @@ const pglite = (db: PGlite): SqlExecutor => ({
 });
 
 const migrated = async (): Promise<SqlExecutor> => {
-  const sql = pglite(new PGlite());
-  await migrate(sql);
+  const { sql } = await freshPgliteSchema();
   return sql;
 };
 
@@ -55,7 +55,7 @@ describe("migration 0011", () => {
   it("carries the four columns the SPEC omitted, and not the one it invented", async () => {
     const sql = await migrated();
     const cols = await sql.query<{ column_name: string }>(
-      `SELECT column_name FROM information_schema.columns WHERE table_name = 'principal_memory'`,
+      `SELECT column_name FROM information_schema.columns WHERE table_name = 'principal_memory' AND table_schema = current_schema()`,
     );
     const names = new Set(cols.map((c) => c.column_name));
 
@@ -75,7 +75,7 @@ describe("migration 0011", () => {
   it("stores the blob value, not a pointer — because that is what the port returns", async () => {
     const sql = await migrated();
     const cols = await sql.query<{ column_name: string; data_type: string }>(
-      `SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'blobs'`,
+      `SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'blobs' AND table_schema = current_schema()`,
     );
     const byName = new Map(cols.map((c) => [c.column_name, c.data_type]));
     // `get(ref)` must hand back what `put(value)` was given, so a metadata-and-pointer row could not
