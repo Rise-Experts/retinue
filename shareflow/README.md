@@ -69,6 +69,24 @@ Two more from Campaigns:
   daily campaign over a year produces 31 — and an assistant that inferred the count from the dates
   would report 365. The field exists so the cap is visible; recomputing it locally would duplicate the
   logic it exists to expose.
+From the migrated skills (#122):
+
+- **No limit value survives in a skill body.** Character ceilings, hashtag counts and per-platform media
+  rules are `platform_rules` — workspace-overridable — so restating them in prose creates a second source
+  that can disagree with the tenant's configuration, and the model would work from the wrong one with no
+  error anywhere. The guidance became "ask the tool", which the original already said was the reliable
+  path.
+- **Three things the originals claimed are no longer true**, and were changed rather than shipped:
+  confirmation is *not* automatic (a gated call returns `approval_required`); "a published post cannot be
+  edited" is too narrow (any destination succeeding is enough); and `captionLength` arithmetic was
+  replaced by a boolean in #115 precisely because a model is bad at that comparison.
+- **No skill names a tool that does not exist.** A loaded skill instructing a call into nothing is worse
+  than an absent skill: the model follows it and fails. The two artifact skills are migrated at
+  `status: "draft"` — present and versioned, kept out of discovery until REQ-028 lands.
+- **The always-on rule a skill asked for.** `research-and-citation` says the untrusted-content rule
+  "must never depend on this skill being loaded". It now does not: it is a `base-policy` section, and the
+  skill keeps a pointer rather than a copy.
+
 From the context providers (#121):
 
 - **Five of the eight read the same seam the tools read.** Campaign, accounts, current post, examples and
@@ -167,7 +185,7 @@ From Accounts:
 | `services/` | the seam: `ConnectorService`, `ContentService`, `MediaService`, `PublishingService` |
 | `tools/` | the `ToolProvider` and the closed category vocabulary from docs/07 |
 | `context/` | the eight providers from docs/07, the shared section builder, and the forbidden-claim checker |
-| `skills/` | built-in skills, validated at import time by the platform's own validator |
+| `skills/` | the seven migrated skill bodies, validated at import time by the platform's own validator |
 | `manifests/` | the Social Assistant — `id` neutral, branding in the display name |
 
 Nothing under `tools/` performs I/O; a ShareFlow tool is the envelope from `defineDelegatingTool` over
@@ -196,8 +214,8 @@ stops the process starting, rather than producing a confusing catalog on someone
 ## Status
 
 The seam and the scaffolding (#114); Posts (#115); Campaigns (#116); Accounts (#117); Media (#118);
-Publishing (#119); Engagement and Leads (#120); context providers (#121). Skills, content generation,
-research and analytics land in #122–#125.
+Publishing (#119); Engagement and Leads (#120); context providers (#121); the seven skills (#122).
+Content generation, research and analytics land in #123–#125.
 
 `npm test` in this workspace runs `tsc -b` first. That is deliberate: this package value-imports
 `@agentkit/backend`, whose entry point is `dist/`, so `vitest run` on its own tests whatever was last

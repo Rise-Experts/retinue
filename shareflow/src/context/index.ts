@@ -74,6 +74,7 @@ export const shareFlowSection = (input: ShareFlowSectionInput): ContextSection =
  * A test asserts every id here has a provider, so the list cannot drift out of step again.
  */
 export const SHAREFLOW_CONTEXT_PROVIDER_IDS = [
+  "shareflow.untrusted-content",
   "shareflow.claims",
   "shareflow.brand",
   "shareflow.audience",

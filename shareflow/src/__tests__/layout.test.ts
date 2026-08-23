@@ -203,10 +203,23 @@ describe("built-in skills", () => {
     expect(() => shareFlowBuiltInSkills([skill, skill])).toThrowError(/duplicate/);
   });
 
-  it("ships no invented skill content", () => {
-    // #122 migrates the real content. An assistant shipping plausible-looking prose nobody wrote on
-    // purpose is worse than one shipping none.
-    expect(SHAREFLOW_BUILT_IN_SKILLS).toEqual([]);
+  it("ships the seven migrated skills, and nothing invented", () => {
+    // #114 asserted this set was empty, on the grounds that an assistant shipping plausible-looking
+    // prose nobody wrote on purpose is worse than one shipping none. #122 migrated the real bodies from
+    // `ai_backend/skills`, so the assertion becomes what they are rather than that there are none.
+    expect(SHAREFLOW_BUILT_IN_SKILLS.map((s) => s.name).sort()).toEqual([
+      "analytics-reporting",
+      "document-generation",
+      "mermaid-diagrams",
+      "platform-media-rules",
+      "post-composition",
+      "publishing-safety",
+      "research-and-citation",
+    ]);
+    for (const skill of SHAREFLOW_BUILT_IN_SKILLS) {
+      expect(skill.source, skill.name).toBe("built-in");
+      expect(skill.version, skill.name).toBe(1);
+    }
   });
 });
 

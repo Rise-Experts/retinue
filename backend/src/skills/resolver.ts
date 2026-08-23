@@ -63,8 +63,14 @@ export const createSkillResolver = (config: {
     async listCatalog({ tenantId, assigned, allowTenantSkills }) {
       const assignedSet = new Set(assigned);
       const byName = new Map<string, SkillCatalogEntry>();
-      // Built-ins first...
-      for (const s of config.builtIn) if (assignedSet.has(s.name)) byName.set(s.name, toEntry(s));
+      // Built-ins first, and only the active ones.
+      //
+      // The store adapters already filter discovery to the latest *active* version per name —
+      // deliberate and tested: "a run pinned to an archived version keeps working and no new run picks
+      // it up." This layer did not, so `status` was load-bearing for a tenant skill and inert for a
+      // built-in. Same field, two meanings, which is an inconsistency rather than a decision (#122).
+      for (const s of config.builtIn)
+        if (s.status === "active" && assignedSet.has(s.name)) byName.set(s.name, toEntry(s));
       // ...then tenant skills shadow them by name.
       if (allowTenantSkills) {
         for (const entry of await config.store.listCatalog({ tenantId })) {
@@ -78,6 +84,8 @@ export const createSkillResolver = (config: {
       // Tenant skill of this name+version shadows the built-in.
       const tenantSkill = await config.store.findVersion({ tenantId, name, version });
       if (tenantSkill) return tenantSkill;
+      // Resolved regardless of status, matching `findVersion`: a run pinned to a version that has since
+      // been archived must keep working. Only *discovery* hides it.
       const builtIn = builtInByName.get(name);
       if (builtIn && builtIn.version === version) return builtIn;
       throw new AgentPlatformError({
