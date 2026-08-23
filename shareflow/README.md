@@ -38,6 +38,11 @@ all. Three further things about their shape decided the seam:
 | | `check_media_storage` | `external-write` |
 | `publishing` (#119) | `validate_publish`, `get_publish_status` | `read` |
 | | `publish_post_now`, `schedule_post`, `retry_publish_target` | `external-write`, approval **always** |
+| `engagement` (#120) | `list_comments` | `read` |
+| | `dismiss_comment` | `internal-write` |
+| | `reply_to_comment` | `external-write`, approval **always** |
+| `leads` (#120) | `list_leads` | `read` |
+| | `create_lead`, `update_lead` | `internal-write` |
 
 Three things about the Posts tools generalise to every category that follows:
 
@@ -64,6 +69,23 @@ Two more from Campaigns:
   daily campaign over a year produces 31 — and an assistant that inferred the count from the dates
   would report 365. The field exists so the cap is visible; recomputing it locally would duplicate the
   logic it exists to expose.
+From Engagement and Leads:
+
+- **A reply is keyed on the comment, not the call** — the same reasoning as publishing. ShareFlow already
+  refuses a second reply on `reply_status` of `sent`, so the comment is the natural unit; a call-derived
+  key would let a second distinct call send a second public reply.
+- **A suppressed lead has no success shape to be reported in.** `createLead` returns a discriminated
+  union — `created` | `existing` | `suppressed`. Suppression is enforced inside the insert path, so the
+  risk is not a tool bypassing it but a tool **misreporting** it: telling the user a lead was captured
+  for someone who opted out.
+- **`approve_comment` and `suppress_lead` are deliberately absent.** The first sends the reply already
+  drafted in `inbox_comments.reply`, and `needs_review` exists so a person looks first — an assistant
+  that could approve its own draft would route around the review rather than pass through it. The second
+  retires up to 200 existing lead rows.
+- **Assignment does not exist in the substrate.** `inbox_comments` has no assignee column and there is no
+  assign function; what exists is triage, so `dismiss_comment` is the no-approval internal change. A tool
+  that claimed to assign and did nothing would be worse than an absent one.
+
 From Publishing — the zero-tolerance category:
 
 - **The idempotency key is per draft + destination, and not derived from the call.** `create_post_draft`
@@ -155,7 +177,8 @@ stops the process starting, rather than producing a confusing catalog on someone
 ## Status
 
 The seam and the scaffolding (#114); Posts (#115); Campaigns (#116); Accounts (#117); Media (#118);
-Publishing (#119). Engagement, research and analytics land in #120–#125.
+Publishing (#119); Engagement and Leads (#120). Context providers, skills, content generation, research
+and analytics land in #121–#125.
 
 `npm test` in this workspace runs `tsc -b` first. That is deliberate: this package value-imports
 `@agentkit/backend`, whose entry point is `dist/`, so `vitest run` on its own tests whatever was last

@@ -30,6 +30,8 @@
 import type { ExecutionContext } from "@agentkit/backend";
 import type {
   CampaignId,
+  InboxCommentId,
+  LeadId,
   MediaAssetId,
   PlatformId,
   PostDraftId,
@@ -836,16 +838,197 @@ export interface PublishingService {
 
 // ---------------------------------------------------------------------------------------------------
 
+
+// ---------------------------------------------------------------------------------------------------
+// Engagement service — docs/07: "comments, assignment and replies" (#120).
+//
+// **Assignment is absent, and that is a finding rather than an omission.** `inbox_comments` has no
+// assignee column and ShareFlow has no assign function; what exists is triage — `needs_review` →
+// `dismissed`. So the port carries `dismiss` and not `assign`. Adding one needs an assignee field and a
+// notion of members to assign to, neither of which exists yet.
+// ---------------------------------------------------------------------------------------------------
+
+/**
+ * Where a comment is in the reply workflow.
+ *
+ * `needs-review` means a draft reply is waiting for a person. `auto-sent` means a bot rule answered it.
+ * Both `sent` states are terminal: `replyToComment` refuses a second reply on either.
+ */
+export const COMMENT_REPLY_STATES = ["needs-review", "dismissed", "sent", "auto-sent"] as const;
+export type CommentReplyState = (typeof COMMENT_REPLY_STATES)[number];
+
+export type InboxComment = {
+  readonly id: InboxCommentId;
+  readonly platformId: PlatformId;
+  readonly authorName: string;
+  readonly authorHandle?: string;
+  readonly content: string;
+  /** Which post or thread this is a comment on, when known. */
+  readonly postRef?: string;
+  readonly replyState: CommentReplyState;
+  /**
+   * A reply already drafted and waiting for a person.
+   *
+   * Surfaced read-only and never approvable from here. `approveComment` sends this draft, and
+   * `needs-review` exists so a human looks first — an assistant that could approve its own draft would
+   * be routing around the review step rather than passing through it.
+   */
+  readonly draftedReply?: string;
+  readonly createdAt: string;
+};
+
+/** What a sent reply records. The comment id is the grounding, not decoration. */
+export type CommentReplyReceipt = {
+  readonly commentId: InboxCommentId;
+  readonly platformId: PlatformId;
+  readonly sentAt: string;
+};
+
+export interface EngagementService {
+  listComments(
+    context: ExecutionContext,
+    input: {
+      readonly replyState?: CommentReplyState;
+      readonly platformId?: PlatformId;
+      readonly limit: number;
+      readonly cursor?: string;
+    },
+  ): Promise<Page<InboxComment>>;
+
+  /**
+   * Send a reply to one comment.
+   *
+   * Throws `conflict` when the comment has already been answered — which is a real outcome, not a
+   * failure to send: `replyToComment` refuses on `sent` or `auto-sent`. Throws
+   * `capability_unavailable` when the platform's connector has no `sendReply`, because *"replying is
+   * not supported on {platform} yet — reply in the {platform} app instead"* is guidance, not an error.
+   *
+   * `idempotencyKey` is derived from the **comment**, not the call. A second distinct call to answer one
+   * comment must not send a second reply, and a call-derived key would.
+   */
+  reply(
+    context: ExecutionContext,
+    input: {
+      readonly idempotencyKey: ServiceIdempotencyKey;
+      readonly commentId: InboxCommentId;
+      readonly text: string;
+    },
+  ): Promise<CommentReplyReceipt>;
+
+  /** Take a comment out of the review queue without answering it. Internal; nothing leaves the tenant. */
+  dismiss(
+    context: ExecutionContext,
+    input: { readonly idempotencyKey: ServiceIdempotencyKey; readonly commentId: InboxCommentId },
+  ): Promise<InboxComment>;
+}
+
+// ---------------------------------------------------------------------------------------------------
+// Lead service — docs/07: "create/update attributed leads" (#120).
+// ---------------------------------------------------------------------------------------------------
+
+export const LEAD_STATUSES = ["new", "contacted", "qualified", "rejected"] as const;
+export type LeadStatus = (typeof LEAD_STATUSES)[number];
+
+/** Why a lead may never be added. Mirrors `LeadSuppressionReason`. */
+export const LEAD_SUPPRESSION_REASONS = ["opt-out", "complaint", "existing-customer", "manual"] as const;
+export type LeadSuppressionReason = (typeof LEAD_SUPPRESSION_REASONS)[number];
+
+/**
+ * Where a lead came from.
+ *
+ * Structured, not a string. `Lead.capturedFrom` is free text today, and AC-5 of #120 wants the
+ * originating post or campaign *"so the analytics attribution has real linkage"* — a string the
+ * analytics step has to parse is not linkage. The adapter serialises into `capturedFrom` until ShareFlow
+ * has columns for it, which is the schema change this implies.
+ */
+export type LeadAttribution = {
+  readonly postDraftId?: PostDraftId;
+  readonly campaignId?: CampaignId;
+  readonly platformId?: PlatformId;
+  /** A comment or message the lead came out of, when that is the origin. */
+  readonly commentId?: InboxCommentId;
+};
+
+export type Lead = {
+  readonly id: LeadId;
+  readonly name: string;
+  readonly email?: string;
+  readonly status: LeadStatus;
+  /** Pipeline value in the tenant's currency, minor units — the same convention as usage accounting. */
+  readonly valueMinorUnits?: number;
+  readonly attribution: LeadAttribution;
+  readonly createdAt: string;
+};
+
+/**
+ * What happened when a lead was offered.
+ *
+ * A **discriminated union**, and that is the whole of AC-4. Suppression is enforced inside the insert
+ * path — *"checked before every insert, so a re-run of the same search cannot resurrect someone who
+ * opted out"* — so the risk is not that a tool bypasses it, but that a tool **misreports** it: telling
+ * the user a lead was captured for someone who opted out. There is no success shape to put that in.
+ *
+ * `existing` is here for the same reason. A dedupe match reported as `created` is the same class of
+ * untruth, and ShareFlow normalises domain and email precisely so those matches happen.
+ */
+export type LeadCreateResult =
+  | { readonly outcome: "created"; readonly lead: Lead }
+  | { readonly outcome: "existing"; readonly lead: Lead }
+  | { readonly outcome: "suppressed"; readonly reason: LeadSuppressionReason };
+
+/** A sparse patch, for the same reason every other patch here is one. No `attribution`: where a lead came from does not change. */
+export type LeadPatch = {
+  readonly name?: string;
+  readonly email?: string;
+  readonly status?: LeadStatus;
+  readonly valueMinorUnits?: number;
+};
+
+export interface LeadService {
+  listLeads(
+    context: ExecutionContext,
+    input: { readonly status?: LeadStatus; readonly limit: number; readonly cursor?: string },
+  ): Promise<Page<Lead>>;
+
+  /**
+   * Offer a lead. May be refused.
+   *
+   * Normalisation of the email and domain stays in the service: suppression matching depends on it, and
+   * a second normaliser here would eventually disagree about what matches — which for an opt-out means
+   * contacting someone who asked not to be.
+   */
+  createLead(
+    context: ExecutionContext,
+    input: {
+      readonly idempotencyKey: ServiceIdempotencyKey;
+      readonly name: string;
+      readonly email?: string;
+      readonly valueMinorUnits?: number;
+      readonly attribution: LeadAttribution;
+    },
+  ): Promise<LeadCreateResult>;
+
+  updateLead(
+    context: ExecutionContext,
+    input: {
+      readonly idempotencyKey: ServiceIdempotencyKey;
+      readonly id: LeadId;
+      readonly patch: LeadPatch;
+    },
+  ): Promise<Lead>;
+}
+
 /**
  * Everything the integration's tools, context providers and skills are given.
  *
- * One object rather than four constructor arguments, so adding the analytics, engagement, leads and
- * research services (#120, #125) is an additive change here instead of a signature change at every
- * registration site.
+ * One object rather than several constructor arguments, so adding the analytics and research services
+ * (#124, #125) stays an additive change here instead of a signature change at every registration site.
  */
 export type ShareFlowServices = {
   readonly connectors: ConnectorService;
   readonly content: ContentService;
   readonly media: MediaService;
   readonly publishing: PublishingService;
+  readonly engagement: EngagementService;
+  readonly leads: LeadService;
 };
