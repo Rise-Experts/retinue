@@ -4,20 +4,23 @@ TypeScript implementation of the specifications in [`docs/`](docs/README.md).
 
 | Folder | Package | Runs where |
 |---|---|---|
-| [`backend/`](backend) | `@agentkit/backend` | Server: runtime, tools, MCP, skills, context, HITL, persistence ports |
+| [`backend/`](backend) | `@agentkit/backend` | Server: runtime, tools, MCP, skills, context, HITL, persistence adapters. **Takes no server or HTTP dependency and reads no environment variables.** |
+| [`server/`](server) | `@agentkit/server` | The reference GraphQL host: Yoga, the SSE endpoint, configuration and health probes |
 | [`frontend/`](frontend) | `@agentkit/frontend` | Client: headless React state, subscriptions and typed part reducers |
 | [`docs/`](docs) | — | The specifications these packages implement |
 
 ## Status
 
-Scaffold. The packages currently contain the **contracts** the specifications define
-verbatim — types, ports and envelopes — and no execution logic. The runtime is built
-out over the phases in [`docs/08-migration-plan.md`](docs/08-migration-plan.md).
+The runtime is implemented and durable. All nineteen storage ports pass the shared conformance
+suite against three adapters — in-memory, PostgreSQL and Supabase — and runs execute across worker
+processes with a durable queue, per-conversation serialization, crash recovery and resumable
+streaming.
 
-Anything not stated in the specifications is marked `@proposed` in the source and is
-not settled. Outbound MCP-server consumption (`backend/src/mcp`) is now specified in
-[`docs/10-mcp-integration.md`](docs/10-mcp-integration.md); its contracts can move out of
-`@proposed` as they are reconciled against that section.
+Progress is tracked as a live matrix, published by CI on every run: see
+`backend/.conformance/conformance-matrix.md` from any build. A cell that is neither passing nor
+explicitly tracked to an issue fails the build, so absence is classified rather than invisible.
+
+Anything not stated in the specifications is marked `@proposed` in the source and is not settled.
 
 ## Workspace
 
@@ -44,3 +47,61 @@ test with neither ShareFlow/Chorus nor Twenty installed:
 
 ShareFlow-specific tools, context providers, skills and agents are registered through
 the public interfaces from an integration package, never added here.
+
+## Deployment
+
+Two processes, one image. They share every dependency, so two images would only drift.
+
+### Configuration
+
+Validated at startup: a missing or malformed variable fails the boot with a message naming it, and
+**all** problems are reported at once rather than one per deploy.
+
+| Variable | Required | Default | Notes |
+|---|---|---|---|
+| `AGENTKIT_DATABASE_URL` | yes | — | `postgres://…` |
+| `AGENTKIT_REDIS_URL` | yes | — | `redis://…`, for the job queue and the lock |
+| `AGENTKIT_SCHEMA_MODE` | no | `off` | `off` \| `plan` \| `auto`. Keep `off` in production so managed migrations stay in control; `plan` logs the pending diff and applies nothing |
+| `AGENTKIT_WORKER_CONCURRENCY` | no | `4` | Runs handled at once per worker |
+| `AGENTKIT_LOG_LEVEL` | no | `info` | `debug` \| `info` \| `warn` \| `error` |
+| `PORT` | no | `4000` | API host only |
+
+### Running
+
+Both commands need one more variable: `AGENTKIT_APP_MODULE`, pointing at a module that
+default-exports your wiring — `{ authenticate, deps }` for the API host, plus `{ engine, buildContext }`
+for the worker. There is deliberately **no default for `authenticate`**: a fallback would serve an open
+API to anyone who forgot to set it, which is a worse failure than refusing to start.
+
+```bash
+# API host — GraphQL at /graphql, SSE at /runs/events, probes at /healthz and /readyz
+AGENTKIT_APP_MODULE=./dist/my-app.js node server/dist/cli.js
+
+# Worker — consumes the run queue, heartbeats its claims, reaps stale runs
+AGENTKIT_APP_MODULE=./dist/my-app.js node server/dist/cli-worker.js
+```
+
+With the image:
+
+```bash
+docker build -t agentkit .
+docker run -p 4000:4000 --env-file .env agentkit                     # API host
+docker run --env-file .env agentkit node server/dist/cli-worker.js   # worker
+```
+
+### Probes
+
+| Path | Answers | Behaviour |
+|---|---|---|
+| `/healthz` | Is the process alive? | 200 **even while the database is down**. Restarting a process because a dependency is unavailable turns a blip into a restart storm |
+| `/readyz` | Should traffic come here? | 200 when Postgres, Redis and the schema version all check out; **503** naming every failing probe otherwise |
+
+Both are served before authentication, because a load balancer carries no credentials.
+
+### First boot against an empty database
+
+```bash
+AGENTKIT_SCHEMA_MODE=auto node server/dist/main.js   # provisions, then logs the applied migration ids
+```
+
+`auto` is idempotent — a second boot applies nothing — but the production default is `off` on purpose.

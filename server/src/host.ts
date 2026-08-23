@@ -12,6 +12,7 @@
  */
 import { createGraphQLError, createSchema, createYoga } from "graphql-yoga";
 import { createRunEventSseRoute, type SseRouteOptions } from "./sse-route.js";
+import type { HealthRoutes } from "./health.js";
 import { createResolvers, typeDefs, type GraphQLContext, type ResolverDeps } from "@agentkit/backend";
 import type { ExecutionContext } from "@agentkit/backend";
 
@@ -38,6 +39,11 @@ export type HostOptions = {
    * exclusively should not have a second streaming surface it never wanted.
    */
   readonly sse?: Omit<SseRouteOptions, "deps" | "authenticate"> & { readonly enabled: boolean };
+  /**
+   * Health and readiness routes, served **before** authentication. Deliberately: a load balancer has
+   * no credentials, and a probe that required them would report every healthy pod as unhealthy.
+   */
+  readonly health?: HealthRoutes;
 };
 
 /** Thrown when a request carries no usable identity. Surfaces as a GraphQL error, not a crash. */
@@ -78,13 +84,14 @@ export const createAgentkitHost = (options: HostOptions) => {
     },
   });
 
-  if (options.sse?.enabled !== true) return yoga;
+  const health = options.health;
 
-  const sse = createRunEventSseRoute({
-    deps: options.deps,
-    authenticate: options.authenticate,
-    ...options.sse,
-  });
+  if (options.sse?.enabled !== true && health === undefined) return yoga;
+
+  const sse =
+    options.sse?.enabled === true
+      ? createRunEventSseRoute({ deps: options.deps, authenticate: options.authenticate, ...options.sse })
+      : null;
 
   /**
    * One fetch handler for both surfaces. Composed rather than mounted on a router, because a router
@@ -104,11 +111,14 @@ export const createAgentkitHost = (options: HostOptions) => {
     // failed with "Invalid URL" for every caller that passed one.
     const request = input instanceof Request ? input : new Request(String(input), init);
     const url = new URL(request.url);
-    if (url.pathname === sse.path) return sse.handle(request);
+    // Probes first and unauthenticated: a load balancer carries no credentials.
+    const probe = await health?.handle(request);
+    if (probe !== null && probe !== undefined) return probe;
+    if (sse !== null && url.pathname === sse.path) return sse.handle(request);
     return (yoga.fetch as (r: Request, ...a: readonly unknown[]) => Promise<Response>)(request, ...rest);
   };
 
-  return Object.assign(fetch, yoga, { fetch, ssePath: sse.path });
+  return Object.assign(fetch, yoga, { fetch, ...(sse === null ? {} : { ssePath: sse.path }) });
 };
 
 export type AgentkitHost = ReturnType<typeof createAgentkitHost>;
