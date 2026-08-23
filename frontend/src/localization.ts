@@ -92,6 +92,27 @@ export const statusId = (status: string): string => `status.${status}`;
 export const errorId = (code: string): string => `error.${code}`;
 export const toolLabelId = (toolName: string): string => `tool.${toolName}.label`;
 
+/**
+ * Citation string ids (#138).
+ *
+ * Constants rather than inline literals at the call sites, so a component cannot spell one differently from the
+ * catalogue — a mistyped id renders as the id itself, which looks like a translation gap rather than a typo.
+ */
+export const CITATION_IDS = {
+  marker: "citation.marker",
+  expand: "citation.expand",
+  collapse: "citation.collapse",
+  excerpt: "citation.excerpt",
+  retrievedAt: "citation.retrievedAt",
+  source: "citation.source",
+  openSource: "citation.openSource",
+  notLinkable: "citation.notLinkable",
+  unresolvable: "citation.unresolvable",
+  grounded: "citation.grounded",
+  ungrounded: "citation.ungrounded",
+  sourceCount: "citation.sourceCount",
+} as const;
+
 /** Built-in English catalog for the stable ids the runtime emits. Ship a JSON per language to add one. */
 export const DEFAULT_CATALOGS: Catalogs = {
   en: {
@@ -112,5 +133,24 @@ export const DEFAULT_CATALOGS: Catalogs = {
     "error.forbidden": "You don't have permission to do that.",
     "error.approval_required": "This action needs approval before it can run.",
     "error.internal": "Something went wrong.",
+    // #138. Citations. `marker` is a number so it reads as a footnote in every language; the surrounding
+    // brackets are in the catalogue rather than the component, because not every locale brackets footnotes.
+    "citation.marker": (params) => `[${params.index}]`,
+    "citation.expand": "Show source",
+    "citation.collapse": "Hide source",
+    "citation.excerpt": "What the source said",
+    "citation.retrievedAt": (params, intl) =>
+      `Read ${intl.dateTime(params.retrievedAt as string, { dateStyle: "medium" })}`,
+    "citation.source": "Source",
+    "citation.openSource": "Open source",
+    // A retrieval citation has no URL a browser can follow. Said plainly rather than rendered as a dead link.
+    "citation.notLinkable": "This source is inside the workspace and cannot be opened in a new tab.",
+    "citation.unresolvable": "This source is no longer available. The passage below is what was read at the time.",
+    // Screen-reader text for AC-2's non-visual half: the visual treatment is a marker and an underline, and
+    // neither is announced.
+    "citation.grounded": "Supported by a source",
+    "citation.ungrounded": "Not attributed to a source",
+    "citation.sourceCount": (params, intl) =>
+      intl.plural(params.count as number, { one: "1 source", other: `${params.count} sources` }),
   },
 };

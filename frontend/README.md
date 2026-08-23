@@ -15,6 +15,7 @@ Scaffold, with one piece implemented:
 | `types` | Re-exports the wire contract from `@agentkit/backend`, plus client-only view state. Type-only, erased at build time. |
 | `event-buffer` | **Implemented.** Orders and de-duplicates run events across a reconnect. |
 | `hooks` | Signature types for the ten required hooks. Implementations land with the GraphQL surface. |
+| `ui/citations` | **Implemented.** Citation markers and expandable source panels: append-only ordering so a mid-stream citation never moves what is on screen, a grounded/ungrounded treatment that uses no colour, and a shipped hue-free stylesheet. |
 
 `event-buffer` exists first because it backs a specification acceptance criterion —
 *"subscription reconnect produces no missing or duplicated rendered parts"* — and that
