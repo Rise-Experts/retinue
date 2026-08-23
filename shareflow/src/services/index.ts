@@ -53,14 +53,66 @@ export type AccountHealth = "active" | "expired" | "not-configured" | "revoked";
 export type ConnectedAccount = {
   readonly id: SocialAccountId;
   readonly platformId: PlatformId;
-  /** Human label for the destination, e.g. a Page or channel name. Safe to show a user. */
+  /**
+   * Human label for the destination, e.g. a Page or channel name.
+   *
+   * The one field in this type that carries platform-supplied free text, and therefore the one an
+   * adapter could get wrong. `tools/accounts.ts` scans it — see `assertNoSecrets`.
+   */
   readonly displayName: string;
   readonly health: AccountHealth;
   /**
+   * When the stored credential expires, if the platform sets an expiry.
+   *
+   * A timestamp, never the credential. Included because it is what lets the assistant warn *before* a
+   * destination breaks rather than reporting it afterwards — ShareFlow already selects
+   * `token_expires_at` for exactly that reason.
+   */
+  readonly accessExpiresAt?: string;
+  /**
    * Set when `health` is not `active`, phrased for a person: what is wrong and what fixes it.
-   * Never a provider error body.
+   *
+   * **Not propagated into any tool result.** It is free prose from an adapter, and the obvious way to
+   * fill it is with the provider's error message — which is where a token ends up. The agent-facing
+   * remediation is a stable code plus `getConnectionSetup`'s structured payload instead. Kept on the
+   * port because the app's own UI can legitimately show it.
    */
   readonly healthDetail?: string;
+};
+
+/**
+ * What a platform's OAuth app needs before any account on it can connect.
+ *
+ * Mirrors twenty-social's `show_connection_setup` return: the redirect URL, the fields each platform's
+ * developer console asks for *named as that console names them*, the scopes, and how long review takes.
+ * Contains variable **names** (`META_CLIENT_ID`), never values.
+ */
+export type PlatformSetupGuide = {
+  readonly platformId: PlatformId;
+  /** Display label, which may cover more than one platform id ("Facebook and Instagram"). */
+  readonly label: string;
+  /** The platform's developer console. */
+  readonly consoleUrl: string;
+  /** Environment variable names the deployment must set. Names only. */
+  readonly credentialVariables: readonly string[];
+  /** Each URL the console asks for, labelled the way the console labels it. */
+  readonly consoleFields: readonly { readonly label: string; readonly url: string }[];
+  readonly scopes: readonly string[];
+  /** What platform review is required, and roughly how long it takes. */
+  readonly reviewNeeded?: string;
+};
+
+export type ConnectionSetup = {
+  /** One redirect URL for every platform and workspace. */
+  readonly redirectUrl: string;
+  /** Where the deployment's credentials are entered. */
+  readonly credentialsPageUrl: string;
+  /**
+   * Set when the deployment's own URL will make OAuth fail — plain http outside localhost. A real
+   * condition worth surfacing: every platform refuses it, so connecting cannot work until it is fixed.
+   */
+  readonly warning?: string;
+  readonly platforms: readonly PlatformSetupGuide[];
 };
 
 export interface ConnectorService {
@@ -77,6 +129,15 @@ export interface ConnectorService {
     context: ExecutionContext,
     input: { readonly accountIds: readonly SocialAccountId[] },
   ): Promise<readonly ConnectedAccount[]>;
+
+  /**
+   * What a platform needs before an account on it can connect.
+   *
+   * Deployment-wide rather than per account, because that is what the answer depends on: a missing
+   * `META_CLIENT_ID` breaks every Facebook account at once. Wraps twenty-social's
+   * `show_connection_setup`.
+   */
+  getConnectionSetup(context: ExecutionContext): Promise<ConnectionSetup>;
 }
 
 // ---------------------------------------------------------------------------------------------------

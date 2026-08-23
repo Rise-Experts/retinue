@@ -32,6 +32,7 @@ all. Three further things about their shape decided the seam:
 | | `create_post_draft`, `update_post_draft`, `duplicate_post_draft` | `internal-write` |
 | `campaigns` (#116) | `list_campaigns`, `get_campaign`, `get_campaign_calendar` | `read` |
 | | `create_campaign`, `update_campaign` | `internal-write` |
+| `accounts` (#117) | `list_accounts`, `check_account_health`, `get_connection_setup` | `read` |
 
 Three things about the Posts tools generalise to every category that follows:
 
@@ -58,6 +59,22 @@ Two more from Campaigns:
   daily campaign over a year produces 31 — and an assistant that inferred the count from the dates
   would report 365. The field exists so the cap is visible; recomputing it locally would duplicate the
   logic it exists to expose.
+From Accounts:
+
+- **Nothing changes a connection, in either direction.** Connecting requires the user's consent at the
+  platform; the assistant's job is to say where to go and what is needed. `connect_test_account` exists
+  in `twenty-social` and is *deliberately* not exposed: it creates an active destination with a fake
+  token that accepts posts without contacting any platform, so an assistant holding it has a way to
+  manufacture a destination that silently swallows posts and then report success.
+- **A credential cannot appear in a result because there is no field for one.** The account view carries
+  stable codes, ids and a credential *expiry* timestamp — `healthDetail` is not propagated, since free
+  prose from an adapter is where a provider error message, and therefore a token, ends up. A guard
+  scans what does go out and **fails** rather than scrubbing, because a silent scrub hides the adapter
+  bug that produced it.
+- **The remediation is derived from the health in one place.** `expired`/`revoked` mean reconnect;
+  `not-configured` means an admin registers the OAuth app, and no amount of reconnecting will help. An
+  assistant that conflated them would send the user round a loop that cannot terminate.
+
 - **No paid operations, and the catalog is pinned by a test.** ShareFlow has no ad account, spend or
   boost anywhere, so there is nothing to withhold. What is worth recording is what would have to be
   true before there were: an ad spend moves money out of the tenant's account, so it is an
@@ -98,8 +115,8 @@ stops the process starting, rather than producing a confusing catalog on someone
 
 ## Status
 
-The seam and the scaffolding (#114); Posts (#115); Campaigns (#116). Accounts, media, publishing,
-engagement, research and analytics land in #117–#125.
+The seam and the scaffolding (#114); Posts (#115); Campaigns (#116); Accounts (#117). Media,
+publishing, engagement, research and analytics land in #118–#125.
 
 `npm test` in this workspace runs `tsc -b` first. That is deliberate: this package value-imports
 `@agentkit/backend`, whose entry point is `dist/`, so `vitest run` on its own tests whatever was last
