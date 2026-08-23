@@ -384,6 +384,19 @@ export type FileMetadata = {
  * Separate from the file's own `state` on purpose. A file is perfectly `stored` while its extraction has
  * `failed`, and conflating the two would make an unreadable document look like a lost upload.
  */
+/**
+ * Below this, a recognised extraction is flagged rather than presented as certain (#132).
+ *
+ * Here rather than in `documents/` because two layers interpret the same field and neither may import the
+ * other: `documents/vision.ts` sets the flag, and `files/context.ts` marks the reference line so a model
+ * choosing between attachments knows before it reads any of them. A copy in each is a copy that drifts, and
+ * the port that declares `confidence` is the right place for the number that gives it meaning.
+ *
+ * 0.7 because that is roughly where OCR stops being "a few wrong characters" and becomes "wrong words" — and
+ * a wrong word is worse than a gap, because the sentence still reads.
+ */
+export const LOW_CONFIDENCE_THRESHOLD = 0.7;
+
 export type FileExtraction = {
   readonly state: "pending" | "running" | "extracted" | "failed" | "skipped";
   /** Where the extracted document lives. `BlobStore` holds JSON, which is exactly what it is. */
@@ -393,6 +406,14 @@ export type FileExtraction = {
   readonly pageCount?: number;
   readonly blockCount?: number;
   readonly truncated?: boolean;
+  /**
+   * OCR/vision confidence, 0–1 (#132).
+   *
+   * On the record as well as inside the extracted document, so a listing can flag a low-confidence extraction
+   * without fetching the blob to find out. Absent means the extraction was not probabilistic — a PDF's text
+   * layer is read, not recognised — which is a different fact from "confidence unknown".
+   */
+  readonly confidence?: number;
   readonly at?: string;
 };
 

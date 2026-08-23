@@ -272,3 +272,74 @@ window is in **blocks, not characters**, because a character bound can land insi
 half of one — worse than none, since the missing rows are invisible and the model answers confidently from what
 it can see. When there is nothing to read it reports *why*, and marks the error retryable only when retrying
 could change the answer.
+
+## OCR and vision (#132)
+
+A screenshot and a scanned PDF are inert without these. Both feed the *same* derived-artifact path as #131, so
+`read_document`, the context section and the blob see one representation regardless of where the text came
+from — which is what stops "can the model read this?" depending on the format the user happened to attach.
+
+### Two ports, not one
+
+| Port | Job | Built in? |
+|---|---|---|
+| `OcrProvider` | **Transcribes.** Returns the words on the page, with a confidence. Does not interpret. | **No** — see below |
+| `VisionProvider` | **Describes.** Says what an image shows. The only useful answer for an image with no text. | Yes, over the model registry |
+
+Conflating them would force one adapter to do both badly. For a dashboard screenshot the answer is *both*:
+either alone loses half of it — the numbers without the layout, or the layout without the numbers. A vision
+description is labelled as one, because a description is the model's *reading* of an image and a transcription
+is what the image says; presenting them identically would let a later answer cite an inference as a quote.
+
+**There is no built-in OCR adapter, and there cannot honestly be one.** OCR needs a trained engine —
+Tesseract, or a hosted service. The PDF parser in #131 could be written over the raw syntax with `zlib`
+because a PDF *contains* its text; a scan does not contain text at all. So `OcrProvider` is a documented port
+with no implementation in this package. The alternative — a stub returning empty text — would make every scan
+look like a successful extraction of nothing, which is precisely what `no-text-layer` exists to prevent.
+
+The port takes the **original bytes and media type**, not page images: rasterising a PDF needs a renderer, and
+every real service (Textract, Document AI, Azure Document Intelligence) accepts a PDF directly and does that
+itself.
+
+### A model without vision is never selected
+
+`ModelRegistry.resolve({ role, requiredModalities: ["image"] })` already throws `capability_unavailable` when
+nothing satisfies it. So the guarantee holds because the caller cannot *obtain* a model to pass to the vision
+call — not because the vision call checks one. A check there would be a second gate to keep in step with the
+first, and the weaker of the two would be the one that mattered. The refusal is deliberately not caught: a
+fabricated description is the one outcome worse than no description.
+
+### The OCR fallback is narrow on purpose
+
+A scanned PDF is found by the text parser reporting `no-text-layer`, and **only** that reason triggers the
+fallback. An encrypted or malformed document is not retried through OCR, because OCR will not decrypt anything
+and the second attempt would cost money to reach the same conclusion. This is where #131's insistence that
+`no-text-layer` be its own reason rather than folded into `malformed` becomes load-bearing.
+
+### Confidence, and what its absence means
+
+`confidence` is **required** on `OcrResult`. An optional field would default to the optimistic answer and
+nobody would notice — an engine that cannot report one says `0` and lets the flag fire. Below
+`LOW_CONFIDENCE_THRESHOLD` (0.7, roughly where OCR stops being "a few wrong characters" and becomes "wrong
+words" — and a wrong word is worse than a gap, because the sentence still reads) the extraction is flagged in
+three places, because a consumer might look at any of them: a warning in the document, `lowConfidence` on the
+read result, and a marker on the attachment's reference line so a model choosing between attachments knows
+before it reads any of them.
+
+On `ExtractedDocument` **and** on the file record, so a listing can flag a low-confidence extraction without
+fetching the blob. Absent means the extraction was not probabilistic — a PDF's text layer is *read*, not
+recognised, so a confidence there would be a number with nothing behind it, and `1.0` would be a lie about a
+different kind of extraction.
+
+### Cost
+
+A vision call is reported on the parse result and the pipeline forwards it to `onPricedOperation` *before*
+writing the blob and strips it from what is stored — a priced operation already happened, so a crash must
+still have billed it, and a stored document has no business carrying billing data. A ledger write that fails
+is logged, not thrown: an unbilled call is a smaller problem than a document the user paid for and cannot read.
+
+`UsageEvent.runId` is required and an extraction is **not a run**, so it borrows the field with a namespaced
+`extraction:<fileId>`. Two consequences: the ledger stays single, which is what "through the existing usage
+hook" asks for; and `usageDedupeKey` is `(runId, stepId)`, so a re-enqueued extraction records **once** rather
+than charging a tenant twice for the same image. The wart is that `runId` no longer always names a run — a
+separate cost dimension would be cleaner if the ledger ever needs to distinguish them.

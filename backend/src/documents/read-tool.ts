@@ -20,6 +20,7 @@ import { defineTool } from "../tools/define.js";
 import type { Tool } from "../tools/index.js";
 import type { ExtractionService } from "./extraction.js";
 import { renderBlocks, summariseBlocks } from "./render.js";
+import { LOW_CONFIDENCE_THRESHOLD } from "../persistence/index.js";
 
 /**
  * Blocks per call, and the character ceiling that overrides it.
@@ -40,6 +41,14 @@ export type ReadDocumentOutput = {
   readonly nextBlock?: number;
   /** Present when extraction itself truncated the document — a different fact from this window truncating. */
   readonly documentTruncated?: boolean;
+  /**
+   * OCR/vision confidence, 0–1, and only when the extraction was probabilistic (#132).
+   *
+   * Present alongside the low-confidence warning rather than instead of it: the warning is the sentence a
+   * model should pass on, and the number is what a caller comparing two extractions needs.
+   */
+  readonly confidence?: number;
+  readonly lowConfidence?: boolean;
   readonly warnings?: readonly string[];
 };
 
@@ -113,6 +122,14 @@ export const createReadDocumentTool = (deps: { readonly extraction: ExtractionSe
         ...(truncated ? { nextBlock: end } : {}),
         // Only when true. A `false` on every response is a field a model has to read and discard.
         ...(document.truncated ? { documentTruncated: true } : {}),
+        // AC-5 reaching the model. The flag is derived here as well as warned about in the document, so a
+        // consumer that only reads structured fields still cannot mistake uncertain text for certain.
+        ...(document.confidence === undefined
+          ? {}
+          : {
+              confidence: document.confidence,
+              ...(document.confidence < LOW_CONFIDENCE_THRESHOLD ? { lowConfidence: true } : {}),
+            }),
         ...(document.warnings.length > 0 ? { warnings: document.warnings } : {}),
       };
     },

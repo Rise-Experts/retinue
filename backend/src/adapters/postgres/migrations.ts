@@ -684,6 +684,14 @@ export const MIGRATIONS: readonly Migration[] = [
       `ALTER TABLE files ADD COLUMN IF NOT EXISTS extraction_blocks integer`,
       `ALTER TABLE files ADD COLUMN IF NOT EXISTS extraction_truncated boolean`,
       `ALTER TABLE files ADD COLUMN IF NOT EXISTS extracted_at timestamptz`,
+      // #132. `real` rather than numeric: a confidence is a measurement, not money, and two decimal places
+      // of a float are all anyone acts on. Nullable because a PDF's text layer is read rather than
+      // recognised -- absent means "not probabilistic", not "unknown".
+      `ALTER TABLE files ADD COLUMN IF NOT EXISTS extraction_confidence real`,
+      `DO $$ BEGIN
+         ALTER TABLE files ADD CONSTRAINT files_extraction_confidence_ck
+           CHECK (extraction_confidence IS NULL OR (extraction_confidence >= 0 AND extraction_confidence <= 1));
+       EXCEPTION WHEN duplicate_object THEN NULL; END $$`,
       // A failure without a reason is a failure nobody can act on, and a reason without a failure state is a
       // row that contradicts itself. Both directions, in one constraint, because a check that only held one
       // way would let the other through.
@@ -700,7 +708,9 @@ export const MIGRATIONS: readonly Migration[] = [
     ],
     down: [
       `DROP INDEX IF EXISTS files_extraction_state_idx`,
+      `ALTER TABLE files DROP CONSTRAINT IF EXISTS files_extraction_confidence_ck`,
       `ALTER TABLE files DROP CONSTRAINT IF EXISTS files_extraction_failure_ck`,
+      `ALTER TABLE files DROP COLUMN IF EXISTS extraction_confidence`,
       `ALTER TABLE files DROP COLUMN IF EXISTS extracted_at`,
       `ALTER TABLE files DROP COLUMN IF EXISTS extraction_truncated`,
       `ALTER TABLE files DROP COLUMN IF EXISTS extraction_blocks`,

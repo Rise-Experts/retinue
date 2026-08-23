@@ -46,6 +46,7 @@ type Row = {
   extraction_pages: number | string | null;
   extraction_blocks: number | string | null;
   extraction_truncated: boolean | null;
+  extraction_confidence: number | string | null;
   extracted_at: string | Date | null;
 };
 
@@ -79,6 +80,7 @@ const toFile = (r: Row): FileMetadata => ({
           ...(r.extraction_pages === null ? {} : { pageCount: Number(r.extraction_pages) }),
           ...(r.extraction_blocks === null ? {} : { blockCount: Number(r.extraction_blocks) }),
           ...(r.extraction_truncated === null ? {} : { truncated: r.extraction_truncated }),
+          ...(r.extraction_confidence === null ? {} : { confidence: Number(r.extraction_confidence) }),
           ...(r.extracted_at === null ? {} : { at: iso(r.extracted_at) }),
         },
       }),
@@ -87,7 +89,7 @@ const toFile = (r: Row): FileMetadata => ({
 const COLUMNS = `id, conversation_id, filename, media_type, byte_size, content_key, checksum, state,
                  uploaded_by, created_at, deleted_at, extraction_state, extraction_ref,
                  extraction_failure_reason, extraction_failure_message, extraction_pages,
-                 extraction_blocks, extraction_truncated, extracted_at`;
+                 extraction_blocks, extraction_truncated, extraction_confidence, extracted_at`;
 
 /**
  * Keyset cursor on `(created_at, id)`.
@@ -218,7 +220,8 @@ export const createPostgresFileMetadataStore = (sql: SqlExecutor): FileMetadataS
               extraction_pages = $7,
               extraction_blocks = $8,
               extraction_truncated = $9,
-              extracted_at = $10::timestamptz
+              extraction_confidence = $10,
+              extracted_at = $11::timestamptz
         -- No compare on the previous extraction state, unlike transition(). A worker retrying after a crash
         -- does not know what it wrote before the crash, and requiring it to would make recovery impossible.
         WHERE tenant_id = $1 AND id = $2
@@ -233,6 +236,7 @@ export const createPostgresFileMetadataStore = (sql: SqlExecutor): FileMetadataS
         extraction.pageCount ?? null,
         extraction.blockCount ?? null,
         extraction.truncated ?? null,
+        extraction.confidence ?? null,
         extraction.at ?? null,
       ],
     );

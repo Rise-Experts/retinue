@@ -83,6 +83,30 @@ export type ExtractedDocument = {
    * answer, and a log line does not reach them.
    */
   readonly warnings: readonly string[];
+  /**
+   * How confident the extraction is, 0–1 (#132).
+   *
+   * Present only for extraction that *has* a confidence — OCR and vision. A PDF's text layer is not
+   * recognised, it is read, so a confidence there would be a number with nothing behind it. Absent therefore
+   * means "not a probabilistic extraction", which is a different fact from "confidence unknown".
+   */
+  readonly confidence?: number;
+  /**
+   * Priced operations this extraction performed (#132, AC-4).
+   *
+   * **Transport only.** The pipeline reports each entry to `onPricedOperation` and then strips the field
+   * before storing the blob, so a stored document never carries billing data. It lives on the result rather
+   * than in a callback because only the pipeline knows which file and tenant a parse belonged to — a callback
+   * handed to the parser at construction is shared across every file it ever parses, and correlating one
+   * would mean trusting that parses never interleave.
+   */
+  readonly usage?: readonly {
+    readonly kind: "vision" | "ocr";
+    readonly modelId: string;
+    readonly inputTokens: number;
+    readonly outputTokens: number;
+    readonly cachedInputTokens: number;
+  }[];
 };
 
 /**
@@ -195,3 +219,4 @@ export * from "./parsers/pdf.js";
 export * from "./extraction.js";
 export * from "./render.js";
 export * from "./read-tool.js";
+export * from "./vision.js";

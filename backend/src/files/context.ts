@@ -18,6 +18,7 @@
 import type { ExecutionContext } from "../core/context.js";
 import type { ConversationId } from "../core/ids.js";
 import type { ContextProvider, ContextSection } from "../context/index.js";
+import { LOW_CONFIDENCE_THRESHOLD } from "../persistence/index.js";
 import type { FileMetadata, FileMetadataStore } from "../persistence/index.js";
 
 /**
@@ -95,7 +96,11 @@ const extractionSuffix = (file: FileMetadata): string => {
   if (extraction === undefined) return "";
   switch (extraction.state) {
     case "extracted":
-      return " [text available: read_document]";
+      // The low-confidence marker is in the *reference line* and not only in the read result, because a model
+      // choosing which of three attachments to trust decides before it reads any of them (#132).
+      return extraction.confidence !== undefined && extraction.confidence < LOW_CONFIDENCE_THRESHOLD
+        ? " [text available (recognised, low confidence): read_document]"
+        : " [text available: read_document]";
     case "failed":
       return ` [unreadable: ${(extraction.failureMessage ?? extraction.failureReason ?? "unknown reason").slice(0, MAX_EXTRACTION_NOTE)}]`;
     case "skipped":

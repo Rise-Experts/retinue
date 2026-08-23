@@ -42,6 +42,27 @@ export type ExtractionServiceDeps = {
   /** Where the extracted document goes. `BlobStore` stores JSON, which is what an `ExtractedDocument` is. */
   readonly blobs: BlobStore;
   readonly parsers: readonly DocumentParser[];
+  /**
+   * Parsers to try when the primary one reports `no-text-layer` (#132).
+   *
+   * Keyed by media type like `parsers`, and separate because the dispatch table holds one parser per type:
+   * both the text-layer PDF parser and the OCR one claim `application/pdf`. This is where #131's insistence
+   * that `no-text-layer` be its own reason becomes load-bearing — the fallback triggers on exactly that
+   * answer and on nothing else. An encrypted or malformed document is *not* retried through OCR, because
+   * OCR will not decrypt it and the second attempt would cost money to reach the same conclusion.
+   */
+  readonly fallbackParsers?: readonly DocumentParser[];
+  /**
+   * Bills a vision or OCR call (#132, AC-4).
+   *
+   * A callback rather than a `UsageRecorder`, so `documents` does not depend on `usage`. The pipeline knows
+   * *when* a priced operation happened; what it costs is the caller's pricing model.
+   */
+  readonly onPricedOperation?: (input: {
+    readonly tenantId: TenantId;
+    readonly fileId: FileId;
+    readonly usage: PricedExtractionUsage;
+  }) => Promise<void>;
   readonly limits?: ExtractionLimits;
   readonly clock?: () => string;
   /**
@@ -119,6 +140,15 @@ const withTimeout = async (
   }
 };
 
+/** What a priced extraction step consumed. Vision calls are the expensive kind, so they are reported. */
+export type PricedExtractionUsage = {
+  readonly kind: "vision" | "ocr";
+  readonly modelId: string;
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  readonly cachedInputTokens: number;
+};
+
 export const createExtractionService = (deps: ExtractionServiceDeps) => {
   const limits = deps.limits ?? DEFAULT_EXTRACTION_LIMITS;
   const clock = deps.clock ?? (() => new Date().toISOString());
@@ -128,6 +158,9 @@ export const createExtractionService = (deps: ExtractionServiceDeps) => {
   const byMediaType = new Map<string, DocumentParser>();
   for (const parser of deps.parsers)
     for (const mediaType of parser.mediaTypes) byMediaType.set(normaliseMediaType(mediaType), parser);
+  const fallbackByMediaType = new Map<string, DocumentParser>();
+  for (const parser of deps.fallbackParsers ?? [])
+    for (const mediaType of parser.mediaTypes) fallbackByMediaType.set(normaliseMediaType(mediaType), parser);
 
   const record = async (
     tenantId: TenantId,
@@ -255,6 +288,19 @@ export const createExtractionService = (deps: ExtractionServiceDeps) => {
         });
       }
 
+      // #132. A scan is the one failure worth a second, more expensive attempt — and only that one. Retrying
+      // an encrypted or malformed document through OCR would spend money to reach the same conclusion.
+      if (isExtractionFailure(outcome) && outcome.reason === "no-text-layer") {
+        const fallback = fallbackByMediaType.get(mediaType);
+        if (fallback !== undefined && fallback.id !== parser.id) {
+          try {
+            outcome = await withTimeout(fallback.parse({ bytes, mediaType, limits }), limits.timeoutMs);
+          } catch (error) {
+            log("fallback parser threw", { tenantId, fileId, parser: fallback.id, error });
+          }
+        }
+      }
+
       if (isExtractionFailure(outcome))
         return record(tenantId, fileId, {
           state: "failed",
@@ -266,13 +312,30 @@ export const createExtractionService = (deps: ExtractionServiceDeps) => {
       // Stored by reference (AC-6). The blob is written *before* the ref is recorded: the reverse would leave
       // a file pointing at a blob that does not exist, and a dangling ref reads as corruption while an
       // unreferenced blob is merely waste.
-      const ref: BlobRef = await deps.blobs.put({ tenantId, value: outcome });
+      // AC-4. Reported before the blob is written, and *stripped* from what is stored: a priced operation
+      // already happened, so a crash between here and the record must still have billed it — and a stored
+      // document has no business carrying billing data.
+      const { usage, ...document } = outcome;
+      for (const entry of usage ?? []) {
+        try {
+          await deps.onPricedOperation?.({ tenantId, fileId, usage: entry });
+        } catch (error) {
+          // Logged, not thrown. A ledger write that fails must not discard an extraction that succeeded, and
+          // an unbilled call is a smaller problem than a document the user paid for and cannot read.
+          log("failed to record extraction usage", { tenantId, fileId, kind: entry.kind, error });
+        }
+      }
+
+      const ref: BlobRef = await deps.blobs.put({ tenantId, value: document });
       return record(tenantId, fileId, {
         state: "extracted",
         ref,
-        pageCount: outcome.pageCount ?? 0,
-        blockCount: outcome.blocks.length,
-        truncated: outcome.truncated,
+        pageCount: document.pageCount ?? 0,
+        blockCount: document.blocks.length,
+        truncated: document.truncated,
+        // On the record as well as in the document, so a listing can flag a low-confidence extraction
+        // without fetching the blob to find out.
+        ...(document.confidence === undefined ? {} : { confidence: document.confidence }),
         at: clock(),
       });
     },
