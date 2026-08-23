@@ -278,3 +278,4 @@ const sortedEntries = (map: Readonly<Record<string, string>>): readonly [string,
 
 export * from "./graders.js";
 export * from "./judge.js";
+export * from "./gate.js";

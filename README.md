@@ -32,9 +32,25 @@ are deliberately **not** members — they keep their own lockfiles, and CI insta
 ```bash
 npm install          # from the repository root
 npm run typecheck
+npm run build        # before npm test: the release-gate CLI imports the built @agentkit/backend
 npm test
-npm run build
 ```
+
+## The release gate
+
+Releases are gated on measured quality. `evals/thresholds.json` holds the per-dimension thresholds — data, not
+code, with the reason each one holds its value written next to it. `evals/trend.json` is the committed,
+append-only record of quality per release, and each entry stores the thresholds it was judged against, so
+`git log -p evals/` distinguishes "quality improved" from "we moved the bar".
+
+```bash
+npm run release:gate -- --report <scored-run.json> [--baseline <prev.json>] [--record]
+```
+
+Exit codes: **0** pass or overridden, **1** a quality failure, **2** a usage error. An override needs both
+`AGENTKIT_GATE_OVERRIDE_ACTOR` and `AGENTKIT_GATE_OVERRIDE_REASON`; half of one is refused rather than ignored,
+and the trend entry records both. The CI job runs on a release tag and on demand, not on every push. See
+`docs/09-quality-and-release.md` — including what the gate cannot yet do, which is score a live run.
 
 ## Boundaries
 

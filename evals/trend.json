@@ -1,0 +1,14 @@
+{
+  "notes": [
+    "Quality per release — REQ-032, AC-3. Append-only, committed, one entry per gated release.",
+    "",
+    "Committed rather than kept in a dashboard for one reason: a threshold change and the results it was applied",
+    "to then appear in the same history. `git log -p evals/` shows the numbers, the limits they were judged",
+    "against, and any override with its actor and reason, in one place, without a service to keep running.",
+    "",
+    "Each entry stores the thresholds in force for that release. So a reviewer reading a later entry against an",
+    "earlier one can see whether quality rose or the bar dropped — which look identical if only the scores are",
+    "recorded."
+  ],
+  "entries": []
+}

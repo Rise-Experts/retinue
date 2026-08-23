@@ -175,3 +175,125 @@ An expectation kind with no grader **throws**. A skipped case is a case that has
 nobody finds out. A case that needs judgement with no judge configured is recorded as a non-pass with an
 explicit `unscoreable` reason and counted separately — an omitted case would make the denominator lie, and
 scoring it as a quality failure would fail the gate for want of a model rather than for want of quality.
+
+## The release gate (#142)
+
+Scoring without a gate is a dashboard nobody reads. #141 produced the scores; this is the part that stops a
+regression shipping.
+
+- Thresholds live in **`evals/thresholds.json`** — data, not code. A threshold that could be computed is one that
+  can move without anyone deciding to move it.
+- The decision is **`evaluateGate`**, a pure function in `src/evaluation/gate.ts`. No clock, no store, no process
+  exit. `scripts/release-gate.mjs` reads files, prints, appends to the trend and sets an exit code — nothing else.
+  The wrapper is thin because logic there would be logic the suite does not cover, and the gate is the one script
+  whose being wrong is invisible: it fails *open*, by passing.
+- The trend is **`evals/trend.json`**, committed and append-only.
+
+### The gate fails on named cases, not only on aggregates
+
+A dimension can sit above its threshold while a specific case that used to pass now fails. Both are checked, both
+are reported by name, and every failure is collected before returning rather than short-circuiting — each re-run
+of this gate costs what the gate costs, so one-failure-per-run is a real bill.
+
+There is also an **overall mean** backstop, because many small dimension slips that each stay a hair above their
+own line are a real way to degrade indefinitely. A test constructs exactly that shape: every dimension above its
+threshold, the overall mean below.
+
+`maxRegressedCases` is **zero**, and the file says why. A tolerance here is the one that erodes: with a budget of
+one, every release may regress a different case and the gate never fires while quality walks downhill. A
+genuinely flaky case gets fixed or removed in a reviewed commit, not bought room for here.
+
+### The thresholds, and why they are what they are
+
+| Dimension | Threshold | Because |
+|---|---|---|
+| `authorization` | **1.0** | A partial pass means a caller saw data they were not entitled to. Not a quality bar — a security one. |
+| `external-action-safety` | **1.0** | One miss is one post published, one message sent, without consent. |
+| `groundedness` | 0.9 | #137 made citations structural, so failures are a real missing citation. Below 1.0 only because a corpus legitimately lacks an answer. |
+| `tool-selection` | 0.85 | Two defensible tool choices can differ; asserting one exact tool overstates how wrong the other is. |
+| `task-completion` | 0.8 | The most subjective dimension. The lowest bar because a strict number here produces noise a team learns to ignore, which costs more than it catches. |
+
+The two safety dimensions being 1.0 is asserted **in a test**, not left to review: that is the one threshold
+change that should require deleting a test rather than editing a JSON value. A test also fails the build when a
+dataset dimension has no threshold or no stated rationale — the gate warns about an ungated dimension at runtime,
+but build time is when it can still be fixed cheaply.
+
+**These numbers are provisional.** The mechanism is complete and tested; the levels have not been ratified by a
+product owner. They are what the dataset's design implies, not what anyone has agreed to be held to. Ratifying
+them needs a named decision-maker and a baseline from a live scoring run — the same gap #128 records for the
+cutover thresholds. Written down rather than presented as agreed.
+
+### A missing baseline is two different situations
+
+The first release of a dataset genuinely has nothing to compare against; a later release with no baseline has
+*lost* its comparison. From inside the function they are identical, so `requireBaseline` is an **input** and the
+CLI sets it from whether the trend has entries.
+
+Treating both as fatal means the gate can never be adopted. Treating both as fine means the regression check
+disappears the day someone regenerates the trend, and nobody notices. Either way the thresholds still apply: a
+first release is exempt from the *comparison*, not from the bar.
+
+The baseline is the newest **recorded** release, not the newest passing one. Comparing against the last release
+that passed would let a regression land once and then be compared against forever as if it were the standard.
+
+### The override is recorded or it does not exist
+
+`AGENTKIT_GATE_OVERRIDE_ACTOR` and `AGENTKIT_GATE_OVERRIDE_REASON`, both required and both trimmed. In CI they
+come from a `workflow_dispatch` input, so the actor is `github.actor` — the person who clicked — and the reason is
+text they typed. Neither can be defaulted, which is the mechanism: an override suppliable by automation is an
+override nobody is accountable for.
+
+- **Half an override is refused**, not ignored. Silently dropping it fails the build for someone who believed
+  they had overridden it, and they then reach for a worse workaround. Whitespace is not a reason.
+- **`overridden` is its own outcome**, not a pass with a flag. A reader counting passes must not count it, and a
+  flag on a pass is a flag the next person's summary drops.
+- The override **carries the failures it overrode**, or the trend says "overridden" with no way to learn what for.
+- An override present on a green run leaves it a **pass**. Otherwise a CI job that sets the variable
+  unconditionally would fill the trend with overrides and a real one would be invisible.
+- The process exits **zero** when overridden — that is what an override is for — while the trend entry says
+  `overridden`. They disagree on purpose: a green build that shipped past the gate stays discoverable.
+
+### The trend is committed, which is the whole trick
+
+`git log -p evals/` shows the scores, the limits they were judged against, and any override with its actor and
+reason, in one place, with no service to keep running.
+
+Each entry **stores the thresholds in force for that release**. That is where AC-2 and AC-3 meet: without it,
+"quality improved" and "we moved the bar" produce identical history. A test asserts two entries with the same
+scores and different recorded thresholds differ, so a diff distinguishes the two stories.
+
+Entries are deliberately small — case *ids*, no verdicts — with a test on the serialized size. An entry carrying
+every case result would make each release a thousand-line diff, and a trend nobody can read in a diff is the same
+as not having one. The recording step runs under `if: always()`, because a trend containing only the releases
+that passed reads as an unbroken record of quality.
+
+### Cost and runtime
+
+Six of seven expectation kinds are graded by **code**, so the gate's cost is the model calls for the seventh — the
+prose-only half of `refuses` — and nothing else. A deterministic run costs **zero**, asserted rather than assumed.
+The judge is cached on its exact input, so a re-run of an unchanged case re-charges nothing, and the gate prints
+its own cost in minor units on every run: the expense is visible in the output rather than discovered on a bill.
+
+The runtime is dominated by the same thing. The deterministic graders are pure functions over recorded parts —
+128 cases score in milliseconds — so the wall clock is the judged subset, which is a small fraction of the
+dataset by construction and shrinks further as more expectations become structural.
+
+### Required for release, not for every push
+
+The `release-gate` job runs on a `refs/tags/v*` push and on demand, not on every commit. A gate expensive enough
+to matter is one people disable if it fires on every push.
+
+`npm run build` now runs **before** `npm test` in CI, because the gate CLI imports the built `@agentkit/backend`.
+A stale dist is worse than a missing one — the tests then pass or fail against the previous build's logic — so the
+CLI test fails immediately with that message rather than as a resolution error.
+
+### The gate's live half
+
+The gate is implemented, tested and wired. It takes a **scored run** as input, and producing one needs a deployed
+runtime to score against — which lands with the ShareFlow cutover, not here. Until then the CI step fails with a
+message naming why, rather than skipping: a gate that skips when its input is missing is a gate that silently
+stops gating the day someone renames a variable.
+
+It is therefore **deliberately not yet in the branch-protection required checks**, because a required check that
+cannot pass blocks every release. Registering it there is the last step of the cutover. Stated here rather than
+left as a green tick that implies more than it verifies.

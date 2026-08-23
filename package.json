@@ -27,7 +27,8 @@
     "clean": "npm run clean --workspaces --if-present && rm -rf tsconfig.tsbuildinfo",
     "conformance:matrix": "node scripts/conformance-matrix.mjs backend/.conformance/vitest.json",
     "conformance:report": "rm -rf backend/.conformance/vitest.json && npm run test -w @agentkit/backend -- --reporter=json --outputFile=.conformance/vitest.json",
-    "conformance": "npm run conformance:report; npm run conformance:matrix"
+    "conformance": "npm run conformance:report; npm run conformance:matrix",
+    "release:gate": "node scripts/release-gate.mjs"
   },
   "devDependencies": {
     "typescript": "^5"
