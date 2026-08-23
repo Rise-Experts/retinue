@@ -72,6 +72,39 @@ Two more from Campaigns:
   daily campaign over a year produces 31 — and an assistant that inferred the count from the dates
   would report 365. The field exists so the cap is visible; recomputing it locally would duplicate the
   logic it exists to expose.
+From rollout (#127):
+
+- **There was no flag mechanism to reuse.** ShareFlow's existing flags are process-wide env vars, and one is
+  explicitly non-production — both disqualified by AC-1 itself, since **an env var requires a deploy to
+  change**. `bot_settings.enabled` is the right shape and the wrong subject, so it is the precedent rather
+  than the mechanism.
+- **A flag is resolved once per run and pinned.** Re-reading it per step means a mid-run rollback switches
+  runtimes halfway through an answer — which *is* the "silently dropped mid-answer" AC-3 forbids.
+- **So the time-to-effect an operator needs is not the cache bound.** It is `staleness + the longest
+  in-flight run`, and both are in the rollback report so nobody has to reason it out during an incident.
+- **Rollback has two modes and the urgent one is loud.** `complete-in-flight` by default;
+  `abandon-in-flight` names every stopped run, and each user is told nothing was published and asking
+  again is safe. A stopped run that looks slow is one the user retries, and the retry is what duplicates.
+- **The default, and the store-unavailable answer, are both the old runtime.** Failing open to the new one
+  would migrate a customer during an outage.
+
+From shadow mode (#126):
+
+- **Suppression is in the envelope, so no capability can forget it.** A capability invented in the test
+  file, which has never heard of shadow mode, is suppressed anyway — the property a per-tool flag could
+  never have.
+- **Suppression runs *before* the approval gate.** A shadow run must not ask a human to approve something
+  that will not happen; doing so teaches people that approving is meaningless, which is the one thing an
+  approval gate cannot survive. Whether approval *would* have been required is recorded instead.
+- **A shadow run with nowhere to record its suppressions is refused.** The absent flag defaults to "real
+  run" — unavoidable, since defaulting the other way would make every existing context a shadow one — so
+  the dangerous direction is closed here instead.
+- **Shadow mode measures everything up to the external write and nothing after it.** All three return
+  shapes change the agent's trajectory; only a truthful one avoids teaching it to report a publish that
+  never happened.
+- **The diff reports kinds of difference, not a verdict** — *"some differences are improvements"*. It does
+  surface one number directly: whether the new runtime would have published more times than the old one.
+
 From analytics (#125):
 
 - **The envelope has no room for an interpretation.** AC-2 asks for facts and interpretations to be
@@ -240,6 +273,8 @@ From Accounts:
 | `context/` | the eight providers from docs/07, the shared section builder, and the forbidden-claim checker |
 | `skills/` | the seven migrated skill bodies, validated at import time by the platform's own validator |
 | `manifests/` | the Social Assistant — `id` neutral, branding in the display name |
+| `shadow/` | shadow-run recording and the per-workflow parity diff |
+| `rollout/` | per-workspace runtime flags, rollback, and the written procedure |
 
 Nothing under `tools/` performs I/O; a ShareFlow tool is the envelope from `defineDelegatingTool` over
 a service method, and R7 fails the build on an attempt.
