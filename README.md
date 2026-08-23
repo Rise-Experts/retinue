@@ -71,6 +71,16 @@ server and writes a JSON report. The measured envelope, the failure-injection re
 mode are in [`docs/16-load-and-resilience.md`](docs/16-load-and-resilience.md) — including what has *not* been
 measured, which is a deployed HTTP instance and a multi-hour soak.
 
+## Security review
+
+`npm run security:review` prints the checklist, the findings register and the checks a person must still walk by
+hand, and exits non-zero once an accepted finding passes its revisit date. Everything a machine can decide is
+asserted in `backend/src/__tests__/security-audit.test.ts` and runs in `npm test`.
+
+Findings, severities and resolutions: [`docs/17-security-review.md`](docs/17-security-review.md). Two properties
+worth knowing when writing a context provider: `ContextSection.origin` is required and has no default, and a
+`platform` section that interpolates a user-supplied value must neutralise it.
+
 ## Boundaries
 
 Per [`docs/01-architecture.md`](docs/01-architecture.md), these packages must build and

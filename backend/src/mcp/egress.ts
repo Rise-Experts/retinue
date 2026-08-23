@@ -71,6 +71,23 @@ export const validateEndpoint = (policy: EgressPolicy, transport: McpTransport, 
   } catch {
     throw forbidden(`Invalid MCP endpoint URL`);
   }
+  /**
+   * A URL carrying userinfo is a **credential**, and it is refused (#145).
+   *
+   * `https://user:sk-live-abc@allowed.host` passed every check here: the scheme is permitted, the host is on the
+   * allow-list, and the endpoint was then stored verbatim in `mcp_connections.endpoint`. A secret in a database
+   * column — and in every log line, error message and support ticket that ever quotes the endpoint.
+   *
+   * The whole point of `McpAuth.credentialRef` is that a secret is *referenced*, never inlined. A URL is a second,
+   * unguarded way to inline one, which is why this is a refusal and not a strip: silently removing the userinfo
+   * would connect without the credential the operator believed they had configured, and the failure would look
+   * like the remote server rejecting them.
+   */
+  if (url.username !== "" || url.password !== "")
+    throw forbidden(
+      "MCP endpoint URL must not contain credentials in its userinfo; use McpAuth.credentialRef instead",
+    );
+
   const schemes = policy.allowedSchemes ?? ["https"];
   const scheme = url.protocol.replace(/:$/, "");
   if (!schemes.includes(scheme)) throw forbidden(`scheme "${scheme}" is not permitted for MCP egress`);

@@ -3,6 +3,7 @@
  */
 
 import type { ExecutionContext } from "../core/context.js";
+import type { ContextOrigin } from "../security/prompt-safety.js";
 
 export type ContextSensitivity = "public" | "internal" | "confidential" | "restricted";
 
@@ -19,6 +20,22 @@ export type ContextSection = {
   /** Where this came from, so a claim in the output can be traced back. */
   readonly provenance: string;
   readonly sensitivity: ContextSensitivity;
+  /**
+   * Whether this content may instruct the agent (#145, AC-4).
+   *
+   * **Required, with no default.** A provider has to decide, so "nobody thought about it" is a compile error
+   * rather than external content quietly reaching the system prompt as instruction.
+   *
+   * Not the same as `sensitivity`, and the difference matters in the worst direction. Sensitivity is
+   * *confidentiality* — who may see this. Origin is *provenance* — may this instruct. A page fetched off the
+   * public web is `public` sensitivity and the least trustworthy content in the system.
+   *
+   * `external` content is rendered inside a delimited envelope with delimiter forgery neutralised; see
+   * `security/prompt-safety.ts`. A `platform` section that *interpolates* untrusted values — a filename, a tool
+   * name, a user-supplied label — stays `platform` and neutralises those values itself, so the section's own
+   * instructions are not swallowed by an envelope that says nothing inside it is an instruction.
+   */
+  readonly origin: ContextOrigin;
   readonly cacheable: boolean;
   readonly expiresAt?: string;
   /** Budget bucket. Defaults to `user-context` when a provider does not specify one. */

@@ -202,7 +202,17 @@ const readAs = async (
 
 describe("policy coverage is derived from MIGRATIONS, not transcribed", () => {
   it("covers or explicitly exempts every table a migration creates", () => {
-    const covered = new Set(TENANT_SCOPED_TABLES.map((t) => t.table));
+    /**
+     * Both coverage lists, because `tablesInMigrations` now scans both migration lists (#145).
+     *
+     * The security audit found the gate reading only `MIGRATIONS`, so no table from `VECTOR_MIGRATIONS` was ever
+     * checked. Fixing the scan made this test fail immediately on `knowledge_chunks` — which *was* covered, in
+     * `VECTOR_TENANT_SCOPED_TABLES`, and the gate had simply never looked at the table to notice. Proof the hole
+     * was real: the next vector table would have shipped with no policy and nothing would have said so.
+     */
+    const covered = new Set(
+      [...TENANT_SCOPED_TABLES, ...VECTOR_TENANT_SCOPED_TABLES].map((t) => t.table),
+    );
     const exempt = new Map(RLS_EXEMPT_TABLES.map((t) => [t.table, t.reason]));
 
     const uncovered = tablesInMigrations().filter((t) => !covered.has(t) && !exempt.has(t));
@@ -213,6 +223,8 @@ describe("policy coverage is derived from MIGRATIONS, not transcribed", () => {
 
   it("names no table that does not exist", () => {
     const actual = new Set([...tablesInMigrations(), "schema_migrations"]);
+    for (const { table } of VECTOR_TENANT_SCOPED_TABLES)
+      expect(actual.has(table), `${table} is not a real table`).toBe(true);
     // The other direction, and the one the SPEC's list got wrong: `interactions` and `blob_refs` were
     // both named and neither exists. A stale entry generates a policy statement against a missing
     // table, which fails at apply time — far from the list that caused it.

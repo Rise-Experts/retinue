@@ -15,7 +15,7 @@
  * `supabase-rls.test.ts` derives the table list from `MIGRATIONS`, so a new table cannot ship
  * uncovered and a stale entry for a dropped table fails too.
  */
-import { MIGRATIONS } from "../postgres/migrations.js";
+import { MIGRATIONS, VECTOR_MIGRATIONS } from "../postgres/migrations.js";
 import type { SqlExecutor } from "../postgres/sql.js";
 import type { TransactionRunner } from "../postgres/transaction.js";
 
@@ -141,9 +141,20 @@ export const applyVectorRls = async (sql: SqlExecutor): Promise<void> => {
  * neither of which exists, and missed `schema_migrations`. A list that can disagree with the schema
  * will eventually disagree with the schema.
  */
+/**
+ * Every table any migration creates — **both** lists (#145).
+ *
+ * `VECTOR_MIGRATIONS` was missing, and that was a hole in the coverage gate rather than an oversight in a list:
+ * a table added there was never scanned, so it could ship with no RLS policy and no exemption and nothing would
+ * say so. `knowledge_chunks` happened to be covered because someone remembered; the *next* vector table would
+ * not have been.
+ *
+ * Found by auditing the gate rather than the list, which is the difference between checking the answer and
+ * checking the thing that produces it.
+ */
 export const tablesInMigrations = (): readonly string[] => {
   const names: string[] = [];
-  for (const migration of MIGRATIONS) {
+  for (const migration of [...MIGRATIONS, ...VECTOR_MIGRATIONS]) {
     for (const statement of migration.up) {
       const match = /CREATE TABLE (?:IF NOT EXISTS )?([a-z_][a-z0-9_]*)/i.exec(statement);
       if (match?.[1] && !names.includes(match[1])) names.push(match[1]);

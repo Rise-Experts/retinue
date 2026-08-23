@@ -26,6 +26,8 @@ import {
 import type { ModelProvider } from "../models/index.js";
 import type { AuthorizationPolicy } from "../authorization/index.js";
 import { gatherSections, type ContextProvider } from "../context/index.js";
+import { randomBytes } from "node:crypto";
+import { makeNonce, renderContextBlock } from "../security/prompt-safety.js";
 import { createToolRegistry, type ToolProvider } from "../tools/index.js";
 import { createDurableWorker, type AgentEngine, type ProcessOutcome, type Run } from "../runtime/index.js";
 import {
@@ -90,6 +92,14 @@ export type CreateAgentConfig = {
   readonly tools?: readonly ToolProvider[];
   /** Context providers (e.g. principal memory, retrieval) whose sections are prepended to the prompt. */
   readonly contextProviders?: readonly ContextProvider[];
+  /**
+   * Random hex for the untrusted-content delimiter nonce (#145).
+   *
+   * Injected so a test can pin the exact bytes of a rendered prompt; defaults to `node:crypto`. A module that
+   * reaches for randomness directly is one whose output cannot be asserted, and the assertion here is precisely
+   * that a forged delimiter does not survive.
+   */
+  readonly randomHex?: (bytes: number) => string;
   readonly authorization?: AuthorizationPolicy;
   readonly tenantId?: string;
   /** Test/advanced seam: override how a manifest resolves to a model (e.g. a mock model). */
@@ -116,6 +126,9 @@ export type RunResult = {
 
 const textOf = (parts: readonly MessagePart[]): string =>
   parts.filter((p): p is TextPart => p.type === "text").map((p) => p.text).join("");
+
+/** The default nonce source. Real randomness, so a delimiter cannot be predicted across runs. */
+const defaultRandomHex = (bytes: number): string => randomBytes(bytes).toString("hex");
 
 export const createAgent = (config: CreateAgentConfig) => {
   const manifest = defineAgent(config.manifest);
@@ -157,10 +170,22 @@ export const createAgent = (config: CreateAgentConfig) => {
     resolveModel,
     ...(contextProviders.length > 0
       ? {
+          /**
+           * The system prompt, with external content quarantined (#145, AC-4).
+           *
+           * The previous version was `sections.map(s => "## " + s.title + "\n" + s.body)`. That is the one place
+           * a model most readily treats text as instruction, and a section body can be a fetched page, an MCP
+           * result or an extracted document. `contextProviders` is the *intended extension point* for exactly
+           * that content, and nothing in the type system warned the next person who wired one.
+           *
+           * `renderContextBlock` groups untrusted sections after the trusted ones under a standing preamble and
+           * encloses each in a nonce-delimited block with delimiter forgery neutralised. A fresh nonce per
+           * assembly, so content cannot learn the delimiter from a previous turn.
+           */
           systemPrompt: async (m: AgentManifest, context: ExecutionContext) => {
             const sections = await gatherSections(context, contextProviders);
             if (sections.length === 0) return m.instructions;
-            const ctxText = sections.map((s) => `## ${s.title}\n${s.body}`).join("\n\n");
+            const ctxText = renderContextBlock(sections, makeNonce(config.randomHex ?? defaultRandomHex));
             return `${m.instructions}\n\n# Context\n${ctxText}`;
           },
         }

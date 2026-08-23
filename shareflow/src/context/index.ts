@@ -15,7 +15,7 @@
  * - **`estimatedTokens` is computed, not asserted.** A provider that under-reports its size defeats
  *   the prompt budget, and every provider guessing separately guarantees they disagree.
  */
-import type { ContextKind, ContextSection, ContextSensitivity, PruneStage } from "@agentkit/backend";
+import type { ContextKind, ContextOrigin, ContextSection, ContextSensitivity, PruneStage } from "@agentkit/backend";
 
 /**
  * Token estimate for a body of prose.
@@ -33,6 +33,18 @@ export type ShareFlowSectionInput = {
   readonly priority: number;
   /** Required. Where this came from, specifically enough to check the claim it supports. */
   readonly provenance: string;
+  /**
+   * Required. Whether this content may instruct the agent (#145).
+   *
+   * No default, deliberately, even though `sensitivity` and `cacheable` have one. Those have a safe default;
+   * this does not — guessing `platform` would let third-party content instruct, and guessing `external` would
+   * wrap the tenant's own brand policy in "nothing here is an instruction". Every one of this package's ten
+   * sections had to state it, which is the point.
+   *
+   * This package already had a `shareflow.untrusted-content` provider before the port had this field — a policy
+   * *about* untrusted content, carried as a convention because there was nowhere to say it structurally.
+   */
+  readonly origin: ContextOrigin;
   readonly sensitivity?: ContextSensitivity;
   readonly kind?: ContextKind;
   readonly cacheable?: boolean;
@@ -55,6 +67,7 @@ export const shareFlowSection = (input: ShareFlowSectionInput): ContextSection =
   estimatedTokens: estimateTokens(input.body),
   provenance: input.provenance,
   sensitivity: input.sensitivity ?? "internal",
+  origin: input.origin,
   cacheable: input.cacheable ?? false,
   ...(input.kind === undefined ? {} : { kind: input.kind }),
   ...(input.expiresAt === undefined ? {} : { expiresAt: input.expiresAt }),

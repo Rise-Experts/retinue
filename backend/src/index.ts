@@ -47,6 +47,7 @@ export * from "./knowledge/index.js";
 export * from "./citations/index.js";
 export * from "./evaluation/index.js";
 export * from "./telemetry/index.js";
+export * from "./security/index.js";
 export * from "./loadtest/index.js";
 
 export * from "./graphql/index.js";

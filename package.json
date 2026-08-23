@@ -2,7 +2,7 @@
   "name": "@agentkit/monorepo",
   "version": "0.0.0",
   "private": true,
-  "description": "Reusable AI agent platform \u2014 npm-workspaces monorepo (see docs/).",
+  "description": "Reusable AI agent platform — npm-workspaces monorepo (see docs/).",
   "license": "UNLICENSED",
   "type": "module",
   "workspaces": [
@@ -29,7 +29,8 @@
     "conformance:report": "rm -rf backend/.conformance/vitest.json && npm run test -w @agentkit/backend -- --reporter=json --outputFile=.conformance/vitest.json",
     "conformance": "npm run conformance:report; npm run conformance:matrix",
     "release:gate": "node scripts/release-gate.mjs",
-    "loadtest": "node scripts/loadtest.mjs"
+    "loadtest": "node scripts/loadtest.mjs",
+    "security:review": "node scripts/security-review.mjs"
   },
   "devDependencies": {
     "typescript": "^5"

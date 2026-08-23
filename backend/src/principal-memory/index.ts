@@ -141,6 +141,10 @@ export const createPrincipalMemoryProvider = (config: {
         estimatedTokens: estimate(e.text),
         provenance: `principal-memory:${e.id}`, // lets the context inspector attribute the turn
         sensitivity: "confidential",
+        // The principal's own remembered context, written from their own turns. Treating it as untrusted would
+        // wrap a user's own stated preferences in "nothing here is an instruction", which is the opposite of what
+        // this provider is for. Third-party content never reaches this store -- see docs/17.
+        origin: "platform",
         cacheable: false,
         kind: "user-context",
         pruneStage: "old-knowledge",
