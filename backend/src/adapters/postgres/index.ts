@@ -30,3 +30,4 @@ export const POSTGRES_CAPABILITIES: readonly AdapterCapability[] = [
   "distributed-locking",
 ];
 export * from "./files.js";
+export * from "./artifacts.js";

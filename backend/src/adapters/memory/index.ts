@@ -99,6 +99,7 @@ export * from "./usage.js";
 /** Blob store reference adapter (spilled tool output). */
 export * from "./blobs.js";
 export * from "./files.js";
+export * from "./artifacts.js";
 
 /** Idempotency store reference adapter. */
 export * from "./idempotency.js";

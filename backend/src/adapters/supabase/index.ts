@@ -61,6 +61,14 @@ export {
  */
 export { createPostgresFileMetadataStore as createSupabaseFileMetadataStore } from "../postgres/files.js";
 export * from "./storage.js";
+/**
+ * Artifacts alias to Postgres like every other relational port (#133).
+ *
+ * Their *content* does not live here at all — it is a `BlobRef`, and where those bytes sit is `BlobStore`'s
+ * business, which is itself an alias. So unlike `FileContentStore` there is nothing Supabase-specific to add:
+ * the artifact row is a relational row.
+ */
+export { createPostgresArtifactStore as createSupabaseArtifactStore } from "../postgres/artifacts.js";
 
 export * from "./rls.js";
 export * from "./realtime.js";

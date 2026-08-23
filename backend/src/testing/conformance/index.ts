@@ -25,6 +25,7 @@ export * from "./session-state.js";
 export * from "./records.js";
 export * from "./hitl.js";
 export * from "./files.js";
+export * from "./artifacts.js";
 export * from "./invariants.js";
 
 /** A port with methods, and the harness that verifies it. */
@@ -59,6 +60,7 @@ export const REGISTERED_PORTS: readonly PortCoverage[] = [
   { port: "McpConnectionStore", harness: "mcpConnectionStoreConformance" },
   { port: "FileMetadataStore", harness: "fileMetadataStoreConformance" },
   { port: "FileContentStore", harness: "fileContentStoreConformance" },
+  { port: "ArtifactStore", harness: "artifactStoreConformance" },
 ];
 
 /**
@@ -91,7 +93,6 @@ export const ISOLATION_EXEMPT_PORTS: readonly { readonly port: string; readonly 
 export const PLACEHOLDER_PORTS: readonly string[] = [
   "EvaluationStore",
   "KnowledgeStore",
-  "ArtifactStore",
   "VectorIndex",
   "KeywordIndex",
 ];
@@ -236,6 +237,7 @@ export const ADAPTER_COVERAGE: readonly AdapterCoverage[] = [
       "PrincipalMemoryStore",
       "BlobStore",
       "FileMetadataStore",
+      "ArtifactStore",
     ],
     notImplemented: POSTGRES_PENDING,
     notApplicable: [RELATIONAL_CONTENT_EXEMPTION],
@@ -274,4 +276,5 @@ export const HARNESS_MODULES: readonly string[] = [
   "src/testing/conformance/records.ts",
   "src/testing/conformance/hitl.ts",
   "src/testing/conformance/files.ts",
+  "src/testing/conformance/artifacts.ts",
 ];

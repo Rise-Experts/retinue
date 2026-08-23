@@ -69,6 +69,8 @@ export const TENANT_SCOPED_TABLES: readonly RlsTable[] = [
   // #129. The bytes are not in Postgres at all, so this policy covers the metadata only — an object-storage
   // bucket needs its own access rules, and RLS here says nothing about them.
   { table: "files" },
+  { table: "artifacts" },
+  { table: "artifact_versions" },
 ];
 
 /**

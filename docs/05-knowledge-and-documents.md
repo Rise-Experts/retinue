@@ -343,3 +343,64 @@ is logged, not thrown: an unbilled call is a smaller problem than a document the
 hook" asks for; and `usageDedupeKey` is `(runId, stepId)`, so a re-enqueued extraction records **once** rather
 than charging a tenant twice for the same image. The wart is that `runId` no longer always names a run — a
 separate cost dimension would be cleaner if the ledger ever needs to distinguish them.
+
+## Artifacts (#133)
+
+An artifact is how substantial assistant output becomes a named, versioned thing rather than text buried in a
+thread — the prerequisite for exporting it.
+
+### Two tables, not one
+
+`artifacts` holds the identity that outlives any single version: a name, an owning conversation, a shared
+link's target. `artifact_versions` holds the versions. Folding them together would mean either duplicating
+that identity on every version or having no row to point a deleted link at.
+
+`latest_version` is **denormalised** onto the artifact row on purpose. It is read on every resolve of "the
+current version", and a `MAX()` subquery there would be a second source of truth that can disagree with the
+rows it summarises under concurrency — which is the exact race `addVersion`'s compare-and-set exists to settle.
+
+### Versioning is a compare-and-set
+
+`addVersion` takes `expectedLatestVersion` and the `UPDATE` carries `WHERE latest_version = $expected`. Two
+concurrent regenerations both hold `expectedLatestVersion: 1`; exactly one wins, and the loser is *told* so.
+Without that, both become version 2 and one silently replaces the other — which is "earlier versions remain
+resolvable" failing in the way nobody notices. `UNIQUE (tenant_id, artifact_id, version)` says the same thing
+a second time, at the level the application cannot be wrong about.
+
+**Restore makes a new version**, it does not move a pointer backwards. Moving one would make the history lie
+about what happened, and *"the version that was current on Tuesday"* is exactly the question a shared link
+asks. The restored version reuses the original's `contentRef` — a blob is immutable, so sharing it is safe, and
+copying would double the storage for a byte-identical value.
+
+### Content by reference, and the write order
+
+The version row holds a `BlobRef` and there is no column content could be inlined into. An artifact is the
+thing a user exports, so it grows without limit, and an unbounded value in a row is the antipattern `0011`
+rejected for blobs and `0013` for file bytes.
+
+The blob is written **before** the row. A crash between them leaves an unreferenced blob, which is waste; the
+reverse leaves a row pointing at content that does not exist, and a dangling reference reads as corruption.
+Same reasoning, opposite order, as the file upload in #129 — because there the metadata row is the evidence
+reconciliation needs, and here the reference is the thing that must never dangle.
+
+### Provenance is required
+
+`ArtifactProvenance` is required on every version: the run, the producing tool, the normalised inputs, and any
+attachments the content was derived from. Provenance that *can* be absent is provenance that will be, on the
+version someone eventually asks about. The inputs are the **normalised** ones rather than the model's prose
+request, because a regeneration that produced a different result should be explicable by comparing two
+versions' inputs — and free text does not compare.
+
+The conversation is on the *artifact*, not repeated per version: it owns the artifact, so duplicating it would
+be a second place for it to disagree.
+
+### Access follows the conversation
+
+`AuthorizationPolicy` is a required dependency of `ArtifactService` and every entry point takes the decision
+on the **conversation** — read, write, history, restore, delete and list alike. An artifact is therefore never
+more accessible than the conversation that produced it, and there is no second permission model to keep in
+step with the first. An unentitled caller gets the same `not_found` and the same message as a nonexistent id.
+
+Rendered formats — PDF, DOCX — are *exports* of an artifact rather than kinds of one, which is why
+`ARTIFACT_KINDS` does not list them: an artifact exported twice is still one artifact, and making PDF a kind
+would make it two things that drift. Export is #134.

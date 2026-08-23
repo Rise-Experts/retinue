@@ -16,6 +16,8 @@ import type { PlatformError } from "../core/errors.js";
 import type {
   AgentId,
   ApprovalGrantId,
+  ArtifactId,
+  ArtifactVersionId,
   BlobRef,
   ConversationId,
   FileId,
@@ -311,7 +313,131 @@ export interface UsageStore {
 
 export interface EvaluationStore {}
 export interface KnowledgeStore {}
-export interface ArtifactStore {}
+
+// ---------------------------------------------------------------------------
+// Artifacts (#133) — REQ-028. Substantial assistant output as a named, versioned thing rather than
+// text buried in a thread.
+// ---------------------------------------------------------------------------
+
+/**
+ * What an artifact is.
+ *
+ * Markdown and structured content first, per `docs/05` → Document writing. Rendered formats — PDF, DOCX — are
+ * *exports* of an artifact rather than kinds of one, which is why they are absent here: an artifact exported
+ * twice is one artifact, and making PDF a kind would make it two things that drift.
+ */
+export const ARTIFACT_KINDS = ["markdown", "html", "json", "csv", "code", "diagram"] as const;
+export type ArtifactKind = (typeof ARTIFACT_KINDS)[number];
+
+/**
+ * Where a version came from — AC-3.
+ *
+ * Required on every version, not optional. A reader asking "where did this number come from" is the whole
+ * reason artifacts exist as first-class objects, and provenance that *can* be absent is provenance that will
+ * be, on the version someone eventually asks about.
+ */
+export type ArtifactProvenance = {
+  /** The run that produced it. Absent for an artifact a person created directly. */
+  readonly runId?: RunId;
+  /** The tool or agent that produced it, by name. */
+  readonly producedBy: string;
+  /**
+   * The inputs it was produced from.
+   *
+   * Stored as JSON, and deliberately the *normalised* input rather than the model's prose request: a
+   * regeneration that produced a different result should be explicable by comparing these, and free text
+   * does not compare.
+   */
+  readonly inputs: Readonly<Record<string, unknown>>;
+  /** Attachments the content was derived from, so a document's figures trace back to their source. */
+  readonly sourceFileIds?: readonly FileId[];
+};
+
+/**
+ * One version's content, by reference — AC-5.
+ *
+ * `contentRef` points into `BlobStore`, which stores JSON, which is what markdown-and-structured-content is
+ * once it is a value. The row holds no content: an artifact is the thing a user exports, so it grows without
+ * limit, and a table row is the wrong place for something unbounded — the same reasoning that kept file bytes
+ * out of `files` in #129.
+ */
+export type ArtifactVersion = {
+  readonly id: ArtifactVersionId;
+  readonly artifactId: ArtifactId;
+  /** 1-based and contiguous. A gap would make "the previous version" ambiguous. */
+  readonly version: number;
+  readonly contentRef: BlobRef;
+  readonly byteSize: number;
+  readonly checksum?: string;
+  readonly provenance: ArtifactProvenance;
+  readonly createdBy: PrincipalId;
+  readonly createdAt: string;
+};
+
+export type Artifact = {
+  readonly id: ArtifactId;
+  /**
+   * The conversation that owns it.
+   *
+   * Ownership, not association: AC-4 follows from it. Entitlement to an artifact *is* entitlement to its
+   * conversation, exactly as #129 established for files, so there is no second permission model to keep in
+   * step with the first.
+   */
+  readonly conversationId: ConversationId;
+  readonly kind: ArtifactKind;
+  /** As the user or agent named it. Display only. */
+  readonly name: string;
+  /** The highest version that exists. The default a reader gets when they do not ask for one. */
+  readonly latestVersion: number;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  /** Soft delete, so a shared link resolves to "deleted" rather than to nothing. */
+  readonly deletedAt?: string;
+};
+
+export interface ArtifactStore {
+  /** Creates the artifact and its version 1 together: an artifact with no version is not a thing. */
+  create(
+    input: TenantScope & {
+      artifact: Omit<Artifact, "latestVersion" | "updatedAt" | "deletedAt">;
+      version: Omit<ArtifactVersion, "artifactId" | "version">;
+    },
+  ): Promise<Artifact>;
+
+  /**
+   * Adds the next version — AC-2.
+   *
+   * `expectedLatestVersion` makes this a compare-and-set. Without it two concurrent regenerations both become
+   * version 2: one silently replaces the other, and "earlier versions remain resolvable" stops being true for
+   * the one that lost. Reported rather than thrown, because losing that race is an ordinary outcome.
+   */
+  addVersion(
+    input: TenantScope & {
+      id: ArtifactId;
+      expectedLatestVersion: number;
+      version: Omit<ArtifactVersion, "artifactId" | "version">;
+    },
+  ): Promise<{ readonly added: boolean; readonly version?: number }>;
+
+  /** `null` for another tenant's artifact as well as an absent one — the two must be indistinguishable. */
+  get(input: TenantScope & { id: ArtifactId }): Promise<Artifact | null>;
+
+  /** A specific version, or the latest when `version` is omitted. */
+  getVersion(
+    input: TenantScope & { id: ArtifactId; version?: number },
+  ): Promise<ArtifactVersion | null>;
+
+  /** Live artifacts of a conversation, newest cursor last. */
+  listByConversation(
+    input: TenantScope & PageRequest & { conversationId: ConversationId },
+  ): Promise<Page<Artifact>>;
+
+  /** Every version, oldest first — the history a restore reads. */
+  listVersions(input: TenantScope & PageRequest & { id: ArtifactId }): Promise<Page<ArtifactVersion>>;
+
+  /** Soft delete. Versions are kept: the row is what makes a shared link resolve to "deleted". */
+  softDelete(input: TenantScope & { id: ArtifactId; at: string }): Promise<{ readonly deleted: boolean }>;
+}
 
 // ---------------------------------------------------------------------------
 // Files (`docs/05-knowledge-and-documents.md`, REQ-026). Two ports, not one.

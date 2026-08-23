@@ -20,6 +20,7 @@ import type { McpServerConnection } from "../mcp/index.js";
 import {
   createMemoryAgentStore,
   createMemoryApprovalGrantStore,
+  createMemoryArtifactStore,
   createMemoryBlobStore,
   createMemoryFileContentStore,
   createMemoryFileMetadataStore,
@@ -47,6 +48,7 @@ import {
 import { DEFAULT_SESSION_STATE_MAX_BYTES } from "../persistence/index.js";
 import {
   agentStoreConformance,
+  artifactStoreConformance,
   approvalGrantStoreConformance,
   blobStoreConformance,
   checkpointStoreConformance,
@@ -167,6 +169,8 @@ blobStoreConformance(() => createMemoryBlobStore());
 // #129. The metadata store needs its conversation parent, so it takes the fixture shape; the content store
 // has no relational parent at all.
 fileMetadataStoreConformance(() => createMemoryFileMetadataStore());
+// #133. No relational parent to seed here; the fixture shape matters only for Postgres.
+artifactStoreConformance(() => createMemoryArtifactStore());
 fileContentStoreConformance(() => createMemoryFileContentStore());
 idempotencyStoreConformance(() => createMemoryIdempotencyStore());
 principalMemoryStoreConformance(() => createMemoryPrincipalMemoryStore());

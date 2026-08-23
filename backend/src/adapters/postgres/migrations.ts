@@ -721,6 +721,72 @@ export const MIGRATIONS: readonly Migration[] = [
       `ALTER TABLE files DROP COLUMN IF EXISTS extraction_state`,
     ],
   },
+  {
+    // #133. Two tables, not one with a version column: an artifact has an identity that outlives any one
+    // version -- a name, an owning conversation, a shared link -- and folding them together would mean either
+    // duplicating that identity on every version or having no row to point a deleted link at.
+    id: "0015_artifacts",
+    up: [
+      `CREATE TABLE IF NOT EXISTS artifacts (
+        tenant_id       text        NOT NULL,
+        id              text        NOT NULL,
+        conversation_id text        NOT NULL,
+        kind            text        NOT NULL,
+        name            text        NOT NULL,
+        -- Denormalised from artifact_versions on purpose. It is read on every resolve of "the current
+        -- version", and a MAX() subquery there would be a second source of truth that can disagree with the
+        -- rows it summarises under concurrency -- which is the exact race addVersion's compare-and-set exists
+        -- to settle.
+        latest_version  integer     NOT NULL,
+        created_at      timestamptz NOT NULL,
+        updated_at      timestamptz NOT NULL,
+        deleted_at      timestamptz,
+        PRIMARY KEY (tenant_id, id),
+        -- RESTRICT, not CASCADE: dropping an artifact's row while its versions and blobs remain is the
+        -- orphan #129 refused for files, and for the same reason.
+        FOREIGN KEY (tenant_id, conversation_id) REFERENCES conversations (tenant_id, id) ON DELETE RESTRICT,
+        CHECK (latest_version >= 1)
+      )`,
+      `CREATE TABLE IF NOT EXISTS artifact_versions (
+        tenant_id     text        NOT NULL,
+        id            text        NOT NULL,
+        artifact_id   text        NOT NULL,
+        version       integer     NOT NULL,
+        -- A reference, never the content. An artifact is the thing a user exports, so it grows without limit,
+        -- and an unbounded value in a row is the antipattern 0011 rejected for blobs and 0013 for file bytes.
+        content_ref   text        NOT NULL,
+        byte_size     bigint      NOT NULL,
+        checksum      text,
+        -- Provenance as jsonb because the inputs are arbitrary: what a tool was called with is that tool's
+        -- shape, and a column per input is a migration per tool.
+        provenance    jsonb       NOT NULL,
+        created_by    text        NOT NULL,
+        created_at    timestamptz NOT NULL,
+        PRIMARY KEY (tenant_id, id),
+        FOREIGN KEY (tenant_id, artifact_id) REFERENCES artifacts (tenant_id, id) ON DELETE RESTRICT,
+        -- The constraint that makes AC-2 a property rather than a convention: two concurrent regenerations
+        -- cannot both be version 2, whatever the application layer believes.
+        UNIQUE (tenant_id, artifact_id, version),
+        CHECK (version >= 1),
+        CHECK (byte_size >= 0)
+      )`,
+      // Serves listByConversation's keyset page: live rows only, ordered the way the cursor reads.
+      `CREATE INDEX IF NOT EXISTS artifacts_conversation_idx
+        ON artifacts (tenant_id, conversation_id, created_at, id)
+        WHERE deleted_at IS NULL`,
+      // Serves listVersions and getVersion. The unique constraint above already indexes
+      // (tenant_id, artifact_id, version), so this exists only for the descending scan a "latest" lookup
+      // does -- and is dropped rather than kept if it ever shows as unused.
+      `CREATE INDEX IF NOT EXISTS artifact_versions_latest_idx
+        ON artifact_versions (tenant_id, artifact_id, version DESC)`,
+    ],
+    down: [
+      `DROP INDEX IF EXISTS artifact_versions_latest_idx`,
+      `DROP INDEX IF EXISTS artifacts_conversation_idx`,
+      `DROP TABLE IF EXISTS artifact_versions`,
+      `DROP TABLE IF EXISTS artifacts`,
+    ],
+  },
 ];
 
 export const migrate = async (sql: SqlExecutor): Promise<void> => {

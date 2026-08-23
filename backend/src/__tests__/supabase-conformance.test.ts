@@ -39,6 +39,7 @@ import {
   fileContentStoreConformance,
   fileMetadataStoreConformance,
 } from "../testing/conformance/files.js";
+import { artifactStoreConformance } from "../testing/conformance/artifacts.js";
 import { supabaseStorageDouble } from "../testing/supabase-storage-double.js";
 import {
   blobStoreConformance,
@@ -297,6 +298,18 @@ blobStoreConformance(() => supabase.createSupabaseBlobStore(freshExecutor()));
 // reports the port as uncovered, which is the failure mode the generator exists to prevent.
 fileContentStoreConformance(() => supabaseStorageDouble().store);
 
+artifactStoreConformance(() => {
+  const sql = freshExecutor();
+  return {
+    store: supabase.createSupabaseArtifactStore(sql),
+    async seedConversation({ tenantId, conversationId }) {
+      await supabase
+        .createSupabaseConversationStore(sql)
+        .create({ tenantId, id: conversationId, title: "artifacts" });
+    },
+  };
+});
+
 fileMetadataStoreConformance(() => {
   const sql = freshExecutor();
   return {
@@ -335,6 +348,7 @@ const ALIASES: readonly (readonly [keyof typeof supabase, keyof typeof postgres]
   ["createSupabasePrincipalMemoryStore", "createPostgresPrincipalMemoryStore"],
   ["createSupabaseBlobStore", "createPostgresBlobStore"],
   ["createSupabaseFileMetadataStore", "createPostgresFileMetadataStore"],
+  ["createSupabaseArtifactStore", "createPostgresArtifactStore"],
 ];
 
 /**

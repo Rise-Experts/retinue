@@ -18,6 +18,7 @@
 import { PGlite } from "@electric-sql/pglite";
 import { afterAll, describe, expect, it } from "vitest";
 import {
+  createPostgresArtifactStore,
   createPostgresConversationStore,
   createPostgresFileMetadataStore,
   createPostgresAgentStore,
@@ -59,6 +60,7 @@ import { checkpointStoreConformance } from "../testing/conformance/checkpoint-st
 import { crossPortInvariants } from "../testing/conformance/invariants.js";
 import { agentStoreConformance, messageStoreConformance } from "../testing/conformance/records.js";
 import { fileMetadataStoreConformance } from "../testing/conformance/files.js";
+import { artifactStoreConformance } from "../testing/conformance/artifacts.js";
 import {
   conversationBindingStoreConformance,
   sessionStateStoreConformance,
@@ -442,6 +444,17 @@ blobStoreConformance(() => createPostgresBlobStore(freshExecutor()));
 // `withConversation` seeds the parent through the same executor. `FileContentStore` has no Postgres
 // implementation and is classified `notApplicable` — file bytes in a column is the antipattern 0011
 // rejected.
+// #133. `artifacts` has a foreign key to `conversations`, so this takes the fixture shape too.
+artifactStoreConformance(() => {
+  const sql = freshExecutor();
+  return {
+    store: createPostgresArtifactStore(sql),
+    async seedConversation({ tenantId, conversationId }) {
+      await createPostgresConversationStore(sql).create({ tenantId, id: conversationId, title: "artifacts" });
+    },
+  };
+});
+
 fileMetadataStoreConformance(() => {
   const sql = freshExecutor();
   return {
@@ -487,6 +500,7 @@ describe("postgres adapter coverage", () => {
       "PrincipalMemoryStore",
       "BlobStore",
       "FileMetadataStore",
+      "ArtifactStore",
     ]);
   });
 

@@ -37,5 +37,6 @@ export * from "./files/index.js";
 export * from "./files/context.js";
 export * from "./files/read-tool.js";
 export * from "./documents/index.js";
+export * from "./artifacts/index.js";
 
 export * from "./graphql/index.js";

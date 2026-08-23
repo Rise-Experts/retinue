@@ -111,6 +111,13 @@ const SEEDS: Readonly<Record<string, (tenant: string, principal: string) => stri
        (tenant_id, principal_id, id, text, tags, salience, version, created_at, updated_at)
      VALUES ('${t}', '${p}', '${t}-mem1', 'remembered', '[]'::jsonb, 1, 1, now(), now())`,
   blobs: (t) => `INSERT INTO blobs (tenant_id, ref, value) VALUES ('${t}', '${t}-blob1', '{}'::jsonb)`,
+  artifacts: (t) =>
+    `INSERT INTO artifacts (tenant_id, id, conversation_id, kind, name, latest_version, created_at, updated_at)
+     VALUES ('${t}', '${t}-art1', '${t}-c1', 'markdown', 'Q3 summary', 1, now(), now())`,
+  artifact_versions: (t, p) =>
+    `INSERT INTO artifact_versions
+       (tenant_id, id, artifact_id, version, content_ref, byte_size, provenance, created_by, created_at)
+     VALUES ('${t}', '${t}-av1', '${t}-art1', 1, '${t}-blob1', 128, '{}'::jsonb, '${p}', now())`,
   files: (t, p) =>
     `INSERT INTO files
        (tenant_id, id, conversation_id, filename, media_type, byte_size, content_key, state, uploaded_by,
@@ -211,8 +218,9 @@ describe("policy coverage is derived from MIGRATIONS, not transcribed", () => {
       expect(RLS_STATEMENTS).toContain(`ALTER TABLE ${table} ENABLE ROW LEVEL SECURITY`);
       expect(RLS_STATEMENTS).toContain(`ALTER TABLE ${table} FORCE ROW LEVEL SECURITY`);
     }
-    // 20 tables as of #129 (`files`); the count is asserted so a table silently dropping out is visible.
-    expect(TENANT_SCOPED_TABLES).toHaveLength(20);
+    // 22 tables as of #133 (`artifacts`, `artifact_versions`); the count is asserted so a table silently
+    // dropping out is visible.
+    expect(TENANT_SCOPED_TABLES).toHaveLength(22);
     expect(MIGRATIONS.length).toBeGreaterThanOrEqual(11);
   });
 });
