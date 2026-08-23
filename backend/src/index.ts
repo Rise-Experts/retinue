@@ -30,5 +30,10 @@ export * from "./worker/main.js";
 
 export * from "./principal-memory/index.js";
 export * from "./files/index.js";
+// Separate entries rather than re-exports from `files/index.js`: `read-tool.ts` needs `FileService` from
+// there, and routing it back through the same barrel would make the module graph circular for a
+// convenience nobody asked for.
+export * from "./files/context.js";
+export * from "./files/read-tool.js";
 
 export * from "./graphql/index.js";

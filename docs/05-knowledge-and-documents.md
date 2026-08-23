@@ -159,3 +159,37 @@ state is named rather than pretended away.
 
 The job **reports and never deletes**, both directions: rows with no bytes, and bytes with no row. Deleting on
 the strength of "probably an orphan" is how a file whose metadata write was merely slow goes missing.
+
+### Attachments in context (#130)
+
+Governing principle 6 — *"Large files and tool results are referenced, not injected wholesale into model
+context"* — is easy to state and easy to break by accident, so it is held structurally rather than by
+convention.
+
+**The context provider is constructed with a `FileMetadataStore` and nothing else.** It has no
+`FileContentStore`, so it cannot read a byte of an attachment even if a future edit tried to. A rule can be
+forgotten; a provider with no way to reach the content cannot forget it.
+
+**An attachment's cost does not grow with the file.** The rendered line carries a rounded, *fixed-width*
+size — `  1.0 KB`, `  100 MB` — rather than a byte count, so the cost is exactly constant across every order
+of magnitude a file can have. What it does scale with is the filename, which is the user's own text and
+belongs in context; that is bounded too. The list itself is capped, because linear in something the user
+controls is the same unbounded growth by a slower route, and past the cap the section says so and names the
+tool that lists the rest.
+
+The `file` message part is already the reference: `fileId`, `filename`, `mediaType`, `byteSize`, and no
+content field. Rather than add a second part type meaning the same thing — which would have forced the
+frontend change AC-5 exists to avoid — the part was hardened instead. `providerMetadata` on a `file` or
+`image` part is capped at 2 KiB and refuses a `data:` URI at any nesting depth: that bag is
+`Record<string, unknown>`, which is exactly the shape a base64 payload fits into, and a part carrying its own
+content would satisfy every other rule while breaking the only one that matters.
+
+**Bringing content in is a separate, bounded act.** `read_attachment` returns at most 32 KiB, clamps rather
+than refuses a larger request, and reports the offset to continue from — so a model can page a long document
+but cannot flood the transcript, which matters because a tool result *is* a message part and therefore
+permanent. It reads through `FileService`, so the conversation entitlement check is the same one the read
+path uses rather than a second copy. Media types it will decode as text are an exact list, and a refusal
+names the alternative, because a refusal that does not say what to do next produces a retry loop.
+
+The storage `contentKey` never appears in front of the model. The reference is the file *id*; the key is the
+platform's business, and a model that could see it could put it in a tool argument.

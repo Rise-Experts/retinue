@@ -15,6 +15,43 @@ import { RUN_EVENT_TYPES, type RunEvent } from "./events.js";
 const idString = z.string().min(1);
 const providerMetadata = z.record(z.string(), z.unknown()).optional();
 
+/**
+ * The most a reference part's provider bag may hold (#130).
+ *
+ * Small on purpose. `providerMetadata` is `Record<string, unknown>`, which is exactly the shape a base64
+ * payload fits into — and a file part carrying its own content would satisfy every other rule in this file
+ * while breaking the one that matters. 2 KiB is room for a provider's ids and flags and no room for a
+ * document.
+ */
+export const MAX_REFERENCE_METADATA_BYTES = 2048;
+
+/** A `data:` URI is bytes wearing a string's clothes, so it is refused wherever it appears in the bag. */
+const carriesInlineData = (value: unknown): boolean =>
+  typeof value === "string"
+    ? /^\s*data:[^,]*,/i.test(value)
+    : Array.isArray(value)
+      ? value.some(carriesInlineData)
+      : typeof value === "object" && value !== null
+        ? Object.values(value).some(carriesInlineData)
+        : false;
+
+/**
+ * `providerMetadata` for a part that must stay a reference.
+ *
+ * Two checks rather than one, because they fail differently: a size cap catches bulk however it is encoded,
+ * and the `data:` check catches a small payload that would slip under the cap — a 1 KB inline image is still
+ * content in a part that promises not to carry any.
+ */
+const referenceMetadata = z
+  .record(z.string(), z.unknown())
+  .refine((bag) => JSON.stringify(bag).length <= MAX_REFERENCE_METADATA_BYTES, {
+    message: `providerMetadata on a reference part must be at most ${MAX_REFERENCE_METADATA_BYTES} bytes; file contents are referenced, not inlined`,
+  })
+  .refine((bag) => !carriesInlineData(bag), {
+    message: "providerMetadata on a reference part must not contain a data: URI; file contents are referenced, not inlined",
+  })
+  .optional();
+
 /** Fields on every part. `providerMetadata` is optional and never authoritative. */
 const base = {
   id: idString,
@@ -48,8 +85,19 @@ const messagePartSchema = z.discriminatedUnion("type", [
     ...base, type: z.literal("approval"), interactionId: idString, toolName: z.string(),
     summary: z.string(), riskCategory: z.string(), decidedAt: z.string().optional(),
   }),
-  z.object({ ...base, type: z.literal("file"), fileId: idString, filename: z.string(), mediaType: z.string(), byteSize: z.number().int().nonnegative() }),
-  z.object({ ...base, type: z.literal("image"), fileId: idString, mediaType: z.string(), width: z.number().optional(), height: z.number().optional(), altText: z.string().optional() }),
+  // #130. A reference, and structurally incapable of being anything else: no field holds content, and
+  // `referenceMetadata` refuses the two ways bytes could arrive anyway — a `data:` URI, or a payload smuggled
+  // into the non-authoritative provider bag. Governing principle 6 is a property of the schema here rather
+  // than a rule the assembler has to enforce downstream.
+  z.object({
+    ...base, type: z.literal("file"), providerMetadata: referenceMetadata,
+    fileId: idString, filename: z.string(), mediaType: z.string(), byteSize: z.number().int().nonnegative(),
+  }),
+  z.object({
+    ...base, type: z.literal("image"), providerMetadata: referenceMetadata,
+    fileId: idString, mediaType: z.string(), width: z.number().optional(), height: z.number().optional(),
+    altText: z.string().optional(),
+  }),
   z.object({ ...base, type: z.literal("citation"), sourceId: z.string(), quote: z.string(), locator: z.string().optional() }),
   z.object({ ...base, type: z.literal("source"), sourceId: z.string(), title: z.string(), url: z.string().optional() }),
   z.object({ ...base, type: z.literal("artifact"), artifactId: idString, versionId: idString, title: z.string() }),

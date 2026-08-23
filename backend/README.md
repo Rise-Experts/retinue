@@ -23,7 +23,7 @@ are open to change.
 | `hitl` | [04](../docs/04-durable-runtime-and-hitl.md) | Durable questions, approvals and idempotency |
 | `persistence` | [02](../docs/02-core-and-persistence.md) | Tenant-scoped store ports and infrastructure ports |
 | `mcp` | *none yet* — `@proposed` | Outbound MCP-server connections, tool import and effect classification |
-| `files` | [05](../docs/05-knowledge-and-documents.md) | The attachment lifecycle: capped uploads, mediated reads, scheduled deletion, orphan reconciliation |
+| `files` | [05](../docs/05-knowledge-and-documents.md) | The attachment lifecycle: capped uploads, mediated reads, scheduled deletion, orphan reconciliation; the reference-not-inject context provider and the bounded `read_attachment` step |
 
 ## Rules these contracts encode
 
