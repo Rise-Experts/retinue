@@ -914,6 +914,67 @@ export const MIGRATIONS: readonly Migration[] = [
       `ALTER TABLE usage_records DROP COLUMN IF EXISTS record_seq`,
     ],
   },
+  {
+    // #141. Evaluation runs and their per-case results.
+    id: "0020_evaluation_runs",
+    up: [
+      `CREATE TABLE IF NOT EXISTS evaluation_runs (
+        tenant_id        text        NOT NULL,
+        id               text        NOT NULL,
+        release          text        NOT NULL,
+        started_at       timestamptz NOT NULL,
+        -- NULL while the run is in flight. A comparison must exclude those: an unfinished run's totals are
+        -- partial, and every case it has not reached yet would read as a regression.
+        finished_at      timestamptz,
+        total            integer     NOT NULL,
+        passed           integer     NOT NULL,
+        -- The mean, stored rather than derived. A per-dimension breakdown of a thousand cases is read every
+        -- release, and once a case is retired from the dataset the historical mean is no longer recomputable.
+        mean_score       double precision NOT NULL,
+        by_dimension     jsonb       NOT NULL,
+        cost_minor_units bigint      NOT NULL,
+        -- Which graders produced these numbers. Without it, a comparison across a grader change is a comparison
+        -- of two instruments and nobody can tell.
+        grader_versions  jsonb       NOT NULL,
+        PRIMARY KEY (tenant_id, id),
+        CHECK (passed <= total),
+        CHECK (mean_score >= 0 AND mean_score <= 1)
+      )`,
+      `CREATE TABLE IF NOT EXISTS evaluation_case_results (
+        tenant_id        text        NOT NULL,
+        run_id           text        NOT NULL,
+        case_id          text        NOT NULL,
+        dimension        text        NOT NULL,
+        expect_kind      text        NOT NULL,
+        passed           boolean     NOT NULL,
+        score            double precision NOT NULL,
+        reason           text        NOT NULL,
+        grader_id        text        NOT NULL,
+        grader_version   text        NOT NULL,
+        model_id         text,
+        prompt_version   text,
+        cost_minor_units bigint      NOT NULL,
+        -- The key *is* the idempotency: a resumed run re-recording a case it already scored upserts onto this
+        -- rather than double-counting it in the aggregate.
+        PRIMARY KEY (tenant_id, run_id, case_id),
+        FOREIGN KEY (tenant_id, run_id) REFERENCES evaluation_runs (tenant_id, id) ON DELETE CASCADE,
+        CHECK (score >= 0 AND score <= 1)
+      )`,
+      // Serves latest(): the most recent completed run, optionally for one release.
+      `CREATE INDEX IF NOT EXISTS evaluation_runs_release_idx
+        ON evaluation_runs (tenant_id, release, finished_at DESC)
+        WHERE finished_at IS NOT NULL`,
+      // Serves the per-dimension read a comparison does.
+      `CREATE INDEX IF NOT EXISTS evaluation_case_results_dimension_idx
+        ON evaluation_case_results (tenant_id, run_id, dimension)`,
+    ],
+    down: [
+      `DROP INDEX IF EXISTS evaluation_case_results_dimension_idx`,
+      `DROP INDEX IF EXISTS evaluation_runs_release_idx`,
+      `DROP TABLE IF EXISTS evaluation_case_results`,
+      `DROP TABLE IF EXISTS evaluation_runs`,
+    ],
+  },
 ];
 
 /**

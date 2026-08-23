@@ -23,6 +23,7 @@ import {
   createMemoryArtifactExportStore,
   createMemoryArtifactStore,
   createMemoryBlobStore,
+  createMemoryEvaluationStore,
   createMemoryFileContentStore,
   createMemoryKnowledgeBackend,
   createMemoryUsageBackend,
@@ -59,6 +60,7 @@ import {
   conversationBindingStoreConformance,
   conversationRunCoordinatorConformance,
   conversationStoreConformance,
+  evaluationStoreConformance,
   crossPortInvariants,
   fileContentStoreConformance,
   fileMetadataStoreConformance,
@@ -191,6 +193,7 @@ keywordIndexConformance(() => createMemoryKnowledgeBackend(), VECTOR_CAPABLE);
 // #139. Rollups over the same ledger they derive from, which is how a real deployment provides them: a rollup
 // computed from a different set of events than the ledger holds is the bug the port exists to prevent.
 usageRollupStoreConformance(() => createMemoryUsageBackend());
+evaluationStoreConformance(() => createMemoryEvaluationStore());
 fileContentStoreConformance(() => createMemoryFileContentStore());
 idempotencyStoreConformance(() => createMemoryIdempotencyStore());
 principalMemoryStoreConformance(() => createMemoryPrincipalMemoryStore());

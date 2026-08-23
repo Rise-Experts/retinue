@@ -135,8 +135,13 @@ describe("SQL and SDL template literals (#140)", () => {
    */
   it("contains no backtick inside a SQL or SDL string", async () => {
     const { readFileSync } = await import("node:fs");
+    // Every file that holds a SQL or SDL template literal. Listed rather than globbed so a *new* one is a
+    // deliberate addition — and #141 proved the point by adding `evaluation.ts` and immediately tripping over a
+    // backtick the guard did not yet cover.
     const files = [
       "src/adapters/postgres/migrations.ts",
+      "src/adapters/postgres/evaluation.ts",
+      "src/adapters/postgres/usage.ts",
       "src/adapters/postgres/rollups.ts",
       "src/adapters/postgres/knowledge.ts",
       "src/adapters/postgres/files.ts",

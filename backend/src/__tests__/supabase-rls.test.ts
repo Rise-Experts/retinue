@@ -104,6 +104,16 @@ const SEEDS: Readonly<Record<string, (tenant: string, principal: string) => stri
        (tenant_id, period, bucket_start, input_tokens, output_tokens, cached_input_tokens,
         reasoning_tokens, cost_minor_units, event_count, currency, computed_at)
      VALUES ('${t}', 'hour', date_trunc('hour', now()), 100, 20, 5, 0, 7, 1, 'EUR', now())`,
+  evaluation_runs: (t) =>
+    `INSERT INTO evaluation_runs
+       (tenant_id, id, release, started_at, total, passed, mean_score, by_dimension, cost_minor_units,
+        grader_versions)
+     VALUES ('${t}', '${t}-run1', 'v1', now(), 1, 1, 1, '[]'::jsonb, 0, '{}'::jsonb)`,
+  evaluation_case_results: (t) =>
+    `INSERT INTO evaluation_case_results
+       (tenant_id, run_id, case_id, dimension, expect_kind, passed, score, reason, grader_id, grader_version,
+        cost_minor_units)
+     VALUES ('${t}', '${t}-run1', 'gr-001', 'groundedness', 'contains', true, 1, 'ok', 'contains', '1', 0)`,
   idempotency_keys: (t) =>
     `INSERT INTO idempotency_keys (tenant_id, key, result, created_at)
      VALUES ('${t}', '${t}-key', '{}'::jsonb, now())`,
@@ -229,9 +239,9 @@ describe("policy coverage is derived from MIGRATIONS, not transcribed", () => {
       expect(RLS_STATEMENTS).toContain(`ALTER TABLE ${table} ENABLE ROW LEVEL SECURITY`);
       expect(RLS_STATEMENTS).toContain(`ALTER TABLE ${table} FORCE ROW LEVEL SECURITY`);
     }
-    // 24 tables as of #139 (`usage_rollups`); the count is asserted so a table silently
+    // 26 tables as of #141 (`evaluation_runs`, `evaluation_case_results`); the count is asserted so a table silently
     // dropping out is visible.
-    expect(TENANT_SCOPED_TABLES).toHaveLength(24);
+    expect(TENANT_SCOPED_TABLES).toHaveLength(26);
 
     // #135. `knowledge_chunks` lives behind the optional pgvector migration, so its policies are a separate
     // list applied by whoever ran that migration -- `ALTER TABLE ... ENABLE ROW LEVEL SECURITY` on an absent

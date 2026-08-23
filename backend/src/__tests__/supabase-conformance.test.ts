@@ -42,6 +42,7 @@ import {
 import { artifactStoreConformance } from "../testing/conformance/artifacts.js";
 import { artifactExportStoreConformance } from "../testing/conformance/artifact-exports.js";
 import { usageRollupStoreConformance } from "../testing/conformance/rollups.js";
+import { evaluationStoreConformance } from "../testing/conformance/evaluation.js";
 import {
   keywordIndexConformance,
   knowledgeStoreConformance,
@@ -346,6 +347,8 @@ knowledgeStoreConformance(vectorFixture, VECTOR_DECLARATION);
 vectorIndexConformance(vectorFixture, VECTOR_DECLARATION);
 keywordIndexConformance(vectorFixture, VECTOR_DECLARATION);
 
+evaluationStoreConformance(() => supabase.createSupabaseEvaluationStore(freshExecutor()));
+
 usageRollupStoreConformance(() => {
   const sql = freshExecutor();
   return {
@@ -433,6 +436,7 @@ const ALIASES: readonly (readonly [keyof typeof supabase, keyof typeof postgres]
   ["createSupabaseVectorIndex", "createPostgresVectorIndex"],
   ["createSupabaseKeywordIndex", "createPostgresKeywordIndex"],
   ["createSupabaseUsageRollupStore", "createPostgresUsageRollupStore"],
+  ["createSupabaseEvaluationStore", "createPostgresEvaluationStore"],
 ];
 
 /**

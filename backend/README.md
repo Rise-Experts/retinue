@@ -23,6 +23,7 @@ are open to change.
 | `hitl` | [04](../docs/04-durable-runtime-and-hitl.md) | Durable questions, approvals and idempotency |
 | `persistence` | [02](../docs/02-core-and-persistence.md) | Tenant-scoped store ports and infrastructure ports |
 | `usage` | [12](../docs/12-usage-and-accounting.md) | Recomputed rollups keyed on tenant and period, quota enforcement at admission with a warning below the limit, and provider reconciliation that reports rather than corrects |
+| `evaluation` | [09](../docs/09-quality-and-release.md) | Deterministic graders for six of seven expectation kinds, a pinned and cached judge for the seventh, and a release comparison that names the cases that moved |
 | `mcp` | *none yet* — `@proposed` | Outbound MCP-server connections, tool import and effect classification |
 | `files` | [05](../docs/05-knowledge-and-documents.md) | The attachment lifecycle: capped uploads, mediated reads, scheduled deletion, orphan reconciliation; the reference-not-inject context provider and the bounded `read_attachment` step |
 | `documents` | [05](../docs/05-knowledge-and-documents.md) | Extraction to structured blocks (headings, tables, lists), bounded parsers for PDF/Markdown/CSV/JSON, OCR and vision ports, confidence flagging, typed failures, and the bounded `read_document` step |

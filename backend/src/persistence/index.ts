@@ -421,7 +421,104 @@ export interface UsageStore {
   ): Promise<UsageTotals>;
 }
 
-export interface EvaluationStore {}
+/**
+ * Evaluation results, per release — REQ-032 (#141).
+ *
+ * Durable because the point is *comparison*: a score with nothing to compare it against cannot gate a release,
+ * and "quality went down" is only a statement if last release's number still exists. Aggregates are stored
+ * alongside per-case results rather than derived on read, because a per-dimension breakdown of a thousand cases
+ * is a read every release does and an aggregate nobody can recompute once a case is retired from the dataset.
+ */
+export type EvalVerdict = {
+  readonly pass: boolean;
+  /** 0–1. Binary graders report 0 or 1; a partial-credit grader may report between. */
+  readonly score: number;
+  /** Why. Shown in the report, so a regression names its cause rather than only its case id. */
+  readonly reason: string;
+  /**
+   * What producing this verdict cost, in integer minor units.
+   *
+   * On the verdict because the cost is a property of *this grading* — a cache hit and a fresh model call produce
+   * the same verdict at different prices, and a harness that could not tell them apart could not report the
+   * gate's expense. Absent means free, which is every deterministic grader.
+   */
+  readonly costMinorUnits?: number;
+};
+
+/**
+ * One case's result, with everything needed to reproduce it.
+ *
+ * The grader id and version, and for a judged case the model and prompt version, are stored **on the result**.
+ * A run that recorded only scores could not answer "why did this change" — a prompt edit and a model upgrade
+ * look identical in the numbers, and both look like a quality change.
+ */
+export type EvalCaseResult = {
+  readonly caseId: string;
+  readonly dimension: string;
+  readonly expectKind: string;
+  readonly verdict: EvalVerdict;
+  readonly graderId: string;
+  readonly graderVersion: string;
+  /** Present only for a judged case. Absent means graded by code, which is also the cheap path. */
+  readonly modelId?: string;
+  readonly promptVersion?: string;
+  /** Integer minor units. Zero for a deterministic grader, which is asserted rather than assumed. */
+  readonly costMinorUnits: number;
+};
+
+export type EvalDimensionSummary = {
+  readonly dimension: string;
+  readonly total: number;
+  readonly passed: number;
+  readonly meanScore: number;
+};
+
+export type EvalRun = {
+  readonly id: string;
+  /** The release this scored. The axis every comparison is along. */
+  readonly release: string;
+  readonly startedAt: string;
+  readonly finishedAt?: string;
+  readonly total: number;
+  readonly passed: number;
+  readonly meanScore: number;
+  readonly byDimension: readonly EvalDimensionSummary[];
+  /** What the whole gate cost. Recorded so the gate's own expense is known rather than assumed cheap. */
+  readonly costMinorUnits: number;
+  /** Every grader version in the run, so two runs can be compared *knowingly*. */
+  readonly graderVersions: Readonly<Record<string, string>>;
+};
+
+export interface EvaluationStore {
+  /** Opens a run. Separate from completing it so an interrupted run is visibly unfinished rather than absent. */
+  startRun(input: TenantScope & { id: string; release: string; startedAt: string }): Promise<EvalRun>;
+
+  /**
+   * Records one case's result.
+   *
+   * Idempotent on `(runId, caseId)`: a resumed run must not double-count a case it already scored, and a case
+   * cannot be scored twice in one run because a run scores each case once by construction.
+   */
+  recordCase(
+    input: TenantScope & { runId: string; result: EvalCaseResult },
+  ): Promise<{ readonly recorded: boolean }>;
+
+  /** Closes a run, computing and storing its aggregates from the recorded cases. */
+  completeRun(
+    input: TenantScope & { runId: string; finishedAt: string; graderVersions: Readonly<Record<string, string>> },
+  ): Promise<EvalRun>;
+
+  get(input: TenantScope & { runId: string }): Promise<EvalRun | null>;
+
+  /** The most recent *completed* run for a release, or across releases when none is named. */
+  latest(input: TenantScope & { release?: string }): Promise<EvalRun | null>;
+
+  /** Runs newest first, for a release history. */
+  list(input: TenantScope & PageRequest): Promise<Page<EvalRun>>;
+
+  /** A run's per-case results, which is what a comparison between two runs reads. */
+  listCaseResults(input: TenantScope & PageRequest & { runId: string }): Promise<Page<EvalCaseResult>>;
+}
 
 // ---------------------------------------------------------------------------
 // Artifacts (#133) — REQ-028. Substantial assistant output as a named, versioned thing rather than

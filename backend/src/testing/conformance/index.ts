@@ -29,6 +29,7 @@ export * from "./artifacts.js";
 export * from "./artifact-exports.js";
 export * from "./knowledge.js";
 export * from "./rollups.js";
+export * from "./evaluation.js";
 export * from "./invariants.js";
 
 /** A port with methods, and the harness that verifies it. */
@@ -69,6 +70,7 @@ export const REGISTERED_PORTS: readonly PortCoverage[] = [
   { port: "VectorIndex", harness: "vectorIndexConformance" },
   { port: "KeywordIndex", harness: "keywordIndexConformance" },
   { port: "UsageRollupStore", harness: "usageRollupStoreConformance" },
+  { port: "EvaluationStore", harness: "evaluationStoreConformance" },
 ];
 
 /**
@@ -98,7 +100,14 @@ export const ISOLATION_EXEMPT_PORTS: readonly { readonly port: string; readonly 
  * `FileMetadataStore` left this list in #129, which is the mechanism working as intended: it gained methods
  * and the guard would have failed had a harness not come with them.
  */
-export const PLACEHOLDER_PORTS: readonly string[] = ["EvaluationStore"];
+/**
+ * Ports declared with no methods yet.
+ *
+ * Empty as of #141, and the list stays: the guard that fails when a placeholder gains methods without a harness
+ * is what stopped `KnowledgeStore` and `EvaluationStore` from quietly shipping untested, and deleting it once
+ * the list is empty would remove the check that catches the next one.
+ */
+export const PLACEHOLDER_PORTS: readonly string[] = [];
 
 /**
  * Infrastructure ports that are not storage. Their real adapters land with REQ-015 (#105 BullMQ
@@ -246,6 +255,7 @@ export const ADAPTER_COVERAGE: readonly AdapterCoverage[] = [
       "VectorIndex",
       "KeywordIndex",
       "UsageRollupStore",
+      "EvaluationStore",
     ],
     notImplemented: POSTGRES_PENDING,
     notApplicable: [RELATIONAL_CONTENT_EXEMPTION],
@@ -288,4 +298,5 @@ export const HARNESS_MODULES: readonly string[] = [
   "src/testing/conformance/artifact-exports.ts",
   "src/testing/conformance/knowledge.ts",
   "src/testing/conformance/rollups.ts",
+  "src/testing/conformance/evaluation.ts",
 ];

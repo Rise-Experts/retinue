@@ -79,6 +79,7 @@ export { createPostgresArtifactExportStore as createSupabaseArtifactExportStore 
  * absent, and a Supabase project has it while a bare Postgres may not.
  */
 export { createPostgresUsageRollupStore as createSupabaseUsageRollupStore } from "../postgres/rollups.js";
+export { createPostgresEvaluationStore as createSupabaseEvaluationStore } from "../postgres/evaluation.js";
 export {
   createPostgresKnowledgeStore as createSupabaseKnowledgeStore,
   createPostgresVectorIndex as createSupabaseVectorIndex,
