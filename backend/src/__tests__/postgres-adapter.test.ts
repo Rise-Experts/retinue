@@ -1,6 +1,8 @@
 import { PGlite } from "@electric-sql/pglite";
 import { describe, expect, it } from "vitest";
 import {
+  MIGRATIONS,
+  VECTOR_MIGRATIONS,
   createPostgresConversationStore,
   migrate,
   rollback,
@@ -81,3 +83,40 @@ describe("postgres migrations + delete semantics", () => {
     expect(raw).toHaveLength(1); // soft, not hard — row is retained with deleted_at set
   });
 });
+
+describe("migration ids (#139)", () => {
+  /**
+   * Unique across **both** lists.
+   *
+   * `MIGRATIONS` and `VECTOR_MIGRATIONS` are applied separately, so a duplicate number is not a compile error
+   * and not a runtime error either — it is a deployment recording one migration as applied and skipping the
+   * other. Caught by writing `0017_usage_rollups` next to `0017_knowledge_chunks`, which nothing would have
+   * flagged.
+   */
+  it("are unique across the main and vector lists", () => {
+    const all = [...MIGRATIONS, ...VECTOR_MIGRATIONS].map((m) => m.id);
+    expect(new Set(all).size, `duplicate migration id in ${all.join(", ")}`).toBe(all.length);
+  });
+
+  it("use a unique numeric prefix, since that is what a human compares", () => {
+    // Two migrations with the same number and different names read as the same migration in a changelog and in
+    // a review, whatever the ids technically are.
+    const numbers = [...MIGRATIONS, ...VECTOR_MIGRATIONS].map((m) => m.id.split("_")[0]);
+    expect(new Set(numbers).size, `duplicate migration number in ${numbers.join(", ")}`).toBe(numbers.length);
+  });
+
+  it("keeps the main list in ascending order, so a reader can find the newest", () => {
+    const numbers = MIGRATIONS.map((m) => Number(m.id.split("_")[0]));
+    expect([...numbers].sort((a, b) => a - b)).toEqual(numbers);
+  });
+
+  it("gives every migration a down for every up", () => {
+    // Not one-to-one — an ALTER with three ADD COLUMNs is one down with three DROPs — but a migration with no
+    // down at all is one nobody can roll back, which is only discovered during an incident.
+    for (const migration of [...MIGRATIONS, ...VECTOR_MIGRATIONS]) {
+      expect(migration.up.length, `${migration.id} has no up`).toBeGreaterThan(0);
+      expect(migration.down.length, `${migration.id} has no down`).toBeGreaterThan(0);
+    }
+  });
+});
+

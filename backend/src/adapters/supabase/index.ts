@@ -78,6 +78,7 @@ export { createPostgresArtifactExportStore as createSupabaseArtifactExportStore 
  * separate from the main list (`migrateVector`) because `CREATE EXTENSION vector` fails where the extension is
  * absent, and a Supabase project has it while a bare Postgres may not.
  */
+export { createPostgresUsageRollupStore as createSupabaseUsageRollupStore } from "../postgres/rollups.js";
 export {
   createPostgresKnowledgeStore as createSupabaseKnowledgeStore,
   createPostgresVectorIndex as createSupabaseVectorIndex,

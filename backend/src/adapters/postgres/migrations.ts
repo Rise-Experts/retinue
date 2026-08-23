@@ -832,6 +832,88 @@ export const MIGRATIONS: readonly Migration[] = [
       `DROP TABLE IF EXISTS artifact_exports`,
     ],
   },
+  {
+    // #139. Rollups, keyed on (tenant, period, bucket_start). No extension needed, so this belongs in the main
+    // list rather than the optional vector one.
+    //
+    // Numbered 0018, not 0017: `VECTOR_MIGRATIONS` took 0017. The two lists are applied separately and each in
+    // its own order, so the gap is harmless — but the *numbers* must stay unique across both, because they are
+    // how a deployment records what it has run and a collision would make one migration look already applied.
+    id: "0018_usage_rollups",
+    up: [
+      `CREATE TABLE IF NOT EXISTS usage_rollups (
+        tenant_id           text        NOT NULL,
+        period              text        NOT NULL,
+        -- The instant the bucket opens, truncated to the period. Identified by its start rather than a range,
+        -- so two writers asking "which bucket does T belong to" agree by construction.
+        bucket_start        timestamptz NOT NULL,
+        input_tokens        bigint      NOT NULL,
+        output_tokens       bigint      NOT NULL,
+        cached_input_tokens bigint      NOT NULL,
+        reasoning_tokens    bigint      NOT NULL,
+        -- Integer minor units, per 0009's usage_records. Exact arithmetic: a float total of a million events is
+        -- wrong in the last cents, and cents are what an invoice is made of.
+        cost_minor_units    bigint      NOT NULL,
+        event_count         bigint      NOT NULL,
+        currency            text        NOT NULL,
+        computed_at         timestamptz NOT NULL,
+        -- The primary key *is* the idempotency: a rebuild upserts onto it, so re-running a bucket cannot
+        -- create a second row and two workers racing one bucket write the same value.
+        PRIMARY KEY (tenant_id, period, bucket_start),
+        CHECK (period IN ('hour','day')),
+        CHECK (input_tokens >= 0 AND output_tokens >= 0 AND cost_minor_units >= 0 AND event_count >= 0)
+      )`,
+      // Serves the range read AC-1 is about: one tenant, one period, ordered the way a chart wants it. The
+      // primary key already covers this prefix, so this exists only for the descending scan a "latest bucket"
+      // lookup does.
+      `CREATE INDEX IF NOT EXISTS usage_rollups_range_idx
+        ON usage_rollups (tenant_id, period, bucket_start DESC)`,
+      // Serves the rebuild's scan of raw events by time. Without it every rebuild is a full table scan of the
+      // tenant's whole history, which is the cost the rollup exists to avoid paying on every read.
+      `CREATE INDEX IF NOT EXISTS usage_records_occurred_idx
+        ON usage_records (tenant_id, occurred_at)`,
+    ],
+    down: [
+      `DROP INDEX IF EXISTS usage_records_occurred_idx`,
+      `DROP INDEX IF EXISTS usage_rollups_range_idx`,
+      `DROP TABLE IF EXISTS usage_rollups`,
+    ],
+  },
+  {
+    // #139. When we *learned* about an event, as distinct from when it happened.
+    //
+    // Staleness has to be measured against this and not `occurred_at`. An event can be recorded late — a
+    // delayed provider report, a recovered run replaying its steps — with an `occurred_at` hours in the past.
+    // Judged by `occurred_at` its bucket looks already computed and the event is never rolled up: a silent
+    // undercount, in the direction that loses revenue. Found by writing the late-arrival test.
+    //
+    // `DEFAULT now()` so existing rows get a value and no backfill is needed; they are all older than any
+    // rollup, which correctly marks their buckets stale once and then settles.
+    id: "0019_usage_record_sequence",
+    up: [
+      // A monotonic sequence, not a timestamp.
+      //
+      // Staleness asks "has this bucket gained a record since it was last rolled up", and a *clock* cannot
+      // answer it: `now()` is constant within a transaction, `clock_timestamp()` ties under load, and either
+      // way equality has to be read as "stale" to stay safe — which makes a bucket that genuinely drained
+      // indistinguishable from one that did not. A sequence has no ties and no clock skew, and it is exactly
+      // the fact being compared: this rollup covers records up to N.
+      //
+      // It also closes a read anomaly the timestamp version could not: a row committed *during* a rebuild gets
+      // a higher sequence than the rollup records, so the bucket is correctly still stale — where its
+      // `recorded_at` could plausibly have been earlier than the rollup's stamp.
+      `ALTER TABLE usage_records ADD COLUMN IF NOT EXISTS record_seq bigserial`,
+      `CREATE INDEX IF NOT EXISTS usage_records_seq_idx ON usage_records (tenant_id, record_seq)`,
+      // The high-water mark a rollup covers. NULL for a bucket written before this migration, which correctly
+      // reads as "covers nothing" and rebuilds once.
+      `ALTER TABLE usage_rollups ADD COLUMN IF NOT EXISTS covers_seq bigint`,
+    ],
+    down: [
+      `ALTER TABLE usage_rollups DROP COLUMN IF EXISTS covers_seq`,
+      `DROP INDEX IF EXISTS usage_records_seq_idx`,
+      `ALTER TABLE usage_records DROP COLUMN IF EXISTS record_seq`,
+    ],
+  },
 ];
 
 /**

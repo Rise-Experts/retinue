@@ -41,6 +41,7 @@ import {
 } from "../testing/conformance/files.js";
 import { artifactStoreConformance } from "../testing/conformance/artifacts.js";
 import { artifactExportStoreConformance } from "../testing/conformance/artifact-exports.js";
+import { usageRollupStoreConformance } from "../testing/conformance/rollups.js";
 import {
   keywordIndexConformance,
   knowledgeStoreConformance,
@@ -345,6 +346,27 @@ knowledgeStoreConformance(vectorFixture, VECTOR_DECLARATION);
 vectorIndexConformance(vectorFixture, VECTOR_DECLARATION);
 keywordIndexConformance(vectorFixture, VECTOR_DECLARATION);
 
+usageRollupStoreConformance(() => {
+  const sql = freshExecutor();
+  return {
+    usage: supabase.createSupabaseUsageStore(sql),
+    rollups: supabase.createSupabaseUsageRollupStore(sql),
+    // A run needs a conversation, which needs nothing — two levels of parent, seeded through the same executor
+    // so the foreign keys resolve.
+    async seedRun({ tenantId, runId }) {
+      const conversationId = asId<ConversationId>(`conf-rollup-convo-${runId}`);
+      await supabase.createSupabaseConversationStore(sql).create({ tenantId, id: conversationId, title: "rollups" });
+      await supabase.createSupabaseRunStore(sql).create({
+        tenantId,
+        id: runId,
+        conversationId,
+        agentId: asId("conf-rollup-agent"),
+        agentVersion: 1,
+      });
+    },
+  };
+});
+
 artifactExportStoreConformance(() => {
   const sql = freshExecutor();
   return {
@@ -410,6 +432,7 @@ const ALIASES: readonly (readonly [keyof typeof supabase, keyof typeof postgres]
   ["createSupabaseKnowledgeStore", "createPostgresKnowledgeStore"],
   ["createSupabaseVectorIndex", "createPostgresVectorIndex"],
   ["createSupabaseKeywordIndex", "createPostgresKeywordIndex"],
+  ["createSupabaseUsageRollupStore", "createPostgresUsageRollupStore"],
 ];
 
 /**

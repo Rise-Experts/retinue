@@ -6,6 +6,7 @@
  */
 
 import type { ExecutionContext } from "../core/context.js";
+import type { QuotaGuard } from "../usage/index.js";
 import type { ConversationId, RunId } from "../core/ids.js";
 import { asId } from "../core/ids.js";
 import type { ConversationStore, UsageStore } from "../persistence/index.js";
@@ -30,6 +31,14 @@ export type ResolverDeps = {
   readonly coordinator: ConversationRunCoordinator;
   readonly dispatcher: JobDispatcher;
   readonly eventLog: RunEventLog;
+  /**
+   * Quota enforcement at admission (#139).
+   *
+   * Optional: a deployment with no limits configured is valid, and its absence means unbounded — the same
+   * direction `resolveLimits` takes, because a misconfigured quota that blocks everything is an outage and one
+   * that blocks nothing is a bill the rollups make visible.
+   */
+  readonly quota?: QuotaGuard;
   readonly live: LiveEventSource;
   readonly channelFor?: (conversationId: ConversationId) => string;
   /** Host-provided context assembly for the inspector (providers are app-specific). */
@@ -97,6 +106,13 @@ export const createResolvers = (deps: ResolverDeps) => {
       async sendMessage(_: unknown, args: { conversationId: string; runId: string }, ctx: GraphQLContext) {
         const conversationId = asId<ConversationId>(args.conversationId);
         const runId = asId<RunId>(args.runId);
+        // #139, AC-2: the quota check is *here*, before the conversation is claimed and before anything is
+        // enqueued — so a refused run leaves no slot held, no job on the queue, and no partial answer. A limit
+        // enforced mid-run leaves a half-written response and a user who has to guess whether to retry.
+        //
+        // Optional, because a deployment with no limits configured is valid; when it is absent nothing is
+        // checked, which is the same as an unbounded limit.
+        if (deps.quota !== undefined) await deps.quota.assertAdmitted(ctx.execution);
         const started = await startOrEnqueueRun(deps.coordinator, { tenantId: tid(ctx), conversationId, runId });
         if (started === "started") await deps.dispatcher.enqueueRun({ tenantId: tid(ctx), runId });
         const run = await deps.runs.findById({ tenantId: tid(ctx), id: runId });

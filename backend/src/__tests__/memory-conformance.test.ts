@@ -25,6 +25,7 @@ import {
   createMemoryBlobStore,
   createMemoryFileContentStore,
   createMemoryKnowledgeBackend,
+  createMemoryUsageBackend,
   createMemoryFileMetadataStore,
   createMemoryCheckpointStore,
   createMemoryConversationStore,
@@ -74,6 +75,7 @@ import {
   skillStoreConformance,
   threadSummaryStoreConformance,
   unitOfWorkConformance,
+  usageRollupStoreConformance,
   usageStoreConformance,
   vectorIndexConformance,
 } from "../testing/conformance/index.js";
@@ -186,6 +188,9 @@ const VECTOR_CAPABLE = { capabilities: ["vector-search"] } as const;
 knowledgeStoreConformance(() => createMemoryKnowledgeBackend(), VECTOR_CAPABLE);
 vectorIndexConformance(() => createMemoryKnowledgeBackend(), VECTOR_CAPABLE);
 keywordIndexConformance(() => createMemoryKnowledgeBackend(), VECTOR_CAPABLE);
+// #139. Rollups over the same ledger they derive from, which is how a real deployment provides them: a rollup
+// computed from a different set of events than the ledger holds is the bug the port exists to prevent.
+usageRollupStoreConformance(() => createMemoryUsageBackend());
 fileContentStoreConformance(() => createMemoryFileContentStore());
 idempotencyStoreConformance(() => createMemoryIdempotencyStore());
 principalMemoryStoreConformance(() => createMemoryPrincipalMemoryStore());

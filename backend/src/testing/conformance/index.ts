@@ -28,6 +28,7 @@ export * from "./files.js";
 export * from "./artifacts.js";
 export * from "./artifact-exports.js";
 export * from "./knowledge.js";
+export * from "./rollups.js";
 export * from "./invariants.js";
 
 /** A port with methods, and the harness that verifies it. */
@@ -67,6 +68,7 @@ export const REGISTERED_PORTS: readonly PortCoverage[] = [
   { port: "KnowledgeStore", harness: "knowledgeStoreConformance" },
   { port: "VectorIndex", harness: "vectorIndexConformance" },
   { port: "KeywordIndex", harness: "keywordIndexConformance" },
+  { port: "UsageRollupStore", harness: "usageRollupStoreConformance" },
 ];
 
 /**
@@ -243,6 +245,7 @@ export const ADAPTER_COVERAGE: readonly AdapterCoverage[] = [
       "KnowledgeStore",
       "VectorIndex",
       "KeywordIndex",
+      "UsageRollupStore",
     ],
     notImplemented: POSTGRES_PENDING,
     notApplicable: [RELATIONAL_CONTENT_EXEMPTION],
@@ -284,4 +287,5 @@ export const HARNESS_MODULES: readonly string[] = [
   "src/testing/conformance/artifacts.ts",
   "src/testing/conformance/artifact-exports.ts",
   "src/testing/conformance/knowledge.ts",
+  "src/testing/conformance/rollups.ts",
 ];

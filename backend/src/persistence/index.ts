@@ -298,6 +298,95 @@ export type UsageTotals = {
 };
 
 /**
+ * Rollup granularities (#139).
+ *
+ * Hour and day, and nothing finer. A minute bucket multiplies the row count sixty-fold to answer a question
+ * nobody asks — a spend dashboard is read at hour or day resolution — and a coarser-than-day bucket cannot
+ * answer "what did today cost", which is the question a quota is about.
+ */
+export const ROLLUP_PERIODS = ["hour", "day"] as const;
+export type RollupPeriod = (typeof ROLLUP_PERIODS)[number];
+
+/**
+ * One tenant's consumption in one bucket.
+ *
+ * `bucketStart` is the ISO instant the bucket opens, truncated to the period — so a bucket is identified by
+ * its start rather than by a range, and two writers computing "the hour containing T" agree by construction.
+ */
+export type UsageRollup = UsageTotals & {
+  readonly period: RollupPeriod;
+  readonly bucketStart: string;
+  readonly currency: string;
+  /** When this bucket was last recomputed. For spotting a rollup job that has stopped running. */
+  readonly computedAt: string;
+};
+
+/**
+ * Aggregated consumption, derived from the ledger — never a second source of truth.
+ *
+ * **Rollups are recomputed, not accumulated.** `rebuild` reads a bucket's raw events and *replaces* the row.
+ * That makes idempotency structural rather than bookkept: re-running a bucket produces the same numbers, and
+ * two workers racing the same bucket write the same value. The alternative — accumulating deltas with a set of
+ * applied event keys — needs that set to be durable, unbounded and exactly right forever, and any gap in it is
+ * silent double counting or silent loss.
+ *
+ * The cost is one scan per bucket in the *job*, not in the query. That is what a rollup job is for; AC-1 is
+ * about the read path.
+ */
+export interface UsageRollupStore {
+  /**
+   * Recompute one bucket from the ledger and replace the row.
+   *
+   * Returns the row it wrote, so a caller can act on the figures without a second read.
+   */
+  /**
+   * The store stamps `computedAt` itself, from its own clock.
+   *
+   * Not the caller's, and this is not a convenience: staleness is *defined* by comparing a bucket's
+   * `computedAt` against when its newest event was recorded, and both of those are the store's timestamps. A
+   * caller-supplied value is a caller-supplied answer to "is this rollup current" — and a caller whose clock
+   * runs slow, or which passes a fixed value, would mark a bucket permanently stale or permanently fresh.
+   * Found by a conformance fixture passing a constant and every bucket coming back stale.
+   */
+  rebuild(input: TenantScope & { period: RollupPeriod; bucketStart: string }): Promise<UsageRollup>;
+
+  /** One bucket, or null when nothing has been recorded in it. */
+  get(
+    input: TenantScope & { period: RollupPeriod; bucketStart: string },
+  ): Promise<UsageRollup | null>;
+
+  /**
+   * A range of buckets, for a chart — the read path AC-1 is about.
+   *
+   * `from` inclusive, `to` exclusive, so adjacent ranges tile without overlapping and a caller cannot
+   * double-count a boundary bucket by asking for two ranges.
+   */
+  list(
+    input: TenantScope & PageRequest & { period: RollupPeriod; from: string; to: string },
+  ): Promise<Page<UsageRollup>>;
+
+  /**
+   * The sum across a range, without returning the buckets.
+   *
+   * Separate from `list` because a quota check needs one number and a chart needs many, and making the quota
+   * check page through buckets would put the read path's cost on the admission path.
+   */
+  sum(
+    input: TenantScope & { period: RollupPeriod; from: string; to: string },
+  ): Promise<UsageTotals>;
+
+  /**
+   * Buckets that have never been computed, or were computed before the newest event in them.
+   *
+   * The rollup job's work list, derived from the ledger so an interrupted job resumes by asking again — the
+   * same shape `listStaleSources` uses for re-indexing, and for the same reason.
+   */
+  listStaleBuckets(
+    input: TenantScope & PageRequest & { period: RollupPeriod; since: string },
+  ): Promise<Page<{ readonly period: RollupPeriod; readonly bucketStart: string }>>;
+}
+
+/**
  * Append-only usage ledger (`docs/12`). Events are never edited or deleted; corrections are new
  * compensating events. Rollups are derived from events, never a second source of truth. Appends are
  * idempotent on `(runId, stepId)` (or `id`) so a recovered run never double-counts.

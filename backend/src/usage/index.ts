@@ -83,3 +83,5 @@ export interface PricingResolver {
 }
 
 export * from "./recorder.js";
+export * from "./quota.js";
+export * from "./rollups.js";

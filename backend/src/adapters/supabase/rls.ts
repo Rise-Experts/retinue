@@ -71,6 +71,7 @@ export const TENANT_SCOPED_TABLES: readonly RlsTable[] = [
   { table: "interaction_approvals" },
   { table: "approval_grants" },
   { table: "usage_records" },
+  { table: "usage_rollups" },
   { table: "idempotency_keys" },
   { table: "skills" },
   { table: "mcp_connections" },
