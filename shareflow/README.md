@@ -29,6 +29,7 @@ all. Three further things about their shape decided the seam:
 | Category | Tools | Effect |
 |---|---|---|
 | `posts` (#115) | `list_post_drafts`, `get_post_draft` | `read` |
+| `posts` (#123) | `propose_post_angles`, `generate_content` | `read` — writes nothing |
 | | `create_post_draft`, `update_post_draft`, `duplicate_post_draft` | `internal-write` |
 | `campaigns` (#116) | `list_campaigns`, `get_campaign`, `get_campaign_calendar` | `read` |
 | | `create_campaign`, `update_campaign` | `internal-write` |
@@ -69,6 +70,22 @@ Two more from Campaigns:
   daily campaign over a year produces 31 — and an assistant that inferred the count from the dates
   would report 365. The field exists so the cap is visible; recomputing it locally would duplicate the
   logic it exists to expose.
+From content generation (#123) — the one capability with nothing to wrap:
+
+- **Per-channel variants are per-channel *drafts*.** #115 found the store holds one caption plus
+  `target_platforms`, with nowhere for an authored variant, and left the question here. The answer needs
+  no schema change: generation returns one variant per channel and saves nothing; the assistant saves one
+  draft per channel. Each then has its own status, approval and publish target — which is what
+  `socialPostTargets` already models.
+- **AC-4 asked for something a model cannot promise.** "A forbidden claim is never produced" is not
+  guaranteeable; "never *returned*" is. Generate, check, repair, and if it survives the bound, refuse and
+  name the phrase.
+- **The repair bound is 2, and the dangerous case argues for a low bound rather than a high one.** On a
+  forbidden claim a model asked repeatedly produces near-variants of the same claim — repairing that many
+  times is a search for a phrasing that slips past the checker, not persistence.
+- **The model call is still a port.** R3 confines the AI SDK to `models/` and R7 keeps I/O out of
+  `tools/`, so what is built here is the harness — validation, repair, the bound — not the inference.
+
 From the migrated skills (#122):
 
 - **No limit value survives in a skill body.** Character ceilings, hashtag counts and per-platform media
@@ -214,8 +231,8 @@ stops the process starting, rather than producing a confusing catalog on someone
 ## Status
 
 The seam and the scaffolding (#114); Posts (#115); Campaigns (#116); Accounts (#117); Media (#118);
-Publishing (#119); Engagement and Leads (#120); context providers (#121); the seven skills (#122).
-Content generation, research and analytics land in #123–#125.
+Publishing (#119); Engagement and Leads (#120); context providers (#121); the seven skills (#122);
+content generation (#123). Research and analytics land in #124–#125.
 
 `npm test` in this workspace runs `tsc -b` first. That is deliberate: this package value-imports
 `@agentkit/backend`, whose entry point is `dist/`, so `vitest run` on its own tests whatever was last

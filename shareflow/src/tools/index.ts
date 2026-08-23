@@ -112,4 +112,6 @@ export * from "./media.js";
 export * from "./publishing.js";
 export * from "./engagement.js";
 export * from "./leads.js";
+export * from "./duplication.js";
+export * from "./generate.js";
 

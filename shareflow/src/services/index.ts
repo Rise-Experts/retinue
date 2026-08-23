@@ -434,6 +434,26 @@ export interface ContentService {
   ): Promise<PostDraft>;
 
   /**
+   * Validate content that is **not saved yet**.
+   *
+   * AC-3 of #123 requires that nothing is saved when validation fails, and every existing validation
+   * path takes a `draftId` — so there was no way to check content before it existed. This is that
+   * primitive: the same `ValidationIssue[]` everything else returns, over text the store has never seen.
+   *
+   * Platform limits stay here, in the service, for the reason #118 and #122 both settled on:
+   * `platform_rules` is workspace-overridable, so a limit known to the caller is a limit that can be
+   * wrong for the workspace.
+   */
+  validateContent(
+    context: ExecutionContext,
+    input: {
+      readonly caption: string;
+      readonly platformIds: readonly PlatformId[];
+      readonly mediaAssetIds?: readonly MediaAssetId[];
+    },
+  ): Promise<ValidationReport>;
+
+  /**
    * Copy a draft into a new, editable, unpublished one.
    *
    * The original is never touched — *"its status, history, scheduled items and metrics all stay
@@ -1102,6 +1122,58 @@ export interface BrandService {
   getPerformanceBrief(context: ExecutionContext): Promise<string | null>;
 }
 
+
+// ---------------------------------------------------------------------------------------------------
+// Content generation — the one capability with nothing to wrap (#123).
+// ---------------------------------------------------------------------------------------------------
+
+/**
+ * A strategic angle: one way of approaching the brief.
+ *
+ * docs/07 Workflow 1 step 4 asks for *distinct* angles, and step 5 leaves the choice to the workflow. So
+ * an angle is a proposal, not a decision — the assistant or the user picks one.
+ */
+export type ContentAngle = {
+  /** Short label, for choosing between them. */
+  readonly label: string;
+  /** What this angle argues and why it might land. */
+  readonly rationale: string;
+};
+
+/** One channel's version of the content. */
+export type GeneratedVariant = {
+  readonly platformId: PlatformId;
+  readonly caption: string;
+};
+
+/**
+ * The model-facing port.
+ *
+ * Declared here and implemented above, because R3 confines the AI SDK to `models/` and R7 keeps I/O out
+ * of `tools/`. What #123 builds is the harness around this — validation, repair, and the bound — not the
+ * inference.
+ *
+ * `avoid` is how a repair attempt is communicated: the findings from the previous attempt, so the model
+ * is told what to change rather than asked to try again.
+ */
+export interface ContentGenerator {
+  proposeAngles(
+    context: ExecutionContext,
+    input: { readonly brief: string; readonly count: number },
+  ): Promise<readonly ContentAngle[]>;
+
+  generate(
+    context: ExecutionContext,
+    input: {
+      readonly brief: string;
+      readonly angle?: ContentAngle;
+      readonly platformIds: readonly PlatformId[];
+      /** Findings from the previous attempt. Empty on the first. */
+      readonly avoid: readonly ValidationIssue[];
+    },
+  ): Promise<readonly GeneratedVariant[]>;
+}
+
 export type ShareFlowServices = {
   readonly connectors: ConnectorService;
   readonly content: ContentService;
@@ -1110,4 +1182,5 @@ export type ShareFlowServices = {
   readonly engagement: EngagementService;
   readonly leads: LeadService;
   readonly brand: BrandService;
+  readonly generator: ContentGenerator;
 };
