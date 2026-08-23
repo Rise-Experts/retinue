@@ -1,6 +1,6 @@
 {
   "$schema": "https://typedoc.org/schema.json",
-  "entryPoints": ["../backend/src/index.ts", "../frontend/src/index.ts"],
+  "entryPoints": ["../backend/src/index.ts", "../frontend/src/index.ts", "../shareflow/src/index.ts"],
   "tsconfig": "tsconfig.typedoc.json",
   "plugin": ["typedoc-plugin-markdown"],
   "out": "api",

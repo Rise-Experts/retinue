@@ -21,6 +21,7 @@
     "graphql-yoga": "^5.10.0"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.5",
     "graphql-sse": "^2.6.0",
     "vitest": "^4.1.9"
   }

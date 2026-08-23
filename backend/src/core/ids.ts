@@ -7,7 +7,12 @@
 
 declare const brand: unique symbol;
 
-type Branded<T, B extends string> = T & { readonly [brand]: B };
+/**
+ * Exported so a downstream package can mint its own IDs with the same mechanism rather than a second,
+ * incompatible one. `asId` is generic over this, so an integration package's `PostDraftId` gets the
+ * same "cannot be passed where another ID is expected" guarantee the platform's own IDs have.
+ */
+export type Branded<T, B extends string> = T & { readonly [brand]: B };
 
 export type TenantId = Branded<string, "TenantId">;
 export type PrincipalId = Branded<string, "PrincipalId">;

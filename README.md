@@ -7,6 +7,7 @@ TypeScript implementation of the specifications in [`docs/`](docs/README.md).
 | [`backend/`](backend) | `@agentkit/backend` | Server: runtime, tools, MCP, skills, context, HITL, persistence adapters. **Takes no server or HTTP dependency and reads no environment variables.** |
 | [`server/`](server) | `@agentkit/server` | The reference GraphQL host: Yoga, the SSE endpoint, configuration and health probes |
 | [`frontend/`](frontend) | `@agentkit/frontend` | Client: headless React state, subscriptions and typed part reducers |
+| [`shareflow/`](shareflow) | `@agentkit/shareflow` | The ShareFlow integration: its tools, context providers, skills and agent manifests. Depends on `backend`; nothing generic depends on it |
 | [`docs/`](docs) | — | The specifications these packages implement |
 
 ## Status
@@ -24,7 +25,7 @@ Anything not stated in the specifications is marked `@proposed` in the source an
 
 ## Workspace
 
-These two packages are npm workspaces of the repository root. `web/` and `mobile/`
+These four packages are npm workspaces of the repository root. `web/` and `mobile/`
 are deliberately **not** members — they keep their own lockfiles, and CI installs
 `web/` independently.
 
@@ -44,9 +45,19 @@ test with neither ShareFlow/Chorus nor Twenty installed:
 - `frontend` is headless and carries no product styling.
 - Adapters implement ports; ports never import adapters.
 - No public API contains Twenty names or types.
+- A generic package never imports `shareflow`, and `shareflow` never imports the ShareFlow
+  application. The seam is the interfaces in `shareflow/src/services/` — declared there and
+  implemented by ShareFlow, so the dependency points one way only.
+- Every package may only import what its own `package.json` declares. npm hoists all workspace
+  dependencies into one `node_modules`, so an undeclared import works here and fails wherever the
+  package is installed alone — the manifest is the only place "builds without ShareFlow installed"
+  is actually written down.
+
+`npm run check:boundaries` enforces all of the above and fails the build on a violation;
+`scripts/check-boundaries.test.mjs` plants one of each and asserts it is caught.
 
 ShareFlow-specific tools, context providers, skills and agents are registered through
-the public interfaces from an integration package, never added here.
+the public interfaces from `shareflow/`, never added to a generic package.
 
 ## Deployment
 

@@ -45,6 +45,15 @@ agent-platform/
 - GraphQL resolvers call application services and contain no domain logic.
 - ShareFlow registers tools, context providers, skills and agents through public interfaces.
 - No public API contains Twenty names or types.
+- A generic package never imports an integration package. The reverse is the only allowed direction.
+- An integration package declares the service interfaces it needs and never imports the application
+  that implements them, so it carries no dependency on that application's internals.
+- Every package may import only what its own manifest declares. Workspace hoisting makes an
+  undeclared import work locally and fail once the package is installed on its own, so the manifest
+  is where "builds without ShareFlow or Twenty installed" is actually verifiable.
+
+`packages/scripts/check-boundaries.mjs` enforces these as build failures (rules R1–R10); each has a
+planted-violation test beside it.
 
 ## Naming conventions
 

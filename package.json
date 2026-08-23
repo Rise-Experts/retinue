@@ -8,7 +8,8 @@
   "workspaces": [
     "backend",
     "server",
-    "frontend"
+    "frontend",
+    "shareflow"
   ],
   "engines": {
     "node": ">=20"

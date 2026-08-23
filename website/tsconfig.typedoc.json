@@ -14,9 +14,10 @@
     "baseUrl": ".",
     "paths": {
       "@agentkit/backend": ["../backend/src/index.ts"],
-      "@agentkit/frontend": ["../frontend/src/index.ts"]
+      "@agentkit/frontend": ["../frontend/src/index.ts"],
+      "@agentkit/shareflow": ["../shareflow/src/index.ts"]
     },
     "noEmit": true
   },
-  "include": ["../backend/src/index.ts", "../frontend/src/index.ts"]
+  "include": ["../backend/src/index.ts", "../frontend/src/index.ts", "../shareflow/src/index.ts"]
 }
