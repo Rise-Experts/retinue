@@ -27,6 +27,7 @@ export * from "./adapters/supabase/index.js";
 // `createBullMqRunQueue` does.
 export * from "./adapters/bullmq/index.js";
 export * from "./worker/main.js";
+export * from "./worker/extraction.js";
 
 export * from "./principal-memory/index.js";
 export * from "./files/index.js";
@@ -35,5 +36,6 @@ export * from "./files/index.js";
 // convenience nobody asked for.
 export * from "./files/context.js";
 export * from "./files/read-tool.js";
+export * from "./documents/index.js";
 
 export * from "./graphql/index.js";

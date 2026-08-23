@@ -366,10 +366,34 @@ export type FileMetadata = {
   /** Of the bytes as stored, so a read-back can be checked rather than assumed. */
   readonly checksum?: string;
   readonly state: FileState;
+  /** Extraction outcome (#131). Absent for a file nothing has tried to extract yet. */
+  readonly extraction?: FileExtraction;
   readonly uploadedBy: PrincipalId;
   readonly createdAt: string;
   /** Soft delete. A row is kept so a reference to it resolves to "deleted" rather than to nothing. */
   readonly deletedAt?: string;
+};
+
+/**
+ * What a file records about its derived text (#131).
+ *
+ * Declared here rather than imported from `documents/`: a store port that depended on the extraction pipeline
+ * would make the pipeline a prerequisite for storing a file, and `persistence` is the layer nothing above it
+ * gets to reach into.
+ *
+ * Separate from the file's own `state` on purpose. A file is perfectly `stored` while its extraction has
+ * `failed`, and conflating the two would make an unreadable document look like a lost upload.
+ */
+export type FileExtraction = {
+  readonly state: "pending" | "running" | "extracted" | "failed" | "skipped";
+  /** Where the extracted document lives. `BlobStore` holds JSON, which is exactly what it is. */
+  readonly ref?: BlobRef;
+  readonly failureReason?: string;
+  readonly failureMessage?: string;
+  readonly pageCount?: number;
+  readonly blockCount?: number;
+  readonly truncated?: boolean;
+  readonly at?: string;
 };
 
 export interface FileMetadataStore {
@@ -399,6 +423,30 @@ export interface FileMetadataStore {
       checksum?: string;
     },
   ): Promise<{ readonly moved: boolean }>;
+
+  /**
+   * Record the outcome of extraction (#131).
+   *
+   * Idempotent and deliberately **not** a compare-and-set, unlike `transition`. A retried extraction writing
+   * the same outcome twice is harmless, and requiring the caller to state the previous extraction state would
+   * make a retry after a crash impossible — the crash is exactly why it does not know what that state was.
+   *
+   * `recorded: false` means the file is gone, which a retry after a conversation delete will legitimately
+   * hit; reported rather than thrown, because it is an ordinary race and not a fault.
+   */
+  recordExtraction(
+    input: TenantScope & { id: FileId; extraction: FileExtraction },
+  ): Promise<{ readonly recorded: boolean }>;
+
+  /**
+   * Files in a given extraction state, oldest first.
+   *
+   * The reconciliation of *extraction*, distinct from `listByState`'s reconciliation of bytes: a file stuck in
+   * `running` is a worker that died mid-parse, and nothing else would ever notice.
+   */
+  listByExtractionState(
+    input: TenantScope & PageRequest & { state: FileExtraction["state"]; olderThan: string },
+  ): Promise<Page<FileMetadata>>;
 
   /**
    * Mark every live file of a conversation for byte deletion.

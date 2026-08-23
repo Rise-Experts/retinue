@@ -18,7 +18,13 @@ import { AgentPlatformError } from "../../core/errors.js";
 import { asId } from "../../core/ids.js";
 import type { ConversationId, FileId, PrincipalId } from "../../core/ids.js";
 import type { Page } from "../../core/context.js";
-import type { FileMetadata, FileMetadataStore, FileState } from "../../persistence/index.js";
+import type { BlobRef } from "../../core/ids.js";
+import type {
+  FileExtraction,
+  FileMetadata,
+  FileMetadataStore,
+  FileState,
+} from "../../persistence/index.js";
 import type { SqlExecutor } from "./sql.js";
 
 type Row = {
@@ -33,6 +39,14 @@ type Row = {
   uploaded_by: string;
   created_at: string | Date;
   deleted_at: string | Date | null;
+  extraction_state: string | null;
+  extraction_ref: string | null;
+  extraction_failure_reason: string | null;
+  extraction_failure_message: string | null;
+  extraction_pages: number | string | null;
+  extraction_blocks: number | string | null;
+  extraction_truncated: boolean | null;
+  extracted_at: string | Date | null;
 };
 
 const iso = (v: string | Date): string => (v instanceof Date ? v.toISOString() : v);
@@ -52,10 +66,28 @@ const toFile = (r: Row): FileMetadata => ({
   uploadedBy: asId<PrincipalId>(r.uploaded_by),
   createdAt: iso(r.created_at),
   ...(r.deleted_at === null ? {} : { deletedAt: iso(r.deleted_at) }),
+  // Absent rather than a record with a null state: "nothing has tried to extract this" and "extraction is
+  // pending" are different facts, and the column being null is how the first one is spelled.
+  ...(r.extraction_state === null
+    ? {}
+    : {
+        extraction: {
+          state: r.extraction_state as FileExtraction["state"],
+          ...(r.extraction_ref === null ? {} : { ref: asId<BlobRef>(r.extraction_ref) }),
+          ...(r.extraction_failure_reason === null ? {} : { failureReason: r.extraction_failure_reason }),
+          ...(r.extraction_failure_message === null ? {} : { failureMessage: r.extraction_failure_message }),
+          ...(r.extraction_pages === null ? {} : { pageCount: Number(r.extraction_pages) }),
+          ...(r.extraction_blocks === null ? {} : { blockCount: Number(r.extraction_blocks) }),
+          ...(r.extraction_truncated === null ? {} : { truncated: r.extraction_truncated }),
+          ...(r.extracted_at === null ? {} : { at: iso(r.extracted_at) }),
+        },
+      }),
 });
 
 const COLUMNS = `id, conversation_id, filename, media_type, byte_size, content_key, checksum, state,
-                 uploaded_by, created_at, deleted_at`;
+                 uploaded_by, created_at, deleted_at, extraction_state, extraction_ref,
+                 extraction_failure_reason, extraction_failure_message, extraction_pages,
+                 extraction_blocks, extraction_truncated, extracted_at`;
 
 /**
  * Keyset cursor on `(created_at, id)`.
@@ -174,6 +206,57 @@ export const createPostgresFileMetadataStore = (sql: SqlExecutor): FileMetadataS
     // One statement rather than a list and a loop: a file uploaded between the two would be missed, and
     // missed silently.
     return { scheduled: rows.length };
+  },
+
+  async recordExtraction({ tenantId, id, extraction }) {
+    const rows = await sql.query<{ id: string }>(
+      `UPDATE files
+          SET extraction_state = $3,
+              extraction_ref = $4,
+              extraction_failure_reason = $5,
+              extraction_failure_message = $6,
+              extraction_pages = $7,
+              extraction_blocks = $8,
+              extraction_truncated = $9,
+              extracted_at = $10::timestamptz
+        -- No compare on the previous extraction state, unlike transition(). A worker retrying after a crash
+        -- does not know what it wrote before the crash, and requiring it to would make recovery impossible.
+        WHERE tenant_id = $1 AND id = $2
+        RETURNING id`,
+      [
+        tenantId,
+        id,
+        extraction.state,
+        extraction.ref ?? null,
+        extraction.failureReason ?? null,
+        extraction.failureMessage ?? null,
+        extraction.pageCount ?? null,
+        extraction.blockCount ?? null,
+        extraction.truncated ?? null,
+        extraction.at ?? null,
+      ],
+    );
+    // Zero rows means the file is gone -- a conversation deleted while extraction ran. An ordinary race, so
+    // it is reported rather than thrown; a worker that threw would retry it forever.
+    return { recorded: rows.length > 0 };
+  },
+
+  async listByExtractionState({ tenantId, state, olderThan, limit, cursor }) {
+    const after = cursor === undefined ? null : decodeCursor(cursor);
+    const rows = await sql.query<Row>(
+      `SELECT ${COLUMNS} FROM files
+        WHERE tenant_id = $1
+          -- A file nothing has touched has a NULL state, and that is the same fact as 'pending': the row is
+          -- waiting. Coalescing here is what lets this query find the files a lost enqueue dropped, which is
+          -- the whole reason the method exists.
+          AND COALESCE(extraction_state, 'pending') = $2
+          AND created_at < $3::timestamptz
+          AND ($4::text IS NULL OR (created_at, id) > ($4::timestamptz, $5::text))
+        ORDER BY created_at, id
+        LIMIT $6`,
+      [tenantId, state, olderThan, after?.createdAt ?? null, after?.id ?? null, limit + 1],
+    );
+    return page(rows, limit);
   },
 
   async listByState({ tenantId, state, olderThan, limit, cursor }) {

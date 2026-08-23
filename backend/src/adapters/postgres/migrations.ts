@@ -669,6 +669,48 @@ export const MIGRATIONS: readonly Migration[] = [
       `DROP TABLE IF EXISTS files`,
     ],
   },
+  {
+    // #131. Extraction outcome on the file, as columns rather than a jsonb blob: `extraction_state` is
+    // queried by the reconciliation of stuck extractions, and a jsonb predicate there would be an index this
+    // schema does not have. The columns are all nullable because a file that nothing has tried to extract has
+    // no outcome -- distinct from an outcome of "pending", which means it is queued.
+    id: "0014_file_extraction",
+    up: [
+      `ALTER TABLE files ADD COLUMN IF NOT EXISTS extraction_state text`,
+      `ALTER TABLE files ADD COLUMN IF NOT EXISTS extraction_ref text`,
+      `ALTER TABLE files ADD COLUMN IF NOT EXISTS extraction_failure_reason text`,
+      `ALTER TABLE files ADD COLUMN IF NOT EXISTS extraction_failure_message text`,
+      `ALTER TABLE files ADD COLUMN IF NOT EXISTS extraction_pages integer`,
+      `ALTER TABLE files ADD COLUMN IF NOT EXISTS extraction_blocks integer`,
+      `ALTER TABLE files ADD COLUMN IF NOT EXISTS extraction_truncated boolean`,
+      `ALTER TABLE files ADD COLUMN IF NOT EXISTS extracted_at timestamptz`,
+      // A failure without a reason is a failure nobody can act on, and a reason without a failure state is a
+      // row that contradicts itself. Both directions, in one constraint, because a check that only held one
+      // way would let the other through.
+      `DO $$ BEGIN
+         ALTER TABLE files ADD CONSTRAINT files_extraction_failure_ck
+           CHECK ((extraction_state = 'failed') = (extraction_failure_reason IS NOT NULL));
+       EXCEPTION WHEN duplicate_object THEN NULL; END $$`,
+      // Serves listByExtractionState. Partial on the two states reconciliation asks about -- a file that
+      // extracted successfully is never swept, so keeping it in the index would be most of the table for
+      // nothing. The COALESCE matches the query's, so a NULL state is found as 'pending' here too.
+      `CREATE INDEX IF NOT EXISTS files_extraction_state_idx
+        ON files (tenant_id, COALESCE(extraction_state, 'pending'), created_at, id)
+        WHERE extraction_state IS NULL OR extraction_state IN ('pending','running')`,
+    ],
+    down: [
+      `DROP INDEX IF EXISTS files_extraction_state_idx`,
+      `ALTER TABLE files DROP CONSTRAINT IF EXISTS files_extraction_failure_ck`,
+      `ALTER TABLE files DROP COLUMN IF EXISTS extracted_at`,
+      `ALTER TABLE files DROP COLUMN IF EXISTS extraction_truncated`,
+      `ALTER TABLE files DROP COLUMN IF EXISTS extraction_blocks`,
+      `ALTER TABLE files DROP COLUMN IF EXISTS extraction_pages`,
+      `ALTER TABLE files DROP COLUMN IF EXISTS extraction_failure_message`,
+      `ALTER TABLE files DROP COLUMN IF EXISTS extraction_failure_reason`,
+      `ALTER TABLE files DROP COLUMN IF EXISTS extraction_ref`,
+      `ALTER TABLE files DROP COLUMN IF EXISTS extraction_state`,
+    ],
+  },
 ];
 
 export const migrate = async (sql: SqlExecutor): Promise<void> => {

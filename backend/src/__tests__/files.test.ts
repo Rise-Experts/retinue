@@ -227,6 +227,71 @@ describe("createFileService.upload", () => {
   });
 });
 
+describe("extraction is requested, never awaited (#131)", () => {
+  it("asks for extraction after the file is stored, not before", async () => {
+    // A worker picking the job up immediately must find a file it can read. Requesting before the transition
+    // would hand it a `pending` file, which the pipeline correctly skips — losing the extraction to a race.
+    const seen: { fileId: string; state: string | undefined }[] = [];
+    const metadata = createMemoryFileMetadataStore();
+    const content = createMemoryFileContentStore();
+    const service = createFileService({
+      metadata,
+      content,
+      authorization: policy(),
+      clock: () => "2026-08-23T10:00:00.000Z",
+      fileId: () => "file-1",
+      contentKey: () => "key-1",
+      async requestExtraction({ tenantId, fileId }) {
+        const row = await metadata.get({ tenantId, id: fileId });
+        seen.push({ fileId, state: row?.state });
+      },
+    });
+    await service.upload(ctx(), {
+      conversationId: C1,
+      filename: "report.csv",
+      mediaType: "application/pdf",
+      declaredBytes: 5,
+      bytes: bytes("hello"),
+    });
+    expect(seen).toEqual([{ fileId: "file-1", state: "stored" }]);
+  });
+
+  it("still returns the uploaded file when the extraction queue is unreachable", async () => {
+    // AC-2. The bytes and the row are both durable by this point; an unreachable queue must not turn a
+    // successful upload into a failed one. The sweep is what picks up the dropped request.
+    const logged: string[] = [];
+    const { metadata, content } = makeService();
+    const service = createFileService({
+      metadata,
+      content,
+      authorization: policy(),
+      clock: () => "2026-08-23T10:00:00.000Z",
+      fileId: () => "file-1",
+      contentKey: () => "key-1",
+      async requestExtraction() {
+        throw new Error("redis unreachable");
+      },
+      log: (message) => logged.push(message),
+    });
+    const file = await service.upload(ctx(), {
+      conversationId: C1,
+      filename: "report.pdf",
+      mediaType: "application/pdf",
+      declaredBytes: 5,
+      bytes: bytes("hello"),
+    });
+    expect(file).toMatchObject({ state: "stored" });
+    // Dropped loudly rather than silently: the log line is the only trace, so it has to exist.
+    expect(logged).toContain("extraction request failed after upload");
+  });
+
+  it("uploads fine with no extraction configured at all", async () => {
+    // A deployment with no extraction is a valid one, and attaching a text file must not require Redis.
+    const { service } = makeService();
+    await expect(upload(service)).resolves.toMatchObject({ state: "stored" });
+  });
+});
+
 describe("createFileService reads", () => {
   it("reports another tenant's file as absent, not as forbidden", async () => {
     // `forbidden` confirms the id exists. Two callers, one answer.

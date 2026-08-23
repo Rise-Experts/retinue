@@ -193,3 +193,82 @@ names the alternative, because a refusal that does not say what to do next produ
 
 The storage `contentKey` never appears in front of the model. The reference is the file *id*; the key is the
 platform's business, and a model that could see it could put it in a tool argument.
+
+## Document extraction (#131)
+
+Extraction turns an opaque attachment into something the model can reason about. Three decisions shape it.
+
+### Structure, not a flat string
+
+The intermediate is a **block list** — headings keep their level, tables keep their cells, lists keep their
+items — not one long string. A flat string is what every quick extractor produces and it destroys exactly the
+information a question is usually about: *"what was Q3 revenue?"* is answerable from a table and unanswerable
+from that table flattened into prose, because the row and column that gave the number its meaning are gone and
+the model has no way to know they were ever there.
+
+The renderer turns blocks back into Markdown for a model, so a table arrives as a table.
+
+### Failure is a value, not an exception
+
+`ExtractionFailureReason` is a closed set, and every value exists because the *user-facing sentence differs*:
+
+| Reason | What the user should do |
+|---|---|
+| `unsupported-type` / `skipped` | Nothing — this type is not extracted at all |
+| `too-large` | Split the document, or attach the part that matters |
+| `too-many-pages` | Same, and the limit is named in the message |
+| `timed-out` | Retry, or simplify the document |
+| `encrypted` | Remove the password protection |
+| `no-text-layer` | Run OCR — this is a scan, not a broken file |
+| `malformed` | Re-export it |
+
+`no-text-layer` and `malformed` are deliberately separate: collapsing them would send someone to re-export a
+file that needed a different pipeline entirely. The pipeline records the failure on the file and never throws
+for a document problem, so an unreadable document is visibly unreadable rather than silently empty.
+
+### Bounded in every dimension a document can grow
+
+A document is attacker-controlled input, so a page limit alone is not enough:
+
+- `maxBytes` — bytes read from storage. **Refuses** rather than truncating: half a PDF is malformed, not shorter.
+- `maxPages` — refused with the count and the limit both named.
+- `maxTextBytes` — extracted text kept. **Truncates** and says so, because half a document is still useful.
+- `maxBlocks` — separate from `maxTextBytes`, because a million empty paragraphs costs no text and a great deal
+  of everything else.
+- `timeoutMs` — enforced by the *pipeline*, not the parser: a parser stuck in a loop cannot check its own clock.
+- An **inflated-stream ceiling** inside the PDF parser. Checking the file size does not catch a decompression
+  bomb; a small file can inflate to gigabytes, so the ceiling is on the inflated total.
+
+### Asynchronous by construction
+
+Extraction has its own queue, not the run queue. A shared queue would let a hundred-page PDF sit in front of a
+user's next message, and the two kinds of work want different concurrency anyway — extraction is CPU-bound, a
+run is mostly waiting on a provider. `upload` *requests* extraction and an enqueue failure is logged and
+dropped: the bytes and the row are already durable, and an unreachable queue must not turn a successful upload
+into a failed one. `sweepStuckExtractions` picks up both silent shapes — a `pending` file whose enqueue was
+lost, and a `running` file whose worker died.
+
+A failed *document* completes its job; only an infrastructure failure fails one. Retrying a scan with no text
+layer produces the same answer at the same cost forever.
+
+### The PDF parser's limits, stated
+
+Text extraction is over the raw PDF syntax with `node:zlib` and no dependency. It handles what the tools people
+actually use produce — Word, LaTeX, print-to-PDF, Google Docs, most report generators — by walking content
+streams and following the text operators, inferring headings from font size (a PDF has no headings; it has text
+that happens to be bigger) and tables from repeated column positions.
+
+It does **not** handle encrypted documents (refused: extracting from one means implementing the security
+handler), scans with no text layer (reported as such, which is the answer that points at OCR), or Type0/CID
+fonts whose `ToUnicode` map cannot be applied (detected as mojibake and warned about — a garbled answer is
+worse than a refusal). Tables are the honest weak spot: a PDF contains text at coordinates, not tables, so a
+grid is recovered when the evidence is strong and the text is left as paragraphs when it is not. A wrong table
+is worse than no table, because a wrong one looks authoritative.
+
+### Read in windows
+
+`read_document` returns at most 50 blocks or 24,000 characters and reports the block to continue from. The
+window is in **blocks, not characters**, because a character bound can land inside a table and hand the model
+half of one — worse than none, since the missing rows are invisible and the model answers confidently from what
+it can see. When there is nothing to read it reports *why*, and marks the error retryable only when retrying
+could change the answer.

@@ -75,11 +75,42 @@ export const truncateFilename = (filename: string): string => {
  * the function's inputs are the enforcement.
  */
 export const renderAttachmentReference = (file: FileMetadata): string =>
-  `- ${truncateFilename(file.filename)} (${file.mediaType}, ${humanSize(file.byteSize)}) — file:${file.id}`;
+  `- ${truncateFilename(file.filename)} (${file.mediaType}, ${humanSize(file.byteSize)}) — file:${file.id}${extractionSuffix(file)}`;
+
+/**
+ * What extraction says about a file, in as few words as possible (#131).
+ *
+ * A model needs three facts to choose its next move, and only three: whether text is available now, whether
+ * to wait, or whether it will never come and why. So `extracted` names the tool, `failed` gives the reason,
+ * and everything else says "not yet".
+ *
+ * **Bounded on purpose.** The failure message is truncated because it can carry a page count or a byte limit,
+ * and an unbounded string here would make an attachment's context cost depend on how badly extraction went —
+ * undoing #130's AC-2 by a side door.
+ */
+export const MAX_EXTRACTION_NOTE = 90;
+
+const extractionSuffix = (file: FileMetadata): string => {
+  const extraction = file.extraction;
+  if (extraction === undefined) return "";
+  switch (extraction.state) {
+    case "extracted":
+      return " [text available: read_document]";
+    case "failed":
+      return ` [unreadable: ${(extraction.failureMessage ?? extraction.failureReason ?? "unknown reason").slice(0, MAX_EXTRACTION_NOTE)}]`;
+    case "skipped":
+      // Not "we failed" — nobody asked for this type to be readable, and saying "failed" would send a model
+      // looking for a fix that does not exist.
+      return " [no text extraction for this type]";
+    default:
+      return " [text extraction in progress]";
+  }
+};
 
 /** The instruction that makes AC-3 discoverable rather than something the model has to guess. */
 const READ_INSTRUCTION =
-  "Contents are not included. Call `read_attachment` with a file id to read a bounded portion.";
+  "Contents are not included. Call `read_document` for an attachment marked as having text, or " +
+  "`read_attachment` to read raw bytes. Both return a bounded portion.";
 
 export const ATTACHMENT_PROVIDER_ID = "attachments";
 

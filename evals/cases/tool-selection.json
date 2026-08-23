@@ -1,24 +1,394 @@
 [
-  { "id": "ts-001", "dimension": "tool-selection", "title": "Publish means publish tool", "input": { "message": "Publish the 'Spring sale' draft to LinkedIn now." }, "expect": { "kind": "tool-called", "tool": "publish_post" }, "tags": ["publishing"] },
-  { "id": "ts-002", "dimension": "tool-selection", "title": "Schedule not publish", "input": { "message": "Schedule this for Friday 9am." }, "expect": { "kind": "tool-called", "tool": "schedule_post" }, "tags": ["publishing"] },
-  { "id": "ts-003", "dimension": "tool-selection", "title": "Don't publish when only drafting", "input": { "message": "Just draft a post about our webinar, don't post it." }, "expect": { "kind": "tool-not-called", "tool": "publish_post" }, "tags": ["posts"] },
-  { "id": "ts-004", "dimension": "tool-selection", "title": "Metrics use analytics tool", "input": { "message": "How did our last LinkedIn post perform?" }, "expect": { "kind": "tool-called", "tool": "get_post_metrics" }, "tags": ["analytics"] },
-  { "id": "ts-005", "dimension": "tool-selection", "title": "Account health tool", "input": { "message": "Is our Instagram account still connected?" }, "expect": { "kind": "tool-called", "tool": "list_accounts" }, "tags": ["accounts"] },
-  { "id": "ts-006", "dimension": "tool-selection", "title": "Research over invent", "input": { "message": "Find recent statistics on remote-work adoption." }, "expect": { "kind": "tool-called", "tool": "search_web" }, "tags": ["research"] },
-  { "id": "ts-007", "dimension": "tool-selection", "title": "Create campaign", "input": { "message": "Set up a new campaign called 'Summer 2026'." }, "expect": { "kind": "tool-called", "tool": "create_campaign" }, "tags": ["campaign"] },
-  { "id": "ts-008", "dimension": "tool-selection", "title": "Don't create a lead on a draft request", "input": { "message": "Write a post about our new feature." }, "expect": { "kind": "tool-not-called", "tool": "create_lead" }, "tags": ["posts"] },
-  { "id": "ts-009", "dimension": "tool-selection", "title": "Reply tool for comments", "input": { "message": "Reply to the latest comment on our launch post." }, "expect": { "kind": "tool-called", "tool": "reply_to_comment" }, "tags": ["engagement"] },
-  { "id": "ts-010", "dimension": "tool-selection", "title": "Attach media tool", "input": { "message": "Attach the hero image to this draft." }, "expect": { "kind": "tool-called", "tool": "attach_media" }, "tags": ["media"] },
-  { "id": "ts-011", "dimension": "tool-selection", "title": "Validate before schedule", "input": { "message": "Check this draft is valid for Instagram before scheduling." }, "expect": { "kind": "tool-called", "tool": "validate_post" }, "tags": ["publishing"] },
-  { "id": "ts-012", "dimension": "tool-selection", "title": "No web search for own drafts", "input": { "message": "List my drafts from this week." }, "expect": { "kind": "tool-not-called", "tool": "search_web" }, "tags": ["posts"] },
-  { "id": "ts-013", "dimension": "tool-selection", "title": "Update existing draft", "input": { "message": "Change the CTA on the 'Webinar' draft to 'Register now'." }, "expect": { "kind": "tool-called", "tool": "update_post" }, "tags": ["posts"] },
-  { "id": "ts-014", "dimension": "tool-selection", "title": "Retry failed target", "input": { "message": "Retry publishing to the TikTok account that failed." }, "expect": { "kind": "tool-called", "tool": "retry_publish" }, "tags": ["publishing"] },
-  { "id": "ts-015", "dimension": "tool-selection", "title": "Campaign metrics tool", "input": { "message": "How is the 'Summer 2026' campaign doing overall?" }, "expect": { "kind": "tool-called", "tool": "get_campaign_metrics" }, "tags": ["analytics"] },
-  { "id": "ts-016", "dimension": "tool-selection", "title": "Don't publish on metrics ask", "input": { "message": "Show me engagement for last week." }, "expect": { "kind": "tool-not-called", "tool": "publish_post" }, "tags": ["analytics"] },
-  { "id": "ts-017", "dimension": "tool-selection", "title": "Convert media format", "input": { "message": "Convert this video to a square format for Instagram." }, "expect": { "kind": "tool-called", "tool": "convert_media" }, "tags": ["media"] },
-  { "id": "ts-018", "dimension": "tool-selection", "title": "Read source before repurpose", "input": { "message": "Repurpose our latest case study into a post." }, "expect": { "kind": "tool-called", "tool": "read_source" }, "tags": ["research", "repurpose"] },
-  { "id": "ts-019", "dimension": "tool-selection", "title": "Create attributed lead on request", "input": { "message": "This commenter wants a demo — create a lead for them." }, "expect": { "kind": "tool-called", "tool": "create_lead" }, "tags": ["leads"] },
-  { "id": "ts-020", "dimension": "tool-selection", "title": "List destinations", "input": { "message": "Where can I publish this? List my connected channels." }, "expect": { "kind": "tool-called", "tool": "list_accounts" }, "tags": ["accounts"] },
-  { "id": "ts-021", "dimension": "tool-selection", "title": "No delete on edit request", "input": { "message": "Edit the caption on my scheduled post." }, "expect": { "kind": "tool-not-called", "tool": "delete_post" }, "tags": ["posts"] },
-  { "id": "ts-022", "dimension": "tool-selection", "title": "Duplicate vs create", "input": { "message": "Make a copy of my best-performing post to reuse." }, "expect": { "kind": "tool-called", "tool": "duplicate_draft" }, "tags": ["posts"] }
+  {
+    "id": "ts-001",
+    "dimension": "tool-selection",
+    "title": "Publish means publish tool",
+    "input": {
+      "message": "Publish the 'Spring sale' draft to LinkedIn now."
+    },
+    "expect": {
+      "kind": "tool-called",
+      "tool": "publish_post"
+    },
+    "tags": [
+      "publishing"
+    ]
+  },
+  {
+    "id": "ts-002",
+    "dimension": "tool-selection",
+    "title": "Schedule not publish",
+    "input": {
+      "message": "Schedule this for Friday 9am."
+    },
+    "expect": {
+      "kind": "tool-called",
+      "tool": "schedule_post"
+    },
+    "tags": [
+      "publishing"
+    ]
+  },
+  {
+    "id": "ts-003",
+    "dimension": "tool-selection",
+    "title": "Don't publish when only drafting",
+    "input": {
+      "message": "Just draft a post about our webinar, don't post it."
+    },
+    "expect": {
+      "kind": "tool-not-called",
+      "tool": "publish_post"
+    },
+    "tags": [
+      "posts"
+    ]
+  },
+  {
+    "id": "ts-004",
+    "dimension": "tool-selection",
+    "title": "Metrics use analytics tool",
+    "input": {
+      "message": "How did our last LinkedIn post perform?"
+    },
+    "expect": {
+      "kind": "tool-called",
+      "tool": "get_post_metrics"
+    },
+    "tags": [
+      "analytics"
+    ]
+  },
+  {
+    "id": "ts-005",
+    "dimension": "tool-selection",
+    "title": "Account health tool",
+    "input": {
+      "message": "Is our Instagram account still connected?"
+    },
+    "expect": {
+      "kind": "tool-called",
+      "tool": "list_accounts"
+    },
+    "tags": [
+      "accounts"
+    ]
+  },
+  {
+    "id": "ts-006",
+    "dimension": "tool-selection",
+    "title": "Research over invent",
+    "input": {
+      "message": "Find recent statistics on remote-work adoption."
+    },
+    "expect": {
+      "kind": "tool-called",
+      "tool": "search_web"
+    },
+    "tags": [
+      "research"
+    ]
+  },
+  {
+    "id": "ts-007",
+    "dimension": "tool-selection",
+    "title": "Create campaign",
+    "input": {
+      "message": "Set up a new campaign called 'Summer 2026'."
+    },
+    "expect": {
+      "kind": "tool-called",
+      "tool": "create_campaign"
+    },
+    "tags": [
+      "campaign"
+    ]
+  },
+  {
+    "id": "ts-008",
+    "dimension": "tool-selection",
+    "title": "Don't create a lead on a draft request",
+    "input": {
+      "message": "Write a post about our new feature."
+    },
+    "expect": {
+      "kind": "tool-not-called",
+      "tool": "create_lead"
+    },
+    "tags": [
+      "posts"
+    ]
+  },
+  {
+    "id": "ts-009",
+    "dimension": "tool-selection",
+    "title": "Reply tool for comments",
+    "input": {
+      "message": "Reply to the latest comment on our launch post."
+    },
+    "expect": {
+      "kind": "tool-called",
+      "tool": "reply_to_comment"
+    },
+    "tags": [
+      "engagement"
+    ]
+  },
+  {
+    "id": "ts-010",
+    "dimension": "tool-selection",
+    "title": "Attach media tool",
+    "input": {
+      "message": "Attach the hero image to this draft."
+    },
+    "expect": {
+      "kind": "tool-called",
+      "tool": "attach_media"
+    },
+    "tags": [
+      "media"
+    ]
+  },
+  {
+    "id": "ts-011",
+    "dimension": "tool-selection",
+    "title": "Validate before schedule",
+    "input": {
+      "message": "Check this draft is valid for Instagram before scheduling."
+    },
+    "expect": {
+      "kind": "tool-called",
+      "tool": "validate_post"
+    },
+    "tags": [
+      "publishing"
+    ]
+  },
+  {
+    "id": "ts-012",
+    "dimension": "tool-selection",
+    "title": "No web search for own drafts",
+    "input": {
+      "message": "List my drafts from this week."
+    },
+    "expect": {
+      "kind": "tool-not-called",
+      "tool": "search_web"
+    },
+    "tags": [
+      "posts"
+    ]
+  },
+  {
+    "id": "ts-013",
+    "dimension": "tool-selection",
+    "title": "Update existing draft",
+    "input": {
+      "message": "Change the CTA on the 'Webinar' draft to 'Register now'."
+    },
+    "expect": {
+      "kind": "tool-called",
+      "tool": "update_post"
+    },
+    "tags": [
+      "posts"
+    ]
+  },
+  {
+    "id": "ts-014",
+    "dimension": "tool-selection",
+    "title": "Retry failed target",
+    "input": {
+      "message": "Retry publishing to the TikTok account that failed."
+    },
+    "expect": {
+      "kind": "tool-called",
+      "tool": "retry_publish"
+    },
+    "tags": [
+      "publishing"
+    ]
+  },
+  {
+    "id": "ts-015",
+    "dimension": "tool-selection",
+    "title": "Campaign metrics tool",
+    "input": {
+      "message": "How is the 'Summer 2026' campaign doing overall?"
+    },
+    "expect": {
+      "kind": "tool-called",
+      "tool": "get_campaign_metrics"
+    },
+    "tags": [
+      "analytics"
+    ]
+  },
+  {
+    "id": "ts-016",
+    "dimension": "tool-selection",
+    "title": "Don't publish on metrics ask",
+    "input": {
+      "message": "Show me engagement for last week."
+    },
+    "expect": {
+      "kind": "tool-not-called",
+      "tool": "publish_post"
+    },
+    "tags": [
+      "analytics"
+    ]
+  },
+  {
+    "id": "ts-017",
+    "dimension": "tool-selection",
+    "title": "Convert media format",
+    "input": {
+      "message": "Convert this video to a square format for Instagram."
+    },
+    "expect": {
+      "kind": "tool-called",
+      "tool": "convert_media"
+    },
+    "tags": [
+      "media"
+    ]
+  },
+  {
+    "id": "ts-018",
+    "dimension": "tool-selection",
+    "title": "Read source before repurpose",
+    "input": {
+      "message": "Repurpose our latest case study into a post."
+    },
+    "expect": {
+      "kind": "tool-called",
+      "tool": "read_source"
+    },
+    "tags": [
+      "research",
+      "repurpose"
+    ]
+  },
+  {
+    "id": "ts-019",
+    "dimension": "tool-selection",
+    "title": "Create attributed lead on request",
+    "input": {
+      "message": "This commenter wants a demo \u2014 create a lead for them."
+    },
+    "expect": {
+      "kind": "tool-called",
+      "tool": "create_lead"
+    },
+    "tags": [
+      "leads"
+    ]
+  },
+  {
+    "id": "ts-020",
+    "dimension": "tool-selection",
+    "title": "List destinations",
+    "input": {
+      "message": "Where can I publish this? List my connected channels."
+    },
+    "expect": {
+      "kind": "tool-called",
+      "tool": "list_accounts"
+    },
+    "tags": [
+      "accounts"
+    ]
+  },
+  {
+    "id": "ts-021",
+    "dimension": "tool-selection",
+    "title": "No delete on edit request",
+    "input": {
+      "message": "Edit the caption on my scheduled post."
+    },
+    "expect": {
+      "kind": "tool-not-called",
+      "tool": "delete_post"
+    },
+    "tags": [
+      "posts"
+    ]
+  },
+  {
+    "id": "ts-022",
+    "dimension": "tool-selection",
+    "title": "Duplicate vs create",
+    "input": {
+      "message": "Make a copy of my best-performing post to reuse."
+    },
+    "expect": {
+      "kind": "tool-called",
+      "tool": "duplicate_draft"
+    },
+    "tags": [
+      "posts"
+    ]
+  },
+  {
+    "id": "ts-023",
+    "dimension": "tool-selection",
+    "title": "read_document for an attached document, not read_attachment",
+    "input": {
+      "message": "Summarise the attached PDF."
+    },
+    "expect": {
+      "kind": "tool-called",
+      "tool": "read_document"
+    },
+    "tags": [
+      "documents"
+    ]
+  },
+  {
+    "id": "ts-024",
+    "dimension": "tool-selection",
+    "title": "Page a long document rather than asking for all of it",
+    "input": {
+      "message": "Read the whole 300-page attachment and list every heading."
+    },
+    "expect": {
+      "kind": "tool-called",
+      "tool": "read_document"
+    },
+    "tags": [
+      "documents",
+      "bounds"
+    ]
+  },
+  {
+    "id": "ts-025",
+    "dimension": "tool-selection",
+    "title": "list_attachments when the file is not named",
+    "input": {
+      "message": "What files have I attached to this conversation?"
+    },
+    "expect": {
+      "kind": "tool-called",
+      "tool": "list_attachments"
+    },
+    "tags": [
+      "documents"
+    ]
+  },
+  {
+    "id": "ts-026",
+    "dimension": "tool-selection",
+    "title": "Do not read bytes when extracted text exists",
+    "input": {
+      "message": "What is in the attached CSV?"
+    },
+    "expect": {
+      "kind": "tool-not-called",
+      "tool": "read_attachment"
+    },
+    "tags": [
+      "documents"
+    ]
+  }
 ]

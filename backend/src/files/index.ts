@@ -13,7 +13,7 @@ import { AgentPlatformError } from "../core/errors.js";
 import type { AuthorizationPolicy } from "../authorization/index.js";
 import type { ExecutionContext } from "../core/context.js";
 import { asId } from "../core/ids.js";
-import type { ConversationId, FileId } from "../core/ids.js";
+import type { ConversationId, FileId, TenantId } from "../core/ids.js";
 import type { Page } from "../core/context.js";
 import type {
   FileContentStore,
@@ -148,6 +148,23 @@ export type FileServiceDeps = {
    */
   readonly contentKey?: () => string;
   readonly fileId?: () => string;
+  /**
+   * Asks for text extraction after a successful upload (#131).
+   *
+   * A function rather than the service itself, so `files` does not depend on `documents` — the dependency
+   * runs the other way, and a cycle here would make attaching a file require the extraction pipeline to
+   * exist. Optional: a deployment with no extraction is a valid one.
+   *
+   * **It is not awaited in a way that can fail the upload.** AC-2 is that the user's next request is served
+   * without waiting, so a rejection here is logged and dropped — the file is stored, and the sweep will find
+   * an extraction that never got requested.
+   */
+  readonly requestExtraction?: (input: {
+    readonly tenantId: TenantId;
+    readonly fileId: FileId;
+    readonly mediaType: string;
+  }) => Promise<unknown>;
+  readonly log?: (message: string, detail?: Readonly<Record<string, unknown>>) => void;
 };
 
 /**
@@ -233,6 +250,24 @@ export const createFileService = (deps: FileServiceDeps) => {
         // now unreferenced, so they are removed here rather than left for the sweep.
         await deps.content.deleteFile({ tenantId: context.tenantId, contentKey });
         throw refuse("conflict", "that conversation was deleted while the file was uploading");
+      }
+
+      // Extraction is *requested*, not performed — AC-2 of #131. Deliberately after the transition to
+      // `stored`, so a worker picking the job up immediately finds a file it can read.
+      //
+      // The `catch` is not laziness. The upload has succeeded; the bytes and the row are both durable. An
+      // unreachable queue must not turn that into a failed upload, and the extraction sweep exists precisely
+      // to pick up what a lost enqueue dropped.
+      if (deps.requestExtraction !== undefined) {
+        try {
+          await deps.requestExtraction({
+            tenantId: context.tenantId,
+            fileId: id,
+            mediaType: input.mediaType,
+          });
+        } catch (error) {
+          (deps.log ?? (() => {}))("extraction request failed after upload", { id, error });
+        }
       }
 
       // The size as *written*, not as declared. They differ when a client lies, and the record should say

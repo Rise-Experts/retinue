@@ -15,7 +15,7 @@
 
 import { describe, expect, it } from "vitest";
 import { asId } from "../../core/ids.js";
-import type { ConversationId, FileId, PrincipalId, TenantId } from "../../core/ids.js";
+import type { BlobRef, ConversationId, FileId, PrincipalId, TenantId } from "../../core/ids.js";
 import type { FileContentStore, FileMetadata, FileMetadataStore } from "../../persistence/index.js";
 import { withConversation, type FixtureOrStore } from "./parents.js";
 
@@ -194,6 +194,116 @@ export function fileMetadataStoreConformance(
       });
       expect(result.moved).toBe(false);
       expect(await store.get({ tenantId: T1, id: asId<FileId>("f1") })).toMatchObject({ state: "pending" });
+    });
+
+    it("records an extraction outcome and reads it back", async () => {
+      // #131. Every field, because they are stored as separate columns in Postgres and a mapper that dropped
+      // one would still return a plausible record.
+      const store = await open();
+      await store.create({ tenantId: T1, file: file({ id: "f1" }) });
+      const { recorded } = await store.recordExtraction({
+        tenantId: T1,
+        id: asId<FileId>("f1"),
+        extraction: {
+          state: "extracted",
+          ref: asId<BlobRef>("blob-1"),
+          pageCount: 3,
+          blockCount: 42,
+          truncated: false,
+          at: AT,
+        },
+      });
+      expect(recorded).toBe(true);
+      expect((await store.get({ tenantId: T1, id: asId<FileId>("f1") }))?.extraction).toEqual({
+        state: "extracted",
+        ref: "blob-1",
+        pageCount: 3,
+        blockCount: 42,
+        truncated: false,
+        at: AT,
+      });
+    });
+
+    it("records a typed failure with its reason and message", async () => {
+      // AC-4 of #131 depends on both surviving storage: the reason drives behaviour and the message is what
+      // the user reads, so a store that kept one and dropped the other would half-work.
+      const store = await open();
+      await store.create({ tenantId: T1, file: file({ id: "f1" }) });
+      await store.recordExtraction({
+        tenantId: T1,
+        id: asId<FileId>("f1"),
+        extraction: {
+          state: "failed",
+          failureReason: "no-text-layer",
+          failureMessage: "That PDF is a scan and needs OCR.",
+          at: AT,
+        },
+      });
+      expect((await store.get({ tenantId: T1, id: asId<FileId>("f1") }))?.extraction).toMatchObject({
+        state: "failed",
+        failureReason: "no-text-layer",
+        failureMessage: "That PDF is a scan and needs OCR.",
+      });
+    });
+
+    it("does not record an extraction against another tenant's file", async () => {
+      const store = await open();
+      await store.create({ tenantId: T1, file: file({ id: "f1" }) });
+      const { recorded } = await store.recordExtraction({
+        tenantId: T2,
+        id: asId<FileId>("f1"),
+        extraction: { state: "extracted", at: AT },
+      });
+      // Reported rather than thrown: it is the same answer a file deleted mid-extraction gives, and a worker
+      // must be able to tell "gone" from "broken".
+      expect(recorded).toBe(false);
+      expect((await store.get({ tenantId: T1, id: asId<FileId>("f1") }))?.extraction).toBeUndefined();
+    });
+
+    it("reports a file nobody has extracted as pending, not as absent", async () => {
+      // The property that makes the sweep able to find a lost enqueue: a file with no extraction record at
+      // all is waiting, which is the same fact as `pending`.
+      const store = await open();
+      await store.create({ tenantId: T1, file: file({ id: "f1" }) });
+      const page = await store.listByExtractionState({
+        tenantId: T1,
+        state: "pending",
+        olderThan: "2030-01-01T00:00:00.000Z",
+        limit: 10,
+      });
+      expect(page.items.map((f) => f.id)).toEqual(["f1"]);
+    });
+
+    it("finds an extraction stuck mid-parse", async () => {
+      // A worker that died leaves `running`, and nothing else would ever notice.
+      const store = await open();
+      await store.create({ tenantId: T1, file: file({ id: "f1" }) });
+      await store.create({ tenantId: T1, file: file({ id: "f2" }) });
+      await store.recordExtraction({ tenantId: T1, id: asId<FileId>("f1"), extraction: { state: "running", at: AT } });
+      await store.recordExtraction({
+        tenantId: T1,
+        id: asId<FileId>("f2"),
+        extraction: { state: "extracted", ref: asId<BlobRef>("b"), at: AT },
+      });
+      const page = await store.listByExtractionState({
+        tenantId: T1,
+        state: "running",
+        olderThan: "2030-01-01T00:00:00.000Z",
+        limit: 10,
+      });
+      expect(page.items.map((f) => f.id)).toEqual(["f1"]);
+    });
+
+    it("does not list another tenant's stuck extraction", async () => {
+      const store = await open();
+      await store.create({ tenantId: T1, file: file({ id: "f1" }) });
+      const page = await store.listByExtractionState({
+        tenantId: T2,
+        state: "pending",
+        olderThan: "2030-01-01T00:00:00.000Z",
+        limit: 10,
+      });
+      expect(page.items).toEqual([]);
     });
 
     it("rejects a non-timestamp `at` rather than storing it", async () => {
