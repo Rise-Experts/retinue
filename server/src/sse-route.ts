@@ -56,6 +56,34 @@ const SSE_HEADERS: Readonly<Record<string, string>> = {
   "x-accel-buffering": "no",
 };
 
+
+/**
+ * Read `runId` / `conversationId` / `after` out of a GraphQL operation body, tolerantly.
+ *
+ * Tolerant on purpose: a malformed or absent body is not an error here, because the query-parameter
+ * form is equally valid. A body that cannot be parsed simply yields no identifiers, and the caller
+ * then fails with the same 400 it would have for a missing parameter.
+ */
+const readOperationVariables = async (
+  request: Request,
+): Promise<{ runId: string | null; conversationId: string | null; after: string | null }> => {
+  const empty = { runId: null, conversationId: null, after: null };
+  if (request.method !== "POST") return empty;
+  try {
+    const body = (await request.clone().json()) as {
+      variables?: Record<string, unknown>;
+    };
+    const variables = body.variables ?? {};
+    const str = (key: string): string | null => {
+      const value = variables[key];
+      return typeof value === "string" ? value : typeof value === "number" ? String(value) : null;
+    };
+    return { runId: str("runId"), conversationId: str("conversationId"), after: str("after") };
+  } catch {
+    return empty;
+  }
+};
+
 export const createRunEventSseRoute = (options: SseRouteOptions) => {
   const keepAliveMs = options.keepAliveMs ?? 15_000;
   const path = options.path ?? "/runs/events";
@@ -63,9 +91,21 @@ export const createRunEventSseRoute = (options: SseRouteOptions) => {
   return {
     path,
     async handle(request: Request): Promise<Response> {
+      /**
+       * Identifiers from either shape, because two kinds of consumer reach this route.
+       *
+       * A `graphql-sse` client POSTs `{query, variables}` with `accept: text/event-stream` — that is
+       * what its distinct-connections mode does, and it never looks at query parameters. #109 accepted
+       * only query parameters, so #111's frame compliance was real while the *request* side still could
+       * not be reached by a real client. An `EventSource`, by contrast, can only issue a GET with a URL.
+       *
+       * The query text is deliberately not executed: this is a streaming route, not a GraphQL executor.
+       * See the open question on #112.
+       */
       const url = new URL(request.url);
-      const runIdParam = url.searchParams.get("runId");
-      const conversationIdParam = url.searchParams.get("conversationId");
+      const fromBody = await readOperationVariables(request);
+      const runIdParam = url.searchParams.get("runId") ?? fromBody.runId;
+      const conversationIdParam = url.searchParams.get("conversationId") ?? fromBody.conversationId;
       if (runIdParam === null || conversationIdParam === null) {
         return new Response("runId and conversationId are required", { status: 400 });
       }
@@ -100,7 +140,19 @@ export const createRunEventSseRoute = (options: SseRouteOptions) => {
         if (!allowed) return new Response("Not found", { status: 404 });
       }
 
-      const after = cursorFromLastEventId(request.headers.get("last-event-id"));
+      /**
+       * Resume cursor, from whichever source the consumer has.
+       *
+       * `Last-Event-ID` first, because a browser `EventSource` resends it automatically and that is the
+       * only mechanism it has. Then `after` from the operation variables — the graphql-sse client
+       * **never sends `Last-Event-ID`** (it is absent from its source entirely; it retries with backoff
+       * and re-subscribes from the start), so a consumer that wants resume has to pass a cursor itself.
+       * That is the one accommodation beyond the raw protocol, recorded for #112's AC-6.
+       */
+      const after =
+        request.headers.get("last-event-id") !== null
+          ? cursorFromLastEventId(request.headers.get("last-event-id"))
+          : cursorFromLastEventId(fromBody.after);
 
       // Polled by `openRunEventStream`, so a Web AbortSignal needs adapting rather than passing.
       // Both directions matter: the request's signal (the client dropped) and the stream's `cancel`
