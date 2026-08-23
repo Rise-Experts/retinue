@@ -30,6 +30,7 @@ all. Three further things about their shape decided the seam:
 |---|---|---|
 | `posts` (#115) | `list_post_drafts`, `get_post_draft` | `read` |
 | `posts` (#123) | `propose_post_angles`, `generate_content` | `read` — writes nothing |
+| `research` (#124) | `search_web`, `read_source` | `read` |
 | | `create_post_draft`, `update_post_draft`, `duplicate_post_draft` | `internal-write` |
 | `campaigns` (#116) | `list_campaigns`, `get_campaign`, `get_campaign_calendar` | `read` |
 | | `create_campaign`, `update_campaign` | `internal-write` |
@@ -70,6 +71,22 @@ Two more from Campaigns:
   daily campaign over a year produces 31 — and an assistant that inferred the count from the dates
   would report 365. The field exists so the cap is visible; recomputing it locally would duplicate the
   logic it exists to expose.
+From research (#124):
+
+- **An unavailable search is not an empty result.** The existing search is deliberately fail-soft — an
+  error yields `[]` — which is right for a background enrichment step and wrong for an agent, because
+  "found nothing" invites answering from memory while "could not look" has to stop it. `SearchOutcome`
+  separates `searched` from `results`, and AC-6 is unachievable without that.
+- **AC-3 is delivered as delimited data, not as directive-stripping.** Pattern-matching directives cannot
+  be complete, mangles legitimate content (a page *about* prompt injection), and creates the confidence
+  that causes the breach. What is defensible: content is a tool result rather than an instruction, it is
+  fenced, and **the fence is removed from the content** so a page cannot forge its way out of its own
+  block — the same class of bug as #105's `runJobId` collision. Plus #122's always-on rule.
+- **A citation opens what was read, not what was requested.** `safefetch.py` exists because the two
+  differ: *"a perfectly public URL can 302 to `http://169.254.169.254/…`"*. The port requires every
+  redirect hop to be re-validated, since `validateEndpoint` checks one URL.
+- **The egress policy is reused, not reimplemented.** Two SSRF guards is one guard and one liability.
+
 From content generation (#123) — the one capability with nothing to wrap:
 
 - **Per-channel variants are per-channel *drafts*.** #115 found the store holds one caption plus
@@ -232,7 +249,7 @@ stops the process starting, rather than producing a confusing catalog on someone
 
 The seam and the scaffolding (#114); Posts (#115); Campaigns (#116); Accounts (#117); Media (#118);
 Publishing (#119); Engagement and Leads (#120); context providers (#121); the seven skills (#122);
-content generation (#123). Research and analytics land in #124–#125.
+content generation (#123); research (#124). Analytics lands in #125.
 
 `npm test` in this workspace runs `tsc -b` first. That is deliberate: this package value-imports
 `@agentkit/backend`, whose entry point is `dist/`, so `vitest run` on its own tests whatever was last

@@ -1174,6 +1174,103 @@ export interface ContentGenerator {
   ): Promise<readonly GeneratedVariant[]>;
 }
 
+
+// ---------------------------------------------------------------------------------------------------
+// Research — live retrieval, and the other net-new capability (#124).
+// ---------------------------------------------------------------------------------------------------
+
+/** One search hit. Matches the existing `Finding` contract: title, snippet, url. */
+export type SearchResult = {
+  /** Referenceable, so reading a hit does not require the model to echo a URL back. */
+  readonly resultId: string;
+  readonly title: string;
+  readonly snippet: string;
+  readonly url: string;
+};
+
+/**
+ * What a search returned, **and whether it ran**.
+ *
+ * The distinction is the point. `ai_backend/app/core/websearch.py` is deliberately fail-soft — *"network
+ * errors, timeouts, or a missing package yield an empty result list instead of raising, so content
+ * generation never depends on search availability"* — which is right for a background enrichment step and
+ * wrong for an agent-facing tool, because it makes "found nothing" and "never ran" the same value.
+ *
+ * "Nothing out there" invites a model to answer from what it already believes. "I could not look" should
+ * stop it. AC-6 of #124 is unachievable while those are indistinguishable, so `searched` is separate from
+ * `results` and an unavailable search is not an empty success.
+ */
+export type SearchOutcome =
+  | { readonly searched: true; readonly results: readonly SearchResult[] }
+  | { readonly searched: false; readonly reason: "unavailable" | "timed-out" | "not-configured" };
+
+/**
+ * One passage from a source, with everything a citation needs.
+ *
+ * Per *passage*, not per document: docs/07 wants a citation to resolve to the specific text that was used,
+ * and a document-level citation is an invitation to go and find it.
+ */
+export type SourcePassage = {
+  /**
+   * The URL that was **actually read**, after redirects.
+   *
+   * Not the requested one. A citation must open what was read — and `safefetch.py` exists because the two
+   * differ: *"a perfectly public URL can 302 to `http://169.254.169.254/…`"*.
+   */
+  readonly url: string;
+  /** When it was retrieved. A fact from last year and a fact from this morning are different claims. */
+  readonly retrievedAt: string;
+  /** The exact text used. Bounded — see `ReadSourceResult`. */
+  readonly excerpt: string;
+};
+
+export type ReadSourceResult = {
+  /** For reading further passages without re-fetching. AC-5's reference half. */
+  readonly sourceId: string;
+  readonly title?: string;
+  readonly passages: readonly SourcePassage[];
+  /** True when the source has more than the returned passages cover. */
+  readonly truncated: boolean;
+};
+
+export interface ResearchService {
+  /**
+   * Search. Must report *whether it searched*, never a fail-soft empty list.
+   */
+  search(
+    context: ExecutionContext,
+    input: { readonly query: string; readonly maxResults: number },
+  ): Promise<SearchOutcome>;
+
+  /**
+   * Fetch and excerpt one source.
+   *
+   * Three obligations the tool cannot discharge itself, stated here because the implementation is the only
+   * place they can hold:
+   *
+   * 1. **Every redirect hop is re-validated against the egress policy**, not just the first URL.
+   *    `validateEndpoint` checks one URL; following a redirect without re-checking is how a public URL
+   *    reaches a metadata address.
+   * 2. **The response body is capped** and the connection torn down when the cap is hit — not read to the
+   *    end and truncated. *"The callers parse whole documents in memory, so an unbounded download is a
+   *    denial-of-service vector."*
+   * 3. **A timeout applies to the whole fetch**, redirects included, so a chain of slow hops cannot
+   *    outlast it.
+   *
+   * Throws `forbidden` for a disallowed host at any hop, and `timeout` for either limit — both distinct
+   * from an empty result, for the same reason `SearchOutcome` separates `searched`.
+   */
+  readSource(
+    context: ExecutionContext,
+    input: {
+      /** Either a URL, or a `resultId` from a prior search — never both. */
+      readonly url?: string;
+      readonly resultId?: string;
+      readonly maxPassages: number;
+    },
+  ): Promise<ReadSourceResult>;
+}
+
 export type ShareFlowServices = {
   readonly connectors: ConnectorService;
   readonly content: ContentService;
@@ -1183,4 +1280,5 @@ export type ShareFlowServices = {
   readonly leads: LeadService;
   readonly brand: BrandService;
   readonly generator: ContentGenerator;
+  readonly research: ResearchService;
 };
