@@ -28,13 +28,18 @@ import {
 import { asId } from "../core/ids.js";
 import type { AgentId, ConversationId, MessageId, MessagePartId, SkillId } from "../core/ids.js";
 import type { AgentManifest } from "../agents/index.js";
-import { ADAPTER_COVERAGE, REGISTERED_PORTS } from "../testing/conformance/index.js";
+import { ADAPTER_COVERAGE, REGISTERED_PORTS, SUPABASE_NATIVE } from "../testing/conformance/index.js";
 import { freshPgliteSchema } from "../testing/pglite.js";
 import { conversationStoreConformance } from "../testing/conformance/conversation-store.js";
 import { runStoreConformance } from "../testing/conformance/run-store.js";
 import { runEventLogConformance } from "../testing/conformance/run-event-log.js";
 import { checkpointStoreConformance } from "../testing/conformance/checkpoint-store.js";
 import { agentStoreConformance, messageStoreConformance } from "../testing/conformance/records.js";
+import {
+  fileContentStoreConformance,
+  fileMetadataStoreConformance,
+} from "../testing/conformance/files.js";
+import { supabaseStorageDouble } from "../testing/supabase-storage-double.js";
 import {
   blobStoreConformance,
   idempotencyStoreConformance,
@@ -283,6 +288,27 @@ mcpConnectionStoreConformance(
 principalMemoryStoreConformance(() => supabase.createSupabasePrincipalMemoryStore(freshExecutor()));
 blobStoreConformance(() => supabase.createSupabaseBlobStore(freshExecutor()));
 
+// #129. Runs the harness through the Supabase entrypoint even though the alias assertion below proves it
+// is the same function: identity is the strong claim, but it is asserted in one test, and a suite that
+// only asserted identity would go green if the alias were repointed at a stub that satisfied `toBe`.
+// #129. The one port where Supabase is not Postgres: bytes live in Supabase Storage, so this runs the
+// adapter over an in-process double of the Storage REST API. It belongs in *this* file because the matrix
+// generator reads one conformance entrypoint per adapter — a harness run elsewhere passes while the matrix
+// reports the port as uncovered, which is the failure mode the generator exists to prevent.
+fileContentStoreConformance(() => supabaseStorageDouble().store);
+
+fileMetadataStoreConformance(() => {
+  const sql = freshExecutor();
+  return {
+    store: supabase.createSupabaseFileMetadataStore(sql),
+    async seedConversation({ tenantId, conversationId }) {
+      await supabase
+        .createSupabaseConversationStore(sql)
+        .create({ tenantId, id: conversationId, title: "files" });
+    },
+  };
+});
+
 // ---------------------------------------------------------------------------------------------
 // The alias contract and the registry contract.
 // ---------------------------------------------------------------------------------------------
@@ -308,7 +334,18 @@ const ALIASES: readonly (readonly [keyof typeof supabase, keyof typeof postgres]
   ["createSupabaseMcpConnectionStore", "createPostgresMcpConnectionStore"],
   ["createSupabasePrincipalMemoryStore", "createPostgresPrincipalMemoryStore"],
   ["createSupabaseBlobStore", "createPostgresBlobStore"],
+  ["createSupabaseFileMetadataStore", "createPostgresFileMetadataStore"],
 ];
+
+/**
+ * Ports Supabase implements itself instead of aliasing, and why (#129).
+ *
+ * Taken from the registry rather than restated here, so a port can only be let off the identity assertion
+ * if the matrix says so. That matters: without it the two length assertions below would have to be relaxed
+ * to `>=`, and a genuinely missing alias would then read as an intentional divergence.
+ */
+const NATIVE = new Set(SUPABASE_NATIVE);
+const ALIASED_PORTS = REGISTERED_PORTS.filter((p) => !NATIVE.has(p.port));
 
 describe("supabase adapter coverage", () => {
   it("is the Postgres implementation for every port, not a second one", () => {
@@ -317,13 +354,20 @@ describe("supabase adapter coverage", () => {
     for (const [alias, target] of ALIASES) {
       expect(supabase[alias], `${alias} must be ${target}`).toBe(postgres[target]);
     }
-    // One alias per registered port, so a new port cannot be added without an alias or a decision.
-    expect(ALIASES).toHaveLength(REGISTERED_PORTS.length);
+    // One alias per registered port that Supabase does not implement itself, so a new port cannot be added
+    // without either an alias or a declared reason it has none. `FileContentStore` is the first and only
+    // divergence: its bytes live in Supabase Storage, so there is no Postgres factory to alias to.
+    expect([...NATIVE]).toEqual(["FileContentStore"]);
+    expect(ALIASES).toHaveLength(ALIASED_PORTS.length);
   });
 
   it("implements exactly the ports the registry claims", () => {
     expect(coverage).toBeDefined();
-    expect([...(coverage?.implemented ?? [])]).toEqual(REGISTERED_PORTS.map((p) => p.port));
+    // Aliased *and* native: the column claims full coverage, because Supabase has every port. What differs
+    // per port is how — asserted above.
+    expect([...(coverage?.implemented ?? [])].sort()).toEqual(
+      REGISTERED_PORTS.map((p) => p.port).sort(),
+    );
   });
 
   it("has no remaining declared gaps", () => {

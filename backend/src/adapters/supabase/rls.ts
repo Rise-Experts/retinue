@@ -66,6 +66,9 @@ export const TENANT_SCOPED_TABLES: readonly RlsTable[] = [
   // `blobs`, not the SPEC's `blob_refs`: BlobStore stores the value, and the metadata-and-pointer
   // design belongs to FileMetadataStore (#129) / ArtifactStore (#133).
   { table: "blobs" },
+  // #129. The bytes are not in Postgres at all, so this policy covers the metadata only — an object-storage
+  // bucket needs its own access rules, and RLS here says nothing about them.
+  { table: "files" },
 ];
 
 /**

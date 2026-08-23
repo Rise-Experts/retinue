@@ -19,6 +19,7 @@ import { PGlite } from "@electric-sql/pglite";
 import { afterAll, describe, expect, it } from "vitest";
 import {
   createPostgresConversationStore,
+  createPostgresFileMetadataStore,
   createPostgresAgentStore,
   createPostgresCheckpointStore,
   createPostgresConversationBindingStore,
@@ -57,6 +58,7 @@ import { runEventLogConformance } from "../testing/conformance/run-event-log.js"
 import { checkpointStoreConformance } from "../testing/conformance/checkpoint-store.js";
 import { crossPortInvariants } from "../testing/conformance/invariants.js";
 import { agentStoreConformance, messageStoreConformance } from "../testing/conformance/records.js";
+import { fileMetadataStoreConformance } from "../testing/conformance/files.js";
 import {
   conversationBindingStoreConformance,
   sessionStateStoreConformance,
@@ -436,6 +438,20 @@ mcpConnectionStoreConformance(
 principalMemoryStoreConformance(() => createPostgresPrincipalMemoryStore(freshExecutor()));
 blobStoreConformance(() => createPostgresBlobStore(freshExecutor()));
 
+// #129. `files` has a foreign key to `conversations`, so this one takes the fixture shape: the harness's
+// `withConversation` seeds the parent through the same executor. `FileContentStore` has no Postgres
+// implementation and is classified `notApplicable` — file bytes in a column is the antipattern 0011
+// rejected.
+fileMetadataStoreConformance(() => {
+  const sql = freshExecutor();
+  return {
+    store: createPostgresFileMetadataStore(sql),
+    async seedConversation({ tenantId, conversationId }) {
+      await createPostgresConversationStore(sql).create({ tenantId, id: conversationId, title: "files" });
+    },
+  };
+});
+
 // ---------------------------------------------------------------------------------------------
 // The registry contract. Not a placeholder — these assertions are what make the matrix's
 // NOT-IMPLEMENTED cells trustworthy rather than a guess.
@@ -470,6 +486,7 @@ describe("postgres adapter coverage", () => {
       "McpConnectionStore",
       "PrincipalMemoryStore",
       "BlobStore",
+      "FileMetadataStore",
     ]);
   });
 
@@ -477,9 +494,12 @@ describe("postgres adapter coverage", () => {
     for (const { port, trackedBy } of coverage?.notImplemented ?? []) {
       expect(trackedBy, `${port} must name the issue that will add its Postgres store`).toMatch(/^#\d+$/);
     }
-    // 19 registered ports, all 19 implemented as of #102 ⇒ no declared gaps. The loop above is now
-    // vacuous, which is the point: it stays so the assertion still fires the moment a new port is
-    // registered without a Postgres store, rather than being deleted and having to be remembered.
+    // Every registered port either has a Postgres store or a `notApplicable` exemption, so there are no
+    // declared gaps. The loop above is vacuous, which is the point: it stays so the assertion fires the
+    // moment a new port is registered without a Postgres store, rather than being deleted and having to
+    // be remembered. #129 added the first exemption -- `FileContentStore` -- which is tracked separately
+    // in `conformance-coverage.test.ts` because "deliberately not this adapter's job" and "not written
+    // yet" must not be the same cell.
     expect(coverage?.notImplemented.length).toBe(0);
   });
 });

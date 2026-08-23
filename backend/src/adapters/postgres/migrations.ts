@@ -619,6 +619,56 @@ export const MIGRATIONS: readonly Migration[] = [
       `ALTER TABLE interaction_approvals DROP COLUMN IF EXISTS consumed_at`,
     ],
   },
+  {
+    // Attachment metadata (#129). The bytes are not here, deliberately: `FileContentStore` is an
+    // object-storage port, and a relational adapter holding file bytes means base64 in a column -- the
+    // antipattern 0011 rejected when it declined to make `blobs` a pointer table.
+    id: "0013_files",
+    up: [
+      `CREATE TABLE IF NOT EXISTS files (
+        tenant_id       text        NOT NULL,
+        id              text        NOT NULL,
+        conversation_id text        NOT NULL,
+        filename        text        NOT NULL,
+        media_type      text        NOT NULL,
+        byte_size       bigint      NOT NULL CHECK (byte_size >= 0),
+        -- Opaque, and unique per tenant: two rows pointing at one object would let deleting either one
+        -- take the other's bytes with it.
+        content_key     text        NOT NULL,
+        checksum        text,
+        state           text        NOT NULL CHECK (state IN ('pending','stored','deleting','deleted')),
+        uploaded_by     text        NOT NULL,
+        created_at      timestamptz NOT NULL,
+        deleted_at      timestamptz,
+        PRIMARY KEY (tenant_id, id),
+        -- The conversation owns the file, so entitlement to one *is* entitlement to the other and there is
+        -- no second permission model. ON DELETE RESTRICT rather than CASCADE: a cascade would drop the
+        -- metadata and leave the bytes, which is precisely the orphan this design exists to avoid --
+        -- deletion goes through scheduleConversationDeletion so a sweep can find them.
+        FOREIGN KEY (tenant_id, conversation_id)
+          REFERENCES conversations (tenant_id, id) ON DELETE RESTRICT,
+        -- A row can only be 'deleted' with a timestamp saying when, so "deleted" is never a state without
+        -- a time.
+        CHECK (state <> 'deleted' OR deleted_at IS NOT NULL)
+      )`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS files_content_key_key ON files (tenant_id, content_key)`,
+      // Serves listByConversation's keyset page: live rows only, ordered the way the cursor reads.
+      `CREATE INDEX IF NOT EXISTS files_conversation_idx
+        ON files (tenant_id, conversation_id, created_at, id)
+        WHERE deleted_at IS NULL AND state <> 'deleted'`,
+      // Serves listByState, which reconciliation and the sweep both use. Partial on the two states anyone
+      // ever asks for, so it stays small next to a tenant's whole file history.
+      `CREATE INDEX IF NOT EXISTS files_pending_state_idx
+        ON files (tenant_id, state, created_at)
+        WHERE state IN ('pending','deleting')`,
+    ],
+    down: [
+      `DROP INDEX IF EXISTS files_pending_state_idx`,
+      `DROP INDEX IF EXISTS files_conversation_idx`,
+      `DROP INDEX IF EXISTS files_content_key_key`,
+      `DROP TABLE IF EXISTS files`,
+    ],
+  },
 ];
 
 export const migrate = async (sql: SqlExecutor): Promise<void> => {

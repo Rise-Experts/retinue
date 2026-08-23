@@ -18,8 +18,10 @@ import type {
   ApprovalGrantId,
   BlobRef,
   ConversationId,
+  FileId,
   InteractionId,
   MessageId,
+  PrincipalId,
   RunId,
   TenantId,
 } from "../core/ids.js";
@@ -308,9 +310,181 @@ export interface UsageStore {
 }
 
 export interface EvaluationStore {}
-export interface FileMetadataStore {}
 export interface KnowledgeStore {}
 export interface ArtifactStore {}
+
+// ---------------------------------------------------------------------------
+// Files (`docs/05-knowledge-and-documents.md`, REQ-026). Two ports, not one.
+//
+// `BlobStore` below is `put(value) -> ref` / `get(ref) -> value` — JSON, for spilled tool output. It has
+// no content type, no size and no stream, so it cannot hold a file: bytes through a `jsonb` column means
+// base64, which is the "inject rather than reference" failure the platform forbids everywhere else. #102
+// recorded this in the `0011` migration when it declined to make `blobs` a pointer table.
+//
+// So metadata and bytes are separate ports. They also have genuinely different lifecycles: metadata is
+// transactional and soft-deleted, bytes are eventually deleted by a sweep, and the gap between the two is
+// where orphans live.
+// ---------------------------------------------------------------------------
+
+/**
+ * Where a file is in its lifecycle.
+ *
+ * `pending` exists because an upload is two writes — metadata, then bytes — and the window between them is
+ * real. A file stuck in `pending` is metadata with no bytes, which is one of the two orphan directions
+ * reconciliation looks for.
+ *
+ * `deleting` is the same window in reverse: the metadata is gone from the user's view and the bytes are
+ * not yet gone from storage. Deleting them in one transaction is not available — object storage does not
+ * join a database transaction — so the intermediate state is named rather than pretended away.
+ */
+export const FILE_STATES = ["pending", "stored", "deleting", "deleted"] as const;
+export type FileState = (typeof FILE_STATES)[number];
+
+export type FileMetadata = {
+  readonly id: FileId;
+  /**
+   * The conversation that owns it.
+   *
+   * Ownership rather than association: AC-3 and AC-4 of #129 both follow from it — entitlement to the file
+   * *is* entitlement to the conversation, and deleting the conversation is what schedules the bytes. A file
+   * with no owner would need its own permission model, which is a second one to keep in step.
+   */
+  readonly conversationId: ConversationId;
+  /** As the user named it. Display only — never used to address the bytes. */
+  readonly filename: string;
+  readonly mediaType: string;
+  readonly byteSize: number;
+  /**
+   * How the content store addresses the bytes. Opaque here.
+   *
+   * Deliberately not derived from the filename or the id: a key a caller can *construct* is a key a caller
+   * can guess, and `sanitizeMediaRefs`' comment in ShareFlow is the cautionary tale — its workspace-prefix
+   * check was "the ONLY thing standing between a forged path and a signed URL to another tenant's private
+   * object".
+   */
+  readonly contentKey: string;
+  /** Of the bytes as stored, so a read-back can be checked rather than assumed. */
+  readonly checksum?: string;
+  readonly state: FileState;
+  readonly uploadedBy: PrincipalId;
+  readonly createdAt: string;
+  /** Soft delete. A row is kept so a reference to it resolves to "deleted" rather than to nothing. */
+  readonly deletedAt?: string;
+};
+
+export interface FileMetadataStore {
+  create(input: TenantScope & { file: FileMetadata }): Promise<void>;
+
+  /** `null` for another tenant's file as well as an absent one — the two must be indistinguishable. */
+  get(input: TenantScope & { id: FileId }): Promise<FileMetadata | null>;
+
+  /** Live files only: soft-deleted rows are excluded, since this is what a user sees. */
+  listByConversation(
+    input: TenantScope & PageRequest & { conversationId: ConversationId },
+  ): Promise<Page<FileMetadata>>;
+
+  /**
+   * Advance the lifecycle, with the state it must currently be in.
+   *
+   * Compare-and-set rather than a blind write: two workers finishing the same upload, or a delete racing a
+   * completion, must not leave a file `stored` after its bytes were scheduled for removal. Returns whether
+   * this call was the one that moved it.
+   */
+  transition(
+    input: TenantScope & {
+      id: FileId;
+      from: FileState;
+      to: FileState;
+      at: string;
+      checksum?: string;
+    },
+  ): Promise<{ readonly moved: boolean }>;
+
+  /**
+   * Mark every live file of a conversation for byte deletion.
+   *
+   * One call rather than a list-then-loop, because a file uploaded between the list and the loop would be
+   * missed — and it would be missed silently, leaving bytes for a conversation that no longer exists.
+   */
+  scheduleConversationDeletion(
+    input: TenantScope & { conversationId: ConversationId; at: string },
+  ): Promise<{ readonly scheduled: number }>;
+
+  /**
+   * Files in a state longer than they should be — reconciliation's input.
+   *
+   * `olderThan` rather than "all in this state", because a file that entered `pending` a second ago is an
+   * upload in progress and a file that entered it yesterday is an orphan. Without the threshold the job
+   * would report every upload happening while it ran.
+   */
+  listByState(
+    input: TenantScope & PageRequest & { state: FileState; olderThan: string },
+  ): Promise<Page<FileMetadata>>;
+}
+
+/** What the content store recorded about the bytes it accepted. */
+export type StoredContent = {
+  readonly contentKey: string;
+  /** As actually written, which may differ from what the caller declared — see `putFile`. */
+  readonly byteSize: number;
+  readonly checksum: string;
+};
+
+/** One object as the content store sees it. Used only by reconciliation. */
+export type StoredObject = {
+  readonly contentKey: string;
+  readonly byteSize: number;
+};
+
+/**
+ * The bytes.
+ *
+ * Separate from `FileMetadataStore` because object storage cannot join a database transaction, and
+ * pretending otherwise is what produces orphans. Every method is tenant-scoped: a `contentKey` from one
+ * tenant must never resolve another's object, and the key alone must not be sufficient.
+ */
+export interface FileContentStore {
+  /**
+   * Write bytes and report what was written.
+   *
+   * **`maxBytes` is enforced while reading, not checked beforehand.** A declared size is a claim; the cap is
+   * the defence. An adapter must stop consuming and discard the partial object when the cap is passed —
+   * reading to the end and then refusing is a denial of service that happens to return an error.
+   */
+  putFile(
+    input: TenantScope & {
+      contentKey: string;
+      mediaType: string;
+      bytes: AsyncIterable<Uint8Array>;
+      maxBytes: number;
+    },
+  ): Promise<StoredContent>;
+
+  /** `null` when absent, or when the key belongs to another tenant. */
+  readFile(input: TenantScope & { contentKey: string }): Promise<AsyncIterable<Uint8Array> | null>;
+
+  /**
+   * A short-lived authorised URL, or `null` when this adapter proxies reads instead.
+   *
+   * `expiresInSeconds` is **required**, and there is deliberately no method that returns a durable URL —
+   * that is AC-6 of #129 made structural rather than left as a rule an adapter has to remember. An adapter
+   * with no signing mechanism returns `null` and the caller streams through `readFile`.
+   */
+  signedUrl(
+    input: TenantScope & { contentKey: string; expiresInSeconds: number },
+  ): Promise<string | null>;
+
+  /** Idempotent: deleting an absent object is a no-op, because a retried sweep must not fail. */
+  deleteFile(input: TenantScope & { contentKey: string }): Promise<void>;
+
+  /**
+   * Objects this tenant has stored.
+   *
+   * For reconciliation's second direction — bytes with no metadata — which is the one that costs money
+   * silently and which the metadata store cannot see at all.
+   */
+  listObjects(input: TenantScope & PageRequest & { prefix?: string }): Promise<Page<StoredObject>>;
+}
 
 export interface VectorIndex {}
 export interface KeywordIndex {}

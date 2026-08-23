@@ -49,6 +49,18 @@ export {
   createPostgresPrincipalMemoryStore as createSupabasePrincipalMemoryStore,
   createPostgresBlobStore as createSupabaseBlobStore,
 } from "../postgres/memory.js";
+/**
+ * File *metadata* aliases to Postgres. File *bytes* do not, and this is the one port where Supabase is not
+ * simply Postgres under another name.
+ *
+ * `0013_files` keeps metadata only, so `FileMetadataStore` is an alias like every other port. The bytes live
+ * in Supabase Storage, which has its own adapter in `./storage.js` — a genuine second implementation, not an
+ * alias, because there is no Postgres factory to alias to. `notApplicable` in the matrix therefore belongs to
+ * **postgres alone**: file bytes in a relational column is the antipattern #102 rejected, whereas Supabase
+ * has a real home for them.
+ */
+export { createPostgresFileMetadataStore as createSupabaseFileMetadataStore } from "../postgres/files.js";
+export * from "./storage.js";
 
 export * from "./rls.js";
 export * from "./realtime.js";

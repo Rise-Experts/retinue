@@ -205,22 +205,52 @@ describe("adapter coverage guard", () => {
   });
 
   it("every adapter accounts for every registered port — no unclassified absence", () => {
-    for (const { adapter, implemented, notImplemented } of ADAPTER_COVERAGE) {
-      const accounted = new Set([...implemented, ...notImplemented.map((n) => n.port)]);
+    for (const { adapter, implemented, notImplemented, notApplicable } of ADAPTER_COVERAGE) {
+      const accounted = new Set([
+        ...implemented,
+        ...notImplemented.map((n) => n.port),
+        ...(notApplicable ?? []).map((n) => n.port),
+      ]);
       const unaccounted = allPorts.filter((p) => !accounted.has(p));
       expect(
         unaccounted,
         `Adapter "${adapter}" neither implements nor declares a gap for these ports. Add them to ` +
-          `ADAPTER_COVERAGE — either as implemented (and wire the harness into its test entrypoint) ` +
-          `or as notImplemented with the issue that will add them.`,
+          `ADAPTER_COVERAGE — as implemented (and wire the harness into its test entrypoint), as ` +
+          `notImplemented with the issue that will add them, or as notApplicable with the reason it ` +
+          `never will.`,
       ).toEqual([]);
     }
   });
 
+  it("gives every not-applicable exemption a real reason", () => {
+    // A third answer is only useful if it has to be argued for. "n/a" with no reason is the silent gap the
+    // other two categories exist to prevent, wearing a different label.
+    for (const { adapter, notApplicable } of ADAPTER_COVERAGE) {
+      for (const entry of notApplicable ?? []) {
+        expect(
+          entry.reason.length,
+          `Adapter "${adapter}" exempts ${entry.port} without explaining why it never applies`,
+        ).toBeGreaterThan(80);
+      }
+    }
+  });
+
+  it("never claims a port is both pending and inapplicable", () => {
+    // They are contradictory claims: one says an issue will add it, the other says nothing ever will.
+    for (const { adapter, notImplemented, notApplicable } of ADAPTER_COVERAGE) {
+      const both = (notApplicable ?? []).filter((n) => notImplemented.some((p) => p.port === n.port));
+      expect(both.map((b) => b.port), `Adapter "${adapter}" lists these as both pending and inapplicable`).toEqual(
+        [],
+      );
+    }
+  });
+
   it("never claims a port both ways", () => {
-    for (const { adapter, implemented, notImplemented } of ADAPTER_COVERAGE) {
-      const both = implemented.filter((p) => notImplemented.some((n) => n.port === p));
-      expect(both, `Adapter "${adapter}" lists these ports as both implemented and pending`).toEqual([]);
+    for (const { adapter, implemented, notImplemented, notApplicable } of ADAPTER_COVERAGE) {
+      const both = implemented.filter(
+        (p) => notImplemented.some((n) => n.port === p) || (notApplicable ?? []).some((n) => n.port === p),
+      );
+      expect(both, `Adapter "${adapter}" lists these ports as both implemented and not`).toEqual([]);
     }
   });
 

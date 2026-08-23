@@ -29,5 +29,6 @@ export * from "./adapters/bullmq/index.js";
 export * from "./worker/main.js";
 
 export * from "./principal-memory/index.js";
+export * from "./files/index.js";
 
 export * from "./graphql/index.js";

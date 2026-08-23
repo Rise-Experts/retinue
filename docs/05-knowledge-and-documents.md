@@ -108,3 +108,54 @@ Deletion or permission changes propagate to chunks and indexes. Embedding-model 
 - Original files remain unchanged unless an explicit approved replacement occurs.
 - RAG evaluation covers retrieval relevance, groundedness and citation correctness.
 
+
+## Attachment storage (#129)
+
+`BlobStore` above is one interface. The implementation is two, and the split is not cosmetic.
+
+`BlobStore` as built in #102 stores **JSON values** — a `put(value: unknown)` returning a `BlobRef`, backed by
+a `blobs` table. That is the right home for a large tool result or a checkpoint payload, and the wrong home
+for file bytes: bytes in a relational column means base64 in `jsonb`, which #102 declined to do when it
+refused to make `blobs` a pointer table. So attachments use two ports:
+
+- **`FileMetadataStore`** — one row per attachment, in Postgres (`0013_files`). Tenant-scoped, keyset-paged,
+  soft-deleted, and RLS-forced like every other table.
+- **`FileContentStore`** — the bytes, in object storage. `adapters/supabase/storage.ts` implements it over the
+  Supabase Storage REST API. This is the only port where the Supabase adapter is *not* the Postgres adapter
+  under another name; the conformance matrix marks the port `n/a` for `postgres` and asserts alias identity
+  for the other twenty.
+
+### The lifecycle
+
+An upload is two writes, and the order is the design:
+
+1. metadata `pending`
+2. bytes
+3. metadata `pending → stored`, compare-and-set
+
+A crash between 1 and 2 leaves a `pending` row — visible to reconciliation, invisible to the user. The reverse
+order would leave an object nothing references: invisible to everything, and billed for. **An orphan you can
+find beats an orphan you cannot.**
+
+Deletion runs the mirror. Deleting a conversation moves every live file to `deleting` in one statement — so a
+file uploaded mid-delete cannot be missed — and the bytes go afterwards, in a sweep that deletes the object
+*before* moving the row to `deleted`. Object storage cannot join a database transaction; the intermediate
+state is named rather than pretended away.
+
+### Limits and access
+
+- The declared size is checked before the stream is accepted, with the limit stated in the refusal. The
+  declared size is a *claim*, so the stream is also capped while it is read, and the cap throws from inside
+  the generator so the producer is cancelled rather than drained.
+- Media types are an exact list. No wildcards: `image/*` is how an SVG becomes an accepted image.
+- Reads are mediated. A signed URL's life is clamped to 15 minutes at the service, because a signed URL is a
+  bearer token in a query string — it reaches logs, browser history and anything that echoes a URL. An adapter
+  that cannot sign returns `null` and the read is proxied; it never invents a URL.
+- Entitlement to a file is entitlement to its **conversation**, enforced through `AuthorizationPolicy` as a
+  required dependency. An unentitled caller gets the same `not_found` as a nonexistent id, or the endpoint
+  confirms which ids exist.
+
+### Reconciliation
+
+The job **reports and never deletes**, both directions: rows with no bytes, and bytes with no row. Deleting on
+the strength of "probably an orphan" is how a file whose metadata write was merely slow goes missing.

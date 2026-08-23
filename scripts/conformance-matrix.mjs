@@ -132,6 +132,10 @@ const stateFor = (adapter, port) => {
   const declared = registry.adapters.find((a) => a.adapter === adapter);
   const implemented = declared?.implemented.includes(port) ?? false;
   const gap = declared?.notImplemented.find((n) => n.port === port);
+  // A port an adapter is deliberately not the home for (#129: file bytes are object storage, not a
+  // relational column). Distinct from NOT-IMPLEMENTED on purpose -- that one names an issue that will
+  // close it, and this one never closes. Collapsing them would put a permanent decision on a backlog.
+  const exempt = declared?.notApplicable?.find((n) => n.port === port);
   const c = cells[adapter][port];
   const ran = c.pass + c.fail + c.skip > 0;
 
@@ -140,6 +144,9 @@ const stateFor = (adapter, port) => {
   if (implemented && !ran)
     return { state: "MISSING", detail: "registry claims this port is implemented but no harness ran" };
   if (gap) return { state: "NOT-IMPLEMENTED", detail: gap.trackedBy };
+  // Checked after the `implemented && ran` cases above, so an exemption cannot mask a harness that ran and
+  // failed: a FAIL still wins, and a cell claiming both would surface as a coverage-test failure.
+  if (exempt) return { state: "NOT-APPLICABLE", detail: exempt.reason };
   return { state: "UNCLASSIFIED", detail: "no adapter, no tracking issue" };
 };
 
@@ -166,6 +173,7 @@ const GLYPH = {
   FAIL: "❌",
   SKIP: "⏭️",
   "NOT-IMPLEMENTED": "—",
+  "NOT-APPLICABLE": "n/a",
   MISSING: "🚨",
   UNCLASSIFIED: "🚨",
 };
@@ -174,7 +182,7 @@ const lines = [
   "## Conformance matrix",
   "",
   `${PORTS.length} storage ports × ${ADAPTERS.length} adapters. ✅ passing · ✅* passing with a declared`,
-  "capability skip · — no adapter yet (tracked) · 🚨 unaccounted for.",
+  "capability skip · — no adapter yet (tracked) · n/a not this adapter's concern · 🚨 unaccounted for.",
   "",
   `| Port | ${ADAPTERS.join(" | ")} |`,
   `|---|${ADAPTERS.map(() => "---").join("|")}|`,
@@ -191,7 +199,14 @@ lines.push("");
 for (const adapter of ADAPTERS) {
   const states = PORTS.map((p) => matrix.cells[adapter][p].state);
   const passing = states.filter((s) => s.startsWith("PASS")).length;
-  lines.push(`- **${adapter}**: ${passing}/${PORTS.length} ports verified`);
+  // Exempt ports leave the denominator as well as the numerator. "20/21" for an adapter that is complete
+  // reads as a gap, and a number that reads as a gap when there is none is a number people learn to ignore.
+  const applicable = states.filter((s) => s !== "NOT-APPLICABLE").length;
+  const exempt = states.length - applicable;
+  lines.push(
+    `- **${adapter}**: ${passing}/${applicable} ports verified` +
+      (exempt > 0 ? ` (${exempt} not applicable)` : ""),
+  );
 }
 const table = `${lines.join("\n")}\n`;
 

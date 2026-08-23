@@ -24,6 +24,7 @@ export * from "./run-coordinator.js";
 export * from "./session-state.js";
 export * from "./records.js";
 export * from "./hitl.js";
+export * from "./files.js";
 export * from "./invariants.js";
 
 /** A port with methods, and the harness that verifies it. */
@@ -56,6 +57,8 @@ export const REGISTERED_PORTS: readonly PortCoverage[] = [
   { port: "IdempotencyStore", harness: "idempotencyStoreConformance" },
   { port: "PrincipalMemoryStore", harness: "principalMemoryStoreConformance" },
   { port: "McpConnectionStore", harness: "mcpConnectionStoreConformance" },
+  { port: "FileMetadataStore", harness: "fileMetadataStoreConformance" },
+  { port: "FileContentStore", harness: "fileContentStoreConformance" },
 ];
 
 /**
@@ -80,12 +83,13 @@ export const ISOLATION_EXEMPT_PORTS: readonly { readonly port: string; readonly 
  * Method-less placeholder interfaces, deliberately without a harness. An empty harness would pass
  * vacuously and read as coverage, so the guard test instead fails if one of these gains a method —
  * turning "we forgot to widen the suite" into a build failure. Each lands with its own SPEC:
- * `EvaluationStore` #141, `FileMetadataStore` #129, `KnowledgeStore`/`VectorIndex`/`KeywordIndex`
- * #135–#136, `ArtifactStore` #133.
+ * `EvaluationStore` #141, `KnowledgeStore`/`VectorIndex`/`KeywordIndex` #135–#136, `ArtifactStore` #133.
+ *
+ * `FileMetadataStore` left this list in #129, which is the mechanism working as intended: it gained methods
+ * and the guard would have failed had a harness not come with them.
  */
 export const PLACEHOLDER_PORTS: readonly string[] = [
   "EvaluationStore",
-  "FileMetadataStore",
   "KnowledgeStore",
   "ArtifactStore",
   "VectorIndex",
@@ -143,7 +147,44 @@ export type AdapterCoverage = {
   readonly adapter: MatrixAdapter;
   readonly implemented: readonly string[];
   readonly notImplemented: readonly { readonly port: string; readonly trackedBy: string }[];
+  /**
+   * Ports this adapter should **never** implement, with the reason.
+   *
+   * Distinct from `notImplemented`, which means "not yet, tracked by an issue". #129 forced the
+   * distinction: `FileContentStore` holds file bytes, and a relational adapter storing them would be the
+   * base64-in-`jsonb` antipattern #102 rejected when it declined to make `blobs` a pointer table.
+   *
+   * Listing it as pending would be a lie the matrix repeats forever, and leaving it out would be an
+   * unclassified absence the guard rejects. So it is a third answer, with a reason — the same shape as
+   * `ISOLATION_EXEMPT_PORTS`, and kept as short as the truth allows.
+   */
+  readonly notApplicable?: readonly { readonly port: string; readonly reason: string }[];
 };
+
+/**
+ * Why the **relational** adapter does not implement `FileContentStore`.
+ *
+ * Postgres alone. Supabase has a real home for file bytes — Supabase Storage, `adapters/supabase/storage.ts`
+ * — so claiming an exemption there would be claiming a gap that does not exist. The exemption is about the
+ * relational column, not about the deployment.
+ */
+const RELATIONAL_CONTENT_EXEMPTION = {
+  port: "FileContentStore",
+  reason:
+    "File bytes belong in object storage. A relational adapter holding them means base64 in a column — the " +
+    "antipattern #102 rejected when it declined to make `blobs` a pointer table, and the reason #129 split " +
+    "metadata from content in the first place. Object-storage adapters implement this port instead.",
+} as const;
+
+/**
+ * Ports Supabase implements itself rather than inheriting from Postgres (#129).
+ *
+ * The first entry in this list is a real change to what "Supabase" means here: for nineteen ports it was
+ * Postgres under another name, asserted by object identity. File bytes break that, and they break it for a
+ * good reason rather than by drift — object storage is a different service. Named here so the alias test can
+ * assert identity for everything *except* these, instead of being relaxed to let any port off.
+ */
+export const SUPABASE_NATIVE: readonly string[] = ["FileContentStore"];
 
 /**
  * The ports `adapters/supabase/index.ts` aliases from the Postgres adapter — all of them as of #104.
@@ -153,7 +194,12 @@ export type AdapterCoverage = {
  * asserted per port in `supabase-conformance.test.ts`, which is what keeps this honest: if an alias
  * were repointed to a second implementation, that test fails rather than this list going stale.
  */
-const SUPABASE_ALIASED: readonly string[] = REGISTERED_PORTS.map((p) => p.port);
+const SUPABASE_ALIASED: readonly string[] = REGISTERED_PORTS.map((p) => p.port).filter(
+  // `FileContentStore` is the one registered port the Postgres adapter does not implement, so there is
+  // nothing for Supabase to alias. Filtered from the derivation rather than removed from it, so a future
+  // port still defaults to "aliased" and a future exemption has to be stated.
+  (port) => !SUPABASE_NATIVE.includes(port),
+);
 
 /** Ports with no Postgres store yet, each against the SPEC that adds it (REQ-010→013). */
 const POSTGRES_PENDING: readonly { readonly port: string; readonly trackedBy: string }[] = [
@@ -189,8 +235,10 @@ export const ADAPTER_COVERAGE: readonly AdapterCoverage[] = [
       "McpConnectionStore",
       "PrincipalMemoryStore",
       "BlobStore",
+      "FileMetadataStore",
     ],
     notImplemented: POSTGRES_PENDING,
+    notApplicable: [RELATIONAL_CONTENT_EXEMPTION],
   },
   {
     adapter: "supabase",
@@ -201,11 +249,14 @@ export const ADAPTER_COVERAGE: readonly AdapterCoverage[] = [
     // Derived rather than listed: a Postgres store landing (#93 → #102) must not silently become a
     // Supabase claim, but it must not become an *unclassified* absence either. Deriving the gap from
     // what this adapter actually aliases keeps the column honest as Postgres fills in.
-    implemented: SUPABASE_ALIASED,
-    notImplemented: REGISTERED_PORTS.filter((p) => !SUPABASE_ALIASED.includes(p.port)).map((p) => ({
-      port: p.port,
-      trackedBy: "#104",
-    })),
+    //
+    // `FileContentStore` joins as of #129 — implemented, not aliased and not exempt. Supabase Storage is a
+    // real second implementation, which is why the alias assertion exempts it by name rather than the
+    // coverage column claiming a gap Supabase does not have.
+    implemented: [...SUPABASE_ALIASED, ...SUPABASE_NATIVE],
+    notImplemented: REGISTERED_PORTS.filter(
+      (p) => !SUPABASE_ALIASED.includes(p.port) && !SUPABASE_NATIVE.includes(p.port),
+    ).map((p) => ({ port: p.port, trackedBy: "#104" })),
   },
 ];
 
@@ -222,4 +273,5 @@ export const HARNESS_MODULES: readonly string[] = [
   "src/testing/conformance/session-state.ts",
   "src/testing/conformance/records.ts",
   "src/testing/conformance/hitl.ts",
+  "src/testing/conformance/files.ts",
 ];

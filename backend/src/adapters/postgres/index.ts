@@ -29,3 +29,4 @@ export const POSTGRES_CAPABILITIES: readonly AdapterCapability[] = [
   "full-text-search",
   "distributed-locking",
 ];
+export * from "./files.js";

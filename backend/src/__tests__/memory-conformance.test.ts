@@ -21,6 +21,8 @@ import {
   createMemoryAgentStore,
   createMemoryApprovalGrantStore,
   createMemoryBlobStore,
+  createMemoryFileContentStore,
+  createMemoryFileMetadataStore,
   createMemoryCheckpointStore,
   createMemoryConversationStore,
   createMemoryIdempotencyStore,
@@ -52,6 +54,8 @@ import {
   conversationRunCoordinatorConformance,
   conversationStoreConformance,
   crossPortInvariants,
+  fileContentStoreConformance,
+  fileMetadataStoreConformance,
   idempotencyStoreConformance,
   interactionStoreConformance,
   mcpConnectionStoreConformance,
@@ -159,6 +163,11 @@ skillStoreConformance(
 );
 
 blobStoreConformance(() => createMemoryBlobStore());
+
+// #129. The metadata store needs its conversation parent, so it takes the fixture shape; the content store
+// has no relational parent at all.
+fileMetadataStoreConformance(() => createMemoryFileMetadataStore());
+fileContentStoreConformance(() => createMemoryFileContentStore());
 idempotencyStoreConformance(() => createMemoryIdempotencyStore());
 principalMemoryStoreConformance(() => createMemoryPrincipalMemoryStore());
 
