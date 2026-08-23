@@ -25,6 +25,10 @@ test("clean tree yields no violations", () => {
     "backend/src/core/ids.ts": `export type Id = string;\nimport { z } from "./util.js";\n`,
     "frontend/src/x.ts": `import type { RunEvent } from "@agentkit/backend";\n`,
     "backend/src/models/openai.ts": `import { openai } from "@ai-sdk/openai";\n`,
+    // R11: OTel inside its own adapter is the allowed case, and its test is too -- the test's whole job is to
+    // import the real package and prove the structural types hold against it.
+    "backend/src/adapters/otel/index.ts": `import { trace } from "@opentelemetry/api";\n`,
+    "backend/src/adapters/otel/__tests__/otel.test.ts": `import { trace } from "@opentelemetry/api";\n`,
   });
   try { assert.deepEqual(scan([dir]), []); } finally { rmSync(dir, { recursive: true, force: true }); }
 });
@@ -41,10 +45,12 @@ test("planted violations are all caught", () => {
     "backend/src/tools/bad.ts": `import { Workspace } from "twenty-server";\n`,
     // R6: core reaches outside itself
     "backend/src/core/bad.ts": `import { x } from "../models/index.js";\n`,
+    // R11: OTel outside its adapter. The import that would quietly acquire a vendor for the whole platform.
+    "backend/src/runtime/otel-bad.ts": `import { trace } from "@opentelemetry/api";\n`,
   });
   try {
-    const rules = new Set(scan([dir]).map((v) => v.rule.slice(0, 2)));
-    for (const r of ["R2", "R3", "R4", "R5", "R6"]) assert.ok(rules.has(r), `expected ${r} violation`);
+    const rules = new Set(scan([dir]).map((v) => v.rule.slice(0, 3).trim()));
+    for (const r of ["R2", "R3", "R4", "R5", "R6", "R11"]) assert.ok(rules.has(r), `expected ${r} violation`);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 

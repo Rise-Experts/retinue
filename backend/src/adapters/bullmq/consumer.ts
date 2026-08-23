@@ -46,6 +46,12 @@ export const createBullMqJobConsumer = (
           await handler({
             tenantId: job.data.tenantId as TenantId,
             runId: job.data.runId as RunId,
+            // Read back off the payload so the worker's span continues the request's trace (#143). Passed
+            // through even when absent, because the *instrumented* consumer distinguishes "no traceparent" from
+            // "a traceparent that failed to parse" and records which -- a propagation bug otherwise looks
+            // exactly like a job enqueued before propagation existed.
+            ...(job.data.traceparent !== undefined ? { traceparent: job.data.traceparent } : {}),
+            ...(job.data.enqueuedAt !== undefined ? { enqueuedAt: job.data.enqueuedAt } : {}),
           });
         },
         { concurrency },

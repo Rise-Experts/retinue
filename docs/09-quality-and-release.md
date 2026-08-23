@@ -297,3 +297,150 @@ stops gating the day someone renames a variable.
 It is therefore **deliberately not yet in the branch-protection required checks**, because a required check that
 cannot pass blocks every release. Registering it there is the last step of the cutover. Stated here rather than
 left as a green tick that implies more than it verifies.
+
+## Telemetry (#143)
+
+A run crosses the API host, the queue and a worker. Before this, there was no correlated view, so diagnosing a
+production issue meant guessing.
+
+- The port is `src/telemetry` — **ours**, not a vendor's. `Tracer`, `Meter`, `Logger`, and a `TelemetryContext`
+  that contains nothing but ids.
+- `src/adapters/otel` is the only file in the tree that knows OpenTelemetry exists, and **boundary rule R11**
+  makes that a build failure rather than a convention. Exactly R3's shape, for R3's reason: one convenience
+  import of `@opentelemetry/api` in a hot path acquires a vendor for the whole platform, and it is invisible in
+  review because the import looks like every other import.
+- `NOOP_TELEMETRY` means no call site has an `if (telemetry)`. Optional-and-checked would be checked in nineteen
+  places and forgotten in the twentieth, and the forgotten one is a crash rather than a missing span.
+
+### One request, one trace, three processes
+
+The link is a **`traceparent` string in the job payload**, because a worker cannot hold a live span object across
+a process boundary. `JobDispatcher.enqueueRun` was widened to carry it.
+
+The first version had the wrapper remember the span it had just opened, for the adapter to read back. That is
+wrong the moment two enqueues overlap, and overlapping enqueues are the normal case — a racy trace link
+attributes one tenant's run to another tenant's request, which is worse than no trace at all. There is a test
+with two concurrent enqueues.
+
+The chain is `http.request → run.enqueue → run.claim`, with the enqueue as a **producer** span and the claim as a
+**consumer** span: that pair is how a collector draws a queue hop, and without the kinds it renders as a nested
+call where a parent ending before its child looks like corruption.
+
+Both fields are **optional**, and have to be: jobs enqueued before this landed are already on the queue, and a
+worker that required a traceparent would fail every one. A job without one starts its own trace — a missing link,
+not a lost run — and the claim span records `queue.trace_continued: false` so a propagation bug is
+distinguishable from an old job. Without that attribute both look like a working trace.
+
+A malformed `traceparent` is treated as absent. `parseTraceparent` returns `null` rather than throwing, because
+it sits on the hot path of every request and every job, and telemetry that can break a run is worse than no
+telemetry. It is strict about the **all-zero** trace id, though: accepting one puts every caller that failed to
+propagate into the same "trace 000…0", which looks like a working trace joining unrelated requests. A missing
+trace is obvious; a merged one is not.
+
+### Spans align with run events
+
+`SPAN_FOR_RUN_EVENT` is a **total map keyed by `RunEventType`**, so adding an event type without deciding on its
+span is a compile error. Names share their first word with the event, because an operator holding a trace and an
+event history matches them by eye.
+
+Three events fold into `run.step` deliberately — `part.added`, `part.updated`, `usage.updated`. A span per
+streamed part is thousands per run and buries the model and tool spans someone is actually looking for. The
+exceptions are **listed in the test**, not excluded from it: a documented exception and an oversight look
+identical when both are simply absent.
+
+### Metrics, and the cardinality rule
+
+Every instrument declares its unit, its description, and **the operational question it answers** — because
+"enough to answer 'is it healthy'" is the criterion, and a metric with no question behind it is one nobody looks
+at. The unit is in the name as well (`_ms`, `_total`), since a graph legend shows the name and "is that seconds
+or milliseconds" is the wrong question during an incident.
+
+Two recording decisions that are easy to get backwards:
+
+- **Claim latency is recorded before the handler runs**, so a queue backing up is visible even when the run then
+  fails. A queue backlog and a failing run are different incidents, and a metric that only appeared on success
+  hides the first behind the second.
+- **Duration is recorded on the failure path too.** A dashboard built only on successes shows latency
+  *improving* as things break, because the slow runs are the ones that time out.
+
+A negative claim latency — clock skew between two hosts — is **dropped, not clamped**. A zero is
+indistinguishable from a genuinely instant claim, and a p99 built from fabricated zeros reads healthy.
+
+`METRIC_ATTRIBUTE_ALLOWLIST` bounds attributes **in the adapter**, not at call sites. `runId` on a latency
+histogram is one line of code and one time series per run: it looks like helpful detail in review and is a
+cardinality incident in production, with the bill arriving a month later. Ids belong on spans and logs, which are
+sampled and indexed.
+
+### No content in logs, structurally
+
+Two mechanisms, and neither is a rule anyone has to remember.
+
+**The message is a closed union of literals.** `Logger.log` takes a `LogEvent`, not a string. A caller *cannot*
+put a prompt in the message because there is no string parameter to put it in. A denylist cannot help here — the
+content would be in the message, which a denylist cannot inspect without pattern-matching prose. Adding a log
+line means adding a name to `log-events.ts`, which is a reviewed act in a file whose purpose is visible from its
+first line.
+
+**Fields are an allowlist.** A denylist has to name every field that must not be logged, forever, including the
+one a colleague adds next month. An allowlist names the fields that may be, and the failure direction becomes "an
+incident is missing a field" rather than "a prompt is in a third-party index and a backup". Three properties on
+top:
+
+- **Primitives only.** An object is dropped even under an allowlisted key: `{ reason: {...} }` is one keystroke
+  from being a whole tool input, and the key says nothing about what a nested value holds.
+- **Strings are capped at 120 characters** and visibly truncated. An allowlisted key can still be *handed*
+  content, so the cap bounds the leak to a fragment — and the truncation marker is how someone notices the bug.
+- **A dropped field is reported** as its own `telemetry.fields-dropped` line, naming keys and never values.
+  Silent dropping is invisible data loss: whoever needs the field finds it absent and goes looking in the wrong
+  place.
+
+Errors are recorded as a **classified code**, never as a thrown object. A stack and a cause chain routinely carry
+a URL with a token in it or the argument that caused the throw — #131 found exactly that shape in this codebase,
+a service-role key echoed into an error message and therefore into logs. `errorCodeOf` reads a `code` or reports
+a constructor name, and refuses a "code" long enough to be a paragraph.
+
+The redaction test seeds a prompt, a message array, an API key, a bearer token, a signed URL and an error stack,
+then asserts none of them appears in **the bytes a sink would write**. Not in the call arguments — a mock
+capturing those proves the caller's intent and nothing about the output, and the output is what reaches an
+aggregator.
+
+### Vendor-neutral, proven rather than claimed
+
+`@agentkit/backend` has **no runtime dependency on any OpenTelemetry package**. The adapter declares the OTel API
+surface it needs as structural interfaces and the caller passes their own providers, so a customer already
+running the OTel SDK hands us what they have and a customer running something else implements four small
+interfaces.
+
+Structural types that were merely plausible would compile fine and fail on the first real provider, so two test
+files close that gap:
+
+1. `otel.test.ts` imports the genuine `@opentelemetry/api` — real `SpanStatusCode` values, a real `Context` built
+   by `trace.setSpanContext`, a real provider from the package — and drives the adapter with them.
+2. `otel-pipeline.test.ts` runs the **real SDK end to end**: `BasicTracerProvider`, a real `SimpleSpanProcessor`,
+   a real `PeriodicExportingMetricReader`, and an in-memory exporter in the place an OTLP exporter goes. It reads
+   the trace back out of the exporter and asserts one trace id across request, enqueue and claim, with names and
+   units on the metrics.
+
+Swapping the in-memory exporter for `OTLPTraceExporter` is a one-line change in the *host's* wiring, which is
+where a collector endpoint belongs — and why we never see a URL. That is the honest form of test step 4: a
+running collector is not something a unit test should require, and everything between our port and the wire is
+real.
+
+One seam genuinely needs injection. Building an OTel `Context` for a remote parent requires a *function* from the
+package we refuse to import, so `remoteContext` is supplied by the host in three lines. Without it the adapter
+still works and a trace stops at the process boundary — degrading rather than throwing, because three missing
+lines of wiring should cost a trace link and not every request.
+
+### What is instrumented, and what is not
+
+Wired: the enqueue, the claim, model calls, tool calls, and the approval wait. The approval wait is *not* a
+wrapper, because the wait is not a function call — the run is suspended, the process may have exited, and the
+decision arrives in a different request. Two timestamps is the only shape that can measure a wait spanning a
+deploy, and it is often the longest span in a trace and the one that most needs to be visibly not the platform's
+latency.
+
+**Not yet wired: the GraphQL request span and the run's own execution spans.** The resolvers and the durable
+worker have the seams and the helpers exist; connecting them belongs with the host that owns the GraphQL server,
+which the ShareFlow cutover brings. So `http.request` and `run.execute` are declared, tested through the port,
+and produced today only by the tests that construct them. Written down rather than left as a span name that
+implies a call site.

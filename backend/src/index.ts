@@ -26,6 +26,7 @@ export * from "./adapters/supabase/index.js";
 // an inconsistency without a benefit. Loading `bullmq`/`ioredis` constructs no connection — only
 // `createBullMqRunQueue` does.
 export * from "./adapters/bullmq/index.js";
+export * from "./adapters/otel/index.js";
 export * from "./worker/main.js";
 export * from "./worker/extraction.js";
 export * from "./worker/export.js";
@@ -45,5 +46,6 @@ export * from "./export/markdown.js";
 export * from "./knowledge/index.js";
 export * from "./citations/index.js";
 export * from "./evaluation/index.js";
+export * from "./telemetry/index.js";
 
 export * from "./graphql/index.js";

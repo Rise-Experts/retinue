@@ -253,6 +253,10 @@ export function scan(roots = DEFAULT_ROOTS) {
       const isCore = inLayer("core");
       const isPersistence = inLayer("persistence");
       const isModels = inLayer("models");
+      // The OTel adapter *and its test*, since the test's whole job is to import the real `@opentelemetry/api`
+      // and prove the structural types are satisfied by it -- see R11. Excluding the test would leave the claim
+      // "vendor-neutral" resting on interfaces nobody had checked against the actual package.
+      const isOtelAdapter = inLayer("adapters/otel") || /adapters\/otel\//.test(path);
       // Only the shipped envelope, not its tests. A test legitimately wires an in-memory store to
       // exercise the pipeline, and test files are excluded from the published build — the rule is about
       // what the envelope does in production, not what a test needs to construct one.
@@ -272,6 +276,14 @@ export function scan(roots = DEFAULT_ROOTS) {
         // R3 — the AI/provider SDK is confined to the models layer.
         if ((spec === "ai" || spec.startsWith("@ai-sdk/")) && !isModels)
           add("R3 AI SDK may only be imported inside backend/src/models");
+
+        // R11 — OpenTelemetry is confined to its adapter (#143 AC-6).
+        //
+        // Exactly R3's shape, for exactly R3's reason. "Vendor-neutral instrumentation" is only true if it is
+        // enforced: one convenience import of `@opentelemetry/api` in a hot path acquires a vendor for the whole
+        // platform, and it is invisible in review because the import looks like every other import.
+        if (/^@opentelemetry\//.test(spec) && !isOtelAdapter)
+          add("R11 OpenTelemetry may only be imported inside backend/src/adapters/otel");
 
         // R4 — ports must not import adapters.
         if (isPersistence &&

@@ -13,8 +13,19 @@ import type { JobDispatcher, Run } from "../runtime/index.js";
 import type { DurableWorker, ProcessResult } from "../runtime/worker.js";
 import type { RunId, TenantId } from "../core/ids.js";
 
-/** A unit of work off the queue. Mirrors the dispatcher's `enqueueRun` input. */
-export type RunJob = { readonly tenantId: TenantId; readonly runId: RunId };
+/**
+ * A unit of work off the queue. Mirrors the dispatcher's `enqueueRun` input.
+ *
+ * The trace fields (#143) are optional and unused by the runtime itself — `instrumentConsumer` reads them. They
+ * live on this type rather than on a parallel one so the consumer seam stays a single shape; a second type would
+ * mean an adapter deciding which to produce.
+ */
+export type RunJob = {
+  readonly tenantId: TenantId;
+  readonly runId: RunId;
+  readonly traceparent?: string;
+  readonly enqueuedAt?: string;
+};
 
 /**
  * The queue's consumer side.

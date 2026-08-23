@@ -82,7 +82,21 @@ export type Run = {
 
 /** Durable job enqueue. Adapters: BullMQ, in-memory for tests. */
 export interface JobDispatcher {
-  enqueueRun(input: { tenantId: TenantId; runId: RunId }): Promise<void>;
+  /**
+   * `traceparent` and `enqueuedAt` are the trace hop (#143).
+   *
+   * On the port rather than smuggled through a side channel on the adapter, because the alternative was an
+   * instrumented wrapper remembering the last span it opened — which is wrong the moment two enqueues overlap,
+   * and overlapping enqueues are the normal case. Optional so every existing caller is unaffected and a job
+   * already sitting on the queue still runs; a job with no traceparent starts its own trace, which loses a link
+   * rather than a run.
+   */
+  enqueueRun(input: {
+    tenantId: TenantId;
+    runId: RunId;
+    readonly traceparent?: string;
+    readonly enqueuedAt?: string;
+  }): Promise<void>;
 }
 
 /** Atomic claim so two workers never process one run. Adapters: Redis, Postgres. */

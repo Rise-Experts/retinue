@@ -31,6 +31,18 @@ export interface JobQueue {
 export type RunJobData = {
   readonly tenantId: string;
   readonly runId: string;
+  /**
+   * W3C trace context, so the worker's span joins the request's trace (#143, AC-1).
+   *
+   * Optional, and it has to be: jobs enqueued before this existed are already on the queue, and a worker that
+   * required the field would fail every one. Absent means "start a new trace" -- a missing link, not a lost run.
+   */
+  readonly traceparent?: string;
+  /**
+   * The producer's clock when it let go. The only way claim latency is measurable, since neither side alone
+   * knows both ends of the wait.
+   */
+  readonly enqueuedAt?: string;
 };
 
 // Hyphen, not a colon. BullMQ rejects a queue name containing `:` outright ("Queue name cannot
@@ -107,10 +119,28 @@ export const createBullMqJobDispatcher = (
   const timeoutMs = options.enqueueTimeoutMs ?? 5_000;
 
   return {
-    async enqueueRun({ tenantId, runId }: { tenantId: TenantId; runId: RunId }): Promise<void> {
+    async enqueueRun({
+      tenantId,
+      runId,
+      traceparent,
+      enqueuedAt,
+    }: {
+      tenantId: TenantId;
+      runId: RunId;
+      traceparent?: string;
+      enqueuedAt?: string;
+    }): Promise<void> {
       const add = queue.add(
         RUN_JOB_NAME,
-        { tenantId, runId },
+        // Spread conditionally rather than passing `traceparent: undefined`: BullMQ serializes the payload to
+        // JSON, an explicit undefined disappears anyway, and the two shapes are then indistinguishable in a
+        // Redis dump -- which is where someone debugging a broken trace will be looking.
+        {
+          tenantId,
+          runId,
+          ...(traceparent !== undefined ? { traceparent } : {}),
+          ...(enqueuedAt !== undefined ? { enqueuedAt } : {}),
+        },
         { jobId: runJobId({ tenantId, runId }), attempts: QUEUE_ATTEMPTS },
       );
 

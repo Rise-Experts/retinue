@@ -52,6 +52,18 @@ Exit codes: **0** pass or overridden, **1** a quality failure, **2** a usage err
 and the trend entry records both. The CI job runs on a release tag and on demand, not on every push. See
 `docs/09-quality-and-release.md` — including what the gate cannot yet do, which is score a live run.
 
+## Telemetry
+
+`src/telemetry` is a vendor-neutral port — traces, metrics and structured logs — and `src/adapters/otel` is the
+only place OpenTelemetry is imported, enforced by boundary rule **R11**. `@agentkit/backend` has no runtime
+dependency on any OTel package: pass your own `TracerProvider` and `MeterProvider`, and your collector endpoint
+stays in your wiring where it belongs.
+
+Two guarantees are structural rather than conventional. A log line's message is a **closed union of literals**,
+so no caller can put a prompt in it. Its fields are an **allowlist**, so a field nobody has heard of is dropped
+without anyone having predicted it. See `docs/09-quality-and-release.md` for the rest, including what is not yet
+wired.
+
 ## Boundaries
 
 Per [`docs/01-architecture.md`](docs/01-architecture.md), these packages must build and
@@ -64,6 +76,8 @@ test with neither ShareFlow/Chorus nor Twenty installed:
 - A generic package never imports `shareflow`, and `shareflow` never imports the ShareFlow
   application. The seam is the interfaces in `shareflow/src/services/` — declared there and
   implemented by ShareFlow, so the dependency points one way only.
+- The AI SDK is confined to `backend/src/models`, and OpenTelemetry to `backend/src/adapters/otel`. Both are
+  the same rule: a provider dependency that leaks out of its adapter is one the whole platform then has.
 - Every package may only import what its own `package.json` declares. npm hoists all workspace
   dependencies into one `node_modules`, so an undeclared import works here and fails wherever the
   package is installed alone — the manifest is the only place "builds without ShareFlow installed"
