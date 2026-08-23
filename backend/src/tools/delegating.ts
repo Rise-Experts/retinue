@@ -10,9 +10,17 @@
  * author writes a `delegate` that does one thing; authorisation, the approval gate and the idempotency
  * key are applied by construction, in one place, in one order.
  *
- * **The delegate must not know any of this exists.** It receives validated input and a context and
- * returns data. It is not told whether an approval happened, and it never sees an idempotency key —
- * which is what makes a wrapped function still a plain function, testable on its own.
+ * **The delegate is not told whether an approval happened.** It receives validated input, a context and
+ * the call's idempotency key, and returns data — which is what makes a wrapped function still a plain
+ * function, testable on its own.
+ *
+ * The key was originally withheld too, on the reasoning that a delegate should know nothing about any
+ * of this. Writing the first capability that performs a write (#115) showed that to be wrong: the
+ * downstream service needs the key threaded through so a *re-delivered job* is deduplicated, which is
+ * a different guarantee from the one the store here provides. The envelope stops a second agent call;
+ * the downstream key stops a second delivery of one accepted call. Either alone leaves a way to post
+ * twice, and a delegate that cannot pass the key on cannot close that gap. It is still a plain
+ * argument — the delegate remains a function of its inputs.
  */
 import { AgentPlatformError } from "../core/errors.js";
 import type { ExecutionContext } from "../core/context.js";
@@ -22,6 +30,7 @@ import type { IdempotencyKey, IdempotencyStore } from "../idempotency/index.js";
 import type { ApprovalGate } from "../hitl/service.js";
 import { toPlatformError } from "../runtime/retry.js";
 import { defineTool, type ToolSpec } from "./define.js";
+import { zodishValidator, type SchemaValidator } from "./registry.js";
 import type { Tool, ToolEffect } from "./index.js";
 
 /** Effects that require an approval decision before the side effect happens. */
@@ -37,10 +46,27 @@ export type DelegatingToolSpec<I = unknown, O = unknown> = Omit<ToolSpec<I, O>, 
    */
   readonly delegatesTo: string;
   /**
-   * The deterministic function. Receives validated input and the execution context; returns data or
-   * throws. Knows nothing about authorisation, approvals or idempotency.
+   * The deterministic function. Receives validated input, the execution context and the call's
+   * idempotency key; returns data or throws. Knows nothing about authorisation or approvals.
    */
-  delegate(input: I, context: ExecutionContext): Promise<O> | O;
+  delegate(input: I, context: ExecutionContext, details: DelegateDetails): Promise<O> | O;
+};
+
+/**
+ * What the envelope tells the delegate about the call itself.
+ *
+ * An object rather than a bare string so that adding a field later is additive — the same reason
+ * `ShareFlowServices` is one object rather than four arguments.
+ */
+export type DelegateDetails = {
+  /**
+   * The key this call was deduplicated under.
+   *
+   * Passed on so a delegate can hand it to a downstream service whose own queue needs it. **Not** for
+   * the delegate to check: the envelope has already looked it up, and a delegate that consulted it
+   * would be doing the lookup twice with the second one unguarded.
+   */
+  readonly idempotencyKey: IdempotencyKey;
 };
 
 export type DelegatingToolDeps = {
@@ -57,6 +83,18 @@ export type DelegatingToolDeps = {
    * exists to prevent. See the open question on #113.
    */
   readonly idempotency?: IdempotencyStore;
+  /**
+   * Validates `input` against the spec's `inputSchema` before the delegate is reached (#115 AC-5).
+   *
+   * Defaults to `zodishValidator`, which passes through anything that is not a zod-like schema — and
+   * `inputSchema` itself defaults to `{}` — so a tool that declares no schema behaves exactly as it did
+   * before this existed.
+   *
+   * The registry already re-validates at execution, which covers the production path. This covers
+   * *every* path: a tool executed directly, from a test, or from a future caller that is not the
+   * registry. The envelope's whole purpose is that a guarantee cannot be reached around.
+   */
+  readonly validator?: SchemaValidator;
 };
 
 /**
@@ -99,8 +137,8 @@ const refuse = (code: "approval_required" | "capability_unavailable", message: s
   new AgentPlatformError({ code, message, retryable: false });
 
 /**
- * Build a `Tool` whose execute path is: authorise → derive key → look up → approval gate → delegate →
- * store.
+ * Build a `Tool` whose execute path is: authorise → validate → derive key → look up → approval gate →
+ * delegate → store.
  *
  * The lookup sits **before** the approval gate deliberately. A call whose result is already stored has
  * already been approved and executed, so re-gating it would either block a legitimate replay or ask a
@@ -141,11 +179,27 @@ export const defineDelegatingTool = <I = unknown, O = unknown>(
           category: descriptor.category,
         });
 
+        // Validated *before* the key is derived, not after.
+        //
+        // Because a schema may normalise — an LLM passes "LinkedIn" where the store keeps "linkedin" —
+        // deriving the fallback key from the raw arguments would give one logical call two different
+        // keys, and the second would not see the first's result. Normalising first makes the key a
+        // property of the call rather than of the model's capitalisation.
+        //
+        // After authorisation, so a caller with no permission learns nothing about the schema.
+        const validated = (deps.validator ?? zodishValidator).validate(descriptor.inputSchema, input);
+        if (!validated.ok)
+          throw new AgentPlatformError({
+            code: "invalid_input",
+            message: `Invalid input for ${spec.name}: ${validated.message}`,
+            retryable: false,
+          });
+
         // The caller's key is preferred — it is derived from tool-call identity, which is what makes a
         // *retry* safe. The fallback is broader and can suppress an intended repeat; see its docstring.
         const key =
           (idempotencyKey as IdempotencyKey | undefined) ??
-          fallbackIdempotencyKey({ context, toolName: spec.name, args: input });
+          fallbackIdempotencyKey({ context, toolName: spec.name, args: validated.value });
 
         if (deps.idempotency) {
           const stored = await deps.idempotency.get<O>({ tenantId: context.tenantId, key });
@@ -180,7 +234,7 @@ export const defineDelegatingTool = <I = unknown, O = unknown>(
           }
         }
 
-        const data = await spec.delegate(input as I, context);
+        const data = await spec.delegate(validated.value as I, context, { idempotencyKey: key });
         // Stored only after the delegate succeeds, so a failed attempt can be retried rather than
         // having its own failure permanently cached as the answer.
         if (deps.idempotency) {

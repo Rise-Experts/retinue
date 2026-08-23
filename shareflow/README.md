@@ -24,6 +24,32 @@ all. Three further things about their shape decided the seam:
 | `PublishResult` reports failure as `{ success: false }` | **throws** `AgentPlatformError` | the delegating envelope stores the delegate's return value under the idempotency key, so a failure *returned* becomes that call's permanent answer |
 | nothing in the publish path takes an idempotency key | requires one on every write | docs/07 asks for one; making it mandatory in the type turns a missing parameter into a compile error rather than a duplicate post |
 
+## Capabilities
+
+| Category | Tools | Effect |
+|---|---|---|
+| `posts` (#115) | `list_post_drafts`, `get_post_draft` | `read` |
+| | `create_post_draft`, `update_post_draft`, `duplicate_post_draft` | `internal-write` |
+
+Three things about the Posts tools generalise to every category that follows:
+
+- **`.strict()` on every schema.** A model passing `status: "approved"` is refused, not silently
+  ignored. Silent ignoring is the dangerous outcome — the model then reports success and the user
+  believes the post was approved for publishing.
+- **A list returns summaries; a read returns the body.** One caption is bounded by platform limits and
+  is the thing the assistant reasons about. Twenty of them in one tool result is a context overflow
+  waiting for a busy tenant.
+- **`duplicate` is the documented remedy for `update`'s conflict**, not a fifth independent verb. A
+  post can be *half*-published — its status is not `published`, but one destination already succeeded —
+  and editing it would make the record disagree with what is publicly visible. `update` refuses with
+  `details.remedy = "duplicate-then-edit"` so the assistant can offer the recovery instead of
+  reporting a dead end.
+
+Nothing in the Posts category can publish: every capability delegates to `ContentService` and none is
+classified `external-write`. That guarantee holds only while the publishing tools (#119) *are*
+classified `external-write` — ShareFlow creates an assistant-authored post **approved**, deliberately,
+because the human-in-the-loop confirmation on publish is the gate rather than a review queue.
+
 ## Layout
 
 | Directory | Contains |
@@ -59,4 +85,9 @@ stops the process starting, rather than producing a confusing catalog on someone
 
 ## Status
 
-Scaffolding and the seam (#114). The capabilities land in #115–#125.
+The seam and the scaffolding (#114); the Posts category (#115). Campaigns, accounts, media,
+publishing, engagement, research and analytics land in #116–#125.
+
+`npm test` in this workspace runs `tsc -b` first. That is deliberate: this package value-imports
+`@agentkit/backend`, whose entry point is `dist/`, so `vitest run` on its own tests whatever was last
+built — see the note in `vitest.config.ts`.

@@ -9,7 +9,7 @@
  * Nothing in this directory performs I/O — R7 in `scripts/check-boundaries.mjs` fails the build if it
  * tries. A ShareFlow tool is the envelope from #113 over a service method; the service does the work.
  */
-import type { ExecutionContext, Tool, ToolProvider } from "@agentkit/backend";
+import type { DelegatingToolDeps, ExecutionContext, Tool, ToolProvider } from "@agentkit/backend";
 import { AgentPlatformError } from "@agentkit/backend";
 import type { ShareFlowServices } from "../services/index.js";
 
@@ -41,13 +41,27 @@ export const isShareFlowToolCategory = (value: string): value is ShareFlowToolCa
   CATEGORIES.has(value);
 
 /**
- * How a capability is registered: a function from the services to a tool.
+ * Everything a capability is built from.
+ *
+ * `deps` was missing from the first version of this type (#114), and writing the first capability
+ * (#115) is what surfaced it: every ShareFlow tool is a `defineDelegatingTool`, and that needs the
+ * authorization policy, the approval gate and the idempotency store. A factory that received only the
+ * services could not build one — so each capability would have closed over its own copy of the deps,
+ * which is precisely the "applied in one place, in one order" property the envelope exists to have.
+ */
+export type ShareFlowToolContext = {
+  readonly services: ShareFlowServices;
+  readonly deps: DelegatingToolDeps;
+};
+
+/**
+ * How a capability is registered: a function from the services and deps to a tool.
  *
  * A factory rather than a constructed tool, so a capability is written against the seam and the
  * concrete services are supplied once at wiring time. It is also what keeps a capability testable —
  * pass a stub service, get a tool.
  */
-export type ShareFlowToolFactory = (services: ShareFlowServices) => Tool;
+export type ShareFlowToolFactory = (context: ShareFlowToolContext) => Tool;
 
 const invalid = (message: string) =>
   new AgentPlatformError({ code: "invalid_input", message, retryable: false });
@@ -62,9 +76,11 @@ const invalid = (message: string) =>
 export const createShareFlowToolProvider = (input: {
   readonly id?: string;
   readonly services: ShareFlowServices;
+  readonly deps: DelegatingToolDeps;
   readonly factories: readonly ShareFlowToolFactory[];
 }): ToolProvider => {
-  const tools = input.factories.map((factory) => factory(input.services));
+  const context: ShareFlowToolContext = { services: input.services, deps: input.deps };
+  const tools = input.factories.map((factory) => factory(context));
 
   const seen = new Set<string>();
   for (const tool of tools) {
@@ -88,3 +104,6 @@ export const createShareFlowToolProvider = (input: {
     },
   };
 };
+
+export * from "./posts.js";
+

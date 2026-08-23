@@ -40,6 +40,9 @@ const CONTEXT = {
 /** Stub services. Nothing here reaches a network — that is the point of the seam. */
 const services = {} as ShareFlowServices;
 
+/** The delegating deps every ShareFlow capability is built from. */
+const deps = { authorization: { async can() { return { allow: true }; } } as never };
+
 const tool = (name: string, category: string): Tool =>
   defineTool({ name, description: `does ${name}`, category, execute: () => ({ ok: true }) });
 
@@ -47,6 +50,7 @@ describe("the tool provider", () => {
   it("serves every registered factory's tool", async () => {
     const provider = createShareFlowToolProvider({
       services,
+      deps,
       factories: [() => tool("list_accounts", "accounts"), () => tool("create_post_draft", "posts")],
     });
     expect(provider.id).toBe("shareflow");
@@ -61,7 +65,7 @@ describe("the tool provider", () => {
     // selects tools *by* category, so "post" instead of "posts" yields an assistant that silently has
     // fewer tools than configured — which reads as the model being unhelpful.
     expect(() =>
-      createShareFlowToolProvider({ services, factories: [() => tool("create_post", "post")] }),
+      createShareFlowToolProvider({ services, deps, factories: [() => tool("create_post", "post")] }),
     ).toThrowError(/not one of/);
   });
 
@@ -71,6 +75,7 @@ describe("the tool provider", () => {
     expect(() =>
       createShareFlowToolProvider({
         services,
+        deps,
         factories: [() => tool("publish_post", "publishing"), () => tool("publish_post", "posts")],
       }),
     ).toThrowError(/duplicate/);
@@ -82,7 +87,7 @@ describe("the tool provider", () => {
     let built = false;
     expect(() => {
       built = true;
-      return createShareFlowToolProvider({ services, factories: [() => tool("x", "nope")] });
+      return createShareFlowToolProvider({ services, deps, factories: [() => tool("x", "nope")] });
     }).toThrow();
     expect(built).toBe(true);
   });

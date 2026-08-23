@@ -83,22 +83,115 @@ export interface ConnectorService {
 // Content service — the "database services": drafts and campaigns.
 // ---------------------------------------------------------------------------------------------------
 
-export type PostDraftVariant = {
-  readonly platformId: PlatformId;
-  readonly content: string;
-  readonly title?: string;
-  readonly mediaAssetIds?: readonly MediaAssetId[];
-  /** Platform-specific toggles. Opaque here; validated by `PublishingService.validate`. */
-  readonly options?: Readonly<Record<string, unknown>>;
-};
+/**
+ * Review state, in the platform's own vocabulary.
+ *
+ * ShareFlow's `PostStatus` is `DRAFT | IN_REVIEW | APPROVED | CHANGES_REQUESTED | PUBLISHED`; these are
+ * the same states in the kebab-case docs/01 requires of a union.
+ *
+ * **No tool may set this.** A post's status is where ShareFlow's review policy lives — `draft.ts` is
+ * explicit that routing creation through the app exists to *"keep one owner of that policy"* — and an
+ * assistant that could move a post to `approved` would be approving its own content for publication.
+ * Nothing in `tools/posts.ts` accepts a status, and `updateDraft`'s patch has no field for one.
+ */
+export const POST_DRAFT_STATUSES = [
+  "draft",
+  "in-review",
+  "approved",
+  "changes-requested",
+  "published",
+] as const;
+
+export type PostDraftStatus = (typeof POST_DRAFT_STATUSES)[number];
 
 export type PostDraft = {
   readonly id: PostDraftId;
   readonly campaignId?: CampaignId;
-  readonly title: string;
-  readonly variants: readonly PostDraftVariant[];
+  readonly status: PostDraftStatus;
+  /**
+   * The authored post text, as stored. One caption for all destinations.
+   *
+   * **Not per-platform variants**, which is what this seam first assumed from docs/07 step 6's
+   * "produce structured channel variants". The store holds one caption plus `target_platforms`, and
+   * per-platform text is *derived* at render time (`toPlatformText`) — there is nowhere to put an
+   * authored variant, so promising one here would make the adapter unwritable. Authored overrides need
+   * a ShareFlow schema change; see the open question on #123.
+   */
+  readonly caption: string;
+  readonly targetPlatforms: readonly PlatformId[];
+  readonly mediaAssetIds: readonly MediaAssetId[];
   readonly updatedAt: string;
 };
+
+/**
+ * What a list returns: enough to choose one, never the bodies.
+ *
+ * A tool result enters the model's context. One caption is bounded by platform limits and is the thing
+ * the assistant has to reason about; twenty of them is a context-overflow waiting for a busy tenant.
+ * So a single read returns the caption and a list returns an excerpt and the id to fetch.
+ */
+export type PostDraftSummary = {
+  readonly id: PostDraftId;
+  readonly status: PostDraftStatus;
+  /** First line or so of the caption, for recognition. Never the whole body. */
+  readonly excerpt: string;
+  readonly captionLength: number;
+  readonly targetPlatforms: readonly PlatformId[];
+  readonly mediaCount: number;
+  readonly updatedAt: string;
+};
+
+/**
+ * The result of creating a draft, carrying two fields that exist because of failures ShareFlow already
+ * had in production. Both are documented in `draft.ts`.
+ */
+export type CreatedPostDraft = PostDraft & {
+  /**
+   * Length of the caption **as stored**.
+   *
+   * ShareFlow's reason, verbatim: *"a model asked to repeat a long caption into a tool argument may
+   * abbreviate it, and the result is a post that publishes a fragment of what the user was shown."*
+   * Returning the stored length turns that from invisible into checkable.
+   */
+  readonly captionLength: number;
+  /**
+   * Attachments that were **refused** — an asset the caller may not attach.
+   *
+   * ShareFlow's reason, verbatim: *"Silence here is what let an assistant announce an attachment it
+   * never made."* Refusals are reported, not dropped, so the tool can say which file did not attach.
+   */
+  readonly droppedMedia: readonly MediaAssetId[];
+};
+
+/**
+ * A sparse patch: **only the fields present are touched.**
+ *
+ * This mirrors `EditPostPatch`, whose reason is that the composer can save a caption *"without having
+ * to resend media it never loaded"*. For a model-driven caller that distinction is load-bearing in a
+ * way it is not for a form: `mediaAssetIds: []` removes every attachment, and omitting the field
+ * leaves them alone. Nothing here may be given a default — a default would silently wipe media on a
+ * caption-only edit.
+ *
+ * There is deliberately no `status` field. See `PostDraftStatus`.
+ */
+export type PostDraftPatch = {
+  readonly caption?: string;
+  readonly targetPlatforms?: readonly PlatformId[];
+  readonly mediaAssetIds?: readonly MediaAssetId[];
+};
+
+/**
+ * Why `updateDraft` refuses, when it refuses for a reason a duplicate would solve.
+ *
+ * `assertEditable` has two gates, and the second is the one nobody would guess: a post to three
+ * platforms can be **half-published** — its own status is not `published`, but one channel already
+ * succeeded, so editing would make the record disagree with what is publicly visible.
+ *
+ * Carried in the error's `details` as a machine-readable remedy, because `internal/duplicate-post`
+ * documents exactly what to do instead: *"duplicate, edit the copy, then publish the copy."* Without
+ * it the assistant reports a dead end where a one-step recovery exists.
+ */
+export const EDIT_REMEDY_DUPLICATE = "duplicate-then-edit" as const;
 
 export type Campaign = {
   readonly id: CampaignId;
@@ -120,30 +213,66 @@ export type Page<T> = {
 };
 
 export interface ContentService {
+  /**
+   * One draft, with its caption.
+   *
+   * Must answer `not_found` for a draft in another tenant — **not** `forbidden`. ShareFlow's own
+   * reason: *"the two must be indistinguishable, or the endpoint confirms the existence of other
+   * tenants' ids."*
+   */
   getDraft(context: ExecutionContext, input: { readonly id: PostDraftId }): Promise<PostDraft>;
 
+  /** Summaries, never bodies — see `PostDraftSummary`. */
   listDrafts(
     context: ExecutionContext,
-    input: { readonly campaignId?: CampaignId; readonly limit: number; readonly cursor?: string },
-  ): Promise<Page<PostDraft>>;
+    input: {
+      readonly campaignId?: CampaignId;
+      readonly status?: PostDraftStatus;
+      readonly limit: number;
+      readonly cursor?: string;
+    },
+  ): Promise<Page<PostDraftSummary>>;
 
   createDraft(
     context: ExecutionContext,
     input: {
       readonly idempotencyKey: ServiceIdempotencyKey;
-      readonly title: string;
+      readonly caption: string;
+      readonly targetPlatforms: readonly PlatformId[];
       readonly campaignId?: CampaignId;
-      readonly variants: readonly PostDraftVariant[];
+      readonly mediaAssetIds?: readonly MediaAssetId[];
     },
-  ): Promise<PostDraft>;
+  ): Promise<CreatedPostDraft>;
 
+  /**
+   * Apply a sparse patch to a not-yet-public draft.
+   *
+   * Throws `conflict` when the draft can no longer be edited, with
+   * `details.remedy === EDIT_REMEDY_DUPLICATE` when duplicating would let the caller proceed.
+   */
   updateDraft(
     context: ExecutionContext,
     input: {
       readonly idempotencyKey: ServiceIdempotencyKey;
       readonly id: PostDraftId;
-      readonly title?: string;
-      readonly variants?: readonly PostDraftVariant[];
+      readonly patch: PostDraftPatch;
+    },
+  ): Promise<PostDraft>;
+
+  /**
+   * Copy a draft into a new, editable, unpublished one.
+   *
+   * The original is never touched — *"its status, history, scheduled items and metrics all stay
+   * intact. That is the whole point — a duplicate is safe in a way that mutating a published post
+   * would not be."* Nothing is scheduled by this call.
+   */
+  duplicateDraft(
+    context: ExecutionContext,
+    input: {
+      readonly idempotencyKey: ServiceIdempotencyKey;
+      readonly id: PostDraftId;
+      /** Override the copy's destinations; defaults to the original's. */
+      readonly targetPlatforms?: readonly PlatformId[];
     },
   ): Promise<PostDraft>;
 

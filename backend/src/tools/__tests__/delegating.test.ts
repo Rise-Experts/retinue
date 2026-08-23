@@ -323,3 +323,173 @@ describe("the envelope performs no I/O of its own", () => {
     expect(violations.filter((v) => v.rule.startsWith("R7"))).toEqual([]);
   });
 });
+
+/**
+ * Input validation in the envelope (#115 AC-5).
+ *
+ * The registry already re-validates at execution, which covers the production path. Putting it here
+ * covers *every* path — a tool executed directly, from a test, or by a future caller that is not the
+ * registry. The envelope exists precisely so a guarantee cannot be reached around.
+ */
+describe("input validation", () => {
+  /** A zod-shaped schema, hand-rolled so this file does not need zod to assert the seam works. */
+  const schema = (parse: (v: unknown) => { success: boolean; data?: unknown; error?: { message: string } }) => ({
+    safeParse: parse,
+  });
+
+  const tool = (options: {
+    readonly inputSchema: unknown;
+    readonly allow?: boolean;
+    readonly onDelegate?: (input: unknown, key: string) => void;
+  }) => {
+    const { authorization } = policy(options.allow ?? true);
+    let calls = 0;
+    const built = defineDelegatingTool(
+      { authorization, idempotency: createMemoryIdempotencyStore() },
+      {
+        name: "publish_draft",
+        description: "publishes a draft",
+        category: "posts",
+        inputSchema: options.inputSchema,
+        delegatesTo: "ContentService.publish",
+        delegate: (input, _context, details) => {
+          calls += 1;
+          options.onDelegate?.(input, details.idempotencyKey);
+          return { published: true };
+        },
+      },
+    );
+    return { built, calls: () => calls };
+  };
+
+  it("rejects invalid input before the delegate is reached", async () => {
+    const { built, calls } = tool({
+      inputSchema: schema(() => ({ success: false, error: { message: "draftId is required" } })),
+    });
+    const result = await built.execute({ context: ctx(), input: {}, idempotencyKey: "k" });
+    expect(result).toMatchObject({ ok: false, error: { code: "invalid_input", retryable: false } });
+    expect((result as { error: { message: string } }).error.message).toContain("draftId is required");
+    // The observable effect, not the flag: the delegate never ran.
+    expect(calls()).toBe(0);
+  });
+
+  it("validates after authorisation, so an unauthorised caller learns nothing about the schema", async () => {
+    const { built } = tool({
+      allow: false,
+      inputSchema: schema(() => ({ success: false, error: { message: "draftId is required" } })),
+    });
+    const result = await built.execute({ context: ctx(), input: {}, idempotencyKey: "k" });
+    // `forbidden`, not `invalid_input`: the schema's complaint would otherwise describe a capability
+    // the caller may not use.
+    expect(result).toMatchObject({ ok: false, error: { code: "forbidden" } });
+  });
+
+  it("hands the delegate the normalised value, not the raw input", async () => {
+    let seen: unknown;
+    const { built } = tool({
+      inputSchema: schema((v) => ({
+        success: true,
+        data: { platform: String((v as { platform: string }).platform).toLowerCase() },
+      })),
+      onDelegate: (input) => {
+        seen = input;
+      },
+    });
+    await built.execute({ context: ctx(), input: { platform: "LinkedIn" }, idempotencyKey: "k" });
+    expect(seen).toEqual({ platform: "linkedin" });
+  });
+
+  it("derives the fallback key from the normalised value, so capitalisation is not a second call", async () => {
+    // This is why validation has to precede key derivation. Without it, "LinkedIn" and "linkedin" are
+    // one logical call with two different keys, and the second would re-run the side effect.
+    let calls = 0;
+    const { authorization } = policy(true);
+    const built = defineDelegatingTool(
+      { authorization, idempotency: createMemoryIdempotencyStore() },
+      {
+        name: "publish_draft",
+        description: "publishes a draft",
+        category: "posts",
+        inputSchema: {
+          safeParse: (v: unknown) => ({
+            success: true,
+            data: { platform: String((v as { platform: string }).platform).toLowerCase() },
+          }),
+        },
+        delegatesTo: "ContentService.publish",
+        delegate: () => {
+          calls += 1;
+          return { published: true };
+        },
+      },
+    );
+    // No caller-supplied key, so the fallback is used — which is the path this affects.
+    await built.execute({ context: ctx(), input: { platform: "LinkedIn" } });
+    await built.execute({ context: ctx(), input: { platform: "linkedin" } });
+    expect(calls).toBe(1);
+  });
+
+  it("passes through a schema it cannot validate, so an existing tool is unchanged", async () => {
+    // `inputSchema` defaults to `{}` and `zodishValidator` passes anything without `safeParse`. This is
+    // what makes adding validation additive rather than a change in behaviour for every tool.
+    const { built, calls } = tool({ inputSchema: {} });
+    expect(await built.execute({ context: ctx(), input: { anything: true }, idempotencyKey: "k" })).toMatchObject({
+      ok: true,
+    });
+    expect(calls()).toBe(1);
+  });
+});
+
+/**
+ * The key reaches the delegate (#115).
+ *
+ * #113 deliberately withheld it, on the reasoning that a delegate should know nothing about
+ * idempotency. The first capability that performs a write showed that to be wrong: the downstream
+ * service needs the key so a *re-delivered job* is deduplicated, which is a different guarantee from
+ * the one the store here provides.
+ */
+describe("the delegate's view of the call", () => {
+  it("receives the caller's key when one was supplied", async () => {
+    const { authorization } = policy(true);
+    let seen: string | undefined;
+    const built = defineDelegatingTool(
+      { authorization, idempotency: createMemoryIdempotencyStore() },
+      {
+        name: "save_draft",
+        description: "saves a draft",
+        category: "posts",
+        delegatesTo: "ContentService.createDraft",
+        delegate: (_input, _context, details) => {
+          seen = details.idempotencyKey;
+          return { saved: true };
+        },
+      },
+    );
+    await built.execute({ context: ctx(), input: {}, idempotencyKey: "caller-key" });
+    expect(seen).toBe("caller-key");
+  });
+
+  it("receives the fallback key when the caller supplied none", async () => {
+    const { authorization } = policy(true);
+    let seen: string | undefined;
+    const built = defineDelegatingTool(
+      { authorization, idempotency: createMemoryIdempotencyStore() },
+      {
+        name: "save_draft",
+        description: "saves a draft",
+        category: "posts",
+        delegatesTo: "ContentService.createDraft",
+        delegate: (_input, _context, details) => {
+          seen = details.idempotencyKey;
+          return { saved: true };
+        },
+      },
+    );
+    await built.execute({ context: ctx(), input: { caption: "hi" } });
+    // Not merely "defined": the same key the envelope stored under, so a delegate that forwards it
+    // downstream forwards the one that identifies this call.
+    expect(seen).toBe(
+      fallbackIdempotencyKey({ context: ctx(), toolName: "save_draft", args: { caption: "hi" } }),
+    );
+  });
+});
