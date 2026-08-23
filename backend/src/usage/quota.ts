@@ -255,6 +255,17 @@ export const createQuotaGuard = (deps: QuotaGuardDeps) => {
       return { admitted: true, usage, warnings };
     },
 
+    /**
+     * The limits in force for this context, or undefined for unlimited.
+     *
+     * Exposed so a UI can render "you have used X of Y" without a second source for Y — a panel that took its
+     * limit from configuration while enforcement took it from here would eventually disagree, and the version
+     * a user sees would be the wrong one.
+     */
+    async limits(context: ExecutionContext): Promise<QuotaLimits | undefined> {
+      return deps.resolveLimits(context);
+    },
+
     /** Throws the refusal, for a caller that would rather not branch. Same decision, different ergonomics. */
     async assertAdmitted(context: ExecutionContext, at?: string): Promise<QuotaDecision> {
       const decision = await this.admit(context, at);

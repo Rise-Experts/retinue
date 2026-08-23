@@ -13,5 +13,6 @@ export type * from "./hooks/index.js";
 export * from "./hooks/hooks.js";
 
 export * from "./context-inspector.js";
+export * from "./usage-panel.js";
 
 export * from "./localization.js";

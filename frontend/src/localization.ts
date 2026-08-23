@@ -152,5 +152,31 @@ export const DEFAULT_CATALOGS: Catalogs = {
     "citation.ungrounded": "Not attributed to a source",
     "citation.sourceCount": (params, intl) =>
       intl.plural(params.count as number, { one: "1 source", other: `${params.count} sources` }),
+    // #140. The spend panel. Every figure is formatted by the component through `Intl` and passed in already
+    // localised, so these strings interpolate rather than format — a catalogue entry that did its own number
+    // formatting would be a second place for currency rules to live.
+    "usage.loading": "Loading usage…",
+    "usage.loadFailed": "Usage could not be loaded. Try again shortly.",
+    // Explains *why* it is empty, which a zeroed chart cannot.
+    "usage.empty": "No usage recorded yet for this period. Figures appear here once the assistant runs.",
+    "usage.total": (params) => `${params.cost} across ${params.tokens} tokens`,
+    "usage.byPeriod": "By period",
+    "usage.byModel": "By model",
+    "usage.byConversation": "By conversation",
+    "usage.noBreakdown": "Nothing to break down for this period.",
+    // A usage event with no conversation — a background extraction or export.
+    "usage.noConversation": "Background work",
+    "usage.noLimit": "No spending limit is set for this workspace.",
+    "usage.quotaUsed": (params) => `${params.used} of ${params.limit} used`,
+    "usage.quotaWarning": "Approaching the spending limit for this period.",
+    "usage.quotaExceeded": "The spending limit for this period has been reached. New runs are refused until it resets.",
+    "usage.columnPeriod": "Period",
+    "usage.columnName": "Name",
+    "usage.columnShare": "Share",
+    "usage.columnCost": "Cost",
+    // Already formatted by the component, for the reason every figure here is: one locale, one place. A
+    // catalogue entry calling `intl.dateTime` would use the *translator's* locale, which can differ from the
+    // panel's — and one panel would show a German date next to an English currency.
+    "usage.bucketLabel": (params) => String(params.label),
   },
 };

@@ -67,6 +67,55 @@ export const typeDefs = /* GraphQL */ `
     eventCount: Int!
   }
 
+  "One period's consumption. #139's rollups, so a chart never scans raw records."
+  type UsageBucket {
+    bucketStart: String!
+    totals: UsageTotals!
+    currency: String!
+  }
+
+  "Consumption grouped by model or conversation over the requested range."
+  type UsageBreakdownEntry {
+    key: String!
+    totals: UsageTotals!
+  }
+
+  """
+  Where the tenant stands against its limit.
+
+  Absent when no limit is configured — which means unbounded, not zero. A UI must show "no limit set"
+  rather than a full bar.
+  """
+  type UsageQuota {
+    period: String!
+    costLimitMinorUnits: Int
+    inputTokenLimit: Int
+    outputTokenLimit: Int
+    "The fraction of the limit at which a warning shows. Sent so the UI cannot disagree with the server."
+    warnAt: Float!
+    "True once any dimension is past warnAt and still admitted."
+    warning: Boolean!
+    "True once any dimension has reached its limit, so work is being refused."
+    exceeded: Boolean!
+  }
+
+  """
+  The usage report a spend panel renders.
+
+  One query rather than several, so a panel cannot show a total from one moment and a breakdown from another.
+  """
+  type UsageReport {
+    period: String!
+    from: String!
+    to: String!
+    totals: UsageTotals!
+    buckets: [UsageBucket!]!
+    byModel: [UsageBreakdownEntry!]!
+    byConversation: [UsageBreakdownEntry!]!
+    quota: UsageQuota
+    currency: String!
+  }
+
   "A single transport event; payload carries the typed part / lifecycle detail."
   type RunEvent {
     type: String!
@@ -112,6 +161,13 @@ export const typeDefs = /* GraphQL */ `
     run(id: ID!): Run
     toolCatalog(preloaded: [String!]!, categories: [String!]!, excluded: [String!]!): ToolCatalog!
     usage(runId: ID): UsageTotals!
+    """
+    Consumption and cost by period, with breakdowns and quota state (#140).
+
+    An extension of the usage query rather than a second endpoint: a panel showing a total from one query and a
+    breakdown from another can show two moments at once, and the discrepancy looks like a bug in the numbers.
+    """
+    usageReport(period: String!, from: String!, to: String!, breakdownLimit: Int): UsageReport!
     "What context shaped a turn — attributes memory/tools/history that influenced the prompt."
     conversationContext(conversationId: ID!, runId: ID): ContextInspection
   }

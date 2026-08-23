@@ -78,6 +78,39 @@ export const createMemoryUsageBackend = (options: { readonly clock?: () => strin
       return page;
     },
 
+    async breakdown({ tenantId, from, to, by, limit }) {
+      const scoped = [...tenant(tenantId).values()].filter(
+        // Half-open, like every other range in this codebase, so adjacent periods tile without a boundary
+        // event appearing in both.
+        (e) => e.occurredAt >= from && e.occurredAt < to,
+      );
+      const groups = new Map<string, UsageTotals>();
+      for (const e of scoped) {
+        // A conversation is optional on a usage event — a background extraction has none — so those group under
+        // an explicit key rather than being silently dropped, which would make the breakdown not add up.
+        const key = by === "model" ? e.modelId : (e.conversationId ?? "");
+        const current = groups.get(key) ?? ZERO_TOTALS;
+        groups.set(key, {
+          inputTokens: current.inputTokens + e.inputTokens,
+          outputTokens: current.outputTokens + e.outputTokens,
+          cachedInputTokens: current.cachedInputTokens + e.cachedInputTokens,
+          reasoningTokens: current.reasoningTokens + (e.reasoningTokens ?? 0),
+          costMinorUnits: current.costMinorUnits + e.costMinorUnits,
+          eventCount: current.eventCount + 1,
+        });
+      }
+      return [...groups.entries()]
+        .map(([key, totals]) => ({ key, totals }))
+        // Largest cost first, so a `limit` drops what matters least; ties by key so the order is stable and a
+        // rendered breakdown does not reshuffle between refreshes.
+        .sort((a, b) =>
+          b.totals.costMinorUnits !== a.totals.costMinorUnits
+            ? b.totals.costMinorUnits - a.totals.costMinorUnits
+            : a.key.localeCompare(b.key),
+        )
+        .slice(0, limit);
+    },
+
     async totals({ tenantId, runId, conversationId }) {
       const scoped = [...tenant(tenantId).values()].filter(
         (e) =>

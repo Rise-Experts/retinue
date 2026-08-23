@@ -231,3 +231,74 @@ than toggled. Said plainly, because "we tested the component" should not imply i
 
 The ordering logic sits in a React-free `citationViewModel`, for the same reason `part-summary.ts` is
 React-free: the append-only property is provable about a list and merely observable about a DOM tree.
+
+## The usage and cost panel (#140)
+
+#139 built the rollups. Without a panel nobody can see their own consumption, so the transparency goal is unmet.
+
+### One query, extended — not a second endpoint
+
+`usageReport(period, from, to)` extends the existing `usage` surface rather than adding a bespoke one. Headline
+totals and buckets come from the **rollups**, so a page load never scans raw records however much a tenant has
+used. Breakdowns by model and by conversation come from the ledger over the same bounded range.
+
+That split is a deliberate trade. Rollups are keyed on `(tenant, period, bucket)`; adding a model and a
+conversation dimension would multiply the row count by the product of both cardinalities to serve a panel
+nobody opens per second. A breakdown over one period is a bounded scan served by an index — where the headline
+total, read on every page load *and* every quota check, comes from a rollup.
+
+Everything in one resolver, because a panel showing a total from one query and a breakdown from another can
+show two moments at once, and the discrepancy looks like a bug in the numbers rather than in the fetching.
+
+### The chart is semantic HTML
+
+No charting dependency. A bar per period, drawn as a proportional element inside a table row, which is *more*
+accessible than a canvas — a screen reader reads the numbers rather than an alt text summarising them. The bar
+is `aria-hidden`, because the figure is in the next cell and announcing both reads every row twice.
+
+Bars scale against the **peak** bucket, not the total. Against the total, every bar in a long range is a sliver
+and the chart says nothing.
+
+### Empty is a state, not a zero
+
+A tenant with no usage sees a sentence explaining why, never a chart of zeroes — a zeroed graph says *"we
+measured and it was nothing"*, which is a different and misleading claim from *"there is nothing to measure"*.
+
+`state` is decided from `eventCount`, **not** from whether the bucket array is empty. A rollup job that ran over
+a quiet period writes buckets whose totals are all zero, and deciding from the array's length would draw exactly
+the chart the empty state exists to avoid.
+
+The empty state still shows the quota: a new tenant's limit is worth knowing before they spend anything.
+
+### The quota bar is never a lie
+
+- Its status comes from the **server's own guard** — the same computation that refuses admission. A panel that
+  recomputed a threshold would eventually show "you are fine" while runs are being refused.
+- Its fraction is capped at 1. A bar wider than its track is a rendering bug, and past the limit the useful
+  information is "full"; the exceeded label says the rest in words.
+- "No limit configured" renders as **text**, not as an empty track — an empty bar reads as "plenty of room",
+  which is a claim about a limit that does not exist.
+- It is a real `<progress>`: it announces its value, responds to forced-colours mode, and needs no ARIA. A
+  styled `div` would need all three reimplemented.
+
+Warning and exceeded are also stated in words, because the styling is a border pattern and a border is not
+announced. Exceeded uses `role="alert"` rather than `status`: work is being refused *now*.
+
+### One locale, one place
+
+Every figure is formatted by the component with the `locale` prop and passed to the catalogue already
+localised, so a catalogue entry interpolates and never formats. The alternative — letting an entry call
+`intl.dateTime` — formats with the **translator's** locale, which can differ from the prop: one panel would then
+show a German date next to an English currency.
+
+The division from minor units to major happens in `formatCost` and nowhere else; doing it at a call site is how
+a figure ends up a hundred times wrong.
+
+### Mobile first, and hue-free
+
+The base rules stack each table row into a block and a `min-width: 480px` query restores the table layout. That
+direction matters: a desktop-first sheet leaves a phone with the horizontally-scrolling table the requirement
+rules out, and only fixes it if the query matches. Figures use `tabular-nums` so a column of costs compares.
+
+No hue carries meaning — warning is a dashed border, exceeded a doubled one, and both are labelled. Asserted:
+the stylesheet contains no hex colour and no `rgb()`/`hsl()`.

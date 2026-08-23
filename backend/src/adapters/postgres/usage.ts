@@ -121,6 +121,51 @@ export const createPostgresUsageStore = (sql: SqlExecutor): UsageStore => ({
     return page;
   },
 
+  async breakdown({ tenantId, from, to, by, limit }) {
+    // The grouping column is chosen from a closed union, never interpolated from user input — `by` has two
+    // possible values and both are literals here.
+    const column = by === "model" ? "model_id" : "COALESCE(conversation_id, '')";
+    const rows = await sql.query<{
+      key: string;
+      input_tokens: number | string;
+      output_tokens: number | string;
+      cached_input_tokens: number | string;
+      reasoning_tokens: number | string;
+      cost_minor_units: number | string;
+      event_count: number | string;
+    }>(
+      `SELECT ${column} AS key,
+              COALESCE(SUM(input_tokens), 0)                  AS input_tokens,
+              COALESCE(SUM(output_tokens), 0)                 AS output_tokens,
+              COALESCE(SUM(cached_input_tokens), 0)           AS cached_input_tokens,
+              COALESCE(SUM(COALESCE(reasoning_tokens, 0)), 0) AS reasoning_tokens,
+              COALESCE(SUM(cost_minor_units), 0)             AS cost_minor_units,
+              COUNT(*)                                       AS event_count
+         FROM usage_records
+        WHERE tenant_id = $1
+          -- Half-open, like every other range here, so adjacent periods tile without a boundary event
+          -- appearing in both.
+          AND occurred_at >= $2::timestamptz AND occurred_at < $3::timestamptz
+        GROUP BY 1
+        -- Largest cost first so a LIMIT drops what matters least; key breaks the tie so the order is stable
+        -- and a rendered breakdown does not reshuffle between refreshes.
+        ORDER BY cost_minor_units DESC, key
+        LIMIT $4`,
+      [tenantId, from, to, limit],
+    );
+    return rows.map((r) => ({
+      key: r.key,
+      totals: {
+        inputTokens: int(r.input_tokens),
+        outputTokens: int(r.output_tokens),
+        cachedInputTokens: int(r.cached_input_tokens),
+        reasoningTokens: int(r.reasoning_tokens),
+        costMinorUnits: int(r.cost_minor_units),
+        eventCount: int(r.event_count),
+      },
+    }));
+  },
+
   async totals({ tenantId, runId, conversationId }) {
     // Aggregated in the database rather than by fetching every row: totals feed `reserve()`, which
     // runs before each provider call, and a run can accumulate thousands of usage records.

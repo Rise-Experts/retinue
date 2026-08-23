@@ -6,7 +6,9 @@
  */
 
 import type { ExecutionContext } from "../core/context.js";
+import { DEFAULT_WARN_AT } from "../usage/index.js";
 import type { QuotaGuard } from "../usage/index.js";
+import type { UsageRollupStore } from "../persistence/index.js";
 import type { ConversationId, RunId } from "../core/ids.js";
 import { asId } from "../core/ids.js";
 import type { ConversationStore, UsageStore } from "../persistence/index.js";
@@ -39,6 +41,13 @@ export type ResolverDeps = {
    * that blocks nothing is a bill the rollups make visible.
    */
   readonly quota?: QuotaGuard;
+  /**
+   * Rollups for the spend panel (#140).
+   *
+   * Optional for the same reason `quota` is: a deployment that has not run the rollup job yet should still
+   * serve a usage query, from the ledger, rather than erroring. Its absence costs a chart, not the page.
+   */
+  readonly rollups?: UsageRollupStore;
   readonly live: LiveEventSource;
   readonly channelFor?: (conversationId: ConversationId) => string;
   /** Host-provided context assembly for the inspector (providers are app-specific). */
@@ -62,6 +71,28 @@ export const createResolvers = (deps: ResolverDeps) => {
   const channelFor = deps.channelFor ?? ((id: ConversationId) => `conversation:${id}`);
   const tid = (ctx: GraphQLContext) => ctx.execution.tenantId;
 
+  /**
+   * The quota state, from the guard rather than recomputed.
+   *
+   * Asking the guard means the panel's warning and the admission decision are the same computation. A UI that
+   * recomputed a threshold would eventually show "you are fine" while a run is being refused, which is worse
+   * than showing nothing.
+   */
+  const quotaViewFor = async (guard: QuotaGuard, execution: ExecutionContext) => {
+    const decision = await guard.admit(execution);
+    const limits = await guard.limits(execution);
+    if (limits === undefined) return null;
+    return {
+      period: limits.period,
+      costLimitMinorUnits: limits.costMinorUnits ?? null,
+      inputTokenLimit: limits.inputTokens ?? null,
+      outputTokenLimit: limits.outputTokens ?? null,
+      warnAt: limits.warnAt ?? DEFAULT_WARN_AT,
+      warning: decision.admitted && decision.warnings.length > 0,
+      exceeded: !decision.admitted,
+    };
+  };
+
   return {
     Query: {
       async conversations(_: unknown, args: { limit: number; cursor?: string }, ctx: GraphQLContext) {
@@ -79,6 +110,61 @@ export const createResolvers = (deps: ResolverDeps) => {
       },
       async usage(_: unknown, args: { runId?: string }, ctx: GraphQLContext) {
         return deps.usage.totals({ tenantId: tid(ctx), ...(args.runId ? { runId: asId<RunId>(args.runId) } : {}) });
+      },
+      /**
+       * The spend panel's one query (#140).
+       *
+       * Headline totals and buckets come from the **rollups**, so a page load never scans raw records however
+       * much a tenant has used. Breakdowns come from the ledger over the same bounded range — a deliberate
+       * trade documented on `UsageStore.breakdown`.
+       *
+       * Everything in one resolver so a panel cannot show a total from one moment and a breakdown from another;
+       * the discrepancy would look like a bug in the numbers rather than in the fetching.
+       */
+      async usageReport(
+        _: unknown,
+        args: { period: string; from: string; to: string; breakdownLimit?: number },
+        ctx: GraphQLContext,
+      ) {
+        const period = args.period === "hour" ? ("hour" as const) : ("day" as const);
+        const limit = Math.min(Math.max(1, args.breakdownLimit ?? 10), 50);
+        const scope = { tenantId: tid(ctx), period, from: args.from, to: args.to };
+
+        // Absent rollup support is not an error: a deployment can run without the rollup job and still answer
+        // from the ledger. Reported as empty buckets rather than a failure, because a panel with no chart is
+        // usable and a panel with an error is not.
+        const buckets = deps.rollups === undefined ? { items: [] } : await deps.rollups.list({ ...scope, limit: 400 });
+        const totals =
+          deps.rollups === undefined
+            ? await deps.usage.totals({ tenantId: tid(ctx) })
+            : await deps.rollups.sum(scope);
+
+        const [byModel, byConversation] = await Promise.all([
+          deps.usage.breakdown({ tenantId: tid(ctx), from: args.from, to: args.to, by: "model", limit }),
+          deps.usage.breakdown({ tenantId: tid(ctx), from: args.from, to: args.to, by: "conversation", limit }),
+        ]);
+
+        // The quota state as the *server* computes it, so a UI cannot disagree with the enforcement. Absent
+        // when no limit is configured, which means unbounded — a UI must show "no limit" rather than a full bar.
+        const quota = deps.quota === undefined ? null : await quotaViewFor(deps.quota, ctx.execution);
+
+        return {
+          period,
+          from: args.from,
+          to: args.to,
+          totals,
+          buckets: buckets.items.map((b) => ({
+            bucketStart: b.bucketStart,
+            currency: b.currency,
+            totals: b,
+          })),
+          byModel,
+          byConversation,
+          quota,
+          // The currency of the buckets in range. Empty when there is no usage — a period with no spend has no
+          // currency, and claiming one would be inventing a fact for a UI to format with.
+          currency: buckets.items.find((b) => b.currency !== "")?.currency ?? "",
+        };
       },
       async conversationContext(_: unknown, args: { conversationId: string; runId?: string }, ctx: GraphQLContext) {
         if (!deps.inspectContext) return null;

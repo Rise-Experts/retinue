@@ -16,6 +16,7 @@ Scaffold, with one piece implemented:
 | `event-buffer` | **Implemented.** Orders and de-duplicates run events across a reconnect. |
 | `hooks` | Signature types for the ten required hooks. Implementations land with the GraphQL surface. |
 | `ui/citations` | **Implemented.** Citation markers and expandable source panels: append-only ordering so a mid-stream citation never moves what is on screen, a grounded/ungrounded treatment that uses no colour, and a shipped hue-free stylesheet. |
+| `ui/usage` | **Implemented.** The spend panel: rollup-backed periods with breakdowns, a quota bar whose state comes from the server's own guard, an explanatory empty state rather than a zeroed chart, and a mobile-first hue-free stylesheet. |
 
 `event-buffer` exists first because it backs a specification acceptance criterion —
 *"subscription reconnect produces no missing or duplicated rendered parts"* — and that

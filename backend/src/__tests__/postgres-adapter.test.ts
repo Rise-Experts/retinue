@@ -120,3 +120,38 @@ describe("migration ids (#139)", () => {
   });
 });
 
+
+describe("SQL and SDL template literals (#140)", () => {
+  /**
+   * No backticks inside a template literal.
+   *
+   * A backtick in a SQL comment or a GraphQL description *closes the template literal*, and everything after it
+   * parses as code. The failure is a wall of syntax errors pointing at an unrelated line, and it has now
+   * happened four times on this project — in `0013_files`, in `rollups.ts` twice, and in the GraphQL schema —
+   * each time because Markdown-style backticks are the natural way to write a comment.
+   *
+   * Asserted on the *files* rather than trusted to review, because the mistake is invisible until it is a
+   * parse error and the parse error does not say why.
+   */
+  it("contains no backtick inside a SQL or SDL string", async () => {
+    const { readFileSync } = await import("node:fs");
+    const files = [
+      "src/adapters/postgres/migrations.ts",
+      "src/adapters/postgres/rollups.ts",
+      "src/adapters/postgres/knowledge.ts",
+      "src/adapters/postgres/files.ts",
+      "src/adapters/postgres/artifacts.ts",
+      "src/adapters/postgres/artifact-exports.ts",
+      "src/graphql/schema.ts",
+    ];
+    for (const file of files) {
+      const source = readFileSync(file, "utf8");
+      // Inside a template literal, a `--` SQL comment or a `"""` SDL description must carry no backtick. This
+      // finds a comment line whose content includes one, which is the shape every occurrence took.
+      const offending = source
+        .split("\n")
+        .filter((line) => /^\s*(--|#)/.test(line) && line.includes("`"));
+      expect(offending, `${file} has a backtick in a SQL/SDL comment: ${offending.join(" | ")}`).toEqual([]);
+    }
+  });
+});

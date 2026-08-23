@@ -394,6 +394,27 @@ export interface UsageRollupStore {
 export interface UsageStore {
   append(input: TenantScope & { event: UsageEvent }): Promise<void>;
   listByRun(input: TenantScope & PageRequest & { runId: RunId }): Promise<Page<UsageEvent>>;
+  /**
+   * Consumption grouped by model or by conversation, over a bounded range (#140).
+   *
+   * From the **ledger**, not the rollups, and that is a deliberate trade rather than an oversight. Rollups are
+   * keyed on `(tenant, period, bucket)`; adding a model and a conversation dimension would multiply the row
+   * count by the product of both cardinalities to serve a panel nobody opens per second. A breakdown over one
+   * period is a bounded scan served by the `(tenant_id, occurred_at)` index — where the *headline* total, which
+   * is read on every page load and every quota check, comes from a rollup.
+   *
+   * `limit` because a tenant can have thousands of conversations and a breakdown of all of them is not a
+   * breakdown. Returned largest-first so the truncation drops what matters least.
+   */
+  breakdown(
+    input: TenantScope & {
+      from: string;
+      to: string;
+      by: "model" | "conversation";
+      limit: number;
+    },
+  ): Promise<readonly { readonly key: string; readonly totals: UsageTotals }[]>;
+
   /** Running totals, optionally scoped to a run or conversation — used by `reserve()` and rollups. */
   totals(
     input: TenantScope & { runId?: RunId; conversationId?: ConversationId },
