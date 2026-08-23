@@ -12,7 +12,7 @@ Companion to the [extraction inventory](inventory.md). Settles how `@agentkit` r
 | Shipped as | A `twenty` CLI (`scaffold`/`dev`/`plan`/`apply`), manifest-driven | Composable packages (`createAgentPlatform` / `createAgent`) |
 | Execution | Deterministic serverless **logic-functions** synced to Twenty | Durable queued runs, checkpoints, HITL, cancellation |
 | UI | `front-component-renderer` (Preact/React) | headless `react` + optional `ui` |
-| Transport | GraphQL over **`graphql-sse`** + `twenty-client-sdk` | GraphQL subscriptions (SSE adapter, SPEC #27) |
+| Transport | GraphQL over **`graphql-sse`** + `twenty-client-sdk` | GraphQL subscriptions (SSE adapter, SPEC #37) |
 | AI / models / RAG / approvals | ❌ none | ✅ the whole point |
 
 **Conclusion:** they coexist. An app is built with twenty-sdk and *consumes* @agentkit for its
@@ -46,11 +46,11 @@ Agent run ──▶ @agentkit tool (authz + approval + idempotency)
                    └──▶ twenty-sdk logic-function / platform service (the actual side effect)
 ```
 
-## SSE precedent (for SPEC #27)
+## SSE precedent (for SPEC #37)
 
 twenty-sdk already ships GraphQL streaming over **`graphql-sse`** (a dependency of the SDK). That
 is direct precedent that Server-Sent Events is a proven transport in this stack — it de-risks the
-**SSE transport adapter (SPEC #27)** as the lightweight streaming path for the embedded profile,
+**SSE transport adapter (SPEC #37)** as the lightweight streaming path for the embedded profile,
 alongside GraphQL subscriptions for the server profile. Match the `graphql-sse` framing rather
 than inventing a bespoke SSE protocol.
 
@@ -59,4 +59,23 @@ than inventing a bespoke SSE protocol.
 - Comparison recorded (this doc).
 - Tool↔logic-function bridge decision recorded (above) — carried into REQ-006 (tools) and the
   ShareFlow integration.
-- SSE precedent recorded for SPEC #27.
+- SSE precedent recorded for SPEC #37.
+
+## Status of the SSE decision (#111)
+
+Implemented. `graphql/sse.ts` now emits the graphql-sse wire format — `event: next` carrying an
+`ExecutionResult`, terminated by `event: complete`, with the `id:` line still carrying
+`RunEvent.sequence` so `Last-Event-ID` resume is unaffected.
+
+It previously emitted `event: <RunEvent.type>` with a raw `RunEvent` as `data`, which is the bespoke
+protocol this document had already decided against; `graphql-sse`'s own `validateStreamEvent` rejects
+that event name outright, so an existing Twenty client could not have consumed it.
+
+A failed run is delivered as a `next` frame carrying **both** `data` and `errors`, rather than as a
+protocol error frame. An error frame carries no `id:`, so a failed run would otherwise be unresumable
+and a reconnecting client would never learn the run had ended.
+
+`graphql-sse` is a **devDependency** of `@agentkit/backend`, used only to validate the frames in tests.
+The adapter still writes plain text and takes no server dependency.
+
+The SPEC numbers above were stale: on `develop`, #27 is the usage hook and **#37** is the SSE adapter.

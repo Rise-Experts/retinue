@@ -98,6 +98,7 @@ const readFrames = async (response: Response, stopAfter = Number.POSITIVE_INFINI
   return { frames, reader };
 };
 
+/** The `complete` frame carries no id, so sequence extraction skips it naturally. */
 const sequencesOf = (frames: readonly string[]): number[] =>
   frames.flatMap((f) => {
     const match = /^id: (\d+)$/m.exec(f);
@@ -127,8 +128,11 @@ describe("streaming a run over HTTP", () => {
     await publishing;
 
     expect(sequencesOf(frames)).toEqual([1, 2, 3, 4]);
-    // The frame shape the library defines, checked once so the route is not silently reformatting it.
-    expect(frames[0]).toMatch(/^id: 1\nevent: part\.added\ndata: \{/);
+    // The graphql-sse framing the library defines as of #111, checked once so the route is not
+    // silently reformatting it. This asserted `event: part.added` until #111 brought the wire format
+    // into line with the decision recorded in the extraction doc — the route was built on the
+    // non-compliant framing and this test agreed with the code rather than the contract.
+    expect(frames[0]).toMatch(/^id: 1\nevent: next\ndata: \{"data":\{"runEvents":/);
   });
 });
 

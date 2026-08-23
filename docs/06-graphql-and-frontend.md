@@ -85,3 +85,29 @@ The headless protocol is client-neutral. React Native may use the same GraphQL o
 - Question/approval actions are accessible and idempotent.
 - Custom applications can replace every UI component while retaining headless state.
 
+## SSE wire format
+
+The SSE streaming path (SPEC #37, framing corrected in #111) speaks the **`graphql-sse`** wire format,
+so a `twenty-client-sdk` client consumes it unmodified — twenty-sdk already streams GraphQL over
+graphql-sse, and matching it was recorded as a decision in
+[`extraction/twenty-sdk-comparison.md`](extraction/twenty-sdk-comparison.md).
+
+```
+id: 3
+event: next
+data: {"data":{"runEvents":{"type":"part.added","runId":"…","sequence":3,…}}}
+
+event: complete
+data:
+```
+
+| Line | Carries | Why |
+|---|---|---|
+| `id:` | `RunEvent.sequence` | A browser resends it as `Last-Event-ID`; `cursorFromLastEventId` maps it straight back to a resume cursor |
+| `event: next` | An `ExecutionResult` | The protocol's data frame. The field name matches the SDL's `runEvents` subscription |
+| `event: complete` | — | Says the response is finished. A stream that merely stops is indistinguishable from a truncated one |
+
+A **failed run** arrives as a `next` frame carrying both `data` and `errors`, not as a protocol error
+frame: `run.failed` is a durable event with a sequence, and an error frame has no `id:`, so delivering
+it that way would make a failed run unresumable. A **stream-level** failure — the event log being
+unreadable — does use the protocol's error shape, because there is no sequence to preserve.
