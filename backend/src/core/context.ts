@@ -26,6 +26,21 @@ export type ExecutionContext = {
   readonly conversationId?: ConversationId;
   readonly runId?: RunId;
   readonly requestId: RequestId;
+  /**
+   * True when this run must perform **no external write** — docs/07 and docs/08's shadow mode: *"old and
+   * new systems may run in shadow mode, but shadow execution performs no external writes."*
+   *
+   * On the context deliberately, and the paragraph above is the reason it is safe: shadow-ness is
+   * constructed by the host, exactly like `tenantId`, and **a model must never be able to clear it** —
+   * clearing it would turn a shadow run into a real one. A hint a model could set would not belong here;
+   * this is the opposite kind of field.
+   *
+   * Absent means a real run. That is the uncomfortable direction — a forgotten flag publishes rather than
+   * suppresses — and it is unavoidable, because defaulting to shadow would make every existing context a
+   * shadow context. The dangerous direction is closed in `defineDelegatingTool` instead: a run that *says*
+   * it is shadow and has nowhere to record the suppression is refused, not performed.
+   */
+  readonly shadow?: boolean;
 };
 
 /**

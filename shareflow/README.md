@@ -269,8 +269,8 @@ stops the process starting, rather than producing a confusing catalog on someone
 The seam and the scaffolding (#114); Posts (#115); Campaigns (#116); Accounts (#117); Media (#118);
 Publishing (#119); Engagement and Leads (#120); context providers (#121); the seven skills (#122);
 content generation (#123); research (#124); analytics (#125). **All eleven docs/07 tool categories and
-both net-new capabilities are implemented.** What remains for the integration is shadow mode (#126),
-feature flags (#127) and the cutover (#128).
+both net-new capabilities are implemented.** Shadow mode (#126) suppresses external writes in the
+envelope. What remains is per-workspace flags (#127) and the cutover (#128).
 
 `npm test` in this workspace runs `tsc -b` first. That is deliberate: this package value-imports
 `@agentkit/backend`, whose entry point is `dist/`, so `vitest run` on its own tests whatever was last

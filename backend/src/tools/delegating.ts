@@ -85,6 +85,35 @@ export type DelegateDetails = {
   readonly idempotencyKey: IdempotencyKey;
 };
 
+/**
+ * What a shadow run records instead of doing.
+ *
+ * A port rather than a store, because what "recording" means differs by deployment: a parity harness wants
+ * it in memory, a migration wants it durable and comparable to the old runtime's output.
+ */
+export type SuppressedWrite = {
+  readonly runId?: string;
+  readonly toolName: string;
+  /** The function that would have been called. */
+  readonly delegatesTo: string;
+  readonly effect: ToolEffect;
+  /** Validated input — what would have been sent. */
+  readonly input: unknown;
+  readonly idempotencyKey: IdempotencyKey;
+  /**
+   * Whether this action would have required a human's approval.
+   *
+   * Captured because suppression happens *before* the approval gate — a shadow run must not ask someone to
+   * approve something that will not happen, since that teaches them approving is meaningless. Recording it
+   * keeps the fact the parity report wants without asking the question.
+   */
+  readonly wouldRequireApproval: boolean;
+};
+
+export interface ShadowRecorder {
+  record(context: ExecutionContext, write: SuppressedWrite): Promise<void> | void;
+}
+
 export type DelegatingToolDeps = {
   readonly authorization: AuthorizationPolicy;
   /**
@@ -111,6 +140,14 @@ export type DelegatingToolDeps = {
    * registry. The envelope's whole purpose is that a guarantee cannot be reached around.
    */
   readonly validator?: SchemaValidator;
+  /**
+   * Where a shadow run's suppressed writes go.
+   *
+   * Required *when the run says it is shadow*: `context.shadow === true` with no recorder is refused
+   * rather than performed. Announcing a shadow run and having nowhere to record it is not a licence to
+   * publish — the same fail-closed reasoning as the missing approval gate.
+   */
+  readonly shadow?: ShadowRecorder;
 };
 
 /**
@@ -153,7 +190,7 @@ const refuse = (code: "approval_required" | "capability_unavailable", message: s
   new AgentPlatformError({ code, message, retryable: false });
 
 /**
- * Build a `Tool` whose execute path is: authorise → validate → derive key → look up → preflight →
+ * Build a `Tool` whose execute path is: authorise → validate → derive key → look up → preflight → shadow →
  * approval gate → delegate → store.
  *
  * The lookup sits **before** the approval gate deliberately. A call whose result is already stored has
@@ -235,6 +272,42 @@ export const defineDelegatingTool = <I = unknown, O = unknown>(
         // already run, so re-validating it could refuse a legitimate replay on content that has since
         // changed underneath it.
         if (spec.preflight) await spec.preflight(validated.value as I, context);
+
+        // Shadow mode, and **before** the approval gate.
+        //
+        // A shadow run must not ask a human to approve something that will not happen; doing so teaches
+        // people that approving is meaningless, which is the one thing an approval gate cannot survive.
+        //
+        // Only gated effects are suppressed — `external-write` and `destructive`. docs/07 says "shadow
+        // execution performs no external *writes*", so an internal write still happens, and that is worth
+        // knowing: a shadow run does create real drafts. See the note on #126.
+        if (gated && context.shadow === true) {
+          if (!deps.shadow)
+            throw refuse(
+              "capability_unavailable",
+              `${spec.name} is a ${effect} and this run is in shadow mode with no recorder configured`,
+            );
+          await deps.shadow.record(context, {
+            ...(context.runId === undefined ? {} : { runId: context.runId }),
+            toolName: spec.name,
+            delegatesTo: spec.delegatesTo,
+            effect,
+            input: validated.value,
+            idempotencyKey: key,
+            wouldRequireApproval: descriptor.approvalPolicy !== "never",
+          });
+          // Marked truthfully, and this is the least-bad of three bad options. A fake success would teach
+          // the agent to report a publish that never happened; a hard failure would change the trajectory
+          // parity measurement is trying to observe; this changes it too, but honestly.
+          //
+          // The limitation is inherent and worth stating rather than hiding: shadow mode measures
+          // everything up to the external write and nothing after it. What an agent does *after*
+          // publishing cannot be observed without publishing.
+          //
+          // Not stored under the idempotency key: a suppressed call must not become the cached answer for
+          // a later real one.
+          return { ok: true, data: { suppressed: true, reason: "shadow-mode", wouldHaveCalled: spec.delegatesTo } as O };
+        }
 
         if (gated) {
           if (!deps.approvals) {
