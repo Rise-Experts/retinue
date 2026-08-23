@@ -653,6 +653,24 @@ export type PublishTarget = {
   readonly accountId: SocialAccountId;
   /** Omitted means publish now. */
   readonly scheduledAt?: string;
+  /**
+   * The key that makes *this destination* publish once.
+   *
+   * Per draft + destination, and derived from **only** those two — never from the call. That is the
+   * difference between the two guarantees, and it is the whole of AC-2 and AC-3:
+   *
+   * - A retry of the same call finds the succeeded destinations already done and completes only the
+   *   outstanding ones.
+   * - A **second, distinct** publish call for the same draft and account is also deduplicated. Derived
+   *   from the call instead, it would republish — which is the failure the zero-tolerance criterion is
+   *   about.
+   *
+   * This is not the argument-derived key #113 warned against. That danger was "identical arguments" not
+   * meaning "the same intended act". Here the inputs are two durable record identities, `socialPostTargets`
+   * already holds one row per (post, platform), and ShareFlow's own documented way to publish the same
+   * content again is to **duplicate the draft** — which `duplicate_post_draft` exists for.
+   */
+  readonly idempotencyKey: ServiceIdempotencyKey;
 };
 
 export type ValidationIssue = {
@@ -715,16 +733,55 @@ export type ValidationReport = {
   readonly issues: readonly ValidationIssue[];
 };
 
+/**
+ * What has happened to one destination.
+ *
+ * `awaiting-platform` is the one that matters, and it is not defensive modelling — it is the normal path
+ * for video. `finish-pending-targets` exists because of it: *"Instagram Reels and TikTok videos are
+ * accepted, then transcoded. Without this sweep they would sit at 'Awaiting platform' forever, which is
+ * the single easiest way for a scheduler to quietly lose a post."*
+ *
+ * So it is the concrete form of AC-6's "unconfirmable outcome": the platform took the upload and has
+ * confirmed nothing. `publishing` is the other unconfirmed state — an attempt in flight, or one whose
+ * process died mid-attempt, since the status is set to `publishing` before the call.
+ */
+export const PUBLISH_TARGET_STATES = [
+  "scheduled",
+  "publishing",
+  "awaiting-platform",
+  "published",
+  "failed",
+  "cancelled",
+] as const;
+
+export type PublishTargetState = (typeof PUBLISH_TARGET_STATES)[number];
+
 export type PublishTargetStatus = {
   readonly id: PublishTargetId;
   readonly accountId: SocialAccountId;
-  readonly state: "scheduled" | "publishing" | "published" | "failed" | "cancelled";
+  readonly state: PublishTargetState;
   readonly scheduledAt?: string;
   readonly publishedAt?: string;
   /** The live post, when there is one. Public by definition, so safe to surface. */
   readonly externalUrl?: string;
+  /**
+   * How many attempts this destination has had.
+   *
+   * Surfaced because ShareFlow tracks it (`attemptCount`) and because it is what distinguishes "not
+   * tried yet" from "tried and failed twice" — an assistant offering a retry should know which.
+   */
+  readonly attemptCount?: number;
   /** Stable failure code and a sentence. Never the provider's raw body. */
   readonly failure?: { readonly code: string; readonly message: string };
+  /**
+   * True when the destination has been unconfirmed long enough to be considered stuck rather than slow.
+   *
+   * ShareFlow gives up after 24 hours, because *"Instagram expires an unpublished container after 24
+   * hours … Anything older is stuck, and saying so beats a row that claims to be publishing for a
+   * week."* The threshold is ShareFlow's; this flag is the answer, so the assistant does not compute an
+   * age against a constant that lives in another repository.
+   */
+  readonly stuck?: boolean;
 };
 
 export interface PublishingService {
@@ -735,7 +792,10 @@ export interface PublishingService {
    */
   validate(
     context: ExecutionContext,
-    input: { readonly draftId: PostDraftId; readonly targets: readonly PublishTarget[] },
+    input: {
+      readonly draftId: PostDraftId;
+      readonly accountIds: readonly SocialAccountId[];
+    },
   ): Promise<ValidationReport>;
 
   /**
@@ -748,6 +808,7 @@ export interface PublishingService {
   schedule(
     context: ExecutionContext,
     input: {
+      /** The call's key. Guards a duplicate *call*; each target's own key guards the destination. */
       readonly idempotencyKey: ServiceIdempotencyKey;
       readonly draftId: PostDraftId;
       readonly targets: readonly PublishTarget[];

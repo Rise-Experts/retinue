@@ -14,6 +14,7 @@ import type { AuthorizationPolicy, Decision } from "../../authorization/index.js
 import { createMemoryApprovalGrantStore, createMemoryIdempotencyStore } from "../../adapters/memory/index.js";
 import { createApprovalGate } from "../../hitl/service.js";
 import { deriveIdempotencyKey } from "../../idempotency/index.js";
+import { AgentPlatformError } from "../../core/errors.js";
 import { defineDelegatingTool, fallbackIdempotencyKey } from "../delegating.js";
 
 const T1 = asId<TenantId>("env-t1");
@@ -491,5 +492,125 @@ describe("the delegate's view of the call", () => {
     expect(seen).toBe(
       fallbackIdempotencyKey({ context: ctx(), toolName: "save_draft", args: { caption: "hi" } }),
     );
+  });
+});
+
+/**
+ * The preflight stage (#119 AC-4).
+ *
+ * The general property it exists for: *do not ask a person to authorise something that cannot succeed*.
+ * Content validation placed inside the delegate runs after the gate, so a human would already have
+ * approved something that then fails — which teaches them their approval does not mean much.
+ */
+describe("preflight", () => {
+  const gated = (options: {
+    readonly preflight: () => void;
+    readonly granted?: boolean;
+  }) => {
+    const { authorization } = policy(true);
+    const grants = createMemoryApprovalGrantStore();
+    const trace: string[] = [];
+    let delegateCalls = 0;
+
+    const approvals = {
+      async isAllowed() {
+        trace.push("gate");
+        return options.granted ?? false;
+      },
+    };
+
+    const built = defineDelegatingTool(
+      { authorization, approvals: approvals as never, idempotency: createMemoryIdempotencyStore() },
+      {
+        name: "publish_post",
+        description: "publishes a post",
+        category: "publishing",
+        effect: "external-write",
+        delegatesTo: "PublishingService.schedule",
+        preflight: () => {
+          trace.push("preflight");
+          options.preflight();
+        },
+        delegate: () => {
+          delegateCalls += 1;
+          return { published: true };
+        },
+      },
+    );
+    void grants;
+    return { built, trace, calls: () => delegateCalls };
+  };
+
+  it("runs before the approval gate", async () => {
+    const { built, trace } = gated({ preflight: () => {}, granted: true });
+    await built.execute({ context: ctx(), input: {}, idempotencyKey: "k" });
+    // The ordering *is* the guarantee, so it is asserted as an ordering rather than inferred from an
+    // outcome.
+    expect(trace).toEqual(["preflight", "gate"]);
+  });
+
+  it("refuses without reaching the gate when it throws", async () => {
+    const { built, trace, calls } = gated({
+      preflight: () => {
+        throw new AgentPlatformError({
+          code: "invalid_input",
+          message: "cannot publish",
+          retryable: false,
+          details: { issues: [{ code: "media-too-large" }] },
+        });
+      },
+    });
+    const result = await built.execute({ context: ctx(), input: {}, idempotencyKey: "k" });
+    // `invalid_input` with the findings, not `approval_required`: nobody was asked.
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "invalid_input", details: { issues: [{ code: "media-too-large" }] } },
+    });
+    expect(trace).toEqual(["preflight"]);
+    expect(calls()).toBe(0);
+  });
+
+  it("does not run for a replayed call whose result is already stored", async () => {
+    // After the idempotency lookup deliberately: a call whose result is stored has already happened, so
+    // re-validating it could refuse a legitimate replay on content that has since changed underneath.
+    const { authorization } = policy(true);
+    const idempotency = createMemoryIdempotencyStore();
+    let preflights = 0;
+    const built = defineDelegatingTool(
+      { authorization, idempotency },
+      {
+        name: "save_draft",
+        description: "saves a draft",
+        category: "posts",
+        delegatesTo: "ContentService.createDraft",
+        preflight: () => {
+          preflights += 1;
+        },
+        delegate: () => ({ saved: true }),
+      },
+    );
+    await built.execute({ context: ctx(), input: {}, idempotencyKey: "k" });
+    await built.execute({ context: ctx(), input: {}, idempotencyKey: "k" });
+    expect(preflights).toBe(1);
+  });
+
+  it("is absent by default, so an existing tool is unchanged", async () => {
+    const { authorization } = policy(true);
+    let calls = 0;
+    const built = defineDelegatingTool(
+      { authorization, idempotency: createMemoryIdempotencyStore() },
+      {
+        name: "read_draft",
+        description: "reads a draft",
+        category: "posts",
+        delegatesTo: "ContentService.getDraft",
+        delegate: () => {
+          calls += 1;
+          return { id: "d1" };
+        },
+      },
+    );
+    expect(await built.execute({ context: ctx(), input: {}, idempotencyKey: "k" })).toMatchObject({ ok: true });
+    expect(calls).toBe(1);
   });
 });

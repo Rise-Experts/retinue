@@ -36,6 +36,8 @@ all. Three further things about their shape decided the seam:
 | `media` (#118) | `list_media`, `inspect_media`, `check_media_for_platforms` | `read` |
 | | `attach_media_to_post`, `convert_media` | `internal-write` |
 | | `check_media_storage` | `external-write` |
+| `publishing` (#119) | `validate_publish`, `get_publish_status` | `read` |
+| | `publish_post_now`, `schedule_post`, `retry_publish_target` | `external-write`, approval **always** |
 
 Three things about the Posts tools generalise to every category that follows:
 
@@ -62,6 +64,25 @@ Two more from Campaigns:
   daily campaign over a year produces 31 — and an assistant that inferred the count from the dates
   would report 365. The field exists so the cap is visible; recomputing it locally would duplicate the
   logic it exists to expose.
+From Publishing — the zero-tolerance category:
+
+- **The idempotency key is per draft + destination, and not derived from the call.** `create_post_draft`
+  threads the *envelope's* key, because two create calls are two drafts. Publishing is the opposite: a
+  second, distinct call to publish the same draft to the same account must be deduplicated, and a
+  call-derived key would republish. `socialPostTargets` already holds one row per (post, platform), and
+  ShareFlow's documented way to publish the same content again is to duplicate the draft.
+- **Validation runs before the approval gate**, through the envelope's `preflight`. A human asked to
+  approve a publish that then fails learns that their approval does not mean much — a worse outcome
+  than the failed publish.
+- **The outcome is derived, and `unconfirmed` outranks `published`.** `AWAITING_PLATFORM` is the normal
+  path for video, not an edge case: the platform took the upload and confirmed nothing. Reporting
+  success while a destination is mid-transcode would be claiming an outcome nobody confirmed.
+
+> **Known gap, not fixed here.** `allow-once` issues no grant, `ApprovalGate` consults standing grants
+> only, and nothing reads `PendingApproval.normalizedInput` back to execute an approved call. So the
+> *refusal* direction holds — nothing publishes unapproved — while an approved-once publish cannot
+> proceed. Tracked separately; see #119.
+
 From Media:
 
 - **No limit is written down in the provider.** Not a byte count, a file count, a MIME list or a
@@ -133,8 +154,8 @@ stops the process starting, rather than producing a confusing catalog on someone
 
 ## Status
 
-The seam and the scaffolding (#114); Posts (#115); Campaigns (#116); Accounts (#117); Media (#118).
-Publishing, engagement, research and analytics land in #119–#125.
+The seam and the scaffolding (#114); Posts (#115); Campaigns (#116); Accounts (#117); Media (#118);
+Publishing (#119). Engagement, research and analytics land in #120–#125.
 
 `npm test` in this workspace runs `tsc -b` first. That is deliberate: this package value-imports
 `@agentkit/backend`, whose entry point is `dist/`, so `vitest run` on its own tests whatever was last

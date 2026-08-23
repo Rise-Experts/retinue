@@ -50,6 +50,22 @@ export type DelegatingToolSpec<I = unknown, O = unknown> = Omit<ToolSpec<I, O>, 
    * idempotency key; returns data or throws. Knows nothing about authorisation or approvals.
    */
   delegate(input: I, context: ExecutionContext, details: DelegateDetails): Promise<O> | O;
+  /**
+   * A check that runs **before the approval gate** (#119 AC-4).
+   *
+   * The general property, not a publishing one: *do not ask a person to authorise something that
+   * cannot succeed*. Content validation placed inside the delegate runs after the gate, so a human
+   * would already have approved something that then fails — which teaches them their approval does not
+   * mean much.
+   *
+   * Throw to refuse. The thrown error is returned as-is, so a preflight that has structured findings
+   * can carry them in `details` rather than flattening them into a sentence.
+   *
+   * It must be **read-only**. It runs on every call including one that is about to be refused for want
+   * of an approval, so a preflight with a side effect would be a side effect that happens without
+   * approval — the exact thing the gate exists to prevent.
+   */
+  preflight?(input: I, context: ExecutionContext): Promise<void> | void;
 };
 
 /**
@@ -137,8 +153,8 @@ const refuse = (code: "approval_required" | "capability_unavailable", message: s
   new AgentPlatformError({ code, message, retryable: false });
 
 /**
- * Build a `Tool` whose execute path is: authorise → validate → derive key → look up → approval gate →
- * delegate → store.
+ * Build a `Tool` whose execute path is: authorise → validate → derive key → look up → preflight →
+ * approval gate → delegate → store.
  *
  * The lookup sits **before** the approval gate deliberately. A call whose result is already stored has
  * already been approved and executed, so re-gating it would either block a legitimate replay or ask a
@@ -214,6 +230,11 @@ export const defineDelegatingTool = <I = unknown, O = unknown>(
             `${spec.name} performs a ${effect} and no idempotency store is configured`,
           );
         }
+
+        // Before the gate, and after the idempotency lookup: a call whose result is already stored has
+        // already run, so re-validating it could refuse a legitimate replay on content that has since
+        // changed underneath it.
+        if (spec.preflight) await spec.preflight(validated.value as I, context);
 
         if (gated) {
           if (!deps.approvals) {

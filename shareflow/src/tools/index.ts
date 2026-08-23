@@ -109,4 +109,5 @@ export * from "./posts.js";
 export * from "./campaigns.js";
 export * from "./accounts.js";
 export * from "./media.js";
+export * from "./publishing.js";
 
