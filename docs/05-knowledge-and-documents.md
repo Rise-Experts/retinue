@@ -482,3 +482,104 @@ A thrown renderer is the *renderer* being broken, not the artifact being unrende
 sentence and the stack trace stays in the log. A failed render **completes** its queue job — retrying an
 artifact that cannot be rendered produces the same answer at the same cost forever. Only infrastructure
 failures throw, and only those are retried.
+
+## Vector search and the embedding pipeline (#135)
+
+The first buildable piece of RAG: chunks, embeddings, and a permission-aware nearest-neighbour search.
+
+### Two ports, one table
+
+`KnowledgeStore` owns the rows — content, provenance, which embedding produced them. `VectorIndex` owns the
+similarity search. A pgvector deployment satisfies both from `knowledge_chunks`; a deployment on a dedicated
+vector database satisfies them from two systems, and nothing above changes.
+
+### The authorisation subject is on the chunk
+
+This is the most important decision here. Filtering **inside** the query is not a performance preference — it
+is the only version that does not leak. Filter after retrieval and the result *count* tells you what you were
+not allowed to see: ask for ten chunks, get three, and you have learned that seven exist; a few queries later
+you know roughly what they are about.
+
+So `authSubject` travels with the chunk, and `VectorIndex.search` takes `authSubjects` as a **required**
+argument. An optional filter is a filter someone omits, and the day it is omitted every tenant member can
+retrieve every chunk. An empty array means "no subjects" and correctly returns nothing — the opposite reading
+would be the worst possible default.
+
+### HNSW, not IVFFlat
+
+The SPEC asks for a documented choice. **HNSW**, at pgvector's defaults (`m = 16`, `ef_construction = 64`).
+
+IVFFlat builds faster and uses less memory, and it needs a representative sample at build time: its recall
+degrades as the data grows past what its lists were trained on, and the fix is a periodic per-tenant rebuild.
+In a multi-tenant knowledge base where every tenant's corpus grows continuously and unevenly, "recall silently
+falls until someone rebuilds" is the disqualifying property — not the cost. HNSW's recall is stable as rows are
+added, which is worth its slower build and larger memory here.
+
+pgvector's own published benchmarks put those parameters at roughly 0.98 recall@10 on 1536-dimension
+embeddings; that is the recorded target for the index. The platform's own query set is measured separately
+against the exact reference index (see below), because an approximate index's recall and the retrieval logic's
+correctness are different things and conflating them makes both untestable.
+
+### Dimensions are a migration, not a re-index
+
+`EMBEDDING_DIMENSIONS` (1536) lives on the **port**, not in an adapter — the same reasoning that moved
+`DEFAULT_SESSION_STATE_MAX_BYTES` there in #97. A vector column has one width and an index cannot span widths,
+so a model whose *output size* changes needs a re-migration; a model whose *version* changes needs a re-index.
+`EmbeddingModelRef` carries both, and a size mismatch is refused rather than queued.
+
+The reference adapter accepted 768 while pgvector refused it, until running the harness against real pgvector
+caught it. That is exactly the laxness #129 named: a reference adapter more permissive than the real one turns
+a production write failure into a passing test.
+
+### Re-indexing needs no bookkeeping
+
+`listStaleSources` asks the database which sources were embedded by anything other than the current model, so
+the work list is **derived from what is stored**. `reindexBatch` does one page and reports what remains; a
+caller loops until zero. An interruption therefore loses at most one page and *no bookkeeping* — there is no
+cursor to persist and so no cursor to lose. A source that can no longer be reloaded has its chunks removed
+rather than retried forever, because otherwise the work list never drains and the re-index never finishes.
+
+Chunk ids are derived from `(sourceType, sourceId, index)` and so are **stable across an edit**: a citation
+recorded against chunk 0 still points at chunk 0 after the document changes.
+
+### Chunking respects structure
+
+The input is #131's block list, which is the payoff of extracting to structure: a chunker that only sees text
+guesses where a section ends, and one that sees blocks knows.
+
+- A **table is one chunk**, whole. Splitting one separates a number from its column header, which is the exact
+  failure the extraction design exists to avoid. A table too large for one chunk is split *by rows with its
+  header repeated*, so every piece still says what its columns mean.
+- The **nearest heading path is prepended** to every chunk. "Revenue rose 9%" is unretrievable alone and
+  retrievable as "Quarterly Review > By region > Revenue rose 9%" — and it is what makes a hit explicable.
+- A heading is never a chunk of its own: it retrieves nothing useful and costs an embedding call.
+- Overlap is **by block**, not by character. Overlapping mid-sentence produces two chunks that each contain
+  half a thought and neither the whole one.
+
+### Freshness
+
+`FRESHNESS_TARGET_MS` is **60 seconds**, and it is a commitment rather than an observation: indexing runs on
+the worker tier, so the delay is queue latency plus embedding time, and a target far below queue latency would
+be a promise the architecture cannot keep. The pipeline reports its own elapsed time and logs when it exceeds
+the target — reported, not thrown, because the material *is* indexed and the useful action is to know.
+
+### What the test suite measures, and what it does not
+
+The reference `VectorIndex` is an **exact** brute-force scan. That is deliberate: pgvector's HNSW is
+*approximate*, so "the nearest chunk comes first" is something the production adapter is permitted to miss on a
+large corpus, and asserting it in the shared harness would fail for a reason that is not a bug. The harness
+asserts what must hold exactly at any size — tenant isolation, permission filtering, the limit, score ordering
+among returned hits, that no vector is ever returned.
+
+Recall is measured separately over a fixed corpus with deliberate distractors. The test embedder is **lexical**,
+so the figure measures *retrieval mechanics* — does cosine ranking put the document sharing the most query
+terms above a distractor sharing one of them. Semantic recall against a real embedding model is an eval, and
+eval cases exist for it; measuring it in a unit test would be measuring a stub. An earlier version of that test
+used synonym queries and scored 0.5, which said nothing about this code and everything about bag-of-words.
+
+`knowledge_chunks` lives behind an **optional** migration (`migrateVector`), because `CREATE EXTENSION vector`
+fails where the extension is absent — including the PGlite the suite runs on by default. The conformance cases
+are gated on the `vector-search` capability, so on a database without pgvector every case registers as a
+*named* skip rather than vanishing: an invisible skip is indistinguishable from coverage. Its RLS policies are
+a separate list (`applyVectorRls`) applied by whoever ran that migration, and asserted in the RLS test — "it is
+behind a flag" is how a tenant-scoped table without RLS survives review.

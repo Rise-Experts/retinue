@@ -4,6 +4,7 @@
  * `rollback` reverses.
  */
 import type { SqlExecutor } from "./sql.js";
+import { EMBEDDING_DIMENSIONS } from "../../persistence/index.js";
 
 export type Migration = {
   readonly id: string;
@@ -832,6 +833,111 @@ export const MIGRATIONS: readonly Migration[] = [
     ],
   },
 ];
+
+/**
+ * pgvector migrations, applied separately (#135).
+ *
+ * **Not in `MIGRATIONS`,** and that is deliberate. `CREATE EXTENSION vector` fails on a Postgres without
+ * pgvector installed — including PGlite, which the conformance suite runs against by default — so folding
+ * these into the main list would make every test require an extension most deployments install explicitly
+ * anyway. `migrateVector` is called by a deployment that has it, and `hasVectorExtension` tells a caller
+ * whether it does rather than making them guess from an error.
+ *
+ * **Dimensions are fixed at 1536.** pgvector's `vector(N)` needs a literal, and an index cannot span
+ * dimensions, so a deployment changing embedding model *sizes* re-migrates rather than re-indexing —
+ * which is why `EmbeddingModelRef` carries `dimensions` and `listStaleSources` compares it.
+ */
+export const VECTOR_DIMENSIONS = EMBEDDING_DIMENSIONS;
+
+/**
+ * The index: HNSW, not IVFFlat.
+ *
+ * The benchmark the SPEC asks for, stated rather than implied. HNSW builds slower and uses more memory;
+ * IVFFlat needs a representative sample at build time and degrades badly when the data grows past what it was
+ * trained on. For a multi-tenant knowledge base where every tenant's corpus grows continuously and unevenly,
+ * a list-based index has to be periodically rebuilt per tenant or recall silently falls — and "silently" is
+ * the disqualifying part. HNSW's recall is stable as rows are added, which is worth its build cost here.
+ *
+ * `m = 16, ef_construction = 64` are pgvector's defaults and the operating point its own benchmarks report as
+ * ~0.98 recall@10 on 1536-dimension embeddings. That figure is the recorded target; the measured figure for
+ * this platform's own query set is in the tests, against the exact in-memory index.
+ */
+export const VECTOR_MIGRATIONS: readonly Migration[] = [
+  {
+    id: "0017_knowledge_chunks",
+    up: [
+      // `WITH SCHEMA public` on purpose. `CREATE EXTENSION IF NOT EXISTS` skips when the extension exists
+      // *anywhere*, so without a fixed schema the first caller decides where the `vector` type lives and every
+      // later schema finds it invisible. Pinning it to `public` — which is on every normal deployment's
+      // search_path — makes the type resolvable from any schema. Found by running this suite against a real
+      // pgvector server, where each test gets its own schema.
+      `CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public`,
+      `CREATE TABLE IF NOT EXISTS knowledge_chunks (
+        tenant_id          text        NOT NULL,
+        id                 text        NOT NULL,
+        source_type        text        NOT NULL,
+        source_id          text        NOT NULL,
+        chunk_index        integer     NOT NULL,
+        content            text        NOT NULL,
+        token_count        integer     NOT NULL,
+        -- The authorisation subject, on the chunk. This is what lets permission filtering happen *inside* the
+        -- query: filtering after retrieval leaks through result counts -- ask for ten, get three, and you have
+        -- learned that seven exist you may not see.
+        auth_subject       text        NOT NULL,
+        embedding          vector(${VECTOR_DIMENSIONS}) NOT NULL,
+        embedding_model    text        NOT NULL,
+        embedding_version  text        NOT NULL,
+        embedding_dims     integer     NOT NULL,
+        locator            text,
+        created_at         timestamptz NOT NULL,
+        PRIMARY KEY (tenant_id, id),
+        UNIQUE (tenant_id, source_type, source_id, chunk_index),
+        CHECK (chunk_index >= 0),
+        CHECK (token_count >= 0),
+        CHECK (embedding_dims = ${VECTOR_DIMENSIONS})
+      )`,
+      // Serves listBySource and replaceSource's delete, both of which scan by source.
+      `CREATE INDEX IF NOT EXISTS knowledge_chunks_source_idx
+        ON knowledge_chunks (tenant_id, source_type, source_id, chunk_index)`,
+      // Serves listStaleSources: the work list for an incremental re-index.
+      `CREATE INDEX IF NOT EXISTS knowledge_chunks_model_idx
+        ON knowledge_chunks (tenant_id, embedding_model, embedding_version)`,
+      // HNSW on cosine distance, matching the metric the ports normalise to. Built after the table so the
+      // initial build is over an empty relation, which is fast; a build over a loaded table locks it.
+      `CREATE INDEX IF NOT EXISTS knowledge_chunks_embedding_idx
+        ON knowledge_chunks USING hnsw (embedding vector_cosine_ops)
+        WITH (m = 16, ef_construction = 64)`,
+    ],
+    down: [
+      `DROP INDEX IF EXISTS knowledge_chunks_embedding_idx`,
+      `DROP INDEX IF EXISTS knowledge_chunks_model_idx`,
+      `DROP INDEX IF EXISTS knowledge_chunks_source_idx`,
+      `DROP TABLE IF EXISTS knowledge_chunks`,
+    ],
+  },
+];
+
+/** Whether this database can hold vectors, so a caller does not have to learn it from a failure. */
+export const hasVectorExtension = async (sql: SqlExecutor): Promise<boolean> => {
+  try {
+    const rows = await sql.query<{ ok: boolean }>(
+      `SELECT true AS ok FROM pg_available_extensions WHERE name = 'vector'`,
+    );
+    return rows.length > 0;
+  } catch {
+    // A database that cannot answer the question cannot have the extension either.
+    return false;
+  }
+};
+
+/** Applies the vector migrations. Call only where `hasVectorExtension` is true. */
+export const migrateVector = async (sql: SqlExecutor): Promise<void> => {
+  for (const m of VECTOR_MIGRATIONS) for (const stmt of m.up) await sql.query(stmt);
+};
+
+export const rollbackVector = async (sql: SqlExecutor): Promise<void> => {
+  for (const m of [...VECTOR_MIGRATIONS].reverse()) for (const stmt of m.down) await sql.query(stmt);
+};
 
 export const migrate = async (sql: SqlExecutor): Promise<void> => {
   for (const m of MIGRATIONS) for (const stmt of m.up) await sql.query(stmt);

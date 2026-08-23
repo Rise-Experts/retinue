@@ -16,6 +16,7 @@
  */
 
 import type { ExecutionContext } from "../core/context.js";
+import { estimateTokens } from "../core/tokens.js";
 import type { ConversationId } from "../core/ids.js";
 import type { ContextProvider, ContextSection } from "../context/index.js";
 import { LOW_CONFIDENCE_THRESHOLD } from "../persistence/index.js";
@@ -125,8 +126,12 @@ export const ATTACHMENT_PROVIDER_ID = "attachments";
  * Computed from the body this module just built, never accepted from elsewhere. `ContextSection`'s
  * `estimatedTokens` is self-reported, and a section that under-reports its cost is a section that survives
  * budgeting it should have lost — so the one place that could lie about an attachment's cost does not.
+ *
+ * Re-exported from `core/tokens.ts` rather than defined here: five copies of this arithmetic had accumulated,
+ * agreeing by coincidence, and a section sized against one and budgeted against another is a section that does
+ * not fit the budget it was measured for.
  */
-export const estimateTokens = (body: string): number => Math.ceil(body.length / 4);
+export { estimateTokens } from "../core/tokens.js";
 
 /**
  * The attachment section for a conversation.

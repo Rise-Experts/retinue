@@ -9,6 +9,7 @@
  */
 
 import type { ExecutionContext } from "../core/context.js";
+import { estimateTokens } from "../core/tokens.js";
 import { AgentPlatformError } from "../core/errors.js";
 import type { RunId } from "../core/ids.js";
 import { computeModelCostMinorUnits, type ModelRegistry } from "../models/index.js";
@@ -25,7 +26,7 @@ import type {
 
 /** A crude but provider-agnostic default: ~4 characters per token. Replace with a real tokenizer. */
 export const heuristicTokenCounter: TokenCounter = {
-  estimate: (text) => Math.ceil(text.length / 4),
+  estimate: (text) => estimateTokens(text),
 };
 
 /** Pricing resolver backed by the model registry — resolves rates from the catalog at call time. */

@@ -27,6 +27,7 @@ export * from "./hitl.js";
 export * from "./files.js";
 export * from "./artifacts.js";
 export * from "./artifact-exports.js";
+export * from "./knowledge.js";
 export * from "./invariants.js";
 
 /** A port with methods, and the harness that verifies it. */
@@ -63,6 +64,8 @@ export const REGISTERED_PORTS: readonly PortCoverage[] = [
   { port: "FileContentStore", harness: "fileContentStoreConformance" },
   { port: "ArtifactStore", harness: "artifactStoreConformance" },
   { port: "ArtifactExportStore", harness: "artifactExportStoreConformance" },
+  { port: "KnowledgeStore", harness: "knowledgeStoreConformance" },
+  { port: "VectorIndex", harness: "vectorIndexConformance" },
 ];
 
 /**
@@ -92,12 +95,7 @@ export const ISOLATION_EXEMPT_PORTS: readonly { readonly port: string; readonly 
  * `FileMetadataStore` left this list in #129, which is the mechanism working as intended: it gained methods
  * and the guard would have failed had a harness not come with them.
  */
-export const PLACEHOLDER_PORTS: readonly string[] = [
-  "EvaluationStore",
-  "KnowledgeStore",
-  "VectorIndex",
-  "KeywordIndex",
-];
+export const PLACEHOLDER_PORTS: readonly string[] = ["EvaluationStore", "KeywordIndex"];
 
 /**
  * Infrastructure ports that are not storage. Their real adapters land with REQ-015 (#105 BullMQ
@@ -241,6 +239,8 @@ export const ADAPTER_COVERAGE: readonly AdapterCoverage[] = [
       "FileMetadataStore",
       "ArtifactStore",
       "ArtifactExportStore",
+      "KnowledgeStore",
+      "VectorIndex",
     ],
     notImplemented: POSTGRES_PENDING,
     notApplicable: [RELATIONAL_CONTENT_EXEMPTION],
@@ -281,4 +281,5 @@ export const HARNESS_MODULES: readonly string[] = [
   "src/testing/conformance/files.ts",
   "src/testing/conformance/artifacts.ts",
   "src/testing/conformance/artifact-exports.ts",
+  "src/testing/conformance/knowledge.ts",
 ];

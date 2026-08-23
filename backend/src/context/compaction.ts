@@ -9,6 +9,7 @@
  */
 
 import type { Message } from "../core/content-parts.js";
+import { estimateTokens } from "../core/tokens.js";
 import type { ConversationId, TenantId } from "../core/ids.js";
 import type { ThreadSummary, ThreadSummaryStore } from "../persistence/index.js";
 import type { ContextCompactedEvent } from "../core/events.js";
@@ -79,7 +80,7 @@ export const compactThread = async (input: {
   });
 
   // Tokens saved by replacing the older messages with the (smaller) summary text.
-  const summaryTokens = Math.ceil(text.length / 4);
+  const summaryTokens = estimateTokens(text);
   const tokensReclaimed = Math.max(0, input.estimateTokens(older) - summaryTokens);
 
   return {

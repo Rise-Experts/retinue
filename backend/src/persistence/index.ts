@@ -312,7 +312,6 @@ export interface UsageStore {
 }
 
 export interface EvaluationStore {}
-export interface KnowledgeStore {}
 
 // ---------------------------------------------------------------------------
 // Artifacts (#133) — REQ-028. Substantial assistant output as a named, versioned thing rather than
@@ -762,8 +761,143 @@ export interface FileContentStore {
   listObjects(input: TenantScope & PageRequest & { prefix?: string }): Promise<Page<StoredObject>>;
 }
 
-export interface VectorIndex {}
+/**
+ * Knowledge chunks and the vector index — REQ-029 (#135).
+ *
+ * Two ports rather than one, because they answer different questions and can be backed by different systems:
+ * `KnowledgeStore` owns the *rows* (content, provenance, which embedding produced them) and `VectorIndex` owns
+ * the *similarity search*. A deployment on pgvector satisfies both with one table; a deployment on a dedicated
+ * vector database satisfies them with two systems, and nothing above this layer changes.
+ *
+ * **The authorisation subject is on the chunk row.** That is the single most important decision here. The SPEC
+ * says filtering happens *inside* the query, and the reason is precise: filtering after retrieval leaks through
+ * result counts. Ask for ten chunks, get three back, and you have learned that seven exist that you may not
+ * see — and with a few queries, roughly what they are about. So `authSubject` travels with the chunk and every
+ * search takes it as a required filter.
+ */
+/**
+ * The embedding width every adapter stores.
+ *
+ * On the port, not in an adapter, for the reason `DEFAULT_SESSION_STATE_MAX_BYTES` is (#97): a vector column has
+ * one width and a vector index cannot span widths, so "every adapter agrees on the size" must be a property
+ * rather than a coincidence. The reference adapter accepted 768 while pgvector refused it, which is exactly the
+ * laxness that turns a production write failure into a passing test.
+ *
+ * 1536 is OpenAI's `text-embedding-3-small` and `-large` at its default reduction, and Cohere's v3 — the sizes
+ * a deployment is most likely to have. Changing it is a **migration**, not a re-index, which is why
+ * `EmbeddingModelRef` carries `dimensions` and a mismatch is refused rather than queued for re-embedding.
+ */
+export const EMBEDDING_DIMENSIONS = 1536;
+
+export const KNOWLEDGE_SOURCE_TYPES = ["file", "artifact", "message", "external"] as const;
+export type KnowledgeSourceType = (typeof KNOWLEDGE_SOURCE_TYPES)[number];
+
+/**
+ * Which embedding produced a vector.
+ *
+ * Recorded per chunk, not per deployment. A model change must be *detectable* — and it is detectable only if
+ * an old chunk still says what produced it. A single global "current model" setting cannot tell you which rows
+ * are stale, which makes incremental re-indexing impossible.
+ */
+export type EmbeddingModelRef = {
+  readonly modelId: string;
+  /** Bumped when the same model id starts producing different vectors. Providers do this silently. */
+  readonly version: string;
+  readonly dimensions: number;
+};
+
+export type KnowledgeChunk = {
+  readonly id: string;
+  readonly sourceType: KnowledgeSourceType;
+  /** The file, artifact or message this came from. */
+  readonly sourceId: string;
+  /** Position within the source, so neighbouring chunks can be fetched to widen context. */
+  readonly chunkIndex: number;
+  readonly content: string;
+  readonly tokenCount: number;
+  /**
+   * Who may see this chunk, as an opaque subject the authorization engine understands.
+   *
+   * A conversation id for an attachment, a workspace id for shared knowledge. Opaque here on purpose: this
+   * port must not know the permission model, only that a search is scoped to a set of subjects.
+   */
+  readonly authSubject: string;
+  readonly embeddingModel: EmbeddingModelRef;
+  /** Where in the source this came from, for a citation that resolves. */
+  readonly locator?: string;
+  readonly createdAt: string;
+};
+
+/** A chunk plus its vector, for writing. Read paths never return the vector — nobody above needs it. */
+export type KnowledgeChunkWithEmbedding = KnowledgeChunk & { readonly embedding: readonly number[] };
+
+export interface KnowledgeStore {
+  /**
+   * Replaces a source's chunks with a new set, atomically from a reader's point of view.
+   *
+   * Replace rather than append, because re-indexing a changed document must not leave its old chunks
+   * searchable — a stale chunk is a citation pointing at text that is no longer there. The whole source at
+   * once, because a partial replacement is a document that is half old and half new, and no reader can tell.
+   */
+  replaceSource(
+    input: TenantScope & {
+      sourceType: KnowledgeSourceType;
+      sourceId: string;
+      chunks: readonly KnowledgeChunkWithEmbedding[];
+    },
+  ): Promise<{ readonly written: number; readonly removed: number }>;
+
+  /** A source's chunks in order, for reading around a hit or for re-indexing. */
+  listBySource(
+    input: TenantScope & PageRequest & { sourceType: KnowledgeSourceType; sourceId: string },
+  ): Promise<Page<KnowledgeChunk>>;
+
+  get(input: TenantScope & { id: string }): Promise<KnowledgeChunk | null>;
+
+  /** Removes a source's chunks. For a deleted document: its content must stop being searchable. */
+  deleteSource(
+    input: TenantScope & { sourceType: KnowledgeSourceType; sourceId: string },
+  ): Promise<{ readonly removed: number }>;
+
+  /**
+   * Sources whose chunks were embedded by anything other than `current` — AC-5.
+   *
+   * The whole basis of incremental re-indexing: the work list is derived from what is *stored*, so an
+   * interrupted re-index resumes by asking again rather than by remembering where it was.
+   */
+  listStaleSources(
+    input: TenantScope & PageRequest & { current: EmbeddingModelRef },
+  ): Promise<Page<{ readonly sourceType: KnowledgeSourceType; readonly sourceId: string; readonly chunkCount: number }>>;
+}
+
+export type VectorSearchHit = {
+  readonly chunk: KnowledgeChunk;
+  /** 0–1, higher is closer. Normalised here so a caller never has to know the metric. */
+  readonly score: number;
+};
+
+export interface VectorIndex {
+  /**
+   * Nearest neighbours, filtered by permission **inside** the query.
+   *
+   * `authSubjects` is required and not optional. An optional filter is a filter someone omits, and the day it
+   * is omitted every tenant member can retrieve every chunk. An empty array means "no subjects", which
+   * correctly returns nothing rather than everything.
+   */
+  search(
+    input: TenantScope & {
+      embedding: readonly number[];
+      authSubjects: readonly string[];
+      limit: number;
+      /** Below this, a hit is not worth returning. Prevents a query with no good answer returning noise. */
+      minScore?: number;
+      sourceTypes?: readonly KnowledgeSourceType[];
+    },
+  ): Promise<readonly VectorSearchHit[]>;
+}
+
 export interface KeywordIndex {}
+
 
 /**
  * Content-addressable blob storage for spilled tool output (`docs/03` → Tool results). A large

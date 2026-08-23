@@ -41,6 +41,11 @@ import {
 } from "../testing/conformance/files.js";
 import { artifactStoreConformance } from "../testing/conformance/artifacts.js";
 import { artifactExportStoreConformance } from "../testing/conformance/artifact-exports.js";
+import {
+  knowledgeStoreConformance,
+  vectorIndexConformance,
+} from "../testing/conformance/knowledge.js";
+import { hasVectorExtension, migrateVector } from "../adapters/postgres/migrations.js";
 import { supabaseStorageDouble } from "../testing/supabase-storage-double.js";
 import {
   blobStoreConformance,
@@ -311,6 +316,32 @@ artifactStoreConformance(() => {
   };
 });
 
+// #135. Gated on the extension, exactly as the Postgres suite is: Supabase ships pgvector, but the executor
+// this suite runs against may not, and a silent skip would read as coverage.
+const vectorAvailable = await (async () => {
+  try {
+    const sql = freshExecutor();
+    if (!(await hasVectorExtension(sql))) return false;
+    await migrateVector(sql);
+    return true;
+  } catch {
+    return false;
+  }
+})();
+const VECTOR_DECLARATION = vectorAvailable ? { capabilities: ["vector-search" as const] } : undefined;
+const vectorFixture = async () => {
+  // A fresh schema per fixture: sharing one let a chunk written by one case be found by the next.
+  const sql = freshExecutor();
+  await migrateVector(sql);
+  await supabase.applyVectorRls(sql).catch(() => undefined);
+  return {
+    store: supabase.createSupabaseKnowledgeStore(sql),
+    index: supabase.createSupabaseVectorIndex(sql),
+  };
+};
+knowledgeStoreConformance(vectorFixture, VECTOR_DECLARATION);
+vectorIndexConformance(vectorFixture, VECTOR_DECLARATION);
+
 artifactExportStoreConformance(() => {
   const sql = freshExecutor();
   return {
@@ -373,6 +404,8 @@ const ALIASES: readonly (readonly [keyof typeof supabase, keyof typeof postgres]
   ["createSupabaseFileMetadataStore", "createPostgresFileMetadataStore"],
   ["createSupabaseArtifactStore", "createPostgresArtifactStore"],
   ["createSupabaseArtifactExportStore", "createPostgresArtifactExportStore"],
+  ["createSupabaseKnowledgeStore", "createPostgresKnowledgeStore"],
+  ["createSupabaseVectorIndex", "createPostgresVectorIndex"],
 ];
 
 /**

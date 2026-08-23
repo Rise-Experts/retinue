@@ -24,6 +24,7 @@ import {
   createMemoryArtifactStore,
   createMemoryBlobStore,
   createMemoryFileContentStore,
+  createMemoryKnowledgeBackend,
   createMemoryFileMetadataStore,
   createMemoryCheckpointStore,
   createMemoryConversationStore,
@@ -62,6 +63,7 @@ import {
   fileMetadataStoreConformance,
   idempotencyStoreConformance,
   interactionStoreConformance,
+  knowledgeStoreConformance,
   mcpConnectionStoreConformance,
   messageStoreConformance,
   principalMemoryStoreConformance,
@@ -72,6 +74,7 @@ import {
   threadSummaryStoreConformance,
   unitOfWorkConformance,
   usageStoreConformance,
+  vectorIndexConformance,
 } from "../testing/conformance/index.js";
 
 /**
@@ -174,6 +177,13 @@ fileMetadataStoreConformance(() => createMemoryFileMetadataStore());
 // #133. No relational parent to seed here; the fixture shape matters only for Postgres.
 artifactStoreConformance(() => createMemoryArtifactStore());
 artifactExportStoreConformance(() => createMemoryArtifactExportStore());
+// #135. Both ports over one backend, which is how pgvector provides them -- so a search sees what a write
+// just wrote rather than reading a separate, possibly stale, copy.
+// The reference adapter does hold vectors -- an exact brute-force scan -- so it declares the capability and
+// every case runs.
+const VECTOR_CAPABLE = { capabilities: ["vector-search"] } as const;
+knowledgeStoreConformance(() => createMemoryKnowledgeBackend(), VECTOR_CAPABLE);
+vectorIndexConformance(() => createMemoryKnowledgeBackend(), VECTOR_CAPABLE);
 fileContentStoreConformance(() => createMemoryFileContentStore());
 idempotencyStoreConformance(() => createMemoryIdempotencyStore());
 principalMemoryStoreConformance(() => createMemoryPrincipalMemoryStore());

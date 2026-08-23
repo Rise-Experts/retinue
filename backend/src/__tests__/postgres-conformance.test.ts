@@ -19,6 +19,8 @@ import { PGlite } from "@electric-sql/pglite";
 import { afterAll, describe, expect, it } from "vitest";
 import {
   createPostgresArtifactExportStore,
+  createPostgresKnowledgeStore,
+  createPostgresVectorIndex,
   createPostgresArtifactStore,
   createPostgresConversationStore,
   createPostgresFileMetadataStore,
@@ -43,7 +45,9 @@ import {
   createPoolOpener,
   createSingleConnectionOpener,
   createTransactionScope,
+  hasVectorExtension,
   migrate,
+  migrateVector,
   POSTGRES_CAPABILITIES,
   type ConnectionOpener,
   type SqlExecutor,
@@ -63,6 +67,10 @@ import { agentStoreConformance, messageStoreConformance } from "../testing/confo
 import { fileMetadataStoreConformance } from "../testing/conformance/files.js";
 import { artifactStoreConformance } from "../testing/conformance/artifacts.js";
 import { artifactExportStoreConformance } from "../testing/conformance/artifact-exports.js";
+import {
+  knowledgeStoreConformance,
+  vectorIndexConformance,
+} from "../testing/conformance/knowledge.js";
 import {
   conversationBindingStoreConformance,
   sessionStateStoreConformance,
@@ -142,7 +150,11 @@ const serverDatabase = async (): Promise<{ base: SqlExecutor; opener: Connection
       async query<Row>(text: string, params?: readonly unknown[]): Promise<Row[]> {
         const c = await pool.connect();
         try {
-          await c.query(`SET search_path TO ${schema}`);
+          // `public` is on the path as well as the test's own schema. Every table this suite creates goes in
+          // `schema`, so isolation is unaffected — but an *extension* installed in `public` (pgvector's type
+          // and its `<=>` operator) is otherwise invisible, which is how #135's vector cases silently skipped
+          // against a database that had the extension.
+          await c.query(`SET search_path TO ${schema}, public`);
           const r = await c.query(text, params ? [...params] : undefined);
           return r.rows as Row[];
         } finally {
@@ -457,6 +469,50 @@ artifactStoreConformance(() => {
   };
 });
 
+/**
+ * pgvector, when the database has it (#135).
+ *
+ * `hasVectorExtension` is asked once and the answer becomes a declared capability, so on a database without
+ * pgvector — PGlite, which is the default here — every case registers as a *named* skip rather than
+ * disappearing. That is the point of `gatedIt`: an invisible skip is indistinguishable from coverage, and this
+ * is a port whose absence would otherwise be silent.
+ *
+ * Run against pgvector with `AGENTKIT_TEST_PG_URL` pointing at a Postgres that has it.
+ */
+const vectorAvailable = await (async () => {
+  try {
+    const sql = freshExecutor();
+    if (!(await hasVectorExtension(sql))) return false;
+    // Migrated once here purely to prove it works; each fixture below migrates its own schema.
+    await migrateVector(sql);
+    return true;
+  } catch {
+    // A database that cannot answer or cannot migrate is one without the extension, as far as this suite is
+    // concerned. Swallowed rather than failing the file, because the alternative is that every developer
+    // without pgvector cannot run the Postgres suite at all.
+    return false;
+  }
+})();
+
+const VECTOR_DECLARATION = vectorAvailable ? { capabilities: ["vector-search" as const] } : undefined;
+
+/**
+ * A fresh, vector-migrated schema per fixture.
+ *
+ * Per *fixture*, not shared. Sharing one executor across the harness's cases let a chunk written by one case be
+ * found by the next — which is how "filters by source type" passed a `file` chunk written three tests earlier.
+ * Every other harness here gets `freshExecutor()` per call and this one has to as well; the extension lives in
+ * `public` so only the table is created per schema.
+ */
+const vectorFixture = async () => {
+  const sql = freshExecutor();
+  await migrateVector(sql);
+  return { store: createPostgresKnowledgeStore(sql), index: createPostgresVectorIndex(sql) };
+};
+
+knowledgeStoreConformance(vectorFixture, VECTOR_DECLARATION);
+vectorIndexConformance(vectorFixture, VECTOR_DECLARATION);
+
 artifactExportStoreConformance(() => {
   const sql = freshExecutor();
   return {
@@ -533,6 +589,8 @@ describe("postgres adapter coverage", () => {
       "FileMetadataStore",
       "ArtifactStore",
       "ArtifactExportStore",
+      "KnowledgeStore",
+      "VectorIndex",
     ]);
   });
 

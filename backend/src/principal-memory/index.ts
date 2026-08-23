@@ -10,6 +10,7 @@
  */
 
 import { AgentPlatformError } from "../core/errors.js";
+import { estimateTokens } from "../core/tokens.js";
 import type { ExecutionContext, Page, PageRequest, TenantScope } from "../core/context.js";
 import type { PrincipalId } from "../core/ids.js";
 import type { ContextProvider, ContextSection } from "../context/index.js";
@@ -122,7 +123,7 @@ export const createPrincipalMemoryProvider = (config: {
   readonly queryOf?: (context: ExecutionContext) => string | undefined;
 }): ContextProvider => {
   const maxEntries = config.maxEntries ?? 8;
-  const estimate = config.estimateTokens ?? ((t: string) => Math.ceil(t.length / 4));
+  const estimate = config.estimateTokens ?? estimateTokens;
   return {
     id: "principal-memory",
     async provide(context) {

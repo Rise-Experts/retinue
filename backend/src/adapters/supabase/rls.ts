@@ -42,6 +42,18 @@ export type RlsTable = {
  */
 const PRINCIPAL_PREDICATE = `principal_id = current_setting('app.principal_id', true)`;
 
+/**
+ * Tenant-scoped tables that live behind the optional pgvector migration (#135).
+ *
+ * Separate from `TENANT_SCOPED_TABLES` because `knowledge_chunks` does not exist until `migrateVector` runs, and
+ * `ALTER TABLE ... ENABLE ROW LEVEL SECURITY` on an absent table fails. A deployment that runs the vector
+ * migration runs `applyVectorRls` with it; one that does not has no table to protect. Listed rather than
+ * omitted so the requirement is recorded — a tenant-scoped table without RLS is the one omission that matters.
+ */
+export const VECTOR_TENANT_SCOPED_TABLES: readonly { readonly table: string }[] = [
+  { table: "knowledge_chunks" },
+];
+
 export const TENANT_SCOPED_TABLES: readonly RlsTable[] = [
   { table: "conversations" },
   { table: "runs" },
@@ -110,6 +122,13 @@ export const RLS_STATEMENTS: readonly string[] = TENANT_SCOPED_TABLES.flatMap(po
 
 export const applyRls = async (sql: SqlExecutor): Promise<void> => {
   for (const stmt of RLS_STATEMENTS) await sql.query(stmt);
+};
+
+/** The same policies for the vector table, applied by whoever ran `migrateVector` (#135). */
+export const VECTOR_RLS_STATEMENTS: readonly string[] = VECTOR_TENANT_SCOPED_TABLES.flatMap(policyFor);
+
+export const applyVectorRls = async (sql: SqlExecutor): Promise<void> => {
+  for (const stmt of VECTOR_RLS_STATEMENTS) await sql.query(stmt);
 };
 
 /**

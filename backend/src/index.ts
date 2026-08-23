@@ -42,5 +42,6 @@ export * from "./artifacts/index.js";
 export * from "./export/index.js";
 export * from "./export/pdf.js";
 export * from "./export/markdown.js";
+export * from "./knowledge/index.js";
 
 export * from "./graphql/index.js";

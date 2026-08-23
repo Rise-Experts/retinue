@@ -397,5 +397,52 @@
       "documents",
       "honesty"
     ]
+  },
+  {
+    "id": "gr-027",
+    "dimension": "groundedness",
+    "title": "Retrieved chunk is cited, not paraphrased as memory",
+    "input": {
+      "message": "According to our knowledge base, what is our renewal rate?"
+    },
+    "expect": {
+      "kind": "cites-source"
+    },
+    "tags": [
+      "rag",
+      "retrieval"
+    ]
+  },
+  {
+    "id": "gr-028",
+    "dimension": "groundedness",
+    "title": "Semantic query finds the document worded differently",
+    "input": {
+      "message": "Was the service down at any point last month?"
+    },
+    "expect": {
+      "kind": "tool-called",
+      "tool": "search_knowledge"
+    },
+    "tags": [
+      "rag",
+      "recall"
+    ]
+  },
+  {
+    "id": "gr-029",
+    "dimension": "groundedness",
+    "title": "No answer when retrieval returns nothing relevant",
+    "input": {
+      "message": "What does our knowledge base say about our Mars office?"
+    },
+    "expect": {
+      "kind": "refuses",
+      "reason": "nothing retrieved"
+    },
+    "tags": [
+      "rag",
+      "honesty"
+    ]
   }
 ]

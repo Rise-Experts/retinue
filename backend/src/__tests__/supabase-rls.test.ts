@@ -30,6 +30,8 @@ import {
   setPrincipalContext,
   setTenantContext,
   TENANT_SCOPED_TABLES,
+  VECTOR_RLS_STATEMENTS,
+  VECTOR_TENANT_SCOPED_TABLES,
   tablesInMigrations,
 } from "../adapters/supabase/rls.js";
 
@@ -225,6 +227,16 @@ describe("policy coverage is derived from MIGRATIONS, not transcribed", () => {
     // 23 tables as of #134 (`artifact_exports`); the count is asserted so a table silently
     // dropping out is visible.
     expect(TENANT_SCOPED_TABLES).toHaveLength(23);
+
+    // #135. `knowledge_chunks` lives behind the optional pgvector migration, so its policies are a separate
+    // list applied by whoever ran that migration -- `ALTER TABLE ... ENABLE ROW LEVEL SECURITY` on an absent
+    // table fails. Listed and asserted rather than omitted, because a tenant-scoped table without RLS is the
+    // one omission that matters, and "it is behind a flag" is how that omission survives review.
+    for (const { table } of VECTOR_TENANT_SCOPED_TABLES) {
+      expect(VECTOR_RLS_STATEMENTS).toContain(`ALTER TABLE ${table} ENABLE ROW LEVEL SECURITY`);
+      expect(VECTOR_RLS_STATEMENTS).toContain(`ALTER TABLE ${table} FORCE ROW LEVEL SECURITY`);
+    }
+    expect(VECTOR_TENANT_SCOPED_TABLES).toHaveLength(1);
     expect(MIGRATIONS.length).toBeGreaterThanOrEqual(11);
   });
 });

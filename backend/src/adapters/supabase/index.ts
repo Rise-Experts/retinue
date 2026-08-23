@@ -70,6 +70,18 @@ export * from "./storage.js";
  */
 export { createPostgresArtifactStore as createSupabaseArtifactStore } from "../postgres/artifacts.js";
 export { createPostgresArtifactExportStore as createSupabaseArtifactExportStore } from "../postgres/artifact-exports.js";
+/**
+ * Knowledge and vector search alias to Postgres too (#135).
+ *
+ * Supabase ships pgvector, so this is the same adapter and not a second implementation — unlike
+ * `FileContentStore`, where Supabase Storage genuinely is a different service. The vector migrations are
+ * separate from the main list (`migrateVector`) because `CREATE EXTENSION vector` fails where the extension is
+ * absent, and a Supabase project has it while a bare Postgres may not.
+ */
+export {
+  createPostgresKnowledgeStore as createSupabaseKnowledgeStore,
+  createPostgresVectorIndex as createSupabaseVectorIndex,
+} from "../postgres/knowledge.js";
 
 export * from "./rls.js";
 export * from "./realtime.js";
