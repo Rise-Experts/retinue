@@ -67,11 +67,29 @@ export type ToolResult<T = unknown> =
       readonly error: PlatformError;
     };
 
+/**
+ * A single approved execution, presented at the moment of the call.
+ *
+ * Structural on purpose — the tools layer must not depend on `hitl` (the approval *check* is a
+ * structural port here for the same reason). The id is opaque to everything in this layer: whoever
+ * implements the check verifies it against the stored interaction, so passing one along is never the
+ * same as granting anything.
+ */
+export type OneTimeApprovalRef = { readonly interactionId: string };
+
 export type ToolExecutionInput = {
   readonly context: ExecutionContext;
   readonly input: unknown;
   /** Derived from tenant, run and tool-call identity. Replays return the first result. */
   readonly idempotencyKey?: string;
+  /**
+   * Set when this call is the execution a human already approved.
+   *
+   * Threaded down to the tool rather than consumed by the registry alone, because a delegating tool
+   * runs its own gate — the registry letting the call through while the envelope refuses it one layer
+   * lower is the same stuck loop, just harder to see.
+   */
+  readonly approval?: OneTimeApprovalRef;
 };
 
 export interface Tool<T = unknown> {

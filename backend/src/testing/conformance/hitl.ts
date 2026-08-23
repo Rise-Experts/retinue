@@ -12,6 +12,10 @@
  *    one-conversation approval into a standing one.
  *  - **Append-only usage** (`docs/12`): events are never edited; appends are idempotent on
  *    `(runId, stepId)` so a recovered run never double-counts.
+ *  - **The approval claim** (`docs/04` → How the loop closes): an approval's single execution is
+ *    claimed exactly once, and only after a decision. This is where `allow-once` gets its "once" —
+ *    it issues no grant, so an adapter that lost the claim would let one decision publish twice, and
+ *    one that let an undecided interaction be claimed would create permission out of nothing.
  */
 
 import { describe, expect, it } from "vitest";
@@ -151,12 +155,106 @@ export function interactionStoreConformance(
       expect(pending?.normalizedInput).toEqual({ draftId: "d1" });
     });
 
+    /**
+     * The resumption half of the loop. A decision that is recorded but that nothing can look
+     * up again is a decision the run cannot act on — which is the state the platform was in: the
+     * decision was stored, the run was re-enqueued, and the resumed run had no way to find the
+     * approval whose stored input it was supposed to execute.
+     */
+    it("finds the decided approval a resumption must execute", async () => {
+      const store = await open();
+      await store.createApproval({ tenantId: T1, approval: approval("a1") });
+      await store.decideApproval({
+        tenantId: T1,
+        interactionId: asId<InteractionId>("a1"),
+        decision: "allow-once",
+        at: LATER,
+      });
+      expect(await store.findDecidedApproval({ tenantId: T1, runId: RUN })).toMatchObject({
+        id: "a1",
+        decision: "allow-once",
+        normalizedInput: { draftId: "d1" },
+      });
+    });
+
+    it("an undecided approval is not resumable", async () => {
+      const store = await open();
+      await store.createApproval({ tenantId: T1, approval: approval("a1") });
+      expect(await store.findDecidedApproval({ tenantId: T1, runId: RUN })).toBeNull();
+    });
+
+    /**
+     * Where `allow-once` gets its "once" from. It is deliberately *not* a grant — a grant is standing
+     * by definition — so the single execution has to be claimed from the interaction itself, and the
+     * store is the only place that holds across processes. Two workers racing a resumed run must see
+     * exactly one `claimed: true`.
+     */
+    it("claims the single execution an approval authorizes exactly once", async () => {
+      const store = await open();
+      await store.createApproval({ tenantId: T1, approval: approval("a1") });
+      await store.decideApproval({
+        tenantId: T1,
+        interactionId: asId<InteractionId>("a1"),
+        decision: "allow-once",
+        at: LATER,
+      });
+      const first = await store.claimApproval({ tenantId: T1, interactionId: asId<InteractionId>("a1"), at: LATER });
+      const second = await store.claimApproval({ tenantId: T1, interactionId: asId<InteractionId>("a1"), at: LATER });
+      expect(first.claimed).toBe(true);
+      expect(second.claimed).toBe(false);
+      expect(second.approval.consumedAt).toBe(first.approval.consumedAt);
+    });
+
+    it("refuses to claim an approval nobody has decided", async () => {
+      const store = await open();
+      await store.createApproval({ tenantId: T1, approval: approval("a1") });
+      const claim = await store.claimApproval({ tenantId: T1, interactionId: asId<InteractionId>("a1"), at: LATER });
+      expect(claim.claimed).toBe(false);
+      expect(claim.approval.consumedAt).toBeUndefined();
+    });
+
+    it("a claimed approval is no longer the run's resumable one", async () => {
+      const store = await open();
+      await store.createApproval({ tenantId: T1, approval: approval("a1") });
+      await store.decideApproval({
+        tenantId: T1,
+        interactionId: asId<InteractionId>("a1"),
+        decision: "allow-once",
+        at: LATER,
+      });
+      await store.claimApproval({ tenantId: T1, interactionId: asId<InteractionId>("a1"), at: LATER });
+      expect(await store.findDecidedApproval({ tenantId: T1, runId: RUN })).toBeNull();
+    });
+
+    it("reads one approval back by id, so a one-time authorization can be verified", async () => {
+      const store = await open();
+      await store.createApproval({ tenantId: T1, approval: approval("a1") });
+      expect(await store.findApproval({ tenantId: T1, interactionId: asId<InteractionId>("a1") })).toMatchObject({
+        id: "a1",
+        toolName: "publish_post",
+      });
+      expect(await store.findApproval({ tenantId: T1, interactionId: asId<InteractionId>("nope") })).toBeNull();
+    });
+
     it("enforces tenant isolation", async () => {
       const store = await open();
       await store.createQuestion({ tenantId: T1, question: question("q1") });
       await store.createApproval({ tenantId: T1, approval: approval("a1") });
       expect(await store.findPendingQuestion({ tenantId: T2, runId: RUN })).toBeNull();
       expect(await store.findPendingApproval({ tenantId: T2, runId: RUN })).toBeNull();
+    });
+
+    it("isolates the resumption lookups by tenant too", async () => {
+      const store = await open();
+      await store.createApproval({ tenantId: T1, approval: approval("a1") });
+      await store.decideApproval({
+        tenantId: T1,
+        interactionId: asId<InteractionId>("a1"),
+        decision: "allow-once",
+        at: LATER,
+      });
+      expect(await store.findDecidedApproval({ tenantId: T2, runId: RUN })).toBeNull();
+      expect(await store.findApproval({ tenantId: T2, interactionId: asId<InteractionId>("a1") })).toBeNull();
     });
   });
 }

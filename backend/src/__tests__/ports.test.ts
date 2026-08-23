@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  deriveCallIdempotencyKey,
   deriveIdempotencyKey,
   type AuthorizationPolicy,
   type RunId,
@@ -66,6 +67,24 @@ describe("cross-cutting ports", () => {
     expect(deriveIdempotencyKey(a)).not.toBe(
       deriveIdempotencyKey({ ...a, toolCallId: "tc2" as ToolCallId }),
     );
+  });
+
+  /**
+   * The key an approval carries. A resumed run has no provider tool-call id to derive from —
+   * the call it executes came off a stored interaction, not out of a model stream — so the call's own
+   * identity has to be its arguments. Run-scoped, because a key that collided across runs would make
+   * "publish this" next week return last week's result and never publish.
+   */
+  it("deriveCallIdempotencyKey is stable per (tenant, run, tool, arguments)", () => {
+    const base = { tenantId: "t1" as TenantId, runId: "r1" as RunId, toolName: "publish_post" };
+    const key = deriveCallIdempotencyKey({ ...base, args: { a: 1, b: 2 } });
+
+    expect(key).toContain("r1"); // run-scoped
+    // Argument order is not part of the call's identity, so it must not be part of the key.
+    expect(deriveCallIdempotencyKey({ ...base, args: { b: 2, a: 1 } })).toBe(key);
+    expect(deriveCallIdempotencyKey({ ...base, args: { a: 2, b: 2 } })).not.toBe(key);
+    expect(deriveCallIdempotencyKey({ ...base, toolName: "delete_post", args: { a: 1, b: 2 } })).not.toBe(key);
+    expect(deriveCallIdempotencyKey({ ...base, runId: "r2" as RunId, args: { a: 1, b: 2 } })).not.toBe(key);
   });
 
   it("session state enforces optimistic concurrency", async () => {

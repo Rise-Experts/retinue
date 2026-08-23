@@ -7,13 +7,22 @@
  * the platform's typed `RunEvent`s. Transient provider failures are retried Claude-style — but only
  * before any output has streamed, so a retry never duplicates a partial answer; tool side effects
  * stay safe via the registry's idempotency keys.
+ *
+ * **Human-in-the-loop.** With `approvals` wired, the engine owns the two ends of the approval
+ * loop that `docs/04` describes and nothing implemented:
+ *
+ * 1. *Before the turn*, a decided approval is executed — the stored tool and the stored input, never a
+ *    regenerated call — and the model is told what ran.
+ * 2. *During the turn*, every tool call is routed through the loop, so a gated call that has no
+ *    approval raises a durable one and the run pauses into `waiting-for-approval` instead of looping
+ *    on a refusal the model cannot resolve.
  */
 
 import type { ExecutionContext } from "../core/context.js";
 import { AgentPlatformError } from "../core/errors.js";
-import type { MessageId, MessagePartId } from "../core/ids.js";
+import type { InteractionId, MessageId, MessagePartId, ToolCallId } from "../core/ids.js";
 import { asId } from "../core/ids.js";
-import type { TextPart, ToolCallPart, ToolResultPart } from "../core/content-parts.js";
+import type { MessagePart, TextPart, ToolCallPart, ToolResultPart } from "../core/content-parts.js";
 import type {
   ModelTurnRequest,
   ModelTurnTool,
@@ -34,6 +43,7 @@ import {
   type RetryPolicy,
   type Run,
 } from "../runtime/index.js";
+import type { RunApprovals } from "../hitl/index.js";
 import type { AgentManifest } from "./index.js";
 
 /** A model resolved for a turn: the opaque handle plus what the engine needs to attribute usage. */
@@ -55,6 +65,16 @@ export type DefaultEngineDeps = {
   buildTools?: (context: ExecutionContext, manifest: AgentManifest) => Promise<readonly ModelTurnTool[]>;
   /** System prompt; defaults to the manifest instructions. */
   systemPrompt?: (manifest: AgentManifest, context: ExecutionContext) => Promise<string> | string;
+  /**
+   * The approval loop. Absent means no HITL: tool calls go straight to `buildTools`' own `execute`,
+   * which is how every caller behaved before this existed.
+   *
+   * Present means the loop owns tool execution for the turn — deliberately, and not as a layer on top
+   * of the caller's `execute`. A gated call has to be *routed* through the loop rather than merely
+   * observed after the fact, because by the time a refusal has been thrown there is nothing left to
+   * pause on.
+   */
+  readonly approvals?: RunApprovals;
   readonly retry?: RetryPolicy;
   readonly sleep?: (ms: number) => Promise<void>;
   readonly now?: () => number;
@@ -75,10 +95,51 @@ export const createDefaultEngine = (deps: DefaultEngineDeps): AgentEngine => {
       const manifest = await deps.loadManifest({ agentId: run.agentId, version: run.agentVersion, context });
       const resolved = deps.resolveModel(manifest, context);
       const system = (await (deps.systemPrompt?.(manifest, context) ?? manifest.instructions)) || undefined;
-      const messages = await deps.loadHistory(context, run);
-      const tools = deps.buildTools ? await deps.buildTools(context, manifest) : [];
+      const history = await deps.loadHistory(context, run);
+      const declared = deps.buildTools ? await deps.buildTools(context, manifest) : [];
       const maxSteps = manifest.limits?.maxSteps ?? 8;
       const messageId = deriveRunMessageId(run.id) as MessageId;
+
+      // A decision taken while the run was parked. Executed before the model gets another turn, so the
+      // approved side effect happens even if the model would never ask for it again — and so the model
+      // sees the outcome in its history rather than re-requesting something already done.
+      const messages: TurnMessage[] = [...history];
+      if (deps.approvals) {
+        const resumed = await deps.approvals.resume(context, run.id);
+        for (const event of approvalEvents(resumed, messageId, messages)) yield event;
+      }
+
+      /**
+       * The tools the model may call, with execution routed through the approval loop.
+       *
+       * The caller's own `execute` is replaced rather than wrapped: the loop calls the same registry,
+       * and running both would mean two executions of one call — the exact duplicate the approval
+       * exists to prevent.
+       */
+      let pendingApproval: string | null = null;
+      const approvals = deps.approvals;
+      const tools: readonly ModelTurnTool[] = approvals
+        ? declared.map((t) => ({
+            ...t,
+            execute: async (input: unknown) => {
+              const outcome = await approvals.runTool(context, run.id, { name: t.name, input });
+              if (outcome.outcome === "approval-requested") {
+                pendingApproval = outcome.approval.id;
+                // Returned to the model, not thrown. The tool call is a real part of the record with a
+                // real result, and the run pauses on the event below rather than on an error the model
+                // would try to work around.
+                return {
+                  status: "approval_required",
+                  interactionId: outcome.approval.id,
+                  summary: outcome.approval.summary,
+                  message: `${t.name} needs human approval before it can run. The run is paused; do not retry.`,
+                };
+              }
+              if (!outcome.result.ok) throw new AgentPlatformError(outcome.result.error);
+              return outcome.result.data;
+            },
+          }))
+        : declared;
 
       let attempt = 1;
       for (;;) {
@@ -95,6 +156,13 @@ export const createDefaultEngine = (deps: DefaultEngineDeps): AgentEngine => {
             for (const event of mapChunk(chunk, messageId, resolved, textParts)) {
               emitted += 1;
               yield event;
+            }
+            // Raised by a tool call this turn. Stop here rather than letting the model keep going: the
+            // run is about to be parked, and anything it does now would be work nobody can act on.
+            if (pendingApproval !== null) {
+              controller.abort();
+              yield { type: "approval.requested", interactionId: asId<InteractionId>(pendingApproval) };
+              return;
             }
           }
           return; // turn complete
@@ -117,6 +185,75 @@ export const createDefaultEngine = (deps: DefaultEngineDeps): AgentEngine => {
     },
   };
 };
+
+/**
+ * Turn a resumption outcome into the events and the history line it deserves.
+ *
+ * The events are the durable record — a client refreshing after an approval must see the call that
+ * ran. The history line is what stops the model asking again: the executed call is stored as run
+ * *parts*, and `loadHistory` reads conversation *messages*, so without a line here the model resumes
+ * with no idea the publish happened.
+ *
+ * It is a plain `user`-role note rather than a `system` one. A system message arriving mid-conversation
+ * is handled inconsistently across providers, and the note is not an instruction — it is something the
+ * model is being told about the world.
+ */
+function* approvalEvents(
+  resumed: Awaited<ReturnType<RunApprovals["resume"]>>,
+  messageId: MessageId,
+  messages: TurnMessage[],
+): Generator<EngineEvent> {
+  if (resumed.outcome === "none") return;
+  const { approval } = resumed;
+  yield { type: "approval.decided", interactionId: approval.id };
+
+  if (resumed.outcome === "denied") {
+    messages.push({ role: "user", text: `[approval] ${approval.toolName} was denied. Do not attempt it again.` });
+    return;
+  }
+  if (resumed.outcome === "expired") {
+    messages.push({
+      role: "user",
+      text: `[approval] the approval for ${approval.toolName} expired before it could run. Ask again if it is still wanted.`,
+    });
+    return;
+  }
+
+  const toolCallId = asId<ToolCallId>(`approval:${approval.id}`);
+  const call: ToolCallPart = {
+    id: `${toolCallId}:call` as MessagePartId,
+    type: "tool-call",
+    schemaVersion: 1,
+    createdAt: new Date(0).toISOString(),
+    toolCallId,
+    toolName: approval.toolName,
+    input: approval.normalizedInput,
+  };
+  yield { type: "tool.started", toolCallId, toolName: approval.toolName };
+  yield { type: "part.added", messageId, part: call };
+
+  const outcome = resumed.result.ok ? resumed.result.data : resumed.result.error;
+  const result: ToolResultPart = {
+    id: `${toolCallId}:result` as MessagePartId,
+    type: "tool-result",
+    schemaVersion: 1,
+    createdAt: new Date(0).toISOString(),
+    toolCallId,
+    toolName: approval.toolName,
+    output: outcome,
+    truncated: false,
+  };
+  yield {
+    type: resumed.result.ok ? "tool.completed" : "tool.failed",
+    toolCallId,
+    toolName: approval.toolName,
+  };
+  yield { type: "part.added", messageId, part: result as MessagePart };
+  messages.push({
+    role: "user",
+    text: `[approval] ${approval.toolName} was approved and has now run. Result: ${JSON.stringify(outcome)}`,
+  });
+}
 
 /** Map one neutral chunk to zero or more engine events. Mutates `textParts` to accumulate deltas. */
 function* mapChunk(

@@ -588,6 +588,37 @@ export const MIGRATIONS: readonly Migration[] = [
       `DROP TABLE IF EXISTS principal_memory`,
     ],
   },
+  {
+    // The claim that makes `allow-once` mean once (docs/04 -> How the loop closes).
+    //
+    // `decided_at` alone cannot express "approved and already executed". Without a second column the
+    // resumed run has no way to tell an approval it still owes an execution from one it has already
+    // performed, so either it never runs the approved call or it runs it on every resumption. A grant
+    // was the other option and the wrong one: a grant is standing, and issuing one for a one-time
+    // decision widens the authority the human gave.
+    //
+    // The claim lives in the database rather than in the runtime because two workers can race a
+    // resumed run, and an in-process check cannot make one of them lose.
+    id: "0012_approval_consumption",
+    up: [
+      `ALTER TABLE interaction_approvals ADD COLUMN IF NOT EXISTS consumed_at timestamptz`,
+      // Claiming something nobody decided would be permission created out of nothing, so the state is
+      // excluded by the schema and not only by the UPDATE's WHERE clause.
+      `DO $$ BEGIN
+         ALTER TABLE interaction_approvals ADD CONSTRAINT interaction_approvals_consumed_after_decided
+           CHECK (consumed_at IS NULL OR decided_at IS NOT NULL);
+       EXCEPTION WHEN duplicate_object THEN NULL; END $$`,
+      // Serves findDecidedApproval: decided, not yet claimed -- the one row a resumed run looks for.
+      `CREATE INDEX IF NOT EXISTS interaction_approvals_resumable_run_idx
+        ON interaction_approvals (tenant_id, run_id)
+        WHERE decided_at IS NOT NULL AND consumed_at IS NULL`,
+    ],
+    down: [
+      `DROP INDEX IF EXISTS interaction_approvals_resumable_run_idx`,
+      `ALTER TABLE interaction_approvals DROP CONSTRAINT IF EXISTS interaction_approvals_consumed_after_decided`,
+      `ALTER TABLE interaction_approvals DROP COLUMN IF EXISTS consumed_at`,
+    ],
+  },
 ];
 
 export const migrate = async (sql: SqlExecutor): Promise<void> => {

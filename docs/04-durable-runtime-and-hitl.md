@@ -83,6 +83,44 @@ Decisions:
 
 The pending approval stores the exact normalized tool name/input, risk category, summary, estimated cost, expiry and idempotency key. Resumption executes the stored input—not a model-regenerated version.
 
+### How the loop closes
+
+The four decisions are not four flavours of the same thing. `allow-conversation` and `allow-always` are
+standing permissions and produce an `ApprovalGrant`. `allow-once` produces **no grant at all** — a grant
+is standing by definition, so minting one for a one-time decision would widen the authority the human
+gave. Its single execution is instead claimed off the interaction itself:
+
+1. The run calls a gated tool. The gate finds no standing grant and refuses.
+2. The run path turns that refusal into a pending approval carrying the schema-normalized input and an
+   idempotency key derived from the run and the call's arguments. The run pauses to
+   `waiting-for-approval`. Invalid input is refused here rather than raised: nobody should be asked to
+   authorize a call that cannot succeed.
+3. A decision is recorded once and the run is re-enqueued.
+4. The resumed run **claims** the approval — a compare-and-set on the interaction, so two workers racing
+   one run produce exactly one claim — and then executes the *stored* tool and the *stored* input,
+   presenting the claimed interaction to the gate as its authorization. A denial or an expiry is claimed
+   too, so a resumption never loops on a decision it has already honoured.
+
+Every step fails closed. An interaction nobody decided cannot be claimed; a claim for one tool does not
+authorize another; a claim from one run does not travel to another; and a gate with no interaction store
+to check against refuses every one-time authorization rather than trusting it.
+
+Wiring is the host's: build the gate with both the grant store and the interaction store, build the run
+path over the tool registry and the approval service, and hand it to the engine.
+
+```ts
+const approvals = createApprovalGate({ grants, interactions });
+const registry = createToolRegistry({ providers, authorization, idempotency, approval: approvals });
+const engine = createDefaultEngine({
+  /* … */
+  approvals: createRunApprovals({
+    interactions,
+    approvals: createApprovalService({ interactions, grants, dispatcher }),
+    tools: registry,
+  }),
+});
+```
+
 ## Idempotency
 
 Every external/destructive tool requires an idempotency key derived from tenant, run and tool-call identity. A resumed or retried call returns the original result instead of repeating the side effect.
@@ -108,6 +146,8 @@ Transports map these events to GraphQL subscriptions, SSE or another channel wit
 - Worker termination produces safe recovery without duplicate external actions.
 - Pending interactions survive deployment/restart.
 - Approval cannot be bypassed through direct tool execution.
+- An `allow-once` decision permits exactly one execution, issues no standing grant, and runs the stored
+  input rather than a regenerated call.
 - Cancellation and retry states are observable and tested.
 - Retries use backoff with jitter, honor `retry-after`, retry only transient classes, and never double-fire an idempotent external write.
 

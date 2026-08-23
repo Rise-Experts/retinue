@@ -241,6 +241,26 @@ export interface InteractionStore {
   decideApproval(
     input: TenantScope & { interactionId: InteractionId; decision: ApprovalDecision; at: string },
   ): Promise<{ approval: PendingApproval; alreadyResolved: boolean }>;
+
+  /** One approval by id — how a one-time authorization is verified against what was stored. */
+  findApproval(input: TenantScope & { interactionId: InteractionId }): Promise<PendingApproval | null>;
+  /**
+   * The run's decided-but-unclaimed approval: what a resumed run must execute. Decided and claimed
+   * are separate states because the decision is the human's and the claim is the runtime's — without
+   * the second, nothing distinguishes "approved, waiting to run" from "approved, already run".
+   */
+  findDecidedApproval(input: TenantScope & { runId: RunId }): Promise<PendingApproval | null>;
+  /**
+   * Claim the single execution a decided approval authorizes — the mechanism behind `allow-once`.
+   *
+   * A compare-and-set, not a read-then-write: two workers racing a resumed run must see exactly one
+   * `claimed: true`, because the loser executing anyway is a duplicate publish. `claimed` is false
+   * for an approval that is already claimed *and* for one nobody has decided, so an undecided
+   * interaction can never be turned into permission.
+   */
+  claimApproval(
+    input: TenantScope & { interactionId: InteractionId; at: string },
+  ): Promise<{ approval: PendingApproval; claimed: boolean }>;
 }
 
 /** Standing approval grants from `allow-conversation` / `allow-always` (`docs/04` → Approvals). */

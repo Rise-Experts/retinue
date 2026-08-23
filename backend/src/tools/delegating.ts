@@ -26,7 +26,7 @@ import { AgentPlatformError } from "../core/errors.js";
 import type { ExecutionContext } from "../core/context.js";
 import type { AuthorizationPolicy } from "../authorization/index.js";
 import { assertToolAuthorized } from "../authorization/index.js";
-import type { IdempotencyKey, IdempotencyStore } from "../idempotency/index.js";
+import { canonicalizeArgs, type IdempotencyKey, type IdempotencyStore } from "../idempotency/index.js";
 import type { ApprovalGate } from "../hitl/service.js";
 import { toPlatformError } from "../runtime/retry.js";
 import { defineTool, type ToolSpec } from "./define.js";
@@ -151,21 +151,6 @@ export type DelegatingToolDeps = {
 };
 
 /**
- * A stable string for a value, for the fallback key.
- *
- * Object keys are sorted, because `{a, b}` and `{b, a}` are the same arguments and must not produce
- * two keys — the whole point of the key is that an identical call collides with itself.
- */
-const canonical = (value: unknown): string => {
-  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
-  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
-  const entries = Object.entries(value as Record<string, unknown>)
-    .filter(([, v]) => v !== undefined)
-    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
-  return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${canonical(v)}`).join(",")}}`;
-};
-
-/**
  * The key used when the caller supplied none.
  *
  * **Weaker protection than the caller's key, and stronger collision behaviour — both worth knowing.**
@@ -184,7 +169,7 @@ export const fallbackIdempotencyKey = (input: {
   readonly toolName: string;
   readonly args: unknown;
 }): IdempotencyKey =>
-  `${input.context.tenantId}:${input.context.conversationId ?? "-"}:${input.toolName}:${canonical(input.args)}` as IdempotencyKey;
+  `${input.context.tenantId}:${input.context.conversationId ?? "-"}:${input.toolName}:${canonicalizeArgs(input.args)}` as IdempotencyKey;
 
 const refuse = (code: "approval_required" | "capability_unavailable", message: string) =>
   new AgentPlatformError({ code, message, retryable: false });
@@ -222,7 +207,7 @@ export const defineDelegatingTool = <I = unknown, O = unknown>(
 
   return {
     descriptor,
-    async execute({ context, input, idempotencyKey }) {
+    async execute({ context, input, idempotencyKey, approval }) {
       try {
         // Re-authorised here even though discovery already filtered the catalog: the governing
         // principle is that tools are filtered before discovery *and* re-authorised during execution,
@@ -316,11 +301,19 @@ export const defineDelegatingTool = <I = unknown, O = unknown>(
               `${spec.name} performs a ${effect} and no approval gate is configured`,
             );
           }
-          const allowed = await deps.approvals.isAllowed(context, {
-            name: spec.name,
-            category: descriptor.category,
-            approvalPolicy: descriptor.approvalPolicy,
-          });
+          // The ticket, when the call carries one, is handed to the gate rather than interpreted here:
+          // this envelope decides *whether* approval applies, `hitl/service.ts` decides whether a
+          // given approval is real. An envelope that read the ticket itself would be a second place
+          // that could get "is this approved" wrong.
+          const allowed = await deps.approvals.isAllowed(
+            context,
+            {
+              name: spec.name,
+              category: descriptor.category,
+              approvalPolicy: descriptor.approvalPolicy,
+            },
+            approval,
+          );
           // The delegate is never reached. It is not told an approval was needed, refused or granted —
           // this envelope decides *whether* approval applies; `hitl/service.ts` decides *how*.
           if (!allowed) {

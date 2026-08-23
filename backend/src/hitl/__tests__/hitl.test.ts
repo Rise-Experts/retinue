@@ -11,6 +11,7 @@ import { createApprovalGate, createApprovalService, createQuestionService } from
 
 const T = asId<TenantId>("t1");
 const RUN = asId<RunId>("run1");
+const TOOL = { name: "publish", category: "publishing", approvalPolicy: "always" as const };
 
 const ctx = (): ExecutionContext => ({
   tenantId: T,
@@ -129,5 +130,109 @@ describe("approvals — stored input, decisions, idempotent resume, unbypassable
   it("the gate never gates a tool whose policy is 'never'", async () => {
     const gate = createApprovalGate({ grants: createMemoryApprovalGrantStore() });
     expect(await gate.isAllowed(ctx(), { name: "search", category: "read", approvalPolicy: "never" })).toBe(true);
+  });
+
+  it("allow-once issues no standing grant — the gate is no more open than before", async () => {
+    const interactions = createMemoryInteractionStore();
+    const grants = createMemoryApprovalGrantStore();
+    const { dispatcher } = recordingDispatcher();
+    let n = 0;
+    const svc = createApprovalService({ interactions, grants, dispatcher, clock: () => "t", idFactory: () => `id${(n += 1)}` });
+    const gate = createApprovalGate({ grants, interactions, clock: () => "t" });
+    const approval = await svc.request(ctx(), RUN, req);
+    const decided = await svc.decide({ tenantId: T, interactionId: approval.id, runId: RUN, decision: "allow-once" });
+
+    expect(decided.grant).toBeUndefined();
+    // A grant is standing by definition; a one-time decision must not become one.
+    expect(await grants.findActive({ tenantId: T, toolNameOrCategory: "publish", now: "t" })).toBeNull();
+    expect(await gate.isAllowed(ctx(), TOOL)).toBe(false);
+  });
+});
+
+/**
+ * The one-time authorization — how an `allow-once` decision reaches the gate without becoming
+ * a grant. The ticket is the interaction id; the gate verifies it against what was stored rather than
+ * trusting it, so a ticket is only ever worth the decision behind it.
+ */
+describe("approvals — one-time authorization", () => {
+  const req = {
+    toolName: "publish",
+    normalizedInput: { postId: "abc", channel: "twitter" },
+    riskCategory: "external-share",
+    summary: "Publish post abc to twitter",
+    expiresAt: "2999-01-01T00:00:00.000Z",
+    idempotencyKey: "idem-1",
+  };
+
+  const wired = async (decision: "allow-once" | "deny" | null) => {
+    const interactions = createMemoryInteractionStore();
+    const grants = createMemoryApprovalGrantStore();
+    const { dispatcher } = recordingDispatcher();
+    let n = 0;
+    const svc = createApprovalService({ interactions, grants, dispatcher, clock: () => "t", idFactory: () => `id${(n += 1)}` });
+    const approval = await svc.request(ctx(), RUN, req);
+    if (decision) {
+      await svc.decide({ tenantId: T, interactionId: approval.id, runId: RUN, decision });
+      await interactions.claimApproval({ tenantId: T, interactionId: approval.id, at: "t" });
+    }
+    return { interactions, grants, approval };
+  };
+
+  it("satisfies the gate for the exact tool the human approved", async () => {
+    const { interactions, grants, approval } = await wired("allow-once");
+    const gate = createApprovalGate({ grants, interactions, clock: () => "t" });
+    expect(await gate.isAllowed(ctx(), TOOL, { interactionId: approval.id })).toBe(true);
+  });
+
+  it("refuses a ticket for an approval nobody decided", async () => {
+    const { interactions, grants, approval } = await wired(null);
+    const gate = createApprovalGate({ grants, interactions, clock: () => "t" });
+    expect(await gate.isAllowed(ctx(), TOOL, { interactionId: approval.id })).toBe(false);
+  });
+
+  it("refuses a ticket for a denied approval", async () => {
+    const { interactions, grants, approval } = await wired("deny");
+    const gate = createApprovalGate({ grants, interactions, clock: () => "t" });
+    expect(await gate.isAllowed(ctx(), TOOL, { interactionId: approval.id })).toBe(false);
+  });
+
+  it("refuses a ticket presented for a different tool than the one approved", async () => {
+    const { interactions, grants, approval } = await wired("allow-once");
+    const gate = createApprovalGate({ grants, interactions, clock: () => "t" });
+    const otherTool = { name: "delete_everything", category: "publishing", approvalPolicy: "always" as const };
+    expect(await gate.isAllowed(ctx(), otherTool, { interactionId: approval.id })).toBe(false);
+  });
+
+  it("refuses a ticket from another run", async () => {
+    const { interactions, grants, approval } = await wired("allow-once");
+    const gate = createApprovalGate({ grants, interactions, clock: () => "t" });
+    const otherRun: ExecutionContext = { ...ctx(), runId: asId<RunId>("run2") };
+    expect(await gate.isAllowed(otherRun, TOOL, { interactionId: approval.id })).toBe(false);
+  });
+
+  it("refuses a ticket the runtime never claimed", async () => {
+    const interactions = createMemoryInteractionStore();
+    const grants = createMemoryApprovalGrantStore();
+    const { dispatcher } = recordingDispatcher();
+    let n = 0;
+    const svc = createApprovalService({ interactions, grants, dispatcher, clock: () => "t", idFactory: () => `id${(n += 1)}` });
+    const approval = await svc.request(ctx(), RUN, req);
+    await svc.decide({ tenantId: T, interactionId: approval.id, runId: RUN, decision: "allow-once" });
+    // Decided but never claimed: the claim is the at-most-once counter, so without it there is no
+    // execution to authorize.
+    const gate = createApprovalGate({ grants, interactions, clock: () => "t" });
+    expect(await gate.isAllowed(ctx(), TOOL, { interactionId: approval.id })).toBe(false);
+  });
+
+  it("refuses every ticket when no interaction store is wired — an unwired dependency is not permission", async () => {
+    const { approval, grants } = await wired("allow-once");
+    const gate = createApprovalGate({ grants, clock: () => "t" });
+    expect(await gate.isAllowed(ctx(), TOOL, { interactionId: approval.id })).toBe(false);
+  });
+
+  it("refuses a ticket naming an interaction that does not exist", async () => {
+    const { interactions, grants } = await wired("allow-once");
+    const gate = createApprovalGate({ grants, interactions, clock: () => "t" });
+    expect(await gate.isAllowed(ctx(), TOOL, { interactionId: asId<InteractionId>("forged") })).toBe(false);
   });
 });

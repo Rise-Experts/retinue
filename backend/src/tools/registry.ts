@@ -24,6 +24,7 @@ import { deriveIdempotencyKey, type IdempotencyStore } from "../idempotency/inde
 import type { BlobStore } from "../persistence/index.js";
 import { META_TOOL_DESCRIPTOR_LIST } from "./meta-tools.js";
 import type {
+  OneTimeApprovalRef,
   Tool,
   ToolCatalogEntry,
   ToolDescriptor,
@@ -77,11 +78,14 @@ export type ToolCatalog = {
 };
 
 /** Structural approval check (satisfied by the HITL `ApprovalGate`) — kept structural to avoid a
- * tools→hitl dependency. Returns false when the tool needs approval and has no standing grant. */
+ * tools→hitl dependency. Returns false when the tool needs approval and the call carries neither a
+ * standing grant nor a valid one-time approval. */
 export interface ApprovalCheck {
   isAllowed(
     context: ExecutionContext,
     tool: { readonly name: string; readonly category: string; readonly approvalPolicy: ApprovalPolicyValue },
+    /** The single approved execution this call is, when it is one. Verified by the implementation. */
+    oneTime?: OneTimeApprovalRef,
   ): Promise<boolean>;
 }
 type ApprovalPolicyValue = "never" | "policy" | "always";
@@ -103,7 +107,14 @@ export interface ToolRegistry {
   learn(context: ExecutionContext, names: readonly string[]): Promise<readonly ToolDescriptor[]>;
   execute(
     context: ExecutionContext,
-    input: { name: string; input: unknown; idempotencyKey?: string; toolCallId?: string },
+    input: {
+      name: string;
+      input: unknown;
+      idempotencyKey?: string;
+      toolCallId?: string;
+      /** Present when this call is the execution a human approved; see `OneTimeApprovalRef`. */
+      approval?: OneTimeApprovalRef;
+    },
   ): Promise<ToolResult>;
   readOutput(context: ExecutionContext, ref: BlobRef): Promise<ToolResult>;
 }
@@ -162,7 +173,11 @@ export const createToolRegistry = (config: ToolRegistryConfig): ToolRegistry => 
       // write) is refused rather than silently executed unapproved.
       if (d.approvalPolicy !== "never") {
         const allowed = config.approval
-          ? await config.approval.isAllowed(context, { name: d.name, category: d.category, approvalPolicy: d.approvalPolicy })
+          ? await config.approval.isAllowed(
+              context,
+              { name: d.name, category: d.category, approvalPolicy: d.approvalPolicy },
+              input.approval,
+            )
           : false;
         if (!allowed)
           return { ok: false, error: { code: "approval_required", message: `Tool ${d.name} requires approval`, retryable: false } };
@@ -191,7 +206,12 @@ export const createToolRegistry = (config: ToolRegistryConfig): ToolRegistry => 
         if (prior && !prior.firstSeen) return prior.result;
       }
 
-      const result = await tool.execute({ context, input: validated.value, ...(idempotencyKey ? { idempotencyKey } : {}) });
+      const result = await tool.execute({
+        context,
+        input: validated.value,
+        ...(idempotencyKey ? { idempotencyKey } : {}),
+        ...(input.approval ? { approval: input.approval } : {}),
+      });
       const spilled = await maybeSpill(context, result);
 
       if (idempotencyKey !== undefined && config.idempotency) {

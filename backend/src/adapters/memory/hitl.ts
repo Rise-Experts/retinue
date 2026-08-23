@@ -57,6 +57,25 @@ export const createMemoryInteractionStore = (): InteractionStore => {
       aMap(tenantId).set(interactionId, decided);
       return { approval: decided, alreadyResolved: false };
     },
+
+    async findApproval({ tenantId, interactionId }) {
+      return aMap(tenantId).get(interactionId) ?? null;
+    },
+    async findDecidedApproval({ tenantId, runId }) {
+      for (const a of aMap(tenantId).values())
+        if (a.runId === runId && a.decidedAt !== undefined && a.consumedAt === undefined) return a;
+      return null;
+    },
+    async claimApproval({ tenantId, interactionId, at }) {
+      const a = aMap(tenantId).get(interactionId);
+      if (!a) throw notFound(interactionId);
+      // Undecided is refused, not deferred: an interaction nobody has decided must never become
+      // permission just because something asked for it.
+      if (a.decidedAt === undefined || a.consumedAt !== undefined) return { approval: a, claimed: false };
+      const claimed: PendingApproval = { ...a, consumedAt: at };
+      aMap(tenantId).set(interactionId, claimed);
+      return { approval: claimed, claimed: true };
+    },
   };
 };
 

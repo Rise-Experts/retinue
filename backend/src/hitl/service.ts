@@ -4,9 +4,14 @@
  * `ask`/`request` persist a durable interaction (surviving restart/deploy) and pause the run into
  * `waiting-for-question` / `waiting-for-approval`. `answer`/`decide` record the outcome idempotently
  * and queue the continuation exactly once — a duplicate call is a safe no-op, so a run never resumes
- * twice. An approval stores the exact normalized tool name + input; resumption executes that stored
- * input, never a model-regenerated version. The `ApprovalGate` makes the approval unbypassable: a
- * policy-classified tool cannot execute directly without a standing grant.
+ * twice. An approval stores the exact normalized tool name + input. The `ApprovalGate` makes the
+ * approval unbypassable: a policy-classified tool cannot execute directly without either a standing
+ * grant or a one-time approval a human has decided and the runtime has claimed.
+ *
+ * **This file is the *what*, not the *when*.** Requesting, deciding and gating live here; the run path
+ * that raises an approval on a refusal and executes the stored input on resumption is
+ * `./approved-execution.ts`, and the engine calls it (`../agents/engine.ts`). That path did not
+ * exist until the loop was wired, and this docstring described a resumption nothing performed.
  */
 
 import type { ExecutionContext } from "../core/context.js";
@@ -85,6 +90,17 @@ export type ApprovalRequest = {
   readonly idempotencyKey: string;
 };
 
+/**
+ * Decisions that authorize the approved call to run.
+ *
+ * A whitelist rather than `!== "deny"`: a decision added later — a deferral, an escalation — would
+ * read as permission under the negative form, which is the wrong direction to be wrong in.
+ */
+export const ALLOW_DECISIONS = ["allow-once", "allow-conversation", "allow-always"] as const;
+
+export const isAllowDecision = (decision: ApprovalDecision | undefined): boolean =>
+  decision !== undefined && (ALLOW_DECISIONS as readonly string[]).includes(decision);
+
 const grantScopeFor = (decision: ApprovalDecision): ApprovalScope | null =>
   decision === "allow-conversation" ? "conversation" : decision === "allow-always" ? "tenant" : null;
 
@@ -117,8 +133,12 @@ export const createApprovalService = (deps: {
 
     /**
      * Record a decision (once), issue a standing grant for allow-conversation/allow-always, and queue
-     * the continuation exactly once. Resumption re-runs the engine, which executes the *stored*
-     * normalized input from the pending approval — never a regenerated one.
+     * the continuation exactly once. The resumed run executes the *stored* normalized input from the
+     * pending approval — never a regenerated one; see `./approved-execution.ts`.
+     *
+     * `allow-once` deliberately issues **no grant**. A grant is standing by definition, so minting one
+     * for a one-time decision would hand over authority the human did not give. Its single execution is
+     * claimed off the interaction instead (`InteractionStore.claimApproval`).
      */
     async decide(
       input: TenantScopeInput & { interactionId: InteractionId; runId: RunId; conversationId?: ConversationId; decision: ApprovalDecision },
@@ -154,16 +174,75 @@ export const createApprovalService = (deps: {
 };
 
 /**
+ * A single approved execution, presented at the moment of the call.
+ *
+ * The ticket is just the interaction id, and it is **not** a credential — the gate below verifies it
+ * against the stored interaction rather than believing it. That is deliberate: the alternative to a
+ * ticket was issuing a grant for `allow-once`, and a grant is standing by definition, so a one-time
+ * decision would have silently become a permanent one.
+ *
+ * Per-call rather than carried on the `ExecutionContext`: a context is reused for every call in a
+ * turn, so an approval living on it would authorise all of them.
+ */
+export type OneTimeApproval = { readonly interactionId: InteractionId | string };
+
+/**
  * The gate that makes approval unbypassable. A policy-classified tool (`approvalPolicy` other than
  * `never`, or an external/destructive effect under `policy`) may only execute directly when a
- * standing grant covers it; otherwise the caller must go through `request_approval`.
+ * standing grant covers it, or when the call presents a one-time approval a human has decided and the
+ * runtime has claimed.
+ *
+ * Both paths fail closed. A tool with no grant and no ticket is refused; a ticket presented with no
+ * `interactions` store to check it against is refused too, because an unwired dependency must never
+ * be the reason something was allowed.
  */
-export const createApprovalGate = (deps: { readonly grants: ApprovalGrantStore; readonly clock?: Clock }) => {
+export const createApprovalGate = (deps: {
+  readonly grants: ApprovalGrantStore;
+  /**
+   * Where one-time approvals are verified. Optional so a caller that only uses standing grants need
+   * not wire it — with it absent, every ticket is refused rather than trusted.
+   */
+  readonly interactions?: InteractionStore;
+  readonly clock?: Clock;
+}) => {
   const clock = deps.clock ?? (() => new Date().toISOString());
+
+  /**
+   * Whether this ticket really authorises *this* call.
+   *
+   * Every clause is a way the loop could otherwise be widened, and each is checked against what was
+   * stored at request time rather than against anything the caller supplied:
+   *
+   * - the interaction exists in this tenant — a forged or foreign id authorises nothing;
+   * - it belongs to this run, so a ticket cannot be carried into another run;
+   * - the decision is an allow — a denial can never read as permission;
+   * - the tool is the one the human saw, so an approval for `publish` cannot run `delete`;
+   * - it has been claimed. The claim is the at-most-once counter (`InteractionStore.claimApproval`),
+   *   and requiring it here is what keeps a merely *decided* approval from being executable by
+   *   anything that has not first taken the single execution it grants.
+   */
+  const oneTimeAllows = async (
+    context: ExecutionContext,
+    tool: { readonly name: string },
+    oneTime: OneTimeApproval,
+  ): Promise<boolean> => {
+    if (!deps.interactions) return false;
+    const approval = await deps.interactions.findApproval({
+      tenantId: context.tenantId,
+      interactionId: asId<InteractionId>(String(oneTime.interactionId)),
+    });
+    if (!approval) return false;
+    if (approval.runId !== context.runId) return false;
+    if (approval.toolName !== tool.name) return false;
+    if (!isAllowDecision(approval.decision)) return false;
+    return approval.consumedAt !== undefined;
+  };
+
   return {
     async isAllowed(
       context: ExecutionContext,
       tool: { readonly name: string; readonly category: string; readonly approvalPolicy: "never" | "policy" | "always" },
+      oneTime?: OneTimeApproval,
     ): Promise<boolean> {
       if (tool.approvalPolicy === "never") return true;
       const now = clock();
@@ -172,7 +251,8 @@ export const createApprovalGate = (deps: { readonly grants: ApprovalGrantStore; 
       const byName = await deps.grants.findActive({ ...scope, toolNameOrCategory: tool.name });
       if (byName) return true;
       const byCategory = await deps.grants.findActive({ ...scope, toolNameOrCategory: tool.category });
-      return byCategory !== null;
+      if (byCategory) return true;
+      return oneTime === undefined ? false : oneTimeAllows(context, tool, oneTime);
     },
   };
 };

@@ -46,7 +46,18 @@ export type PendingApproval = {
   readonly idempotencyKey: string;
   readonly decidedAt?: string;
   readonly decision?: ApprovalDecision;
+  /**
+   * When the single execution this approval authorizes was claimed.
+   *
+   * This is where `allow-once` gets its "once". A grant would have been the easy mechanism and the
+   * wrong one — a grant is standing by definition, so issuing one for a one-time decision would
+   * silently broaden the authority the human actually gave. The interaction carries its own
+   * at-most-once counter instead, claimed atomically by the store, so a resumed run executes the
+   * approved call exactly once and a second attempt finds nothing left to claim.
+   */
+  readonly consumedAt?: string;
 };
+
 
 /** A standing grant from `allow-conversation` or `allow-always`. */
 export type ApprovalGrant = {
@@ -72,3 +83,4 @@ export type IdempotencyKeyInput = {
 };
 
 export * from "./service.js";
+export * from "./approved-execution.js";

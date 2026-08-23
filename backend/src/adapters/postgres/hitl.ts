@@ -75,6 +75,7 @@ type ApprovalRow = {
   idempotency_key: string;
   decided_at: string | Date | null;
   decision: string | null;
+  consumed_at: string | Date | null;
 };
 
 const toApproval = (r: ApprovalRow): PendingApproval => ({
@@ -92,10 +93,11 @@ const toApproval = (r: ApprovalRow): PendingApproval => ({
   idempotencyKey: r.idempotency_key,
   ...(r.decided_at === null ? {} : { decidedAt: iso(r.decided_at) }),
   ...(r.decision === null ? {} : { decision: r.decision as ApprovalDecision }),
+  ...(r.consumed_at === null ? {} : { consumedAt: iso(r.consumed_at) }),
 });
 
 const APPROVAL_COLUMNS = `tenant_id, id, run_id, tool_name, normalized_input, risk_category, summary,
-         estimated_cost_minor_units, expires_at, idempotency_key, decided_at, decision`;
+         estimated_cost_minor_units, expires_at, idempotency_key, decided_at, decision, consumed_at`;
 
 export const createPostgresInteractionStore = (sql: SqlExecutor): InteractionStore => {
   const readQuestion = async (tenantId: string, id: string): Promise<PendingQuestion | null> => {
@@ -169,8 +171,9 @@ export const createPostgresInteractionStore = (sql: SqlExecutor): InteractionSto
       await sql.query(
         `INSERT INTO interaction_approvals
            (tenant_id, id, run_id, tool_name, normalized_input, risk_category, summary,
-            estimated_cost_minor_units, expires_at, idempotency_key, decided_at, decision)
-         VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9::timestamptz, $10, $11::timestamptz, $12)
+            estimated_cost_minor_units, expires_at, idempotency_key, decided_at, decision, consumed_at)
+         VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9::timestamptz, $10, $11::timestamptz, $12,
+                 $13::timestamptz)
          ON CONFLICT (tenant_id, id) DO NOTHING`,
         [
           tenantId,
@@ -185,6 +188,7 @@ export const createPostgresInteractionStore = (sql: SqlExecutor): InteractionSto
           approval.idempotencyKey,
           approval.decidedAt ?? null,
           approval.decision ?? null,
+          approval.consumedAt ?? null,
         ],
       );
     },
@@ -217,6 +221,41 @@ export const createPostgresInteractionStore = (sql: SqlExecutor): InteractionSto
       const existing = await readApproval(tenantId, interactionId);
       if (!existing) throw notFound(interactionId);
       return { approval: existing, alreadyResolved: true };
+    },
+
+    async findApproval({ tenantId, interactionId }) {
+      return readApproval(tenantId, interactionId);
+    },
+
+    async findDecidedApproval({ tenantId, runId }) {
+      const rows = await sql.query<ApprovalRow>(
+        `SELECT ${APPROVAL_COLUMNS} FROM interaction_approvals
+          WHERE tenant_id = $1 AND run_id = $2 AND decided_at IS NOT NULL AND consumed_at IS NULL
+          ORDER BY decided_at, id
+          LIMIT 1`,
+        [tenantId, runId],
+      );
+      const row = rows[0];
+      return row ? toApproval(row) : null;
+    },
+
+    async claimApproval({ tenantId, interactionId, at }) {
+      // The whole of `allow-once` is this WHERE clause. `consumed_at IS NULL` is what makes the claim
+      // exclusive under concurrency, and `decided_at IS NOT NULL` is what stops an undecided
+      // interaction from being claimable at all — an unwired dependency must never become permission.
+      const rows = await sql.query<ApprovalRow>(
+        `UPDATE interaction_approvals
+            SET consumed_at = $3::timestamptz
+          WHERE tenant_id = $1 AND id = $2 AND decided_at IS NOT NULL AND consumed_at IS NULL
+          RETURNING ${APPROVAL_COLUMNS}`,
+        [tenantId, interactionId, at],
+      );
+      const row = rows[0];
+      if (row) return { approval: toApproval(row), claimed: true };
+
+      const existing = await readApproval(tenantId, interactionId);
+      if (!existing) throw notFound(interactionId);
+      return { approval: existing, claimed: false };
     },
   };
 };

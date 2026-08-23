@@ -1,23 +1,33 @@
 /**
  * The Publishing capabilities (#119) — the zero-tolerance ones.
  *
- * **A note on what these tests can and cannot prove.** AC-1's refusal direction is proven end to end:
- * with no approval, nothing reaches the service. The *success* direction is exercised through a standing
- * grant, because that is the only approval the platform currently executes — `allow-once` issues no grant
- * and nothing reads `PendingApproval.normalizedInput` back to run the approved call. That gap is
- * reported on the issue rather than hidden behind a stubbed gate that makes it look wired.
+ * **What these tests prove.** AC-1's refusal direction is proven end to end: with no approval, nothing
+ * reaches the service. Most of the success direction runs through a standing grant, because a grant is
+ * the shortest way to say "approved" when the subject of the test is the capability rather than the
+ * approval.
+ *
+ * The last block is the one that closes REQ-021. The loop used to stop short of `allow-once`: the
+ * decision was recorded, no grant was issued, and nothing read `PendingApproval.normalizedInput` back to
+ * run the approved call — so the *default*, least-privilege decision was the one that could not proceed,
+ * and this file said so instead of pretending otherwise. It now drives a real `allow-once` from refusal
+ * through decision to a single publish, with no grant involved anywhere.
  */
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   asId,
   createApprovalGate,
+  createApprovalService,
   createMemoryApprovalGrantStore,
   createMemoryIdempotencyStore,
+  createMemoryInteractionStore,
+  createRunApprovals,
+  createToolRegistry,
   type ApprovalGate,
   type AuthorizationPolicy,
   type ExecutionContext,
   type IdempotencyStore,
   type PrincipalId,
+  type RunId,
   type TenantId,
   type Tool,
   type ToolResult,
@@ -213,9 +223,8 @@ describe("nothing publishes without an approval", () => {
   });
 
   it("publishes once a standing grant covers it", async () => {
-    // The success direction, through the only approval the platform currently executes. `allow-once`
-    // issues no grant and nothing runs the stored input, so this is what an approved publish looks like
-    // today — see the note at the top of this file.
+    // The standing-grant shape of an approved publish. The one-time shape — `allow-once`, no grant at
+    // all — is driven end to end in the last block of this file.
     const tool = build(publishPostNowTool, { approvals: await grantedGate("publishing") });
     expect(await run(tool, { postDraftId: "d1", accountIds: ["a1"] })).toMatchObject({
       ok: true,
@@ -550,5 +559,173 @@ describe("arguments and delegation", () => {
     const again = await run(tool, { postDraftId: "d1", accountIds: ["a1"] }, "k1");
     expect(again.ok).toBe(false);
     expect(recorder.calls.filter((c) => c.method === "schedule")).toHaveLength(2);
+  });
+});
+
+/**
+ * REQ-021 end to end: **publishing is approved and never duplicated** — through `allow-once`, the
+ * default and least-privilege decision, with no standing grant anywhere in the fixture.
+ *
+ * This is the whole loop over real parts: the real registry, the real delegating envelope, the real
+ * gate, a real `InteractionStore`, and the real run-path coordinator. The only thing stubbed is the
+ * `PublishingService` at the very bottom, whose recorded calls are the evidence — a publish that
+ * happened is a `schedule` in the recorder, and there is exactly one of them.
+ */
+describe("REQ-021 — an approved publish runs once, on a one-time decision", () => {
+  const RUN = asId<RunId>("run-1");
+  const RUN_CONTEXT = {
+    tenantId: T1,
+    principalId: asId<PrincipalId>("p1"),
+    conversationId: asId("c1"),
+    roleIds: [],
+    runId: RUN,
+  } as unknown as ExecutionContext;
+
+  /**
+   * The registry filters the catalog as well as authorising execution, so this block needs a policy
+   * with `filterTools` — the envelope-only tests above only ever reach `can`.
+   */
+  const registryPolicy = {
+    async can() {
+      return { allow: true };
+    },
+    async filterTools(_context: ExecutionContext, tools: readonly { readonly name: string }[]) {
+      return tools;
+    },
+    async scope(context: ExecutionContext) {
+      return { tenantId: context.tenantId, roleIds: [] };
+    },
+  } as unknown as AuthorizationPolicy;
+
+  const loop = () => {
+    const interactions = createMemoryInteractionStore();
+    const grants = createMemoryApprovalGrantStore();
+    const clock = () => "2026-08-23T12:00:00.000Z";
+    // No grant is ever added to this store. If one appeared, `allow-once` would have been widened into
+    // standing authority — which is the mistake this whole design exists to avoid.
+    const approvals = createApprovalGate({ grants, interactions, clock });
+    const provider = createShareFlowToolProvider({
+      services: { publishing: stubPublishing(recorder) } as unknown as ShareFlowServices,
+      deps: { authorization: registryPolicy, idempotency, approvals },
+      factories: PUBLISHING_TOOL_FACTORIES,
+    });
+    const registry = createToolRegistry({
+      providers: [provider],
+      authorization: registryPolicy,
+      idempotency,
+      approval: approvals,
+    });
+    let n = 0;
+    const service = createApprovalService({
+      interactions,
+      grants,
+      dispatcher: { async enqueueRun() {} },
+      clock,
+      idFactory: () => `int-${(n += 1)}`,
+    });
+    const runApprovals = createRunApprovals({ interactions, approvals: service, tools: registry, clock });
+    return { interactions, grants, service, runApprovals, registry };
+  };
+
+  const publishes = () => recorder.calls.filter((c) => c.method === "schedule");
+
+  it("asks, is approved once, publishes once — and asks again for the next post", async () => {
+    const l = loop();
+    const call = { name: "publish_post_now", input: { postDraftId: "d1", accountIds: ["a1"] } };
+
+    // 1. The model asks. The gate refuses, and the refusal becomes a durable ask rather than an error.
+    const asked = await l.runApprovals.runTool(RUN_CONTEXT, RUN, call);
+    expect(asked.outcome).toBe("approval-requested");
+    if (asked.outcome !== "approval-requested") return;
+    expect(asked.approval).toMatchObject({
+      toolName: "publish_post_now",
+      riskCategory: "publishing",
+      normalizedInput: { postDraftId: "d1", accountIds: ["a1"] },
+    });
+    expect(publishes()).toEqual([]);
+
+    // 2. A human says "allow once". No grant is issued.
+    const decided = await l.service.decide({
+      tenantId: T1,
+      interactionId: asked.approval.id,
+      runId: RUN,
+      decision: "allow-once",
+    });
+    expect(decided.grant).toBeUndefined();
+    expect(
+      await l.grants.findActive({ tenantId: T1, toolNameOrCategory: "publishing", now: "2026-08-23T12:00:00.000Z" }),
+    ).toBeNull();
+
+    // 3. The run resumes and publishes — the stored input, exactly once.
+    const resumed = await l.runApprovals.resume(RUN_CONTEXT, RUN);
+    expect(resumed.outcome).toBe("executed");
+    if (resumed.outcome === "executed") expect(resumed.result).toMatchObject({ ok: true, data: { outcome: "published" } });
+    expect(publishes()).toHaveLength(1);
+    expect(publishes()[0]?.args).toMatchObject({ draftId: "d1" });
+
+    // 4. Never duplicated: further resumptions have nothing left to claim.
+    expect((await l.runApprovals.resume(RUN_CONTEXT, RUN)).outcome).toBe("none");
+    expect((await l.runApprovals.resume(RUN_CONTEXT, RUN)).outcome).toBe("none");
+    expect(publishes()).toHaveLength(1);
+
+    // 5. And the authority did not linger: a different post has to be approved on its own.
+    const next = await l.runApprovals.runTool(RUN_CONTEXT, RUN, {
+      name: "publish_post_now",
+      input: { postDraftId: "d2", accountIds: ["a1"] },
+    });
+    expect(next.outcome).toBe("approval-requested");
+    expect(publishes()).toHaveLength(1);
+  });
+
+  it("publishes what the human read, not what the model asked for next", async () => {
+    const l = loop();
+    const asked = await l.runApprovals.runTool(RUN_CONTEXT, RUN, {
+      name: "publish_post_now",
+      input: { postDraftId: "d1", accountIds: ["a1"] },
+    });
+    if (asked.outcome !== "approval-requested") throw new Error("expected an approval");
+    await l.service.decide({ tenantId: T1, interactionId: asked.approval.id, runId: RUN, decision: "allow-once" });
+
+    // The model changes its mind between the ask and the resumption. An approval that executed a
+    // regenerated call would publish `d-other` under a human decision about `d1`.
+    await l.runApprovals.runTool(RUN_CONTEXT, RUN, {
+      name: "publish_post_now",
+      input: { postDraftId: "d-other", accountIds: ["a1"] },
+    });
+    await l.runApprovals.resume(RUN_CONTEXT, RUN);
+
+    expect(publishes()).toHaveLength(1);
+    expect(publishes()[0]?.args).toMatchObject({ draftId: "d1" });
+  });
+
+  it("a denial publishes nothing, and cannot later be turned into a publish", async () => {
+    const l = loop();
+    const asked = await l.runApprovals.runTool(RUN_CONTEXT, RUN, {
+      name: "publish_post_now",
+      input: { postDraftId: "d1", accountIds: ["a1"] },
+    });
+    if (asked.outcome !== "approval-requested") throw new Error("expected an approval");
+    await l.service.decide({ tenantId: T1, interactionId: asked.approval.id, runId: RUN, decision: "deny" });
+    expect((await l.runApprovals.resume(RUN_CONTEXT, RUN)).outcome).toBe("denied");
+
+    // A second decision on a resolved interaction changes nothing — the store keeps the first.
+    await l.service.decide({ tenantId: T1, interactionId: asked.approval.id, runId: RUN, decision: "allow-always" });
+    expect((await l.runApprovals.resume(RUN_CONTEXT, RUN)).outcome).toBe("none");
+    expect(publishes()).toEqual([]);
+  });
+
+  it("gates schedule and retry through the same loop", async () => {
+    for (const call of [
+      { name: "schedule_post", input: { postDraftId: "d1", accountIds: ["a1"], scheduledAt: "2026-09-01T09:00:00.000Z" } },
+      { name: "retry_publish_target", input: { publishTargetId: "t-a1" } },
+    ]) {
+      const l = loop();
+      const asked = await l.runApprovals.runTool(RUN_CONTEXT, RUN, call);
+      expect(asked.outcome, call.name).toBe("approval-requested");
+      if (asked.outcome !== "approval-requested") continue;
+      await l.service.decide({ tenantId: T1, interactionId: asked.approval.id, runId: RUN, decision: "allow-once" });
+      const resumed = await l.runApprovals.resume(RUN_CONTEXT, RUN);
+      expect(resumed.outcome, call.name).toBe("executed");
+    }
   });
 });

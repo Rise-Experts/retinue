@@ -56,6 +56,12 @@ const capability = (options: {
   readonly withApprovals?: boolean;
   readonly withIdempotency?: boolean;
   readonly granted?: boolean;
+  /** Replaces the gate's verdict outright, so a test can assert on what the envelope handed it. */
+  readonly approvalCheck?: (
+    context: ExecutionContext,
+    tool: { readonly name: string; readonly category: string; readonly approvalPolicy: string },
+    oneTime?: { readonly interactionId: string },
+  ) => Promise<boolean>;
   readonly delegate?: (input: { draftId: string }) => unknown;
 } = {}) => {
   const trace: string[] = [];
@@ -76,6 +82,7 @@ const capability = (options: {
   const tracedApprovals = {
     async isAllowed(...args: Parameters<typeof approvals.isAllowed>) {
       trace.push("approval");
+      if (options.approvalCheck) return options.approvalCheck(...(args as Parameters<NonNullable<typeof options.approvalCheck>>));
       // A standing grant is what `isAllowed` looks for; `granted` decides whether one exists.
       return options.granted === true ? true : approvals.isAllowed(...args);
     },
@@ -167,6 +174,53 @@ describe("the approval gate", () => {
     expect(result.ok).toBe(true);
     // No approval stage at all: gating a read would ask a human to approve looking at something.
     expect(c.trace).not.toContain("approval");
+  });
+
+  /**
+   * The resumption side of the approval loop. The envelope runs its own gate, so an approved call arriving from the
+   * resumed run has to be able to satisfy *that* gate — otherwise the registry lets the call through
+   * and the envelope refuses it one layer down, which looks exactly like the loop this closed.
+   */
+  it("passes the call's one-time approval to the gate, and proceeds when it satisfies it", async () => {
+    const seen: unknown[] = [];
+    const c = capability({
+      approvalCheck: async (_context, _tool, oneTime) => {
+        seen.push(oneTime);
+        return oneTime?.interactionId === "int-1";
+      },
+    });
+    const result = await c.tool.execute({
+      context: ctx(),
+      input: { draftId: "d1" },
+      approval: { interactionId: "int-1" },
+    });
+    expect(result).toMatchObject({ ok: true });
+    expect(c.delegateCalls()).toBe(1);
+    expect(seen).toEqual([{ interactionId: "int-1" }]);
+  });
+
+  it("refuses a one-time approval the gate rejects, without reaching the delegate", async () => {
+    const c = capability({ approvalCheck: async () => false });
+    const result = await c.tool.execute({
+      context: ctx(),
+      input: { draftId: "d1" },
+      approval: { interactionId: "int-forged" },
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("approval_required");
+    expect(c.delegateCalls()).toBe(0);
+  });
+
+  it("refuses a one-time approval when the gate is not wired at all", async () => {
+    const c = capability({ withApprovals: false });
+    const result = await c.tool.execute({
+      context: ctx(),
+      input: { draftId: "d1" },
+      approval: { interactionId: "int-1" },
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("capability_unavailable");
+    expect(c.delegateCalls()).toBe(0);
   });
 
   it("refuses rather than proceeding when the gate is not wired", async () => {

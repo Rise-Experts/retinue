@@ -158,6 +158,86 @@ describe("execute_tool — re-auth, validation, idempotency, spill", () => {
     expect(result).toMatchObject({ ok: false, error: { code: "approval_required" } });
   });
 
+  /**
+   * A one-time approval travels with the call, not with the context — so the registry has to
+   * hand it to the check. Without this the resumed run presents a decided approval and the gate never
+   * sees it, which is the loop that used to spin: approved once, refused forever.
+   */
+  it("hands the call's one-time approval to the check, and executes when it satisfies it", async () => {
+    const seen: unknown[] = [];
+    const reg = createToolRegistry({
+      providers: [makeProvider()],
+      authorization: policy,
+      idempotency: createMemoryIdempotencyStore(),
+      approval: {
+        async isAllowed(_c, _t, oneTime) {
+          seen.push(oneTime);
+          return oneTime?.interactionId === "int-1";
+        },
+      },
+    });
+    const allowed = await reg.execute(ctx(["editor"]), {
+      name: "danger",
+      input: {},
+      idempotencyKey: "k1",
+      approval: { interactionId: "int-1" },
+    });
+    expect(allowed).toMatchObject({ ok: true });
+    expect(seen).toEqual([{ interactionId: "int-1" }]);
+  });
+
+  it("still refuses when the call presents a one-time approval the check rejects", async () => {
+    const reg = createToolRegistry({
+      providers: [makeProvider()],
+      authorization: policy,
+      idempotency: createMemoryIdempotencyStore(),
+      approval: { isAllowed: async () => false },
+    });
+    const result = await reg.execute(ctx(["editor"]), {
+      name: "danger",
+      input: {},
+      idempotencyKey: "k2",
+      approval: { interactionId: "int-forged" },
+    });
+    expect(result).toMatchObject({ ok: false, error: { code: "approval_required" } });
+  });
+
+  it("fails closed even with a one-time approval when no check is wired", async () => {
+    const reg = createToolRegistry({ providers: [makeProvider()], authorization: policy, idempotency: createMemoryIdempotencyStore() });
+    const result = await reg.execute(ctx(["editor"]), {
+      name: "danger",
+      input: {},
+      idempotencyKey: "k3",
+      approval: { interactionId: "int-1" },
+    });
+    expect(result).toMatchObject({ ok: false, error: { code: "approval_required" } });
+  });
+
+  it("passes the one-time approval down to the tool, so a nested gate sees it too", async () => {
+    const received: unknown[] = [];
+    const gatedProvider: ToolProvider = {
+      id: "gated",
+      async listTools() {
+        return [
+          tool(descriptor({ name: "danger", effect: "destructive", approvalPolicy: "always" }), async (input) => {
+            received.push(input.approval);
+            return { ok: true, data: "ran" };
+          }),
+        ];
+      },
+    };
+    const reg = createToolRegistry({
+      providers: [gatedProvider],
+      authorization: policy,
+      idempotency: createMemoryIdempotencyStore(),
+      approval: { isAllowed: async () => true },
+    });
+    await reg.execute(ctx(["editor"]), { name: "danger", input: {}, idempotencyKey: "k4", approval: { interactionId: "int-1" } });
+    // The delegating envelope runs its own gate; a ticket the registry swallowed would leave that
+    // second gate refusing an approved call.
+    expect(received).toEqual([{ interactionId: "int-1" }]);
+  });
+
   it("spills a large result and reads it back through read_tool_output", async () => {
     const reg = registry();
     const result = await reg.execute(ctx(["editor"]), { name: "bigread", input: {} });
