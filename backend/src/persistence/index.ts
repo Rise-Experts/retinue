@@ -395,6 +395,87 @@ export type Artifact = {
   readonly deletedAt?: string;
 };
 
+/**
+ * A rendered export of one artifact version (#134).
+ *
+ * **Not an artifact version.** #133's versions are versions of the *content*; a PDF is a rendering of one.
+ * Making a render a new version would bump `latestVersion` for a reason unrelated to the content, and
+ * "the newest version" would stop meaning "the newest thing the assistant wrote". The issue's wording said
+ * artifact version; this is the deviation, and the reason.
+ *
+ * Keyed on `(artifactId, version, format)`, which is what makes "re-downloaded without re-rendering" a
+ * constraint rather than a cache someone remembers to check.
+ */
+export const EXPORT_FORMATS = ["pdf", "markdown"] as const;
+export type ExportFormat = (typeof EXPORT_FORMATS)[number];
+
+export const EXPORT_STATES = ["pending", "rendering", "rendered", "failed"] as const;
+export type ExportState = (typeof EXPORT_STATES)[number];
+
+export type ArtifactExport = {
+  readonly id: string;
+  readonly artifactId: ArtifactId;
+  /** The content version this rendered. An export is of a *version*, never of "the artifact". */
+  readonly version: number;
+  readonly format: ExportFormat;
+  readonly state: ExportState;
+  /**
+   * The rendered bytes, as a file.
+   *
+   * A `FileId` rather than a `BlobRef`: `BlobStore` holds JSON and a PDF is bytes, and going through the file
+   * ports means the export inherits #129's entitlement check and short-lived signed URLs rather than needing
+   * a second mediated-download path.
+   */
+  readonly fileId?: FileId;
+  readonly byteSize?: number;
+  readonly checksum?: string;
+  readonly failureReason?: string;
+  readonly failureMessage?: string;
+  readonly requestedBy: PrincipalId;
+  readonly createdAt: string;
+  readonly renderedAt?: string;
+};
+
+export interface ArtifactExportStore {
+  /**
+   * Claims the export slot for `(artifactId, version, format)`.
+   *
+   * Returns the existing row when there is one, so a second request for the same export is a *read* rather
+   * than a second render. `claimed: false` means someone else has it — which is the answer that stops two
+   * workers rendering the same PDF.
+   */
+  claim(
+    input: TenantScope & {
+      export: Omit<ArtifactExport, "state" | "fileId" | "byteSize" | "checksum" | "failureReason" | "failureMessage" | "renderedAt">;
+    },
+  ): Promise<{ readonly claimed: boolean; readonly export: ArtifactExport }>;
+
+  /** Records the outcome. Idempotent, because a worker retrying after a crash cannot know what it wrote. */
+  complete(
+    input: TenantScope & {
+      id: string;
+      state: Extract<ExportState, "rendered" | "failed">;
+      fileId?: FileId;
+      byteSize?: number;
+      checksum?: string;
+      failureReason?: string;
+      failureMessage?: string;
+      at: string;
+    },
+  ): Promise<{ readonly recorded: boolean }>;
+
+  get(input: TenantScope & { id: string }): Promise<ArtifactExport | null>;
+
+  /** The export for a specific version and format, which is the cache lookup. */
+  find(
+    input: TenantScope & { artifactId: ArtifactId; version: number; format: ExportFormat },
+  ): Promise<ArtifactExport | null>;
+
+  listByArtifact(
+    input: TenantScope & PageRequest & { artifactId: ArtifactId },
+  ): Promise<Page<ArtifactExport>>;
+}
+
 export interface ArtifactStore {
   /** Creates the artifact and its version 1 together: an artifact with no version is not a thing. */
   create(

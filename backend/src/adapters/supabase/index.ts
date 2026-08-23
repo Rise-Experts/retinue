@@ -69,6 +69,7 @@ export * from "./storage.js";
  * the artifact row is a relational row.
  */
 export { createPostgresArtifactStore as createSupabaseArtifactStore } from "../postgres/artifacts.js";
+export { createPostgresArtifactExportStore as createSupabaseArtifactExportStore } from "../postgres/artifact-exports.js";
 
 export * from "./rls.js";
 export * from "./realtime.js";

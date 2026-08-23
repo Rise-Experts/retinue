@@ -18,6 +18,7 @@
 import { PGlite } from "@electric-sql/pglite";
 import { afterAll, describe, expect, it } from "vitest";
 import {
+  createPostgresArtifactExportStore,
   createPostgresArtifactStore,
   createPostgresConversationStore,
   createPostgresFileMetadataStore,
@@ -61,6 +62,7 @@ import { crossPortInvariants } from "../testing/conformance/invariants.js";
 import { agentStoreConformance, messageStoreConformance } from "../testing/conformance/records.js";
 import { fileMetadataStoreConformance } from "../testing/conformance/files.js";
 import { artifactStoreConformance } from "../testing/conformance/artifacts.js";
+import { artifactExportStoreConformance } from "../testing/conformance/artifact-exports.js";
 import {
   conversationBindingStoreConformance,
   sessionStateStoreConformance,
@@ -455,6 +457,35 @@ artifactStoreConformance(() => {
   };
 });
 
+artifactExportStoreConformance(() => {
+  const sql = freshExecutor();
+  return {
+    store: createPostgresArtifactExportStore(sql),
+    // Two parents deep: an export belongs to an artifact, which belongs to a conversation.
+    async seedArtifact({ tenantId, artifactId, conversationId }) {
+      await createPostgresConversationStore(sql).create({ tenantId, id: conversationId, title: "exports" });
+      await createPostgresArtifactStore(sql).create({
+        tenantId,
+        artifact: {
+          id: artifactId,
+          conversationId,
+          kind: "markdown",
+          name: "Exported",
+          createdAt: "2026-08-23T09:00:00.000Z",
+        },
+        version: {
+          id: asId("conf-export-seed-v1"),
+          contentRef: asId("conf-export-seed-blob"),
+          byteSize: 1,
+          provenance: { producedBy: "seed", inputs: {} },
+          createdBy: asId("conf-export-user"),
+          createdAt: "2026-08-23T09:00:00.000Z",
+        },
+      });
+    },
+  };
+});
+
 fileMetadataStoreConformance(() => {
   const sql = freshExecutor();
   return {
@@ -501,6 +532,7 @@ describe("postgres adapter coverage", () => {
       "BlobStore",
       "FileMetadataStore",
       "ArtifactStore",
+      "ArtifactExportStore",
     ]);
   });
 

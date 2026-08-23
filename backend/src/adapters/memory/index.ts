@@ -100,6 +100,7 @@ export * from "./usage.js";
 export * from "./blobs.js";
 export * from "./files.js";
 export * from "./artifacts.js";
+export * from "./artifact-exports.js";
 
 /** Idempotency store reference adapter. */
 export * from "./idempotency.js";

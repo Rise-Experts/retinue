@@ -787,6 +787,50 @@ export const MIGRATIONS: readonly Migration[] = [
       `DROP TABLE IF EXISTS artifacts`,
     ],
   },
+  {
+    // #134. A rendered export of one artifact *version*, not a version of its own -- see the note on
+    // ArtifactExport for why a PDF is not an artifact version.
+    id: "0016_artifact_exports",
+    up: [
+      `CREATE TABLE IF NOT EXISTS artifact_exports (
+        tenant_id        text        NOT NULL,
+        id               text        NOT NULL,
+        artifact_id      text        NOT NULL,
+        version          integer     NOT NULL,
+        format           text        NOT NULL,
+        state            text        NOT NULL,
+        -- The rendered bytes, as a file. A FileId rather than a BlobRef because blobs hold JSON and a PDF is
+        -- bytes -- and going through the file ports means an export inherits 0013's entitlement check and
+        -- short-lived signed URLs instead of needing a second mediated-download path.
+        file_id          text,
+        byte_size        bigint,
+        checksum         text,
+        failure_reason   text,
+        failure_message  text,
+        requested_by     text        NOT NULL,
+        created_at       timestamptz NOT NULL,
+        rendered_at      timestamptz,
+        PRIMARY KEY (tenant_id, id),
+        FOREIGN KEY (tenant_id, artifact_id) REFERENCES artifacts (tenant_id, id) ON DELETE RESTRICT,
+        -- The constraint that makes "re-downloaded without re-rendering" a property rather than a cache
+        -- someone remembers to check: one export per version per format, enforced where the application
+        -- cannot be wrong about it. Two concurrent requests for the same PDF cannot both claim it.
+        UNIQUE (tenant_id, artifact_id, version, format),
+        -- A rendered export without a file is a row promising a download that does not exist; a failed one
+        -- without a reason is a failure nobody can act on. Both directions, because a check that held one way
+        -- would let the other through.
+        CHECK ((state = 'rendered') = (file_id IS NOT NULL)),
+        CHECK ((state = 'failed') = (failure_reason IS NOT NULL)),
+        CHECK (version >= 1)
+      )`,
+      `CREATE INDEX IF NOT EXISTS artifact_exports_artifact_idx
+        ON artifact_exports (tenant_id, artifact_id, created_at, id)`,
+    ],
+    down: [
+      `DROP INDEX IF EXISTS artifact_exports_artifact_idx`,
+      `DROP TABLE IF EXISTS artifact_exports`,
+    ],
+  },
 ];
 
 export const migrate = async (sql: SqlExecutor): Promise<void> => {

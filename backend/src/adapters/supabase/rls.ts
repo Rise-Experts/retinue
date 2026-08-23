@@ -71,6 +71,7 @@ export const TENANT_SCOPED_TABLES: readonly RlsTable[] = [
   { table: "files" },
   { table: "artifacts" },
   { table: "artifact_versions" },
+  { table: "artifact_exports" },
 ];
 
 /**

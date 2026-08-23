@@ -31,3 +31,4 @@ export const POSTGRES_CAPABILITIES: readonly AdapterCapability[] = [
 ];
 export * from "./files.js";
 export * from "./artifacts.js";
+export * from "./artifact-exports.js";

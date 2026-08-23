@@ -349,10 +349,16 @@ const groupIntoBlocks = (
   };
 
   // The body size is the most common size, which is what makes "larger than body" mean anything.
+  //
+  // Weighted by *characters*, not by line count. Headings are short, so a document with a title, two section
+  // headings and three lines of prose has more heading lines than body lines and a line-count vote elects the
+  // heading size as the body -- after which nothing is a heading and the document's structure is gone. Found
+  // rendering a short report in #134 and reading it back with this parser.
   const sizeCounts = new Map<number, number>();
   for (const line of lines) {
     const rounded = Math.round(line.size);
-    sizeCounts.set(rounded, (sizeCounts.get(rounded) ?? 0) + 1);
+    const weight = Math.max(1, joinLine(line).length);
+    sizeCounts.set(rounded, (sizeCounts.get(rounded) ?? 0) + weight);
   }
   // Most common size wins, and on a tie the *smaller* one does. That tie-break is not a detail: a short
   // document with one heading and one paragraph has a 1-1 tie, and picking the larger as "body" makes the

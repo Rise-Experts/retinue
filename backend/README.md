@@ -26,6 +26,7 @@ are open to change.
 | `files` | [05](../docs/05-knowledge-and-documents.md) | The attachment lifecycle: capped uploads, mediated reads, scheduled deletion, orphan reconciliation; the reference-not-inject context provider and the bounded `read_attachment` step |
 | `documents` | [05](../docs/05-knowledge-and-documents.md) | Extraction to structured blocks (headings, tables, lists), bounded parsers for PDF/Markdown/CSV/JSON, OCR and vision ports, confidence flagging, typed failures, and the bounded `read_document` step |
 | `artifacts` | [05](../docs/05-knowledge-and-documents.md) | Named, versioned assistant output: content by reference, compare-and-set versioning, required provenance, restore, and conversation-scoped access |
+| `export` | [05](../docs/05-knowledge-and-documents.md) | Deterministic PDF and Markdown rendering, one export per version per format, downloads through the mediated file path |
 
 ## Rules these contracts encode
 

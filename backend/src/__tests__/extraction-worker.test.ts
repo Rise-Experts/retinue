@@ -24,6 +24,8 @@ import {
   extractionJobId,
 } from "../adapters/bullmq/extraction.js";
 import { runJobId } from "../adapters/bullmq/dispatcher.js";
+import { EXPORT_JOB_NAME, createBullMqExportDispatcher, exportJobId } from "../adapters/bullmq/export.js";
+import { createExportWorker } from "../worker/export.js";
 
 const T1 = asId<TenantId>("tenant-1");
 const F1 = asId<FileId>("file-1");
@@ -197,5 +199,136 @@ describe("the BullMQ extraction dispatcher", () => {
       .catch((e: AgentPlatformError) => e);
     expect(error).toMatchObject({ code: "provider_unavailable" });
     expect(error.message).toMatch(/job queue is unreachable/);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// The export worker and queue (#134). Same shape, and the same two properties that only exist at
+// this layer: which failures the queue should retry.
+// ---------------------------------------------------------------------------------------------
+
+describe("the export worker", () => {
+  const manualExportConsumer = () => {
+    let handler: ((job: { tenantId: string; exportId: string }) => Promise<void>) | null = null;
+    let stopped = false;
+    return {
+      consumer: {
+        start(h: (job: { tenantId: string; exportId: string }) => Promise<void>) {
+          handler = h;
+        },
+        async stop() {
+          stopped = true;
+        },
+      },
+      deliver: (job: { tenantId: string; exportId: string }) => handler?.(job) ?? Promise.resolve(),
+      get stopped() {
+        return stopped;
+      },
+    };
+  };
+
+  const context = {
+    tenantId: T1,
+    principalId: asId("user-1"),
+    roleIds: [],
+    locale: "en",
+    timezone: "UTC",
+    requestId: asId("req-1"),
+  } as never;
+
+  it("completes the job when a render fails", async () => {
+    // Retrying an artifact that cannot be rendered produces the same answer at the same cost forever.
+    const consumer = manualExportConsumer();
+    const worker = createExportWorker({
+      exports: {
+        async render() {
+          return { state: "failed", failureReason: "render-failed" };
+        },
+      } as never,
+      consumer: consumer.consumer,
+      contextFor: () => context,
+    });
+    await worker.start();
+    await expect(consumer.deliver({ tenantId: T1, exportId: "e1" })).resolves.toBeUndefined();
+    expect(worker.status()).toMatchObject({ processed: 1, failed: 1 });
+  });
+
+  it("fails the job when the store is unreachable", async () => {
+    const consumer = manualExportConsumer();
+    const worker = createExportWorker({
+      exports: {
+        async render() {
+          throw new AgentPlatformError({ code: "provider_unavailable", message: "down", retryable: true });
+        },
+      } as never,
+      consumer: consumer.consumer,
+      contextFor: () => context,
+    });
+    await worker.start();
+    await expect(consumer.deliver({ tenantId: T1, exportId: "e1" })).rejects.toThrow(/down/);
+    expect(worker.status()).toMatchObject({ processed: 0 });
+  });
+
+  it("renders as the context the host supplies, per job", async () => {
+    // The point of `contextFor`: an export must be rendered with the entitlement of the person who asked for
+    // it. A worker inventing an all-powerful context would make the download authorisation decorative.
+    const seen: string[] = [];
+    const consumer = manualExportConsumer();
+    const worker = createExportWorker({
+      exports: {
+        async render(_job: unknown, ctx: { principalId: string }) {
+          seen.push(ctx.principalId);
+          return { state: "rendered" };
+        },
+      } as never,
+      consumer: consumer.consumer,
+      contextFor: (job) => ({ ...(context as object), principalId: `owner-of-${job.exportId}` }) as never,
+    });
+    await worker.start();
+    await consumer.deliver({ tenantId: T1, exportId: "e7" });
+    expect(seen).toEqual(["owner-of-e7"]);
+  });
+
+  it("stops accepting before it waits for in-flight work", async () => {
+    const consumer = manualExportConsumer();
+    const worker = createExportWorker({
+      exports: { async render() { return { state: "rendered" }; } } as never,
+      consumer: consumer.consumer,
+      contextFor: () => context,
+    });
+    await worker.start();
+    expect(await worker.shutdown("test")).toMatchObject({ graceful: true });
+    expect(consumer.stopped).toBe(true);
+  });
+});
+
+describe("the BullMQ export dispatcher", () => {
+  it("enqueues with a deduplicating, colon-free job id", async () => {
+    const added: { name: string; opts?: { jobId?: string; attempts?: number } }[] = [];
+    await createBullMqExportDispatcher({
+      async add(name: string, _data: unknown, opts?: { jobId?: string; attempts?: number }) {
+        added.push({ name, ...(opts === undefined ? {} : { opts }) });
+        return {};
+      },
+    }).enqueueExport({ tenantId: T1, exportId: "e1" });
+    expect(added[0]).toMatchObject({
+      name: EXPORT_JOB_NAME,
+      opts: { jobId: exportJobId({ tenantId: T1, exportId: "e1" }), attempts: 1 },
+    });
+    // The ambiguity the length prefix prevents: two different pairs must not produce one id, or BullMQ's
+    // "existing id is a no-op" behaviour silently drops one tenant's export.
+    expect(exportJobId({ tenantId: "a-b", exportId: "c" })).not.toBe(
+      exportJobId({ tenantId: "a", exportId: "b-c" }),
+    );
+    expect(exportJobId({ tenantId: "a:b", exportId: "c:d" })).not.toContain(":");
+  });
+
+  it("reports an unreachable queue as retryable rather than hanging", async () => {
+    const dispatcher = createBullMqExportDispatcher(
+      { async add() { return new Promise(() => {}); } },
+      { enqueueTimeoutMs: 20 },
+    );
+    const error = await dispatcher.enqueueExport({ tenantId: T1, exportId: "e1" }).catch((e: AgentPlatformError) => e);
+    expect(error).toMatchObject({ code: "provider_unavailable", retryable: true });
   });
 });

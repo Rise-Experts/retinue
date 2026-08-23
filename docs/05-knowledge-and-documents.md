@@ -404,3 +404,81 @@ step with the first. An unentitled caller gets the same `not_found` and the same
 Rendered formats — PDF, DOCX — are *exports* of an artifact rather than kinds of one, which is why
 `ARTIFACT_KINDS` does not list them: an artifact exported twice is still one artifact, and making PDF a kind
 would make it two things that drift. Export is #134.
+
+## Export rendering (#134)
+
+An artifact that cannot leave the platform in a portable format does not solve the user's problem of sharing
+output with colleagues. PDF and Markdown, rendered on the worker tier.
+
+### An export is not an artifact version
+
+The issue's wording asked for a render to produce "a new blob and an artifact version". It produces an
+**export record** instead, and the reason matters: #133's versions are versions of the *content*, and a PDF is
+a rendering of one. Making a render a new version would bump `latestVersion` for a reason unrelated to what
+the assistant wrote — and exporting one artifact to two formats would create two "content versions" that are
+not content.
+
+The export record is keyed `UNIQUE (tenant_id, artifact_id, version, format)`, which delivers the property the
+wording actually wanted: **the same export is re-downloaded rather than re-rendered**, and the constraint makes
+that hold under two simultaneous requests rather than only under one. `claim` returns the winner's row to the
+loser, because the loser's next move is the same either way — read this row.
+
+An export is of a *version*, never of "the artifact". Sharing one across versions would hand someone last
+week's document.
+
+### The PDF writer
+
+Dependency-free, over the raw PDF syntax. Writing is far more tractable than reading: no unknown producers, no
+broken xrefs, no font encodings to guess. Base-14 fonts, so the file carries no font program — a report is a
+few kilobytes instead of a few hundred, and the licensing question does not arise. The cost is the character
+repertoire: **WinAnsi**, so no CJK, and `unsupportedCharacters` reports what was dropped rather than emitting
+blanks. A report whose title rendered as `????` is a document someone forwards believing it is correct.
+
+Line wrapping uses real Helvetica advance widths. A monospace approximation wraps badly enough to be obviously
+wrong — proportional text estimated at a fixed width either overflows the margin or leaves a third of the line
+empty. A word wider than its column (a URL, usually) is broken mid-word rather than allowed to run off the
+page, because an overflowing line is silently truncated by the viewer.
+
+Tables scale their column widths from the widest cell rather than splitting evenly, and the header row repeats
+after a page break — a table whose headings are on the previous page is a table nobody can read.
+
+### Determinism is a requirement (AC-6)
+
+A PDF normally carries a `CreationDate` and often a random `/ID`, either of which makes two renders of the same
+input differ. Both are fixed: the date defaults to a **constant** and the `/ID` is derived from the content. A
+deployment that wants real dates in its PDFs sets `documentDate` and gives up the guarantee knowingly.
+
+Verified by rendering twice and comparing bytes, *and* by asserting the constant's value — comparing two
+renders alone is not enough, because two calls microseconds apart produce the same millisecond-resolution
+timestamp and a `new Date()` regression slips through.
+
+### Fidelity is verified by an independent reader
+
+The rendered PDF is parsed back with the **extraction parser from #131** and its headings, paragraphs and
+table cells are asserted present. That is stronger than a golden blob: a golden file proves the writer still
+produces what it produced yesterday, whereas a parser proves the structure is actually recoverable from the
+bytes by something that knows nothing about the layout code.
+
+### Downloads go through the file ports (AC-5)
+
+A rendered export becomes a `FileMetadata` row plus content in `FileContentStore`, so it inherits #129's
+conversation entitlement and 15-minute signed URLs. There is no code in the export layer that could produce a
+permanent URL, because there is no code in it that constructs a URL at all.
+
+Entitlement is **re-checked on every download** rather than trusted from the request that created the export: a
+user removed from a conversation must stop being able to download what they exported while they were in it.
+
+The export's file is marked `extraction: skipped` — a rendered export *is* extraction output, and without that
+the #131 extraction sweep would pick up every export forever and try to read back a PDF it just wrote.
+
+### A failed render leaves nothing partial (AC-4)
+
+The file row is created, the bytes written, and only then is the export marked `rendered`. A crash leaves a
+`pending` file row that reconciliation can see and an export still `pending` — never a row promising a download
+that does not exist. The schema says the same thing twice: `CHECK ((state = 'rendered') = (file_id IS NOT
+NULL))` and `CHECK ((state = 'failed') = (failure_reason IS NOT NULL))`.
+
+A thrown renderer is the *renderer* being broken, not the artifact being unrenderable: the user gets a
+sentence and the stack trace stays in the log. A failed render **completes** its queue job — retrying an
+artifact that cannot be rendered produces the same answer at the same cost forever. Only infrastructure
+failures throw, and only those are retried.

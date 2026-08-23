@@ -259,6 +259,20 @@ describe("PDF extraction", () => {
     expect("blocks" in doc && doc.blocks[1]).toMatchObject({ kind: "paragraph" });
   });
 
+  it("finds the body size from characters, not from line count", () => {
+    // A short report has more heading lines than body lines: a title, two section headings, three lines of
+    // prose. A line-count vote elects the heading size as the body, after which nothing is a heading and the
+    // document's structure is gone. Found in #134 by rendering a report and reading it back with this parser.
+    const content =
+      show(72, 760, 20, "Quarterly Review") +
+      show(72, 720, 20, "Findings") +
+      show(72, 700, 10.5, "Revenue rose across every region this quarter.");
+    const doc = parsePdf(pdfWith(content), LIMITS);
+    if (!("blocks" in doc)) throw new Error("unparseable");
+    expect(doc.blocks.filter((b) => b.kind === "heading")).toHaveLength(2);
+    expect(doc.blocks.filter((b) => b.kind === "paragraph")).toHaveLength(1);
+  });
+
   it("recovers a table from text at repeating column positions", () => {
     // AC-1 for PDFs, and the honest hard case: a PDF contains no tables, only coordinates.
     const rows = [
