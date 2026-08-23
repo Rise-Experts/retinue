@@ -7,3 +7,4 @@
 export * from "./dispatcher.js";
 export * from "./queue.js";
 export * from "./lock.js";
+export * from "./consumer.js";

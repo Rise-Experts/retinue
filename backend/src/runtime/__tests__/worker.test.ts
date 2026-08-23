@@ -358,3 +358,103 @@ describe("durable worker — cancellation", () => {
     expect(run?.status).toBe("cancelled");
   });
 });
+
+/**
+ * AC-5 of #107: "heartbeats continue during long tool calls, so a slow tool is not mistaken for a dead
+ * worker."
+ *
+ * The existing `heartbeat()` runs on every engine *event*, throttled — which keeps a tool-*heavy* run
+ * alive (many short tools, an event between each) but says nothing about a *single* long tool call.
+ * While the engine awaits one tool it yields nothing, so nothing calls keepalive, and a tool slower
+ * than the lease loses its claim: the run gets reaped and re-executed while it is still running.
+ *
+ * That is a production failure for any genuinely slow tool — a large render, a slow third-party API —
+ * so the worker now keeps a timer-based heartbeat for the duration of the run, independent of events.
+ */
+describe("durable worker — heartbeat during a long tool call (#107 AC-5)", () => {
+  /** An engine whose single tool call takes longer than the lease, emitting nothing while it waits. */
+  const slowToolEngine = (holdMs: number): AgentEngine => ({
+    async *run() {
+      const toolCallId = asId<ToolCallId>("slow-1");
+      yield { type: "tool.started", toolCallId, toolName: "render" };
+      await new Promise((resolve) => setTimeout(resolve, holdMs));
+      yield { type: "tool.completed", toolCallId, toolName: "render" };
+      yield { type: "part.added", messageId: deriveRunMessageId(RUN) as MessageId, part: textPart("p1", "done") };
+    },
+  });
+
+  /**
+   * Real time, deliberately — and this matters. The shared `fakeClock` advances 1000ms on *every*
+   * `now()` read, which makes the keepalive throttle pass unconditionally and the lease look freshly
+   * extended no matter when it was last touched. A first version of these tests used it and passed
+   * while proving nothing: heartbeats still only happened *between* events, and the fake clock hid it.
+   */
+  const realClock = { now: () => Date.now(), iso: () => new Date().toISOString() };
+
+  it("keeps the lease alive while a single tool call outlives it", async () => {
+    const runs = createMemoryRunStore();
+    const checkpoints = createMemoryCheckpointStore();
+    await runs.create({ tenantId: TENANT, id: RUN, conversationId: CONVO, agentId: asId("a1"), agentVersion: 1 });
+
+    const keepalives: string[] = [];
+    const spying: RunStore = {
+      ...runs,
+      async keepalive(input) {
+        keepalives.push(input.now);
+        return runs.keepalive(input);
+      },
+    };
+
+    const { publisher } = recordingPublisher();
+    const worker = createDurableWorker({
+      runs: spying,
+      checkpoints,
+      publisher,
+      engine: slowToolEngine(300),
+      buildContext: () => ctx(),
+      workerId: "worker-1",
+      now: realClock.now,
+      clock: realClock.iso,
+      // A short lease with a heartbeat well inside it, so the single tool call spans several beats.
+      leaseMs: 150,
+      keepaliveEveryMs: 40,
+    });
+
+    const result = await worker.process({ tenantId: TENANT, runId: RUN });
+
+    // The engine emits `tool.started`, then nothing for 300ms. An event-driven heartbeat alone has
+    // nothing to run on across that gap, so a slow tool loses its claim and the run is reaped and
+    // re-executed while the first call is still in flight.
+    expect(keepalives.length).toBeGreaterThan(2);
+    expect(result.outcome).toBe("completed");
+  });
+
+  it("does not leave the run reapable while the slow tool is still running", async () => {
+    const runs = createMemoryRunStore();
+    const checkpoints = createMemoryCheckpointStore();
+    await runs.create({ tenantId: TENANT, id: RUN, conversationId: CONVO, agentId: asId("a1"), agentVersion: 1 });
+
+    const { publisher } = recordingPublisher();
+    const worker = createDurableWorker({
+      runs,
+      checkpoints,
+      publisher,
+      engine: slowToolEngine(400),
+      buildContext: () => ctx(),
+      workerId: "worker-1",
+      now: realClock.now,
+      clock: realClock.iso,
+      leaseMs: 150,
+      keepaliveEveryMs: 40,
+    });
+
+    const processing = worker.process({ tenantId: TENANT, runId: RUN });
+    // Mid-tool and well past the original lease. A reaper sweeping now must not see this run as a
+    // candidate: reclaiming it would run the tool a second time while the first call is in flight.
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    const reapable = await runs.reapExpired({ now: realClock.iso(), limit: 10 });
+    expect(reapable.map((r) => r.id)).not.toContain(RUN);
+
+    expect((await processing).outcome).toBe("completed");
+  });
+});

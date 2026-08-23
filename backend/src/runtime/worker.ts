@@ -191,13 +191,55 @@ export const createDurableWorker = (deps: DurableWorkerDeps) => {
       await persist();
     };
 
-    const heartbeat = async (): Promise<void> => {
-      if (now() - lastKeepalive < keepaliveEveryMs) return;
+    /** True once a keepalive reported the claim gone; the loop below turns this into a ClaimLostError. */
+    let claimLost = false;
+
+    const beat = async (): Promise<void> => {
       lastKeepalive = now();
       const alive = await runs.keepalive({ tenantId, id: run.id, workerId, leaseMs, now: clock() });
-      if (!alive) throw new ClaimLostError();
+      if (!alive) {
+        claimLost = true;
+        return;
+      }
       const fresh = await runs.findById({ tenantId, id: run.id });
       if (fresh?.cancelRequestedAt !== undefined) cancelRequested = true;
+    };
+
+    const heartbeat = async (): Promise<void> => {
+      if (claimLost) throw new ClaimLostError();
+      if (now() - lastKeepalive < keepaliveEveryMs) return;
+      await beat();
+      if (claimLost) throw new ClaimLostError();
+    };
+
+    /**
+     * A timer-based heartbeat for the duration of the run, independent of engine events (#107 AC-5).
+     *
+     * `heartbeat()` above runs after each event, which keeps a tool-*heavy* run alive — many short
+     * tools, an event between each. It does nothing for a *single* long tool call: while the engine
+     * awaits one tool it yields nothing, so nothing calls keepalive, and a tool slower than the lease
+     * loses its claim. The run is then reaped and re-executed while the first call is still in flight,
+     * which for a slow external write is exactly the duplicate the lease exists to prevent.
+     *
+     * This is the one place #107 adds behaviour rather than wiring what exists. AC-5 cannot be
+     * satisfied by composition, because nothing outside the run's own loop knows the run is alive.
+     *
+     * A failed keepalive sets `claimLost` rather than throwing: an unhandled rejection from a timer
+     * would take the process down, and the loop below is where losing a claim is already handled.
+     */
+    const startTimerHeartbeat = (): (() => void) => {
+      const timer = setInterval(() => {
+        if (claimLost) return;
+        // Skipped when an event-driven beat happened recently, so a busy run does not double its
+        // keepalive traffic.
+        if (now() - lastKeepalive < keepaliveEveryMs) return;
+        void beat().catch(() => {
+          // A failed round trip is not proof the claim is gone, so it is not treated as loss here;
+          // the next beat, or the event-driven one, will find out.
+        });
+      }, Math.max(1, keepaliveEveryMs));
+      timer.unref?.();
+      return () => clearInterval(timer);
     };
 
     // Recovery reconciliation (C1). `emit` makes an event durable in the log *before* the checkpoint
@@ -216,6 +258,9 @@ export const createDurableWorker = (deps: DurableWorkerDeps) => {
     // Finalize them once, before the engine resumes, so it observes them as failed and never re-fires.
     if (state.pendingToolCalls.length > 0) await finalizePending();
 
+    // Started before the engine runs and stopped in the `finally` below, so the lease is held for the
+    // whole of the run rather than only across event boundaries.
+    const stopTimerHeartbeat = startTimerHeartbeat();
     try {
       const started = await runs.transition({ tenantId, id: run.id, workerId, to: "running", now: clock() });
       await emit({ type: "run.started" });
@@ -267,6 +312,10 @@ export const createDurableWorker = (deps: DurableWorkerDeps) => {
       await emit({ type: "run.failed", error });
       await persist();
       return { run: failed, outcome: "failed" };
+    } finally {
+      // Every exit path: completed, paused, failed, claim lost, or a throw from the engine. A timer
+      // left running would keep renewing the lease on a run this worker is no longer driving.
+      stopTimerHeartbeat();
     }
   };
 
