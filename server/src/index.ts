@@ -6,3 +6,4 @@
  */
 export * from "./host.js";
 export * from "./main.js";
+export * from "./sse-route.js";

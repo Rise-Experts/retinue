@@ -11,6 +11,7 @@
  * comes from.
  */
 import { createGraphQLError, createSchema, createYoga } from "graphql-yoga";
+import { createRunEventSseRoute, type SseRouteOptions } from "./sse-route.js";
 import { createResolvers, typeDefs, type GraphQLContext, type ResolverDeps } from "@agentkit/backend";
 import type { ExecutionContext } from "@agentkit/backend";
 
@@ -31,6 +32,12 @@ export type HostOptions = {
   readonly graphqlEndpoint?: string;
   /** Landing page and introspection are off by default; a reference host is not a playground. */
   readonly graphiql?: boolean;
+  /**
+   * Also serve the SSE streaming endpoint (#109) on the same fetch handler. Optional because the
+   * embedded profile is one deployment shape, not the only one — a host using GraphQL subscriptions
+   * exclusively should not have a second streaming surface it never wanted.
+   */
+  readonly sse?: Omit<SseRouteOptions, "deps" | "authenticate"> & { readonly enabled: boolean };
 };
 
 /** Thrown when a request carries no usable identity. Surfaces as a GraphQL error, not a crash. */
@@ -41,7 +48,7 @@ export const createAgentkitHost = (options: HostOptions) => {
   // strongest form of that is a host that adds no resolver of its own — asserted in the tests.
   const resolvers = createResolvers(options.deps);
 
-  return createYoga<Record<string, never>, GraphQLContext>({
+  const yoga = createYoga<Record<string, never>, GraphQLContext>({
     schema: createSchema({ typeDefs, resolvers: resolvers as never }),
     graphqlEndpoint: options.graphqlEndpoint ?? "/graphql",
     graphiql: options.graphiql ?? false,
@@ -70,6 +77,38 @@ export const createAgentkitHost = (options: HostOptions) => {
       return { execution };
     },
   });
+
+  if (options.sse?.enabled !== true) return yoga;
+
+  const sse = createRunEventSseRoute({
+    deps: options.deps,
+    authenticate: options.authenticate,
+    ...options.sse,
+  });
+
+  /**
+   * One fetch handler for both surfaces. Composed rather than mounted on a router, because a router
+   * would be a second framework decision this workspace has no need to make — and the whole point of
+   * a fetch handler is that it composes.
+   *
+   * The returned object keeps Yoga's own shape (`fetch`, `graphqlEndpoint`) so callers and
+   * `createServer(host)` are unaffected by whether SSE is enabled.
+   */
+  const fetch = async (
+    input: Request | string | URL,
+    init?: RequestInit,
+    ...rest: readonly unknown[]
+  ): Promise<Response> => {
+    // Yoga's `fetch` accepts a Request, a URL or a string, and callers use all three. Normalising here
+    // rather than assuming a Request: the first version of this read `request.url` off a string and
+    // failed with "Invalid URL" for every caller that passed one.
+    const request = input instanceof Request ? input : new Request(String(input), init);
+    const url = new URL(request.url);
+    if (url.pathname === sse.path) return sse.handle(request);
+    return (yoga.fetch as (r: Request, ...a: readonly unknown[]) => Promise<Response>)(request, ...rest);
+  };
+
+  return Object.assign(fetch, yoga, { fetch, ssePath: sse.path });
 };
 
 export type AgentkitHost = ReturnType<typeof createAgentkitHost>;
