@@ -1271,6 +1271,131 @@ export interface ResearchService {
   ): Promise<ReadSourceResult>;
 }
 
+
+// ---------------------------------------------------------------------------------------------------
+// Analytics — measured facts, and nothing that interprets them (#125).
+// ---------------------------------------------------------------------------------------------------
+
+/** What a number is. Named so the assistant does not have to infer it from the metric's name. */
+export const METRIC_UNITS = ["count", "seconds", "fraction", "minor-units"] as const;
+export type MetricUnit = (typeof METRIC_UNITS)[number];
+
+/** The window a fact covers. A number without one is not a fact, it is a rumour. */
+export type MetricWindow = {
+  /** Inclusive, `YYYY-MM-DD`. */
+  readonly fromDay: CalendarDate;
+  readonly toDay: CalendarDate;
+};
+
+/**
+ * Where a number came from.
+ *
+ * **Not the rows themselves.** An aggregate over 500 records carries 500 references, which is a context
+ * bomb and 500 ids the model will never read. "Traceable" means an auditor can find the rows, not that the
+ * rows are inlined — so the record type and count always, and the ids only when the set is small enough to
+ * be worth reading.
+ */
+export type FactDerivation = {
+  readonly recordType: "post_metrics" | "analytics_daily" | "scheduled_items" | "leads";
+  readonly recordCount: number;
+  /** Present only for a small set. Absent does not mean untraceable — `recordType` plus the window is. */
+  readonly recordIds?: readonly string[];
+};
+
+/**
+ * One measured number, or an explicit statement that it was not measured.
+ *
+ * **A discriminated union, and this is the third time that has been the right answer** — after #120's
+ * suppressed lead and #124's unavailable search. The specific bug it avoids here:
+ * `computeAnalyticsKpis` guards divide-by-zero by returning **0** for engagement rate when impressions are
+ * zero. Correct for a dashboard tile, wrong as a fact — *no impressions* is undefined, not zero, and an
+ * assistant handed `0` will report "engagement was 0%" when the truth is "nothing was measured".
+ *
+ * `analytics-reporting` already says *"if a platform is not covered, say we cannot see its comments — not
+ * that the post has none."* This makes the data shape agree with the skill instead of relying on the model
+ * to remember it.
+ */
+export type Fact =
+  | {
+      readonly metric: string;
+      readonly unit: MetricUnit;
+      readonly window: MetricWindow;
+      readonly value: number;
+      readonly derivedFrom: FactDerivation;
+    }
+  | {
+      readonly metric: string;
+      readonly unit: MetricUnit;
+      readonly window: MetricWindow;
+      /** `no-data`: nothing collected yet. `not-collected`: this platform is not covered at all. */
+      readonly unavailable: "no-data" | "not-collected";
+    };
+
+/**
+ * How fresh the numbers are.
+ *
+ * Analytics are stored and refreshed periodically, not read live — so a fact without an age invites
+ * "this post has 412 likes", which implies a live number nobody has.
+ */
+export type MetricFreshness = {
+  readonly lastRefreshedAt?: string;
+  /** True past ShareFlow's own staleness threshold. The judgement is the service's, not a computed age. */
+  readonly stale: boolean;
+};
+
+/**
+ * The envelope. **Facts only.**
+ *
+ * There is deliberately no `interpretation` field, and that is AC-2 in its strongest form: not "facts and
+ * interpretations are kept apart" but "an interpretation cannot be in here". Who would fill it? The model,
+ * after reading the facts — so a tool that emitted one would be doing what AC-1 forbids.
+ */
+export type MetricsReport = {
+  readonly facts: readonly Fact[];
+  readonly freshness: MetricFreshness;
+  /**
+   * True when the caller may not see every record the aggregate would otherwise cover.
+   *
+   * **A boolean, and only a boolean.** The obvious way to admit a partial aggregate — an excluded count —
+   * *is itself the leak*: it reveals the existence and volume of data the caller may not see, which is the
+   * classic aggregate attack arrived at by trying to be helpful. This says the number is partial without
+   * quantifying what is hidden.
+   *
+   * And it must be said. A permission-scoped aggregate that does not admit it is a wrong number presented
+   * as a right one.
+   */
+  readonly scoped: boolean;
+};
+
+export interface AnalyticsService {
+  /** Metrics for one post, across its destinations. */
+  postMetrics(
+    context: ExecutionContext,
+    input: { readonly draftId: PostDraftId; readonly window?: MetricWindow },
+  ): Promise<MetricsReport>;
+
+  /** Metrics for a campaign's posts, aggregated by the service — never by the caller. */
+  campaignMetrics(
+    context: ExecutionContext,
+    input: { readonly campaignId: CampaignId; readonly window?: MetricWindow },
+  ): Promise<MetricsReport>;
+
+  /**
+   * Leads attributed to a post or campaign, using the linkage #120 stores.
+   *
+   * Traceable by construction: the attribution was recorded when the lead was created, so a number here
+   * resolves to lead records rather than to a join someone hopes is right.
+   */
+  attribution(
+    context: ExecutionContext,
+    input: {
+      readonly draftId?: PostDraftId;
+      readonly campaignId?: CampaignId;
+      readonly window?: MetricWindow;
+    },
+  ): Promise<MetricsReport>;
+}
+
 export type ShareFlowServices = {
   readonly connectors: ConnectorService;
   readonly content: ContentService;
@@ -1281,4 +1406,5 @@ export type ShareFlowServices = {
   readonly brand: BrandService;
   readonly generator: ContentGenerator;
   readonly research: ResearchService;
+  readonly analytics: AnalyticsService;
 };

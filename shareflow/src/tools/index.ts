@@ -115,4 +115,5 @@ export * from "./leads.js";
 export * from "./duplication.js";
 export * from "./generate.js";
 export * from "./research.js";
+export * from "./analytics.js";
 

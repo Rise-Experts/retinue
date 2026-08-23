@@ -31,6 +31,7 @@ all. Three further things about their shape decided the seam:
 | `posts` (#115) | `list_post_drafts`, `get_post_draft` | `read` |
 | `posts` (#123) | `propose_post_angles`, `generate_content` | `read` — writes nothing |
 | `research` (#124) | `search_web`, `read_source` | `read` |
+| `analytics` (#125) | `get_post_metrics`, `get_campaign_metrics`, `get_attribution` | `read` |
 | | `create_post_draft`, `update_post_draft`, `duplicate_post_draft` | `internal-write` |
 | `campaigns` (#116) | `list_campaigns`, `get_campaign`, `get_campaign_calendar` | `read` |
 | | `create_campaign`, `update_campaign` | `internal-write` |
@@ -71,6 +72,24 @@ Two more from Campaigns:
   daily campaign over a year produces 31 — and an assistant that inferred the count from the dates
   would report 365. The field exists so the cap is visible; recomputing it locally would duplicate the
   logic it exists to expose.
+From analytics (#125):
+
+- **The envelope has no room for an interpretation.** AC-2 asks for facts and interpretations to be
+  separated; the strongest form is that one of them cannot be in there. Who would fill an
+  `interpretation` field? The model, after reading the facts — so a tool emitting one would do exactly
+  what AC-1 forbids. Labelling a hypothesis and ending with a measurable experiment are the *reply's*
+  properties, so #125 extends the `analytics-reporting` skill with both rather than leaving them unowned.
+- **A scoped aggregate says it is partial — and does not say how much.** The obvious way to admit it, an
+  excluded count, **is itself the leak**: it reveals the volume of data the caller may not see. That is
+  the classic aggregate attack arrived at by trying to be helpful. So: a boolean, and only a boolean.
+- **An unmeasured metric is not a zero.** `computeAnalyticsKpis` returns 0 for engagement rate when
+  impressions are zero — right for a dashboard tile, wrong as a fact, because an assistant handed 0 will
+  report "engagement was 0%". Third instance of the same shape after #120's suppressed lead and #124's
+  unavailable search, and the same fix: a discriminated union, so the absent case has no success shape to
+  hide in.
+- **Traceable means an auditor can find the rows, not that the rows are inlined.** A fact carries its
+  record type and count always, and the ids only when the set is small enough to be worth reading.
+
 From research (#124):
 
 - **An unavailable search is not an empty result.** The existing search is deliberately fail-soft — an
@@ -249,7 +268,9 @@ stops the process starting, rather than producing a confusing catalog on someone
 
 The seam and the scaffolding (#114); Posts (#115); Campaigns (#116); Accounts (#117); Media (#118);
 Publishing (#119); Engagement and Leads (#120); context providers (#121); the seven skills (#122);
-content generation (#123); research (#124). Analytics lands in #125.
+content generation (#123); research (#124); analytics (#125). **All eleven docs/07 tool categories and
+both net-new capabilities are implemented.** What remains for the integration is shadow mode (#126),
+feature flags (#127) and the cutover (#128).
 
 `npm test` in this workspace runs `tsc -b` first. That is deliberate: this package value-imports
 `@agentkit/backend`, whose entry point is `dist/`, so `vitest run` on its own tests whatever was last

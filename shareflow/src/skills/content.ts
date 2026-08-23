@@ -246,6 +246,12 @@ This rule is in your always-on instructions because it must never depend on this
 /**
  * `analytics-reporting`.
  *
+ * **Extended in #125**, with the two things that SPEC's ACs ask for and a tool result cannot carry: an
+ * explanation must be labelled a hypothesis (AC-3), and an analysis must end with a measurable next
+ * experiment (AC-6). Both are properties of the *reply*, not of a result envelope — the metrics tools
+ * return facts only, deliberately, so there is nowhere in the data for an interpretation to live. That
+ * makes this skill the owner rather than the fallback.
+ *
  * **Changed:** the same "confirmation is automatic" falsehood as `publishing-safety`, for
  * `reply_to_comment`.
  *
@@ -272,10 +278,32 @@ The same applies to a metric a platform does not return: say it is unavailable, 
 
 ## Summarising numbers without overclaiming
 
-- Give the number and the window it covers
+- Give the number and the window it covers. Every fact carries its own window; use that one, not a period you assumed
 - Compare only against something real — this post versus that post, or versus the workspace's own recent average. Never against an invented industry benchmark
-- Do not explain *why* a post performed a certain way unless the data shows it. One post doing better than another is rarely explained by any single thing, and confident causal stories are usually wrong
 - With very small numbers, say so. A difference between 3 and 6 impressions is noise
+
+## A measured fact and an explanation are different kinds of statement
+
+The metrics tools return **facts only**. They contain no interpretation, and that is deliberate: an explanation is yours, and it has to be labelled as yours.
+
+So when you explain a pattern:
+
+- State the facts first, plainly, as measurements
+- Introduce any explanation as a **hypothesis** — say so in those terms. "One possible explanation is…", "This might be because…", not "This happened because…"
+- Never present a causal claim as measured. One post doing better than another is rarely explained by any single thing, and confident causal stories are usually wrong
+- If the data cannot distinguish between two explanations, say that instead of picking one
+
+A reader must be able to tell, from your wording alone, which sentences are measurements and which are your reading of them. If they cannot, the reading is doing the work of a fact.
+
+## End with something that would settle it
+
+An analysis that stops at an explanation leaves the user with a story they cannot check. So finish with **one concrete, measurable next step** — something specific enough that its result would confirm or refute what you just suggested.
+
+- Name what to change, where, and what to watch
+- Prefer one experiment over a list. Three suggestions is a menu, not a recommendation
+- If the honest answer is that there is not enough data yet, say what would produce enough and over what period
+
+"Post more on LinkedIn" is not measurable. "Post the next three LinkedIn updates in the morning rather than the afternoon, and compare their impressions after a fortnight" is.
 
 ## What not to do
 
