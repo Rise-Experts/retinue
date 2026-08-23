@@ -548,18 +548,101 @@ export interface MediaService {
   inspect(context: ExecutionContext, input: { readonly id: MediaAssetId }): Promise<MediaAsset>;
 
   /**
-   * Convert to a platform's accepted format. Long-running in ShareFlow (a queued job), hence the
-   * returned asset may differ in id from the source.
+   * Convert to a **format**, not to a platform.
+   *
+   * #114 had `targetPlatformId`, and that was wrong for the reason AC-5 of #118 gives: deciding which
+   * format a platform accepts is platform-rules knowledge, and this package must not hold it. The
+   * existing service takes a format (`convertMedia(path, to)`), so this does too. Choosing the format
+   * for a destination is the assistant's job, informed by `checkPlatformCompatibility`.
+   *
+   * `targetFormat` is **not** validated against a list here. The accepted set is the conversion
+   * service's own capability and can grow; a second copy would eventually refuse something the service
+   * supports. An unsupported target must come back as `invalid_input` naming what is supported.
+   *
+   * Already idempotent underneath: ShareFlow's output path is content-addressed on source, target and
+   * profile — *"Determinism IS the cache — an object already at this path means this exact conversion
+   * was done before."* So a retry costs nothing rather than re-encoding, and the envelope's key and the
+   * service's determinism point the same way. Long-running (a queued job), so the returned asset may
+   * differ in id from the source.
    */
   convert(
     context: ExecutionContext,
     input: {
       readonly idempotencyKey: ServiceIdempotencyKey;
       readonly id: MediaAssetId;
-      readonly targetPlatformId: PlatformId;
+      readonly targetFormat: string;
     },
   ): Promise<MediaAsset>;
+
+  /**
+   * Add attachments to a draft, by reference.
+   *
+   * An **add**, not a replace — which is why it is not `updateDraft({ mediaAssetIds })`. To append one
+   * file through a replace the caller has to read the current list, append and write it back, and
+   * ShareFlow keeps `addPostMedia` separate for the same reason.
+   *
+   * Two failures the caller must be able to tell apart, because ShareFlow's writer produces both:
+   * `invalid_input` carrying `issues` when the resulting set breaks a destination's rules, and
+   * `conflict` when the draft is no longer editable — the writer re-asserts that at write time because
+   * *"the post may have been approved and published between the read above and this update."* The
+   * second carries `details.remedy = EDIT_REMEDY_DUPLICATE`, as `updateDraft` does.
+   */
+  attachToDraft(
+    context: ExecutionContext,
+    input: {
+      readonly idempotencyKey: ServiceIdempotencyKey;
+      readonly draftId: PostDraftId;
+      readonly assetIds: readonly MediaAssetId[];
+    },
+  ): Promise<{ readonly draftId: PostDraftId; readonly mediaAssetIds: readonly MediaAssetId[] }>;
+
+  /**
+   * Would these attachments be publishable to these platforms?
+   *
+   * Read-only, and the answer is the **same `ValidationIssue[]`** `PublishingService.validate` returns,
+   * so #119 consumes one shape and the judgement is made in one place. The point of asking before
+   * publishing is that the repair is cheap beforehand and a partial publish afterwards is not.
+   */
+  checkPlatformCompatibility(
+    context: ExecutionContext,
+    input: {
+      readonly assetIds: readonly MediaAssetId[];
+      readonly platformIds: readonly PlatformId[];
+    },
+  ): Promise<readonly ValidationIssue[]>;
+
+  /**
+   * Is the media path working end to end?
+   *
+   * Wraps twenty-social's `check_media_storage`, which proves credentials, signing, the bucket write and
+   * — the part that matters — *"whether the object comes back anonymously from the public domain …
+   * because the platforms fetch media with no credentials and a bucket that is private fails only at
+   * publish time."*
+   *
+   * It writes a diagnostic object, so it is an external write. See the note on the tool.
+   */
+  checkStorage(
+    context: ExecutionContext,
+    input: { readonly idempotencyKey: ServiceIdempotencyKey },
+  ): Promise<MediaStorageCheck>;
 }
+
+/**
+ * The outcome of a storage check.
+ *
+ * `stage` is where it stopped, so the answer is actionable rather than "media is broken": a config
+ * failure, an unreachable host and a private bucket need three different fixes and look identical from
+ * a failed publish.
+ */
+export type MediaStorageCheck = {
+  readonly ok: boolean;
+  /** Reached stage. `public-read` is the last one and the one that catches a private bucket. */
+  readonly stage: "config" | "upload" | "public-read" | "complete";
+  /** Configuration keys that are missing, by name. Names only — never values. */
+  readonly missing?: readonly string[];
+  /** What to do about it, as a stable code the assistant turns into a sentence. */
+  readonly hint?: string;
+};
 
 // ---------------------------------------------------------------------------------------------------
 // Publishing service — "validate, schedule, publish and retry" (docs/07, Workflow 2).
@@ -573,14 +656,59 @@ export type PublishTarget = {
 };
 
 export type ValidationIssue = {
-  /** Stable, so the frontend can localize it and a repair step can branch on it (docs/07 step 8). */
+  /**
+   * Stable, so the frontend can localize it and a repair step can branch on it (docs/07 step 8).
+   *
+   * **A code is not a value.** The adapter assigns one per case it already distinguishes; the limit
+   * itself — which platforms accept video, how many files a post may carry, a character ceiling — stays
+   * in ShareFlow, where it is tenant-overridable data rather than a constant. See `MEDIA_ISSUE_CODES`.
+   */
   readonly code: string;
-  /** Which destination, when the issue is destination-specific. */
+  /** Which destination, when the issue is specific to one connected account. */
   readonly accountId?: SocialAccountId;
+  /**
+   * Which platform, when the issue is true of every destination on it.
+   *
+   * Both scopes exist because both occur: an expired credential is one account's problem, while "TikTok
+   * requires a video" is true of every TikTok destination. `checkMediaCompatibility` maps over platforms
+   * for exactly that reason, so a finding with no `accountId` is not an incomplete finding.
+   */
+  readonly platformId?: PlatformId;
   readonly message: string;
   /** Whether the assistant may attempt an automatic repair, or must ask. */
   readonly repairable: boolean;
 };
+
+/**
+ * The media findings an adapter is expected to distinguish.
+ *
+ * A **vocabulary**, not a rule set. Each entry names a case `validateMediaForPlatform` already
+ * separates; none of them carries the value that decides it. That is the line AC-5 of #118 draws: a
+ * workspace can override `platform_rules`, so a limit copied into this package would be wrong for that
+ * workspace, while a code for "the media is too large" is true wherever the ceiling sits.
+ *
+ * Not exhaustive by design — an adapter may report a code not listed here, and the assistant treats an
+ * unknown code as non-repairable. Closing the set would mean this package deciding what ShareFlow is
+ * allowed to notice.
+ */
+export const MEDIA_ISSUE_CODES = [
+  /** The platform requires an attachment and there is none. */
+  "media-required",
+  /** The platform does not accept this kind of media at all (video, image). */
+  "media-kind-unsupported",
+  /** A document (PDF) sent somewhere with no document post type. */
+  "document-unsupported",
+  /** A document combined with images or video in one post. */
+  "document-cannot-mix",
+  /** More attachments than the platform or the store allows. */
+  "too-many-attachments",
+  /** Larger than the store or the platform accepts. */
+  "media-too-large",
+  /** A MIME type the store or the platform refuses. */
+  "media-type-unsupported",
+] as const;
+
+export type MediaIssueCode = (typeof MEDIA_ISSUE_CODES)[number];
 
 export type ValidationReport = {
   readonly ok: boolean;

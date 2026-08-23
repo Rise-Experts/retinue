@@ -33,6 +33,9 @@ all. Three further things about their shape decided the seam:
 | `campaigns` (#116) | `list_campaigns`, `get_campaign`, `get_campaign_calendar` | `read` |
 | | `create_campaign`, `update_campaign` | `internal-write` |
 | `accounts` (#117) | `list_accounts`, `check_account_health`, `get_connection_setup` | `read` |
+| `media` (#118) | `list_media`, `inspect_media`, `check_media_for_platforms` | `read` |
+| | `attach_media_to_post`, `convert_media` | `internal-write` |
+| | `check_media_storage` | `external-write` |
 
 Three things about the Posts tools generalise to every category that follows:
 
@@ -59,6 +62,21 @@ Two more from Campaigns:
   daily campaign over a year produces 31 — and an assistant that inferred the count from the dates
   would report 365. The field exists so the cap is visible; recomputing it locally would duplicate the
   logic it exists to expose.
+From Media:
+
+- **No limit is written down in the provider.** Not a byte count, a file count, a MIME list or a
+  platform rule. `platform_rules` is workspace-overridable data, so a constant copied here would be
+  silently wrong for any workspace that overrode it — and wrong in the direction that refuses
+  legitimate media. A test asserts the absence against the shipped source, because a stub cannot
+  demonstrate that a constant is missing.
+- **Convert takes a format, not a platform.** Deciding which format a destination accepts *is* the
+  platform-rules knowledge this package must not hold. The conversion service's supported set is not
+  duplicated either: an unrecognised format reaches the service, which is the only thing that knows.
+- **`check_media_storage` is an `external-write`, so it is approval-gated.** It PUTs a diagnostic
+  object, and `check_account_health` is `read` only because it GETs. Classified honestly rather than
+  relabelled to dodge the prompt — the cost is real, and it is raised as a taxonomy question rather
+  than hidden.
+
 From Accounts:
 
 - **Nothing changes a connection, in either direction.** Connecting requires the user's consent at the
@@ -115,8 +133,8 @@ stops the process starting, rather than producing a confusing catalog on someone
 
 ## Status
 
-The seam and the scaffolding (#114); Posts (#115); Campaigns (#116); Accounts (#117). Media,
-publishing, engagement, research and analytics land in #118–#125.
+The seam and the scaffolding (#114); Posts (#115); Campaigns (#116); Accounts (#117); Media (#118).
+Publishing, engagement, research and analytics land in #119–#125.
 
 `npm test` in this workspace runs `tsc -b` first. That is deliberate: this package value-imports
 `@agentkit/backend`, whose entry point is `dist/`, so `vitest run` on its own tests whatever was last
