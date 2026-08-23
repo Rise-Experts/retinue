@@ -975,6 +975,33 @@ export const MIGRATIONS: readonly Migration[] = [
       `DROP TABLE IF EXISTS evaluation_runs`,
     ],
   },
+  {
+    // #151 — the index the retention sweep needs.
+    //
+    // `run_events` is the fastest-growing table in the schema: one row per streamed part, so a single long
+    // assistant turn writes hundreds. The primary key is `(tenant_id, run_id, sequence)`, which cannot serve an
+    // age-based scan at all -- `created_at` is not a prefix of it, so a sweep without this index is a `Seq Scan`
+    // over the largest table there is.
+    id: "0021_run_events_retention",
+    up: [
+      // `(created_at, tenant_id, run_id)` rather than `(created_at)` alone.
+      //
+      // The leading column serves the range predicate, which is the whole point. The two trailing columns are
+      // the join key the safety predicate needs — the sweep has to look up each candidate's run to check it is
+      // terminal — so including them lets the candidate scan be **index-only**, with no heap fetch per row. On a
+      // table where the interesting case is "millions of rows, most of them prunable", the difference between an
+      // index-only scan and a heap fetch per candidate is the difference between a sweep that finishes and one
+      // that thrashes the buffer cache.
+      //
+      // Verified with EXPLAIN in `run-events-retention.test.ts` against a real server, not assumed. The
+      // #93/#94 pattern: an index added on faith is an index nobody knows is being used.
+      `CREATE INDEX IF NOT EXISTS run_events_created_at_idx
+        ON run_events (created_at, tenant_id, run_id)`,
+      // Serves the safety join from the other side: "is this run terminal?" by (tenant_id, id) is already the
+      // primary key of `runs`, so no index is needed there -- stated so the absence is a decision.
+    ],
+    down: [`DROP INDEX IF EXISTS run_events_created_at_idx`],
+  },
 ];
 
 /**

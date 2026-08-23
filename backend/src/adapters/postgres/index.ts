@@ -35,3 +35,4 @@ export * from "./artifact-exports.js";
 export * from "./knowledge.js";
 export * from "./rollups.js";
 export * from "./evaluation.js";
+export * from "./retention.js";

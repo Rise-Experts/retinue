@@ -81,6 +81,15 @@ Findings, severities and resolutions: [`docs/17-security-review.md`](docs/17-sec
 worth knowing when writing a context provider: `ContextSection.origin` is required and has no default, and a
 `platform` section that interpolates a user-supplied value must neutralise it.
 
+## Data retention
+
+`run_events` is pruned past a configured retention period — **default 90 days**, provisional until a product
+owner ratifies it, in `backend/src/retention/index.ts`. Events belonging to a **non-terminal** run are never
+deleted, whatever their age: a run waiting on a human approval for four months still needs its log for recovery.
+
+Pruning is a bounded, callable operation on a separate maintenance surface; `RunEventLog` stays append-only.
+There is no scheduler yet. See [`docs/18-data-retention.md`](docs/18-data-retention.md).
+
 ## Boundaries
 
 Per [`docs/01-architecture.md`](docs/01-architecture.md), these packages must build and
