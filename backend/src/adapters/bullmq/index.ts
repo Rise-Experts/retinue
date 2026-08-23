@@ -6,3 +6,4 @@
  */
 export * from "./dispatcher.js";
 export * from "./queue.js";
+export * from "./lock.js";
