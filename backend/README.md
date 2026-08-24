@@ -5,9 +5,21 @@ Server-side half of the reusable AI platform. Implements the specifications in
 
 ## Status
 
-Contracts only. Every type here is transcribed from a specification section; there is
-no execution logic yet. Modules marked `@proposed` are not in the specifications and
-are open to change.
+Implemented and exercised end to end. 174 source files, ~36,000 lines, 2,143 tests.
+
+This section said *"Contracts only … there is no execution logic yet"* until 2026-08-24,
+which stopped being true a long time before it was corrected — a README that understates
+a package this far is worse than none, because the reader concludes it does nothing and
+looks elsewhere.
+
+What exists now: a durable run loop with leases, checkpointing and recovery; a streaming
+agent engine with tool calls, approvals, questions and citations; three storage adapter
+families held to one conformance suite; usage accounting with quota enforcement; MCP tool
+import; and a GraphQL surface. `examples/` is a runnable application over all of it, and
+`shareflow/` is the first real integration.
+
+Verified against real Postgres, Redis and a live model provider, not only in memory — the
+distinction matters, and `docs/09` records which claims rest on which.
 
 ## Modules
 
@@ -22,15 +34,26 @@ are open to change.
 | `runtime` | [04](../docs/04-durable-runtime-and-hitl.md) | Run lifecycle states and execution limits |
 | `hitl` | [04](../docs/04-durable-runtime-and-hitl.md) | Durable questions, approvals and idempotency |
 | `persistence` | [02](../docs/02-core-and-persistence.md) | Tenant-scoped store ports and infrastructure ports |
-| `usage` | [12](../docs/12-usage-and-accounting.md) | Recomputed rollups keyed on tenant and period, quota enforcement at admission with a warning below the limit, and provider reconciliation that reports rather than corrects |
+| `usage` | [12](../docs/12-usage-and-accounting.md) | Recomputed rollups keyed on tenant, period and principal; quota enforcement at admission across **every** applicable limit — calendar windows, rolling windows and per-model allowances — with a warning below the limit; provider reconciliation that reports rather than corrects |
 | `evaluation` | [09](../docs/09-quality-and-release.md) | Deterministic graders for six of seven expectation kinds, a pinned and cached judge for the seventh, and a release comparison that names the cases that moved |
-| `mcp` | *none yet* — `@proposed` | Outbound MCP-server connections, tool import and effect classification |
+| `mcp` | [10](../docs/10-mcp-integration.md) | Outbound MCP-server connections, tool import with safe-by-default effect classification, per-run catalog snapshots for drift detection, and an HTTP egress policy |
 | `files` | [05](../docs/05-knowledge-and-documents.md) | The attachment lifecycle: capped uploads, mediated reads, scheduled deletion, orphan reconciliation; the reference-not-inject context provider and the bounded `read_attachment` step |
 | `documents` | [05](../docs/05-knowledge-and-documents.md) | Extraction to structured blocks (headings, tables, lists), bounded parsers for PDF/Markdown/CSV/JSON, OCR and vision ports, confidence flagging, typed failures, and the bounded `read_document` step |
 | `artifacts` | [05](../docs/05-knowledge-and-documents.md) | Named, versioned assistant output: content by reference, compare-and-set versioning, required provenance, restore, and conversation-scoped access |
 | `export` | [05](../docs/05-knowledge-and-documents.md) | Deterministic PDF and Markdown rendering, one export per version per format, downloads through the mediated file path |
 | `knowledge` | [05](../docs/05-knowledge-and-documents.md) | Structure-aware chunking, the batched embedding pipeline, incremental resumable re-indexing, the freshness target, and hybrid rank-fusion retrieval with an honest empty result |
 | `citations` | [05](../docs/05-knowledge-and-documents.md) | Per-claim provenance as a durable snapshot, groundedness derived from the citation graph, permission checked at citation time |
+| `adapters` | [02](../docs/02-core-and-persistence.md) | Every storage and infrastructure implementation: `memory` (18 files, the reference), `postgres` (26), `supabase` (RLS over the Postgres adapters), `redis`, `bullmq`, `otel`. All three store families are held to the same conformance suite — 29 memory / 28 postgres (1 n/a) / 29 supabase, with no unaccounted cells |
+| `authorization` | [11](../docs/11-authorization.md) | The policy port. **Frozen v1.** Tools are filtered before discovery and re-authorized during execution; untrusted text can never widen capability |
+| `graphql` | [06](../docs/06-graphql-and-frontend.md) | SDL plus a thin resolver map the host mounts on its own server, so the library takes no GraphQL server dependency |
+| `idempotency` | [04](../docs/04-durable-runtime-and-hitl.md) | The idempotency contract. **Frozen v1.** Every external or destructive call carries a key derived from tenant, run and tool-call identity |
+| `principal-memory` | [15](../docs/15-user-memory.md) | Per-person memory, scoped to the principal as well as the tenant — enforced in the adapters and by RLS, not by a `WHERE` clause the caller has to remember |
+| `retention` | [18](../docs/18-data-retention.md) | Retention windows and the deletion path |
+| `security` | [17](../docs/17-security-review.md) | The security review as executable acceptances, each with a revisit date the release gate checks |
+| `telemetry` | [16](../docs/16-load-and-resilience.md) | The telemetry port and its OTel adapter |
+| `loadtest` | [16](../docs/16-load-and-resilience.md) | Load, soak and failure injection harnesses |
+| `worker` | [05](../docs/05-knowledge-and-documents.md) | The export worker |
+| `testing` | [09](../docs/09-quality-and-release.md) | The conformance suite every adapter runs, plus PGlite fixtures. Named `testing` and shipped deliberately: an adapter written outside this repository has to be holdable to the same behaviour |
 
 ## Rules these contracts encode
 
@@ -52,6 +75,20 @@ npm run typecheck -w @agentkit/backend
 npm test -w @agentkit/backend
 npm run build -w @agentkit/backend
 ```
+
+From the repository root, the checks that gate a change:
+
+```bash
+npm run conformance          # the adapter matrix, and it fails on an unaccounted cell
+npm run check:boundaries     # the dependency rules between workspaces
+npm run check:reachability    # every declared capability is wired, every run event is emitted
+npm run security:review      # the acceptances in `security`, and their revisit dates
+```
+
+`check:reachability` exists because the recurring defect in this codebase is not code that
+is wrong — it is code that is **correct, tested and unreachable**. Citations, questions,
+usage recording, compaction, skills and MCP import were each built, each passing tests,
+and each wired to nothing.
 
 ## Import convention
 

@@ -154,6 +154,81 @@ is fine again in an hour.
 blocks nothing is a bill, and the bill is visible in these very rollups. Token dimensions exist separately from
 cost because a model with no pricing costs zero, so a cost limit alone bounds nothing for it.
 
+### Every applicable limit binds, not the most specific one (#182)
+
+A person can be under a personal five-hour cap, a workspace monthly cap and a workspace cap on one model at the
+same time. All three are checked, and the first refusal wins.
+
+This resolved a **single** limit until 2026-08-24, choosing the most specific — and a workspace-wide cap on an
+expensive model was therefore ignored for anybody who also had a personal overall limit. Configured, readable
+through the API, never enforced. They are not competing answers to one question; they are separate allowances.
+
+The rule is **override within a scope, coexist across scopes**: one limit per `(window, model)`, a principal's
+row replacing the tenant's for that same scope and touching no other. It lives in `UsageLimitStore.applicable`
+so it has one implementation per adapter, held to one behaviour by conformance.
+
+Limits are ordered **shortest span first**, so the one somebody is refused by is the one stopping them soonest —
+which is also the one whose reset is nearest, and therefore the only useful thing to quote.
+
+### Two kinds of window (#181)
+
+| | Calendar | Rolling |
+|---|---|---|
+| Shape | `hour`, `day`, `week`, `month` | `rolling:<minutes>` — "no more than X in any five hours" |
+| Read from | The rollup for the bucket | The ledger, over `[now − length, now)` |
+| Resets | At a true boundary | **Never** — it slides |
+
+`QuotaWindow` is a discriminated union rather than an optional `minutes` beside `period`, because the two are
+read from different places and a shape permitting both would need something to decide which one meant it.
+
+A rolling window **slides**; it is not an anchored session that starts on first use and hard-resets. That was a
+choice: an anchored boundary is *state* — knowing which session a spend belongs to means knowing when the
+current one began, which cannot be derived without walking history forward from the first run ever. Stored, it
+becomes a row that can be stale or missing, and the refusal message quotes it to people. Sliding needs no state,
+cannot drift, and cannot be gamed by waiting out a boundary to spend twice the allowance across it.
+
+What it gives up is a clean "resets at", so the message does not claim one. It says when the oldest spend leaves
+the window — the first moment any headroom returns.
+
+A rolling window cannot come from a rollup: a five-hour allowance beginning at 09:37 spans parts of six hourly
+buckets, and summing them over-counts at both edges. `UsageStore.totalsBetween` answers an exact interval, and
+returns the earliest record in it **from the same query** — two queries could disagree about a record that
+arrived between them, and the refusal would then quote a reset derived from a different set than the total it
+refused on.
+
+### Per-model allowances read the ledger too (#182)
+
+A limit can be scoped to a `modelId`, and then counts only that model's spend. A cap on an expensive model that
+a cheap model's traffic can exhaust is the opposite of a per-model limit.
+
+Model-scoped limits are answered from the ledger whatever their window, and the rollups deliberately gain **no**
+model dimension: that would multiply their row count by a tenant's model count to answer what a bounded index
+scan already answers — the same trade `breakdown` makes. The unscoped calendar path still reads the rollup,
+which is the fast path admission depends on.
+
+The refusal names the model. *"You have run out"* reads as an account-wide stop, and somebody whose Opus
+allowance is gone can still work on a cheaper model.
+
+The model is a parameter of the admission decision, not a field on `ExecutionContext`: the context is who and
+where, and two runs by the same person in the same workspace can be subject to different limits. Absent, a
+model-scoped limit does not apply — the direction that cannot refuse the wrong work, and the reason a host must
+pass it explicitly.
+
+### A limit nobody can see surprises people (#183)
+
+`QuotaGuard.explain` returns every applicable limit with its allowance, its usage and its reset, computed by the
+same reads the refusal path uses. Not a second implementation: a panel with its own idea of "how full is it"
+eventually shows somebody a comfortable number while they are being refused.
+
+Callers get an explicit *unbounded* rather than an empty list, because an empty list also means "the request
+failed and I am rendering nothing".
+
+One consequence worth stating plainly: a calendar limit is enforced from **whatever the rollups last said**. A
+deployment runs the rollup job on a schedule. Running the two window kinds side by side made this visible twice
+— once as a five-hour limit reporting 4 while a daily limit reported 2, and again as two overlapping monthly
+limits reporting 19 and 23. Both numbers were right about their own source, which is not something anyone should
+have to work out from a panel.
+
 ### The warning fires below the limit
 
 A customer told at 100% is told when work is already failing. The threshold is a **fraction** so it scales with
