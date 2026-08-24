@@ -19,6 +19,61 @@
 - React reducer/reconnection tests.
 - RAG retrieval/citation evaluations.
 - ShareFlow workflow end-to-end tests.
+- **Reachability**: every declared capability is wired, and every run event has a producer (#170).
+
+## The reachability guard (#170)
+
+Four features turned out to be **built, tested and unreachable**: citations (#165), questions (#163), usage
+recording (#166) and thread compaction (#169). A fifth and sixth turned up the moment a guard existed —
+`run.queued` and `run.checkpointed`, both in the closed event union and emitted by nothing.
+
+That is a pattern rather than six accidents, and it has one cause: **every layer above verifies a piece in
+isolation, and nothing verifies that a piece is plugged in.**
+
+Each of them looked finished from every angle a test could see:
+
+| What existed | What was missing |
+|---|---|
+| `createCitationEmitter`, `CitationPart`, its validator, the renderer, the groundedness graders | any caller |
+| `question.requested` in `RUN_EVENT_TYPES`, the worker parking on it, a telemetry span, a frontend reducer case | anything that emitted one |
+| `DurableWorkerDeps.usage`, documented and optional, with a conformance-backed store | a deployment that wired it |
+| `compactThread` with tests, over a `ThreadSummaryStore` with three adapters | a summariser and a trigger |
+
+A unit test calls the thing. A conformance suite calls the thing. An exhaustive `switch` over a union type is
+satisfied by *handling* a case, never by producing one. So "has no caller" is invisible to every layer in the
+list above — which is why it needs a layer of its own.
+
+### What it checks
+
+**Every declared capability has a consumer.** `CAPABILITIES` in `scripts/check-reachability.mjs` names each one,
+the symbol that produces it, and the scope it must be consumed from — `platform` (wired inside `backend/src`),
+`entrypoint` (wired by the shipped `server/src` commands) or `host` (wired by an application).
+
+Most are host-facing on purpose, so "referenced from `backend/src`" would be the wrong test: the emitter is
+*meant* to be called from outside. The right test is that the **reference host actually exercises it**, because a
+capability the reference host cannot use is a capability no host can use. That is what makes `examples/`
+load-bearing rather than decorative.
+
+**Every run event has a producer.** `RUN_EVENT_TYPES` is a closed union that the worker, the reducer, the span map
+and the frontend all switch over exhaustively, so an event nobody produces passes every type check in the
+codebase. Producers are found by the `type: "…"` literal specifically — searching for the bare string would match
+the switches, which is the trap.
+
+### What it does not catch, and why that is fine
+
+A ledger catches what it names. Sabotaging the guard against the real tree proved that twice, and both holes are
+now closed with a test each:
+
+- Deleting a wiring call while leaving its **import** in place passed. An import is not a use, and "symbol
+  present, wiring gone" is exactly the state being hunted.
+- Unwiring the compaction *trigger* passed, because the platform function underneath was still called — by the
+  wrapper that nothing then called. One layer of unreachability had replaced another, so the wiring site is now
+  named as well as the platform symbol.
+
+Neither is a flaw to fix with cleverness; it is the shape of the tool. An unused-export scan over a library would
+be almost all false positives, because every public type exists for a caller outside the repository. A declared
+list is the honest shape — the same choice `REGISTERED_PORTS` makes for the conformance suite. Adding a capability
+means adding a line, and forgetting to is the failure this catches.
 
 ## Evaluation dimensions
 

@@ -292,7 +292,19 @@ export const createDurableWorker = (deps: DurableWorkerDeps) => {
       for (const event of missed) state = reduceRunEvent(state, event);
       if (missed.length > 0) await persist();
     }
-    const recovered = state.sequence > 0;
+    /**
+     * Whether there is prior *work* to resume from — not merely a prior event (#170).
+     *
+     * This read `state.sequence > 0`, which was true exactly when the log held something. That worked while the
+     * only things in the log were the worker's own events, and became wrong the moment admission started
+     * emitting `run.queued`: every fresh run would arrive with sequence 1 and be handed a "resume checkpoint"
+     * containing nothing but the fact that it was queued.
+     *
+     * Parts and pending tool calls are the honest predicate, because they are what a resume *uses*: the engine
+     * replays from the checkpoint's parts and finalizes its dangling calls. A run that was claimed and died
+     * before producing either has nothing to resume from, and passing null says so.
+     */
+    const recovered = state.parts.length > 0 || state.pendingToolCalls.length > 0;
 
     // A re-claimed run may carry dangling tool calls (from the checkpoint or the reconciled log).
     // Finalize them once, before the engine resumes, so it observes them as failed and never re-fires.
@@ -314,6 +326,22 @@ export const createDurableWorker = (deps: DurableWorkerDeps) => {
       for await (const body of iterable) {
         await emit(body);
         await persist(); // durable before the engine proceeds (tool.started) / between retry attempts
+        /**
+         * `run.checkpointed`, at tool boundaries — #170.
+         *
+         * The event type was specified in `docs/04` and in `RUN_EVENT_TYPES`, and nothing emitted it. What
+         * "checkpointed" should *mean* was the open question, since `persist()` runs on every engine event and an
+         * event per text delta would double the stream to say nothing.
+         *
+         * Tool boundaries, because that is what the checkpoint above exists for — its own comment says
+         * "durable before the engine proceeds (tool.started)". A crash mid-tool is the case where durability is
+         * load-bearing, so "your progress through this tool is saved" is the signal a client can act on. The
+         * cadence is a judgement; the alternatives were one per event (noise) or none (what we had).
+         */
+        if (body.type === "tool.started" || body.type === "tool.completed" || body.type === "tool.failed") {
+          // The event carries its own sequence, stamped by `emit` — no payload needed.
+          await emit({ type: "run.checkpointed" });
+        }
         if (body.type === "question.requested") pause = "waiting-for-question";
         else if (body.type === "approval.requested") pause = "waiting-for-approval";
         else if (body.type === "question.answered" || body.type === "approval.decided") pause = null;

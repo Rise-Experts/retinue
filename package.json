@@ -2,7 +2,7 @@
   "name": "@agentkit/monorepo",
   "version": "0.0.0",
   "private": true,
-  "description": "Reusable AI agent platform — npm-workspaces monorepo (see docs/).",
+  "description": "Reusable AI agent platform \u2014 npm-workspaces monorepo (see docs/).",
   "license": "UNLICENSED",
   "type": "module",
   "workspaces": [
@@ -18,7 +18,7 @@
   "scripts": {
     "typecheck": "tsc -b",
     "build": "tsc -b",
-    "test": "npm run test --workspaces --if-present && npm run test:boundaries && npm run test:evals",
+    "test": "npm run test --workspaces --if-present && npm run test:boundaries && npm run test:evals && npm run check:reachability",
     "test:boundaries": "node --test scripts/*.test.mjs",
     "test:evals": "node --test evals/*.test.mjs",
     "evals:coverage": "node evals/coverage.mjs",
@@ -31,7 +31,8 @@
     "conformance": "npm run conformance:report; npm run conformance:matrix",
     "release:gate": "node scripts/release-gate.mjs",
     "loadtest": "node scripts/loadtest.mjs",
-    "security:review": "node scripts/security-review.mjs"
+    "security:review": "node scripts/security-review.mjs",
+    "check:reachability": "node scripts/check-reachability.mjs"
   },
   "devDependencies": {
     "typescript": "^5"

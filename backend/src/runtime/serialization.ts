@@ -16,6 +16,7 @@ import type {
   UnitOfWork,
 } from "../persistence/index.js";
 import type { JobDispatcher } from "./index.js";
+import type { RunEventLog } from "../core/events.js";
 
 /**
  * Start `runId` now if the conversation is free, else enqueue it FIFO. Returns whether it started.
@@ -24,9 +25,54 @@ import type { JobDispatcher } from "./index.js";
  */
 export const startOrEnqueueRun = async (
   coordinator: ConversationRunCoordinator,
-  input: { tenantId: TenantId; conversationId: ConversationId; runId: RunId },
+  input: {
+    tenantId: TenantId;
+    conversationId: ConversationId;
+    runId: RunId;
+    /**
+     * The durable log, so admission is *observable* — #170.
+     *
+     * `run.queued` was in `RUN_EVENT_TYPES`, mapped to a telemetry span, and mapped by the frontend reducer to
+     * the status `queued` — and **nothing emitted it**. So a client subscribing to a run saw nothing at all
+     * between sending a message and a worker picking it up: the one moment where "queued" is the only true
+     * thing to say, and the state the reducer had a case for could never be reached.
+     *
+     * Emitted here rather than by each caller because admission is the event. Two hosts emitting their own
+     * would be two answers to "when was this queued", and the one that forgot would look like a hang.
+     *
+     * Optional: a caller with no log still admits runs. Sequence 1 by definition — admission is the first thing
+     * that happens to a run, and the worker reconciles from the log before emitting, so its own first event
+     * continues from here rather than colliding.
+     */
+    eventLog?: RunEventLog;
+    now?: () => string;
+  },
 ): Promise<"started" | "queued"> => {
-  return (await coordinator.claimOrEnqueue(input)).status;
+  const { status } = await coordinator.claimOrEnqueue(input);
+  if (input.eventLog !== undefined) {
+    /**
+     * Best-effort, and deliberately so.
+     *
+     * The run is already admitted by the time this runs; failing the request now would report an error for work
+     * that is going to happen anyway, and the caller would retry an admission that cannot be repeated. A missing
+     * `run.queued` costs a client one status label. Losing the run costs the answer.
+     */
+    try {
+      await input.eventLog.append({
+        tenantId: input.tenantId,
+        event: {
+          type: "run.queued",
+          runId: input.runId,
+          sequence: 1,
+          occurredAt: (input.now ?? (() => new Date().toISOString()))(),
+        },
+      });
+    } catch {
+      // A duplicate sequence means this run was already admitted and logged — a retried request, which is not
+      // an error. Any other failure is a lost status label, which is not worth failing admission over.
+    }
+  }
+  return status;
 };
 
 /**
