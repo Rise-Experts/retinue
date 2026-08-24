@@ -15,7 +15,7 @@
  */
 
 import { createProviderFactory } from "@agentkit/backend";
-import type { ModelDefinition, ResolvedModel } from "@agentkit/backend";
+import type { ModelDefinition, ModelPricing, ResolvedModel } from "@agentkit/backend";
 
 export const MODEL_API_KEY_VARIABLE = "AGENTKIT_MODEL_API_KEY";
 export const MODEL_ID_VARIABLE = "AGENTKIT_MODEL_ID";
@@ -90,6 +90,32 @@ export const resolveExampleModel = (
  * `tools: true` is the one capability asserted rather than zeroed, because the example's whole point is the tool
  * path — and if the configured model cannot call tools, failing on the first turn is the correct outcome.
  */
+/**
+ * Prices, only if the operator supplied them — #155 AC-5.
+ *
+ * `AGENTKIT_MODEL_PRICE_INPUT` and `_OUTPUT`, in minor units per million tokens (so `250` is $2.50/M). Absent
+ * means **zero**, and zero is the honest answer: this file cannot know what an arbitrary model id the operator
+ * typed costs, and a usage panel showing a cost derived from invented prices is worse than one showing zero.
+ * Zero is obviously not a measurement; a plausible number is not obviously wrong.
+ *
+ * Tokens are recorded either way. How many a run consumed is a fact whether or not anyone knows the price, so
+ * the panel is useful with no prices set — it simply has no money in it.
+ */
+export const examplePricing = (env: Readonly<Record<string, string | undefined>> = process.env): ModelPricing => {
+  const read = (name: string): number => {
+    const raw = Number(env[name]);
+    // Non-finite and negative both mean "not a price". Silently treating them as zero beats failing to boot
+    // over a cosmetic panel — but a *negative* price would make spend fall as usage rises, so it is rejected
+    // rather than passed through.
+    return Number.isFinite(raw) && raw >= 0 ? raw : 0;
+  };
+  return {
+    currency: env["AGENTKIT_MODEL_PRICE_CURRENCY"] ?? "USD",
+    inputPerMillion: read("AGENTKIT_MODEL_PRICE_INPUT"),
+    outputPerMillion: read("AGENTKIT_MODEL_PRICE_OUTPUT"),
+  };
+};
+
 export const definitionFor = (input: { readonly provider: string; readonly modelId: string }): ModelDefinition => ({
   provider: input.provider as ModelDefinition["provider"],
   modelId: input.modelId,
@@ -101,6 +127,6 @@ export const definitionFor = (input: { readonly provider: string; readonly model
   // unbounded one would remove the budgeting the platform does on purpose.
   limits: { contextTokens: 128_000, maxOutputTokens: 4_096 },
   // Zero, and honest about it. See above.
-  pricing: { currency: "USD", inputPerMillion: 0, outputPerMillion: 0 },
+  pricing: examplePricing(),
   dataResidency: [],
 });

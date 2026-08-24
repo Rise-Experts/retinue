@@ -4,6 +4,7 @@ import { ModelNotConfigured, resolveExampleModel, definitionFor, DEFAULT_MODEL_I
 import { MAX_MEMORY_ENTRIES, NoteNotFound, createExampleStore, createExampleTools } from "../tools.js";
 import { exampleAgentManifest, exampleContextProviders } from "../agent.js";
 import { questionSpecsFrom } from "../questions.js";
+import { buildWorkerContext } from "../worker-context.js";
 import {
   CONVERSATION_MODES,
   DEFAULT_MODE,
@@ -339,5 +340,56 @@ describe("ask_user question batching", () => {
 
   it("caps a prompt rather than storing whatever the model produced", () => {
     expect(questionSpecsFrom({ question: "x".repeat(900) })[0]?.prompt).toHaveLength(500);
+  });
+});
+
+/**
+ * Who a background run acts as — #164.
+ *
+ * This is the function that decided a worker's identity, and it had `principalId: "example-worker"` and
+ * `roleIds: ["editor"]` hardcoded, because `Run` carried no principal for it to use. Two real consequences: every
+ * person's memories were attributed to one fabricated identity — which is the "I told it my country and it did
+ * not know" bug — and a `viewer` whose run was admitted at the API boundary executed with editor rights.
+ */
+describe("the worker's execution context", () => {
+  const run = (over: Record<string, unknown> = {}) =>
+    ({
+      id: "run-1",
+      tenantId: "t1",
+      conversationId: "c1",
+      agentId: "a1",
+      agentVersion: 1,
+      status: "queued",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      principalId: "azeem",
+      roleIds: ["viewer"],
+      ...over,
+    }) as never;
+
+  it("acts as the caller the run was admitted for", () => {
+    const context = buildWorkerContext(run());
+    expect(context.principalId).toBe("azeem");
+    // The caller's roles, verbatim. The worker re-authorizes with this context, so a widened list here is a
+    // privilege escalation that no API-side check can catch.
+    expect(context.roleIds).toEqual(["viewer"]);
+  });
+
+  it("never substitutes an identity when the run has none", () => {
+    // Refused, not defaulted. A run from before identity was recorded cannot be attributed, and guessing is
+    // exactly what produced both bugs.
+    expect(() => buildWorkerContext(run({ principalId: undefined }))).toThrow(/carries no principal/);
+    expect(() => buildWorkerContext(run({ roleIds: undefined }))).toThrow(/carries no principal/);
+  });
+
+  it("keeps an empty role list empty rather than filling it in", () => {
+    // A caller with no roles is a real state, and it must not become "editor" on the way through.
+    expect(buildWorkerContext(run({ roleIds: [] })).roleIds).toEqual([]);
+  });
+
+  it("carries the run and conversation, so tools and memory are scoped to them", () => {
+    const context = buildWorkerContext(run());
+    expect(context.runId).toBe("run-1");
+    expect(context.conversationId).toBe("c1");
+    expect(context.tenantId).toBe("t1");
   });
 });

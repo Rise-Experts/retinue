@@ -1002,6 +1002,33 @@ export const MIGRATIONS: readonly Migration[] = [
     ],
     down: [`DROP INDEX IF EXISTS run_events_created_at_idx`],
   },
+  {
+    id: "0022_run_principal",
+    up: [
+      // Who a run belongs to — #164.
+      //
+      // A run carried a tenant and no principal, so a durable worker had nothing to rebuild the caller's
+      // identity from. `DurableWorkerDeps.buildContext(run)` receives the run and must return an
+      // `ExecutionContext`, which requires a principal and roles: every host was therefore forced to invent
+      // them, and the shipped example invented `principalId: "example-worker"` with `roleIds: ["editor"]`.
+      //
+      // Two consequences, both real. Every principal's memories, usage and audit entries were attributed to one
+      // fabricated identity. And a `viewer` whose run was admitted at the API boundary executed in the worker
+      // with editor rights, because the worker re-authorizes with the context it was handed.
+      //
+      // Nullable, because rows written before this migration have no answer and inventing one would be the same
+      // mistake at the storage layer. A run with no principal is a run from before identity was recorded, and
+      // `parseExecutionContext` refusing it is better than a silent substitution.
+      `ALTER TABLE runs ADD COLUMN IF NOT EXISTS principal_id text`,
+      // `text[]`, not jsonb: this is a list of role ids, and an array is the type Postgres has for that. jsonb
+      // would allow `{"not": "a list"}` to be stored and only fail on read.
+      `ALTER TABLE runs ADD COLUMN IF NOT EXISTS role_ids text[]`,
+    ],
+    down: [
+      `ALTER TABLE runs DROP COLUMN IF EXISTS role_ids`,
+      `ALTER TABLE runs DROP COLUMN IF EXISTS principal_id`,
+    ],
+  },
 ];
 
 /**

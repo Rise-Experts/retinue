@@ -21,7 +21,7 @@ import { join, sep } from "node:path";
  * "Generic" is the load-bearing word: docs/01 requires these to *"build and test without ShareFlow or
  * Twenty installed"*, which is what R5 and R8 enforce.
  */
-const GENERIC_ROOTS = ["backend", "server", "frontend"];
+const GENERIC_ROOTS = ["backend", "server", "frontend", "examples"];
 
 /**
  * Integration workspaces (#114) — the one place a product name is allowed to appear.

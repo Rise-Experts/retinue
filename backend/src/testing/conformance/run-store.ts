@@ -10,7 +10,7 @@
 
 import { describe, expect, it } from "vitest";
 import { asId } from "../../core/ids.js";
-import type { AgentId, ConversationId, RunId, TenantId } from "../../core/ids.js";
+import type { AgentId, ConversationId, PrincipalId, RunId, TenantId } from "../../core/ids.js";
 import type { RunStore } from "../../persistence/index.js";
 
 const T1 = asId<TenantId>("conf-tenant-1");
@@ -34,6 +34,43 @@ export function runStoreConformance(makeStore: () => RunStore): void {
       const created = await seed(store, "r1");
       expect(created).toMatchObject({ id: "r1", tenantId: T1, status: "queued", agentVersion: 1 });
       expect(await store.findById({ tenantId: T1, id: run("r1") })).toMatchObject({ id: "r1" });
+    });
+
+    /**
+     * The run remembers who it is for — #164.
+     *
+     * A run carried a tenant and no principal, so a durable worker had nothing to rebuild the caller's identity
+     * from and every host invented one. An adapter that dropped these on write would restore that bug while
+     * every other test still passed.
+     */
+    it("records the principal and roles a run was admitted for", async () => {
+      const store = makeStore();
+      await store.create({
+        tenantId: T1,
+        id: run("r-who"),
+        conversationId: CONVO,
+        agentId: AGENT,
+        agentVersion: 1,
+        principalId: asId<PrincipalId>("conf-principal-1"),
+        roleIds: ["viewer", "auditor"],
+      });
+      const found = await store.findById({ tenantId: T1, id: run("r-who") });
+      expect(found?.principalId).toBe("conf-principal-1");
+      // Order preserved and nothing added: roles are compared against a policy, and a reordered or padded list
+      // is a different authorization question.
+      expect(found?.roleIds).toEqual(["viewer", "auditor"]);
+    });
+
+    /**
+     * Absent is absent. A run created before this was recorded, or by a caller that supplied nothing, must not
+     * come back with an invented identity or an empty role list that reads like "a caller with no roles".
+     */
+    it("leaves the principal and roles undefined when none were supplied", async () => {
+      const store = makeStore();
+      await seed(store, "r-anon");
+      const found = await store.findById({ tenantId: T1, id: run("r-anon") });
+      expect(found?.principalId).toBeUndefined();
+      expect(found?.roleIds).toBeUndefined();
     });
 
     it("enforces tenant isolation", async () => {

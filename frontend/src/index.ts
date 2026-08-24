@@ -14,5 +14,7 @@ export * from "./hooks/hooks.js";
 
 export * from "./context-inspector.js";
 export * from "./usage-panel.js";
+// The citation view model, but not the components — `./ui` stays opt-in (it needs React).
+export * from "./citations.js";
 
 export * from "./localization.js";

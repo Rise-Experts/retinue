@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ExecutionContext } from "../../core/context.js";
 import { asId } from "../../core/ids.js";
-import type { InteractionId, RunId } from "../../core/ids.js";
+import type { InteractionId, MessagePartId, RunId } from "../../core/ids.js";
 import { AgentPlatformError } from "../../core/errors.js";
 import { questionPending } from "../../hitl/service.js";
 import type { PendingQuestion } from "../../hitl/index.js";
@@ -377,5 +377,147 @@ describe("default engine — resuming after a question is answered (#163)", () =
     // Optional, like `approvals`. A host that asks nothing should not have to wire the machinery for it.
     const sent = await capture({});
     expect(sent.length).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * A tool's citations become citation parts — #165.
+ *
+ * `createCitationEmitter`, `CitationPart`, the frontend's renderer and the groundedness graders all existed, and
+ * no code path put a citation into a run. The whole provenance feature was unreachable from an agent.
+ */
+describe("default engine — citations from a tool (#165)", () => {
+  const candidate = (excerpt: string) => ({
+    origin: { kind: "retrieval" as const, sourceType: "message" as const, sourceId: "n1", chunkId: "n1:0", chunkIndex: 0 },
+    excerpt,
+    retrievedAt: "2026-01-01T00:00:00.000Z",
+    supports: [],
+    authSubject: "c1",
+  });
+
+  /** Emits everything. The access check has its own tests in `citations/`; this is about the engine's wiring. */
+  const emitter = { emit: async (_ctx: unknown, cands: readonly { excerpt: string; supports: readonly string[] }[]) => ({
+    parts: cands.map((c, i) => ({
+      id: asId<MessagePartId>(`cite-${i}`),
+      type: "citation" as const,
+      schemaVersion: 1,
+      createdAt: "t",
+      excerpt: c.excerpt,
+      retrievedAt: "t",
+      supports: c.supports,
+      origin: { kind: "retrieval" as const, sourceType: "message" as const, sourceId: "n1", chunkId: "n1:0", chunkIndex: 0 },
+    })),
+    withheld: 0,
+  }) };
+
+  /** A stream that calls a citing tool and then writes the claim the passage supports. */
+  const citingRun = (toolResult: unknown) =>
+    async function* (input: { tools?: readonly { name: string; execute: (i: unknown) => Promise<unknown> }[] }) {
+      const tool = (input.tools ?? []).find((t) => t.name === "search");
+      const seen = await tool?.execute({});
+      yield { type: "tool-result", toolCallId: "tc1", toolName: "search", output: seen } as NeutralStreamChunk;
+      yield { type: "text-delta", id: "t1", text: "Revenue rose nine percent." } as NeutralStreamChunk;
+    };
+
+  const searchTool = (result: unknown) => ({
+    name: "search",
+    description: "Search",
+    inputSchema: {},
+    execute: async () => result,
+  });
+
+  it("emits a citation part grounding the claim the tool's passage supports", async () => {
+    const engine = createDefaultEngine(
+      baseDeps(citingRun({ hits: 1, citations: [candidate("Revenue rose nine percent quarter on quarter.")] }) as never, {
+        buildTools: async () => [searchTool({ hits: 1, citations: [candidate("Revenue rose nine percent quarter on quarter.")] })],
+        citations: emitter,
+      }),
+    );
+    const events = await collect(engine);
+    const cites = events.filter((e) => e.type === "part.added" && (e as { part?: { type?: string } }).part?.type === "citation");
+    expect(cites).toHaveLength(1);
+    // Grounding the text part that was actually written, so the renderer can mark the claim as supported.
+    const part = (cites[0] as { part: { supports: readonly string[]; excerpt: string } }).part;
+    expect(part.excerpt).toContain("nine percent");
+    expect(part.supports).toHaveLength(1);
+  });
+
+  /**
+   * Order matters as much as presence. `citationViewModel` numbers citations in arrival order and depends on
+   * markup for N citations being a *prefix* of the markup for N+1 — a citation arriving before the text it
+   * grounds would insert above the reader's position.
+   */
+  it("emits citations after the text, never before", async () => {
+    const engine = createDefaultEngine(
+      baseDeps(citingRun({ citations: [candidate("a passage")] }) as never, {
+        buildTools: async () => [searchTool({ citations: [candidate("a passage")] })],
+        citations: emitter,
+      }),
+    );
+    const events = await collect(engine);
+    const lastText = events.findLastIndex((e) => (e as { part?: { type?: string } }).part?.type === "text");
+    const firstCite = events.findIndex((e) => (e as { part?: { type?: string } }).part?.type === "citation");
+    expect(firstCite).toBeGreaterThan(lastText);
+  });
+
+  it("keeps the citations field away from the model", async () => {
+    // The model has the tool's answer; a parallel list of chunk ids invites it to paraphrase provenance in
+    // prose, which is the unverifiable thing citations exist to replace.
+    let seen: unknown = null;
+    const engine = createDefaultEngine(
+      baseDeps((async function* (input: { tools?: readonly { name: string; execute: (i: unknown) => Promise<unknown> }[] }) {
+        seen = await (input.tools ?? []).find((t) => t.name === "search")?.execute({});
+        yield { type: "text-delta", id: "t1", text: "ok" } as NeutralStreamChunk;
+      }) as never, {
+        buildTools: async () => [searchTool({ hits: 1, citations: [candidate("x")] })],
+        citations: emitter,
+      }),
+    );
+    await collect(engine);
+    expect(seen).toEqual({ hits: 1 });
+  });
+
+  it("emits nothing when a tool cited a passage but the model wrote no claim", async () => {
+    // A citation supporting no text part is unrenderable: the view model has nothing to attach a marker to, and
+    // `ungroundedCitations` would count it as a defect.
+    const engine = createDefaultEngine(
+      baseDeps((async function* (input: { tools?: readonly { name: string; execute: (i: unknown) => Promise<unknown> }[] }) {
+        await (input.tools ?? []).find((t) => t.name === "search")?.execute({});
+      }) as never, {
+        buildTools: async () => [searchTool({ citations: [candidate("x")] })],
+        citations: emitter,
+      }),
+    );
+    const events = await collect(engine);
+    expect(events.some((e) => (e as { part?: { type?: string } }).part?.type === "citation")).toBe(false);
+  });
+
+  it("passes an unrecognised citations field through untouched", async () => {
+    // A tool whose real answer has a field of that name is not misconfigured. Failing its call, or silently
+    // eating the field, would both be worse than ignoring it.
+    let seen: unknown = null;
+    const engine = createDefaultEngine(
+      baseDeps((async function* (input: { tools?: readonly { name: string; execute: (i: unknown) => Promise<unknown> }[] }) {
+        seen = await (input.tools ?? []).find((t) => t.name === "search")?.execute({});
+        yield { type: "text-delta", id: "t1", text: "ok" } as NeutralStreamChunk;
+      }) as never, {
+        buildTools: async () => [searchTool({ citations: "a string, not candidates" })],
+        citations: emitter,
+      }),
+    );
+    const events = await collect(engine);
+    expect(seen).toEqual({ citations: "a string, not candidates" });
+    expect(events.some((e) => (e as { part?: { type?: string } }).part?.type === "citation")).toBe(false);
+  });
+
+  it("ignores the field entirely with no emitter configured", async () => {
+    // Optional, like `approvals` and `questions`. A host that cites nothing should not have to wire an emitter.
+    const engine = createDefaultEngine(
+      baseDeps(citingRun({ citations: [candidate("x")] }) as never, {
+        buildTools: async () => [searchTool({ citations: [candidate("x")] })],
+      }),
+    );
+    const events = await collect(engine);
+    expect(events.some((e) => (e as { part?: { type?: string } }).part?.type === "citation")).toBe(false);
   });
 });

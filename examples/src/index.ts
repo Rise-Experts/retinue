@@ -29,13 +29,19 @@ import {
   createPostgresConversationRunCoordinator,
   createPostgresIdempotencyStore,
   createPostgresInteractionStore,
+  createPostgresPrincipalMemoryStore,
   createPostgresRunEventLog,
   createPostgresRunStore,
   createPostgresSessionStateStore,
+  createPostgresUsageRollupStore,
   createPostgresUsageStore,
   createPostgresConversationStore,
   createApprovalGate,
   createApprovalService,
+  computeModelCostMinorUnits,
+  commitExtractedMemories,
+  createCitationEmitter,
+  createPrincipalMemoryProvider,
   createQuestionService,
   questionPending,
   createRunApprovals,
@@ -58,13 +64,14 @@ import type {
 import { Redis } from "ioredis";
 import type { AgentkitConfig } from "@agentkit/server";
 import { createDevAuthenticate } from "./auth.js";
-import { resolveExampleModel } from "./model.js";
+import { examplePricing, resolveExampleModel } from "./model.js";
 import { questionSpecsFrom } from "./questions.js";
-import { NoteNotFound, createExampleStore, createExampleTools, type ExampleStore } from "./tools.js";
+import { buildWorkerContext } from "./worker-context.js";
+import { MAX_MEMORY_ENTRIES, NoteNotFound, createExampleStore, createExampleTools, type ExampleStore } from "./tools.js";
 import { exampleAgentManifest, exampleContextProviders } from "./agent.js";
 import { EXCLUDED_EFFECTS, MODE_DESCRIPTIONS, type ConversationMode } from "./modes.js";
 import { createModeStore } from "./mode-store.js";
-import { conversationTurns } from "./history.js";
+import { conversationTurns, historyForModel } from "./history.js";
 
 /** One store per process. The tools are a test surface; see the note in `tools.ts`. */
 const store: ExampleStore = createExampleStore();
@@ -89,7 +96,7 @@ const ROLES = [
       { action: "execute", resourceType: "tool" },
       { action: "publish", resourceType: "note", requiresApproval: true },
     ],
-    tools: ["remember", "recall", "list_notes", "write_note", "share_note", "calculate", "now", "ask_user"],
+    tools: ["remember", "recall", "list_notes", "search_notes", "write_note", "share_note", "calculate", "now", "ask_user"],
   },
   {
     roleId: "viewer",
@@ -99,7 +106,7 @@ const ROLES = [
     ],
     // No `write_note`, no `share_note`. `viewer` cannot *see* them in the catalogue, so the model never offers
     // something the person cannot do — which is a better experience than a refusal after asking.
-    tools: ["remember", "recall", "list_notes", "calculate", "now", "ask_user"],
+    tools: ["remember", "recall", "list_notes", "search_notes", "calculate", "now", "ask_user"],
   },
 ] as const;
 
@@ -157,19 +164,58 @@ const buildTools = (sql: SqlExecutor): readonly Tool[] => {
       description: "Store a fact about this person for future conversations.",
       category: "assistant",
       effect: "read" as const,
-      delegatesTo: "exampleTools.remember",
+      delegatesTo: "principalMemory.put",
       inputSchema: { type: "object", properties: { fact: { type: "string" } }, required: ["fact"] },
-      delegate: (input: unknown, context: ExecutionContext) =>
-        impl.remember({ principalId: String(context.principalId), fact: str((input as { fact?: unknown }).fact) }),
+      /**
+       * Durable, through `PrincipalMemoryStore` — the fix for a real bug.
+       *
+       * This used to write to an in-process `Map`, so a fact told in one conversation was gone in the next: the
+       * map lived in the worker process, died with it, and the API host could not see it at all. It looked like
+       * it worked, because within one worker's lifetime `recall` found what `remember` had put there.
+       *
+       * `commitExtractedMemories` rather than a bare `put`, because it is the platform's gate between model
+       * output and durable storage: it trims, bounds the length, and dedupes against what is already stored by
+       * normalized text. Without it, a person mentioning their country three times gets three memories, and the
+       * retrieval budget fills with one repeated fact.
+       */
+      delegate: async (input: unknown, context: ExecutionContext) => {
+        const fact = str((input as { fact?: unknown }).fact);
+        const stored = await commitExtractedMemories(createPostgresPrincipalMemoryStore(sql), {
+          tenantId: context.tenantId,
+          principalId: context.principalId,
+          candidates: [{ text: fact }],
+        });
+        // Reported truthfully, including the no-op: told it was stored when it was a duplicate, the model
+        // confirms something that did not happen, and repeats itself on the next turn.
+        return stored.length > 0
+          ? { remembered: stored[0]?.text, id: stored[0]?.id }
+          : { remembered: null, reason: "already known, or empty" };
+      },
     }),
     defineDelegatingTool(deps, {
       name: "recall",
       description: "List everything you remember about this person.",
       category: "assistant",
       effect: "read" as const,
-      delegatesTo: "exampleTools.recall",
-      delegate: (_input: unknown, context: ExecutionContext) =>
-        impl.recall({ principalId: String(context.principalId) }),
+      delegatesTo: "principalMemory.retrieve",
+      inputSchema: { type: "object", properties: { about: { type: "string" } } },
+      /**
+       * Salience-ranked retrieval, optionally focused by `about`.
+       *
+       * The memory provider already puts the most salient entries in the prompt, so this tool is for when the
+       * model wants to look for something specific — "what do I know about their travel preferences" — rather
+       * than for every turn. `retrieve` skips disabled entries, which a raw `list` would happily return.
+       */
+      delegate: async (input: unknown, context: ExecutionContext) => {
+        const about = str((input as { about?: unknown }).about);
+        const entries = await createPostgresPrincipalMemoryStore(sql).retrieve({
+          tenantId: context.tenantId,
+          principalId: context.principalId,
+          ...(about === "" ? {} : { query: about }),
+          limit: MAX_MEMORY_ENTRIES,
+        });
+        return { facts: entries.map((e) => e.text) };
+      },
     }),
     defineDelegatingTool(deps, {
       name: "list_notes",
@@ -178,6 +224,57 @@ const buildTools = (sql: SqlExecutor): readonly Tool[] => {
       effect: "read" as const,
       delegatesTo: "exampleTools.listNotes",
       delegate: () => impl.listNotes(),
+    }),
+    defineDelegatingTool(deps, {
+      name: "search_notes",
+      description:
+        "Search the notes and get back the specific passages that matched, with where each came from. Use " +
+        "this rather than list_notes when answering a question about what the notes say — the answer will " +
+        "carry citations the person can check.",
+      category: "assistant",
+      effect: "read" as const,
+      delegatesTo: "exampleTools.searchNotes",
+      inputSchema: {
+        type: "object",
+        properties: { query: { type: "string" } },
+        required: ["query"],
+      },
+      /**
+       * The tool that makes citations reachable — #155 AC-5, and what found #165.
+       *
+       * It returns the passages **and** a `citations` array the engine recognises. The candidates carry
+       * `supports: []`: the engine fills that in with the claims the model actually writes, because the passage
+       * is read before the sentence it supports exists.
+       *
+       * `authSubject` is the conversation, which is what the example's authorization policy understands. It is
+       * required for a retrieval citation and its absence means the citation is withheld — failing closed,
+       * because emitting an excerpt nobody authorised leaks the text and not just the source's existence.
+       */
+      delegate: (input: unknown, context: ExecutionContext) => {
+        const query = str((input as { query?: unknown }).query);
+        const passages = impl.searchNotes({ query });
+        const retrievedAt = new Date().toISOString();
+        return {
+          // What the model reads: the passages, without the provenance bookkeeping.
+          matches: passages.map((p) => ({ noteId: p.noteId, title: p.noteTitle, passage: p.excerpt })),
+          citations: passages.map((p) => ({
+            origin: {
+              kind: "retrieval" as const,
+              // `message`, because a note here is user-authored content inside the workspace. A real app would
+              // say `file` or `artifact` — the point is that it is not `web`, so it gets an access check.
+              sourceType: "message" as const,
+              sourceId: p.noteId,
+              chunkId: `${p.noteId}:${p.chunkIndex}`,
+              chunkIndex: p.chunkIndex,
+              locator: p.noteTitle,
+            },
+            excerpt: p.excerpt,
+            retrievedAt,
+            supports: [],
+            authSubject: String(context.conversationId ?? ""),
+          })),
+        };
+      },
     }),
     defineDelegatingTool(deps, {
       name: "write_note",
@@ -359,6 +456,17 @@ const lazyCoordinator = (
 const app = {
   authenticate: createDevAuthenticate(),
 
+  /**
+   * What the configured model costs, so recorded usage can carry a price — #166.
+   *
+   * Resolves for the one model this app is configured with, and null for anything else: a resolver that priced
+   * an unrecognised id with the configured model's rates would produce a confident figure about the wrong
+   * model. Null means "unpriced", tokens are still recorded, and the panel simply shows no money.
+   */
+  pricing: {
+    resolve: (modelId: string) => (modelId === resolveExampleModel().modelId ? examplePricing() : null),
+  },
+
   deps({ config, sql, runner }: { config: AgentkitConfig; sql: SqlExecutor; runner?: TransactionRunner }): ResolverDeps {
     const runs = createPostgresRunStore(sql);
     const interactions = createPostgresInteractionStore(sql);
@@ -406,6 +514,17 @@ const app = {
       conversations: createPostgresConversationStore(sql),
       runs,
       usage: createPostgresUsageStore(sql),
+      /**
+       * Rollups, so the usage panel has a chart rather than only totals — #155 AC-5.
+       *
+       * Optional in `ResolverDeps` and its absence is graceful: `usageReport` falls back to summing the ledger,
+       * which gives correct totals and no buckets. That is a usable panel with no chart, and it is what this
+       * example showed before — accurate, and a weak demonstration of the thing the AC asks for.
+       *
+       * The buckets are rebuilt on demand by `/api/usage` rather than by a scheduled job. A cron in an example
+       * is a process someone has to know to start, and a chart that is empty until it runs looks like a bug.
+       */
+      rollups: createPostgresUsageRollupStore(sql),
       toolRegistry: registry,
       // `runs` is passed to both services deliberately: without it an approved run is enqueued but stays in
       // `waiting-for-approval`, which `claim` will not accept — the bug the #144 load harness found.
@@ -459,7 +578,28 @@ const app = {
       async loadManifest() {
         return exampleAgentManifest;
       },
-      resolveModel: () => ({ model: resolved.model, modelId: resolved.modelId, currency: "USD" }),
+      resolveModel: () => ({
+        model: resolved.model,
+        modelId: resolved.modelId,
+        currency: resolved.definition.pricing.currency,
+        definition: resolved.definition,
+        /**
+         * What this turn cost — #166.
+         *
+         * Without a `price` the engine emits `costMinorUnits: 0` on every `usage.updated`, so the ledger records
+         * real token counts against a cost of zero and the spend panel is permanently free. Tokens without a
+         * price is honest; tokens with a *fabricated* zero looks like a measurement.
+         *
+         * `computeModelCostMinorUnits` is the platform's own arithmetic, so the panel's figure and a quota
+         * ceiling's figure cannot disagree about what a million tokens costs.
+         */
+        price: (usage) =>
+          computeModelCostMinorUnits(resolved.definition.pricing, {
+            inputTokens: usage.inputTokens,
+            outputTokens: usage.outputTokens,
+            ...(usage.cachedInputTokens === undefined ? {} : { cachedInputTokens: usage.cachedInputTokens }),
+          }),
+      }),
       /**
        * History, through the one shared projection in `history.ts` — so the page and the model see the same
        * conversation.
@@ -470,11 +610,13 @@ const app = {
        */
       async loadHistory(context: ExecutionContext): Promise<readonly TurnMessage[]> {
         if (context.conversationId === undefined) return [];
-        return conversationTurns({
-          sql,
-          tenantId: String(context.tenantId),
-          conversationId: String(context.conversationId),
-        });
+        return historyForModel(
+          await conversationTurns({
+            sql,
+            tenantId: String(context.tenantId),
+            conversationId: String(context.conversationId),
+          }),
+        );
       },
       async buildTools(context: ExecutionContext, manifest: AgentManifest): Promise<readonly ModelTurnTool[]> {
         void manifest;
@@ -534,6 +676,7 @@ const app = {
             tenantId: String(context.tenantId),
             conversationId: String(context.conversationId ?? ""),
           }),
+          sql,
         ),
       approvals,
       /**
@@ -544,24 +687,19 @@ const app = {
        * resumed, and the identical picker came back.
        */
       questions: questionServiceFor(sql),
+      /**
+       * Citations reach the message — #155 AC-5, via #165.
+       *
+       * The emitter takes the authorization policy because emission is where the access check lives: a citation
+       * carries an excerpt, so one emitted for a source the reader may not open leaks the text itself. Passing
+       * the same policy the tool catalogue is filtered with means "may see the tool" and "may see the passage"
+       * cannot answer differently.
+       */
+      citations: createCitationEmitter({ authorization }),
     });
   },
 
-  buildContext(run: Run): ExecutionContext {
-    // The worker has no request, so the context is rebuilt from the run. `roleIds: ["editor"]` because a worker
-    // executing an already-admitted run must be able to finish the tools that run was allowed to call — the
-    // admission decision was made at the API boundary with the caller's real roles.
-    return parseExecutionContext({
-      tenantId: run.tenantId,
-      principalId: "example-worker",
-      roleIds: ["editor"],
-      locale: "en",
-      timezone: "UTC",
-      requestId: `worker-${run.id}`,
-      conversationId: run.conversationId,
-      runId: run.id,
-    });
-  },
+  buildContext: (run: Run) => buildWorkerContext(run),
 };
 
 /** Assembled through `gatherSections` + `renderContextBlock`, so the untrusted envelope is not bypassed. */
@@ -569,10 +707,26 @@ const exampleSystemPrompt = async (
   manifest: AgentManifest,
   context: ExecutionContext,
   mode: ConversationMode,
+  sql: SqlExecutor,
 ): Promise<string> => {
   const { gatherSections, renderContextBlock, makeNonce } = await import("@agentkit/backend");
   const { randomBytes } = await import("node:crypto");
-  const sections = await gatherSections(context, exampleContextProviders(store));
+  /**
+   * The notebook's provider, plus the **platform's** principal-memory provider.
+   *
+   * The memory provider is the platform's rather than a local one, and that is the fix for a real bug: the
+   * example had its own reading an in-process `Map`, so a fact told in one conversation was gone in the next —
+   * the map lived in the worker process, died with it, and was invisible to the API host. `PrincipalMemoryStore`
+   * is durable and tenant-scoped, and `createPrincipalMemoryProvider` budgets retrieval by salience so memories
+   * never crowd out recent turns.
+   */
+  const sections = await gatherSections(context, [
+    ...exampleContextProviders(store),
+    createPrincipalMemoryProvider({
+      store: createPostgresPrincipalMemoryStore(sql),
+      maxEntries: 8,
+    }),
+  ]);
   /**
    * The mode instruction goes in the **prompt as well as** the catalogue.
    *

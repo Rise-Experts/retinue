@@ -165,6 +165,19 @@ export type NewRun = {
   readonly conversationId: ConversationId;
   readonly agentId: AgentId;
   readonly agentVersion: number;
+  /**
+   * Who this run is for, and with what roles — #164.
+   *
+   * Optional on the *type* only so existing callers keep compiling; supplying it is what lets a durable worker
+   * rebuild the caller's identity instead of inventing one. A run carried a tenant and nothing else, so
+   * `buildContext(run)` had no principal to return and every host fabricated one — the shipped example used
+   * `"example-worker"` with `roleIds: ["editor"]`, which attributed every person's memory to one identity and
+   * ran a `viewer`'s admitted run with editor rights.
+   *
+   * Recorded at admission, from the authenticated caller. Never from anything the model produced.
+   */
+  readonly principalId?: PrincipalId;
+  readonly roleIds?: readonly string[];
 };
 
 /**

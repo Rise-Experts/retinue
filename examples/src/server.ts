@@ -24,10 +24,15 @@ import {
   createPostgresMessageStore,
   createPostgresSessionStateStore,
   startOrEnqueueRun,
+  createResolvers,
+  createRollupJob,
+  createPostgresUsageRollupStore,
 } from "@agentkit/backend";
+import { citationViewModel, formatCost, formatTokens, shapeUsagePanel } from "@agentkit/frontend";
 import type { ConversationMode } from "./modes.js";
 import type {
   ConversationId,
+  ExecutionContext,
   MessageId,
   MessagePartId,
   ResolverDeps,
@@ -99,7 +104,9 @@ export const startExampleServer = async (options: ExampleServerOptions) => {
    * once. A second copy of it would be a second chance to write it again.
    */
   const startTurn = async (
-    context: { readonly tenantId: TenantId },
+    // The whole execution context, not just the tenant: the run records the principal and roles it was
+    // admitted for (#164), and narrowing this to `{ tenantId }` is what let the identity go missing.
+    context: ExecutionContext,
     input: { readonly conversationId?: string; readonly text: string; readonly mode?: ConversationMode },
   ): Promise<{ conversationId: string; runId: string; messageId: string; started: string; mode: ConversationMode }> => {
     const conversationId = asId<ConversationId>(input.conversationId ?? `conv-${Date.now().toString(36)}`);
@@ -176,6 +183,16 @@ export const startExampleServer = async (options: ExampleServerOptions) => {
       conversationId,
       agentId: asId("example-notes-agent"),
       agentVersion: 1,
+      /**
+       * Who this run is for, recorded at admission — #164.
+       *
+       * From the authenticated caller, which is the only place it can honestly come from. Without it the worker
+       * has nothing to rebuild an identity from, and this app used to invent `principalId: "example-worker"`
+       * with `roleIds: ["editor"]`: every person's memories landed under one identity, and a `viewer`'s
+       * admitted run executed with editor rights.
+       */
+      principalId: context.principalId,
+      roleIds: context.roleIds,
     });
     // Through the platform's own admission path, so the conversation's single-run slot and the queue's dedup
     // both apply — an app that inserted a job directly would bypass exactly the coordination it needs.
@@ -289,6 +306,65 @@ export const startExampleServer = async (options: ExampleServerOptions) => {
       }
     }
 
+    /**
+     * The usage panel — #155 AC-5.
+     *
+     * The **shaping is done here, by the platform's own `shapeUsagePanel`**, and the page draws what it is
+     * given. That is the point rather than a convenience: the panel's rules are real decisions — `state` comes
+     * from `eventCount` and not from the bucket array, because a rollup over a quiet hour writes zeroed buckets
+     * and drawing those is exactly what the empty state exists to avoid; bar fractions are against the peak so a
+     * quiet period looks quiet; the quota fraction is capped at 1 because a bar wider than its track is a
+     * rendering bug. A page that reimplemented any of that would be a second answer to the same question.
+     *
+     * `@agentkit/frontend` is a runtime dependency here for that reason. Its React components stay untouched —
+     * `shapeUsagePanel`, `formatCost` and `formatTokens` are react-free by design, and `./ui` is opt-in.
+     */
+    if (url.pathname === "/api/usage" && request.method === "GET") {
+      const context = await options.authenticate(request);
+      if (context === null) return Response.json({ error: "Unauthenticated" }, { status: 401 });
+
+      const to = new Date();
+      const from = new Date(to.getTime() - 7 * 24 * 60 * 60 * 1000);
+      const period = "day" as const;
+
+      /**
+       * Rebuilt on request, not on a schedule.
+       *
+       * A rollup is a *recomputation*, so running it twice cannot double count — which is what makes doing it
+       * here safe rather than merely convenient. A cron in an example is a process someone has to know to start,
+       * and a chart empty until it runs looks like a bug in the panel.
+       */
+      const job = createRollupJob({ rollups: createPostgresUsageRollupStore(options.sql) });
+      // Bounded. An unbounded loop over stale buckets would turn one page load into a backfill.
+      for (let page = 0; page < 8; page += 1) {
+        const { remaining } = await job.run(
+          { tenantId: context.tenantId },
+          { period, since: from.toISOString(), limit: 50 },
+        );
+        if (remaining === 0) break;
+      }
+
+      const resolvers = createResolvers(options.deps);
+      const report = await resolvers.Query.usageReport(
+        {},
+        { period, from: from.toISOString(), to: to.toISOString(), breakdownLimit: 5 },
+        { execution: context },
+      );
+      const panel = shapeUsagePanel(report as never);
+      return Response.json({
+        panel,
+        // Formatted server-side with the platform's own formatters, so minor units become major ones in exactly
+        // one place. Doing that division at a call site is how a figure ends up a hundred times wrong.
+        formatted: {
+          cost: formatCost(panel.totals.costMinorUnits, panel.currency),
+          inputTokens: formatTokens(panel.totals.inputTokens),
+          outputTokens: formatTokens(panel.totals.outputTokens),
+          bars: panel.bars.map((b) => ({ ...b, cost: formatCost(b.costMinorUnits, panel.currency) })),
+          byModel: panel.byModel.map((e) => ({ key: e.key, cost: formatCost(e.totals.costMinorUnits, panel.currency) })),
+        },
+      });
+    }
+
     if (url.pathname === "/api/history" && request.method === "GET") {
       const context = await options.authenticate(request);
       if (context === null) return Response.json({ error: "Unauthenticated" }, { status: 401 });
@@ -336,7 +412,35 @@ export const startExampleServer = async (options: ExampleServerOptions) => {
         parked !== null && (parked.status === "waiting-for-question" || parked.status === "waiting-for-approval");
 
       return Response.json({
-        turns,
+        /**
+         * Citations come back with the turn, derived by the platform's `citationViewModel` (#155 AC-5).
+         *
+         * The view model rather than the raw parts, because the *numbering* is the part that matters and it is
+         * a decision: numbers are assigned in arrival order and never recomputed from position, since
+         * renumbering as citations stream in would change text the reader is already looking at. A page that
+         * numbered them itself would be a second answer to "which citation is number 3".
+         *
+         * Only for assistant turns; a user turn has no citations to ground anything with.
+         */
+        turns: turns.map((turn) => ({
+          role: turn.role,
+          text: turn.text,
+          citations:
+            turn.role === "assistant"
+              ? citationViewModel({ id: "", role: "assistant", parts: turn.parts } as never).panels.map(
+                  (panel, i) => ({
+                    ...panel,
+                    /**
+                     * The origin too, so the page renders a reloaded citation exactly as it renders a streamed
+                     * one. The panel's `label` is the platform's rendering; the page has its own, because a
+                     * streaming citation arrives as a raw part and never passes through here. Sending the origin
+                     * means one label derivation on the page rather than one for each path.
+                     */
+                    origin: turn.parts.filter((x) => x.type === "citation")[i]?.origin ?? {},
+                  }),
+                )
+              : [],
+        })),
         mode,
         planReady,
         parkedRunId: isParked ? parked.id : null,

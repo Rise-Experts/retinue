@@ -3,7 +3,7 @@
  */
 
 import type { PlatformError } from "../core/errors.js";
-import type { AgentId, ConversationId, RunId, TenantId } from "../core/ids.js";
+import type { AgentId, ConversationId, PrincipalId, RunId, TenantId } from "../core/ids.js";
 
 export const RUN_STATUSES = [
   "queued",
@@ -86,6 +86,15 @@ export type Run = {
   /** Set when a cancel was requested; the owning worker observes it and stops. Durable so a
    * cancel issued to one process is honored by whichever worker holds the run. */
   readonly cancelRequestedAt?: string;
+  /**
+   * The caller this run was admitted for — #164.
+   *
+   * Absent for runs created before this was recorded, and for a caller that did not supply it. That absence is
+   * deliberately visible rather than defaulted: `buildContext` substituting an identity is the bug this exists
+   * to end, and a default here would move the substitution one layer down where it is harder to see.
+   */
+  readonly principalId?: PrincipalId;
+  readonly roleIds?: readonly string[];
 };
 
 /** Durable job enqueue. Adapters: BullMQ, in-memory for tests. */

@@ -46,6 +46,7 @@ import {
 } from "../runtime/index.js";
 import type { PendingQuestion, RunApprovals } from "../hitl/index.js";
 import { isQuestionPending } from "../hitl/service.js";
+import type { CitationCandidate, CitationEmitter } from "../citations/index.js";
 import type { AgentManifest } from "./index.js";
 
 /** A model resolved for a turn: the opaque handle plus what the engine needs to attribute usage. */
@@ -94,6 +95,18 @@ export type DefaultEngineDeps = {
   readonly questions?: {
     answered(input: { tenantId: TenantId; runId: RunId }): Promise<PendingQuestion | null>;
   };
+  /**
+   * Turns a tool's citation candidates into citation parts — #165.
+   *
+   * Optional. `createCitationEmitter`, `CitationPart`, the frontend's renderer and the groundedness graders all
+   * existed, and **nothing put a citation into a run**: there was no path from a tool that read a passage to a
+   * part on the message. Supply this and a tool returning `{ citations: [...] }` produces citation parts;
+   * leave it out and the field is ignored, exactly as before.
+   *
+   * The emitter, not a raw mapper, because emission is where the access check lives: a citation carries an
+   * excerpt, so emitting one the reader may not see leaks the text and not merely the existence of the source.
+   */
+  readonly citations?: CitationEmitter;
   readonly retry?: RetryPolicy;
   readonly sleep?: (ms: number) => Promise<void>;
   readonly now?: () => number;
@@ -102,6 +115,34 @@ export type DefaultEngineDeps = {
 };
 
 const defaultSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/**
+ * Take citation candidates off a tool's result — #165.
+ *
+ * A recognised `citations` field, read and **removed** before the result reaches the model. Removed because the
+ * model does not need it: it has the tool's answer, and handing it a parallel list of chunk ids and excerpts
+ * invites it to paraphrase provenance in prose, which is the unverifiable thing citations exist to replace.
+ *
+ * A non-array `citations`, or one with unusable entries, is left alone rather than rejected — a tool whose real
+ * answer happens to have a field of that name is not misconfigured, and failing its call would be a worse
+ * outcome than ignoring a field.
+ */
+const collectCitations = (result: unknown, into: CitationCandidate[]): unknown => {
+  if (typeof result !== "object" || result === null || !("citations" in result)) return result;
+  const { citations, ...rest } = result as { citations: unknown };
+  if (!Array.isArray(citations)) return result;
+  const usable = citations.filter(
+    (c): c is CitationCandidate =>
+      typeof c === "object" &&
+      c !== null &&
+      "origin" in c &&
+      typeof (c as { excerpt?: unknown }).excerpt === "string" &&
+      typeof (c as { retrievedAt?: unknown }).retrievedAt === "string",
+  );
+  if (usable.length === 0) return result;
+  into.push(...usable);
+  return rest;
+};
 
 /**
  * Recognise a parked question in whatever shape it reached us — #163.
@@ -187,6 +228,14 @@ export const createDefaultEngine = (deps: DefaultEngineDeps): AgentEngine => {
        * carried on and completed. The person's answer arrived for a run that was already over.
        */
       let pendingQuestion: string | null = null;
+      /**
+       * Citation candidates a tool handed back this turn, waiting for the claims they ground — #165.
+       *
+       * Buffered rather than emitted on the spot, because `supports` names the *text parts* a citation grounds
+       * and those do not exist yet: the tool reads the passage, and only then does the model write the sentence
+       * the passage supports. Emitting at the tool call would produce citations supporting nothing.
+       */
+      const pendingCitations: CitationCandidate[] = [];
       const approvals = deps.approvals;
       /**
        * Every tool is wrapped, whether or not an approval gate is configured.
@@ -200,7 +249,7 @@ export const createDefaultEngine = (deps: DefaultEngineDeps): AgentEngine => {
         execute: async (input: unknown) => {
           if (approvals === undefined) {
             try {
-              return await t.execute(input);
+              return collectCitations(await t.execute(input), pendingCitations);
             } catch (thrown) {
               const parked = questionMarker(thrown, t.name);
               if (parked === null) throw thrown;
@@ -230,7 +279,7 @@ export const createDefaultEngine = (deps: DefaultEngineDeps): AgentEngine => {
             }
             throw new AgentPlatformError(outcome.result.error);
           }
-          return outcome.result.data;
+          return collectCitations(outcome.result.data, pendingCitations);
         },
       }));
 
@@ -288,6 +337,30 @@ export const createDefaultEngine = (deps: DefaultEngineDeps): AgentEngine => {
               controller.abort();
               yield { type: "question.requested", interactionId: asId<InteractionId>(pendingQuestion) };
               return;
+            }
+          }
+          /**
+           * Citations last, grounding the claims that were actually written — #165.
+           *
+           * Here rather than at the tool call because `supports` names text parts, and the model writes them
+           * after reading the passage. Every text part of the turn is named: without model-level markers there
+           * is no way to know which sentence a given passage supported, and claiming a narrower link would be
+           * inventing precision. `docs/06`'s renderer treats a text part as grounded exactly when some citation
+           * names it, so this says "these passages support this answer", which is true.
+           *
+           * After the stream, so a citation cannot appear above text the reader is already looking at — the
+           * append-only property `citationViewModel` depends on.
+           */
+          if (deps.citations !== undefined && pendingCitations.length > 0) {
+            const claims = [...textParts.values()].map((t) => t.partId);
+            if (claims.length > 0) {
+              const emittedCitations = await deps.citations.emit(
+                context,
+                pendingCitations.map((c) => ({ ...c, supports: claims })),
+              );
+              for (const part of emittedCitations.parts) {
+                yield { type: "part.added", messageId, part };
+              }
             }
           }
           return; // turn complete

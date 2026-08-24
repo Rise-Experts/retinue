@@ -65,6 +65,29 @@
 
   /* The picker's styles live with the question panel below — see `.ask`. These global `.opt` rules were the
      in-transcript version's and are gone with it; two sets for one control is how they drift. */
+  /* ---------------------------------------------------------------- usage panel */
+  .usage { border-top:1px solid var(--line); padding:10px 14px; }
+  .usage summary { font-size:11px; text-transform:uppercase; letter-spacing:.07em; color:var(--faint);
+                   cursor:pointer; list-style:none; }
+  .usage summary::-webkit-details-marker { display:none; }
+  .usage summary::before { content:"▸ "; }
+  .usage[open] summary::before { content:"▾ "; }
+  .usage-empty, .usage-err { font-size:11.5px; color:var(--faint); margin-top:8px; line-height:1.45; }
+  .usage-err { color:var(--err); }
+  .usage-tot { display:grid; grid-template-columns:auto auto; gap:2px 10px; font-size:11.5px; margin:9px 0 2px; }
+  .usage-tot dt { color:var(--faint); }
+  .usage-tot dd { margin:0; text-align:right; font-variant-numeric:tabular-nums; }
+  /* Bars, not a canvas: semantic HTML a screen reader can read and a stylesheet can restyle. */
+  .usage-bars { display:flex; align-items:flex-end; gap:3px; height:38px; margin:10px 0 4px; }
+  .usage-bar { flex:1; background:var(--accent-soft); border-radius:2px 2px 0 0; min-height:2px; }
+  .usage-bar.on { background:var(--accent); }
+  .usage-model { display:flex; justify-content:space-between; font-size:11.5px; color:var(--muted); margin-top:3px; }
+  /* The quota track. `aria-valuenow` rather than a title, so the number is announced, not hovered. */
+  .usage-quota { height:5px; border-radius:3px; background:var(--line); overflow:hidden; margin-top:9px; }
+  .usage-quota > span { display:block; height:100%; background:var(--ok); }
+  .usage-quota.warning > span { background:var(--warn); }
+  .usage-quota.exceeded > span { background:var(--err); }
+
   .who { border-top:1px solid var(--line); padding:12px 14px; display:grid; gap:7px; }
   .who label { font-size:11px; color:var(--faint); display:block; margin-bottom:2px; }
   .who input, .who select { width:100%; padding:6px 9px; font:inherit; font-size:13px; border:1px solid var(--line);
@@ -128,6 +151,18 @@
   .planbar button { font:inherit; font-size:13.5px; padding:7px 15px; border-radius:9px; cursor:pointer;
                     border:1px solid var(--accent); background:var(--accent); color:#fff; }
   .planbar button:disabled { opacity:.6; cursor:default; }
+  /* ---------------------------------------------------------------- citations */
+  /* Under the answer, quieter than it. A source list that competes with the text it supports gets skipped. */
+  .cites { margin-top:11px; padding-top:10px; border-top:1px solid var(--line); }
+  .cites-h { font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--faint); margin-bottom:7px; }
+  .cite { display:flex; gap:9px; align-items:flex-start; margin-bottom:8px; }
+  /* A number, not a hue: the marker survives greyscale and colour-blindness. */
+  .cite-n { flex:0 0 18px; height:18px; border-radius:5px; background:var(--accent-soft); color:var(--accent);
+            font-size:11px; font-weight:650; display:grid; place-items:center; margin-top:1px; }
+  .cite-src { font-size:12px; color:var(--muted); }
+  /* The excerpt is the evidence. Quoted so it reads as somebody else's words. */
+  .cite-q { font-size:13px; line-height:1.5; border-left:2px solid var(--line); padding-left:9px; margin-top:3px; }
+
   .note { font-size:12.5px; color:var(--faint); text-align:center; margin:14px 0; }
   .note.bad { color:var(--err); }
 
@@ -193,6 +228,14 @@
     <div class="seg" id="modes"></div>
     <div class="modehint" id="modehint"></div>
   </div>
+  <!--
+    Usage, collapsed by default. Open it and it fetches — a panel that polls in the background is a panel that
+    bills you for looking at the page.
+  -->
+  <details class="usage" id="usage">
+    <summary>Usage &amp; cost</summary>
+    <div id="usage-body"><div class="usage-empty">…</div></div>
+  </details>
   <div class="who">
     <div><label>Workspace</label><input id="tenant" value="demo" /></div>
     <div><label>You</label><input id="principal" value="you" /></div>
@@ -376,7 +419,7 @@
   /* ------------------------------------------------------- the stream */
 
   /** One assistant turn's live state: its bubble, its collapsed tool trace, and the text so far. */
-  const newTurnState = () => ({ bubble: null, trace: null, steps: null, text: "" });
+  const newTurnState = () => ({ bubble: null, trace: null, steps: null, text: "", cites: [] });
 
   const traceFor = (st) => {
     if (st.trace) return st.trace;
@@ -401,13 +444,57 @@
       `tools — ${st.steps.children.length} call${st.steps.children.length === 1 ? "" : "s"}`;
   };
 
+  /**
+   * The citation list under an answer.
+   *
+   * The excerpt is the evidence and it is stored on the part, so a citation is readable even when its source is
+   * gone — which is exactly when someone needs it. A retrieval citation has no URL a browser can follow, so it
+   * renders as a passage with its source named rather than as a dead link.
+   */
+  const paintCites = (st) => {
+    const was = atBottom();
+    st.bubble.querySelector(".cites")?.remove();
+    const box = document.createElement("div");
+    box.className = "cites";
+    const h = document.createElement("div");
+    h.className = "cites-h";
+    h.textContent = st.cites.length === 1 ? "1 source" : `${st.cites.length} sources`;
+    box.append(h);
+    st.cites.forEach((part, i) => {
+      const row = document.createElement("div");
+      row.className = "cite";
+      const n = document.createElement("span");
+      n.className = "cite-n";
+      // 1-based: it is a footnote number a person reads, not an array index.
+      n.textContent = String(i + 1);
+      const body = document.createElement("div");
+      const label = document.createElement("div");
+      label.className = "cite-src";
+      const origin = part.origin ?? {};
+      label.textContent = origin.kind === "web"
+        ? (origin.title ?? origin.url ?? "web")
+        : `${origin.locator ?? origin.sourceId ?? "source"} · passage ${Number(origin.chunkIndex ?? 0) + 1}`;
+      const quote = document.createElement("div");
+      quote.className = "cite-q";
+      quote.textContent = part.excerpt ?? "";
+      body.append(label, quote);
+      row.append(n, body);
+      box.append(row);
+    });
+    st.bubble.append(box);
+    follow(was);
+  };
+
   const paint = (st) => {
     const was = atBottom();
     st.bubble.querySelector(".body")?.remove();
     const body = document.createElement("div");
     body.className = "body";
     body.innerHTML = md(st.text) + '<span class="caret"></span>';
-    st.bubble.append(body);
+    // Before the citation list, so sources stay under the answer however the two interleave in the stream.
+    const cites = st.bubble.querySelector(".cites");
+    if (cites) st.bubble.insertBefore(body, cites);
+    else st.bubble.append(body);
     follow(was);
   };
 
@@ -425,6 +512,19 @@
         if (!st.bubble) st.bubble = turn("bot");
         st.text = part.text ?? "";
         paint(st);
+      }
+      /**
+       * A citation, appended below the answer — #155 AC-5.
+       *
+       * **Appended, never inserted.** The engine emits citations after the text they ground, and this appends in
+       * arrival order, so the markup for N citations is a prefix of the markup for N+1 and nothing already on
+       * screen moves. That property is the whole reason the numbering is arrival-order rather than positional.
+       */
+      if (part.type === "citation") {
+        if (!st.bubble) st.bubble = turn("bot");
+        st.cites = st.cites ?? [];
+        st.cites.push(part);
+        paintCites(st);
       }
       return;
     }
@@ -883,6 +983,106 @@
     }
   };
 
+  /* ------------------------------------------------------- usage panel */
+
+  /**
+   * The usage panel — #155 AC-5.
+   *
+   * **All four states are drawn, and the server decides which.** `loading`, `empty`, `loaded` and `error` are a
+   * closed union in `shapeUsagePanel`, and each is a different thing to say: `empty` means the range genuinely
+   * had no usage, and drawing a zeroed chart for it is what the empty state exists to avoid; `error` means a
+   * failed refresh, and a spinner for that hides the failure behind an animation that never ends.
+   *
+   * Nothing is computed here — no totals summed, no fractions derived, no minor units divided by 100. The
+   * server hands over `panel` and `formatted`, so there is exactly one implementation of the panel's rules.
+   */
+  const loadUsage = async () => {
+    const body = $("usage-body");
+    body.innerHTML = '<div class="usage-empty">Loading…</div>';
+    try {
+      const r = await fetch("/api/usage", { headers: headers() });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error ?? r.statusText);
+      paintUsage(j.panel, j.formatted);
+    } catch (e) {
+      body.innerHTML = "";
+      const d = document.createElement("div");
+      d.className = "usage-err";
+      d.textContent = `Could not load usage: ${e.message}`;
+      body.append(d);
+    }
+  };
+
+  const paintUsage = (panel, formatted) => {
+    const body = $("usage-body");
+    body.innerHTML = "";
+    if (panel.state === "empty") {
+      const d = document.createElement("div");
+      d.className = "usage-empty";
+      // Said in words. A chart of zeroes looks like a broken chart, and "nothing yet" is not the same claim.
+      d.textContent = "No usage recorded in the last 7 days.";
+      body.append(d);
+      return;
+    }
+
+    const totals = document.createElement("dl");
+    totals.className = "usage-tot";
+    for (const [label, value] of [
+      ["Cost", formatted.cost],
+      ["Input", formatted.inputTokens],
+      ["Output", formatted.outputTokens],
+      ["Runs", String(panel.totals.eventCount)],
+    ]) {
+      const dt = document.createElement("dt");
+      dt.textContent = label;
+      const dd = document.createElement("dd");
+      dd.textContent = value;
+      totals.append(dt, dd);
+    }
+    body.append(totals);
+
+    if (panel.bars.length > 0) {
+      const bars = document.createElement("div");
+      bars.className = "usage-bars";
+      bars.setAttribute("role", "img");
+      // Labelled as a whole rather than bar by bar: 7 announcements of "0%" is worse than one summary.
+      bars.setAttribute("aria-label", `Daily cost, ${panel.bars.length} days, total ${formatted.cost}`);
+      panel.bars.forEach((bar, i) => {
+        const el = document.createElement("div");
+        el.className = `usage-bar${bar.fraction > 0 ? " on" : ""}`;
+        // Against the peak, computed by the server — a quiet day reads as quiet instead of being rescaled.
+        el.style.height = `${Math.max(2, Math.round(bar.fraction * 100))}%`;
+        el.title = `${bar.bucketStart.slice(0, 10)} · ${formatted.bars[i]?.cost ?? ""}`;
+        bars.append(el);
+      });
+      body.append(bars);
+    }
+
+    for (const entry of formatted.byModel) {
+      const row = document.createElement("div");
+      row.className = "usage-model";
+      const k = document.createElement("span");
+      k.textContent = entry.key;
+      const v = document.createElement("span");
+      v.textContent = entry.cost;
+      row.append(k, v);
+      body.append(row);
+    }
+
+    if (panel.quota.status !== "none" && panel.quota.costFraction !== null) {
+      const track = document.createElement("div");
+      track.className = `usage-quota ${panel.quota.status}`;
+      track.setAttribute("role", "progressbar");
+      track.setAttribute("aria-valuemin", "0");
+      track.setAttribute("aria-valuemax", "100");
+      track.setAttribute("aria-valuenow", String(Math.round(panel.quota.costFraction * 100)));
+      const fill = document.createElement("span");
+      fill.style.width = `${Math.round(panel.quota.costFraction * 100)}%`;
+      track.append(fill);
+      body.append(track);
+    }
+  };
+
   /* ------------------------------------------------------- modes */
 
   let mode = "ask";
@@ -1006,6 +1206,15 @@
         const b = turn(t.role === "assistant" ? "bot" : "me");
         if (t.role === "assistant") b.innerHTML = `<div class="body">${md(t.text)}</div>`;
         else b.textContent = t.text;
+        /**
+         * Citations survive a reload, because #157 made the assistant's turn a real row with its parts.
+         *
+         * The panels come from the server's `citationViewModel` — the same numbering the live stream produced,
+         * so a citation is number 3 whether you watched it arrive or opened the conversation a week later.
+         */
+        if ((t.citations ?? []).length > 0) {
+          paintCites({ bubble: b, cites: t.citations });
+        }
         last = b;
       }
       if (!(h.turns ?? []).length) note("No messages yet.");
@@ -1065,6 +1274,10 @@
   };
 
   $("send").onclick = () => void send();
+  // Fetched when opened, and refreshed on each open — usage changes as you use it, and a stale figure in a
+  // cost panel is the one kind of stale figure people act on.
+  $("usage").ontoggle = () => { if ($("usage").open) void loadUsage(); };
+
   $("new").onclick = () => { conversationId = null; seen.clear(); closeAsk(); showEmpty(); void loadConversations(); $("text").focus(); };
   $("text").onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void send(); } };
   $("text").oninput = () => {

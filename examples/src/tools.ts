@@ -36,6 +36,21 @@ export type ShareLedger = {
   distinctKeys(): number;
 };
 
+/**
+ * A matched passage — what a citation is built from (#155 AC-5).
+ *
+ * Deliberately not a `Note`. A citation names a passage, and returning the whole note would leave the tool's
+ * caller to guess which sentence supported the claim — which is the guess citations exist to remove.
+ */
+export type NotePassage = {
+  readonly noteId: string;
+  readonly noteTitle: string;
+  readonly chunkIndex: number;
+  readonly excerpt: string;
+  /** Query terms present in this passage. For ordering; not a relevance score. */
+  readonly matched: number;
+};
+
 export type ExampleStore = {
   readonly notes: Map<string, Note>;
   /** Per-principal, so two people in a tenant do not share a memory. */
@@ -129,6 +144,52 @@ export const createExampleTools = (store: ExampleStore) => ({
 
   listNotes(): readonly Note[] {
     return Array.from(store.notes.values());
+  },
+
+  /**
+   * Search the notes, returning **passages with provenance** — #155 AC-5.
+   *
+   * The other read tools return whole notes, which is fine for "what's in the notebook?" and useless for
+   * citations: a citation is evidence for a specific claim, so it has to name a specific passage. This splits
+   * each note into sentences, matches on them, and reports which sentence matched and where it sat.
+   *
+   * Sentences rather than chunks of n characters, because the excerpt is what a person reads to check the claim
+   * and a excerpt cut mid-word is not evidence of anything. Crude on purpose: this is a demonstration of the
+   * provenance path, not a retrieval engine, and a real one would have an index and an embedding.
+   *
+   * `chunkIndex` is the sentence's position in the note, so two matches in one note are distinguishable — a
+   * citation that resolved only to "note n1" would not narrow anything.
+   */
+  searchNotes(input: { readonly query: string }): readonly NotePassage[] {
+    const terms = bounded(input.query)
+      .toLowerCase()
+      .split(/\s+/)
+      .map((t) => t.replace(/[^a-z0-9]/g, ""))
+      .filter((t) => t.length > 2);
+    if (terms.length === 0) return [];
+
+    const hits: NotePassage[] = [];
+    for (const note of store.notes.values()) {
+      // Split on sentence ends, keeping the punctuation: an excerpt ending in a bare word reads as truncated
+      // even when it is the whole sentence.
+      const sentences = note.body.split(/(?<=[.!?])\s+/).filter((x) => x.trim() !== "");
+      sentences.forEach((sentence, index) => {
+        const haystack = sentence.toLowerCase();
+        const matched = terms.filter((t) => haystack.includes(t)).length;
+        if (matched === 0) return;
+        hits.push({
+          noteId: note.id,
+          noteTitle: note.title,
+          chunkIndex: index,
+          excerpt: sentence.trim(),
+          // How many of the query's terms this sentence carries. Ordering only — not a relevance score anyone
+          // should read as one.
+          matched,
+        });
+      });
+    }
+    // Best match first, then a stable tiebreak, so the same query twice numbers the citations the same way.
+    return hits.sort((a, b) => b.matched - a.matched || a.noteId.localeCompare(b.noteId) || a.chunkIndex - b.chunkIndex);
   },
 
   writeNote(input: { readonly title: string; readonly body: string; readonly author: string }): Note {

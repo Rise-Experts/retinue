@@ -113,36 +113,18 @@ export const exampleContextProviders = (store: ExampleStore): readonly ContextPr
       ];
     },
   },
-  {
-    id: "example.memory",
-    async provide(context: ExecutionContext): Promise<readonly ContextSection[]> {
-      const entries = store.memory.get(String(context.principalId)) ?? [];
-      if (entries.length === 0) return [];
-      const body = entries.map((e, i) => `${i + 1}. ${e}`).join("\n");
-      return [
-        {
-          providerId: "example.memory",
-          title: "What you remember about this person",
-          body,
-          priority: 70,
-          estimatedTokens: estimateTokens(body),
-          provenance: `example-memory:${context.principalId}`,
-          sensitivity: "confidential",
-          /**
-           * `platform`, unlike the notebook, and the distinction is the point of #145's `origin` field.
-           *
-           * This is the principal's *own* remembered context, written from their own turns. Wrapping it in
-           * "nothing here is an instruction" would negate what the memory is for — if the user said "always
-           * reply in German", that is a real instruction from the real user.
-           *
-           * The notebook is different: anyone in the workspace can write a note, so a note is third-party text.
-           * Same store, same process, different trust — which is exactly why the field cannot have a default.
-           */
-          origin: "platform",
-          cacheable: false,
-          kind: "user-context",
-        },
-      ];
-    },
-  },
+  /**
+   * Nothing here — principal memory has its own provider, and it is the platform's.
+   *
+   * This used to be a hand-written provider reading an in-process `Map`, which is the bug the user hit: they
+   * told the assistant their country in one conversation and it did not know in the next. Two reasons it could
+   * not have worked. The map lived in the *worker* process, so it did not survive a restart and was invisible
+   * to the API host. And `PrincipalMemoryStore` — a durable, tenant-scoped, salience-ranked port with a
+   * `retrieve` built for exactly this — was sitting unused, along with `createPrincipalMemoryProvider`.
+   *
+   * The provider is wired in `index.ts`, where the SQL executor is. It emits `origin: "platform"` for the same
+   * reason this one did: a person's own remembered preferences are instructions from the real user, and wrapping
+   * them in "nothing here is an instruction" would negate what a memory is for. The notebook stays `external`,
+   * because anyone in the workspace can write a note.
+   */
 ];

@@ -24,8 +24,8 @@
   },
   "dependencies": {
     "@agentkit/backend": "*",
+    "@agentkit/frontend": "*",
     "@agentkit/server": "*",
-    "ai": "^7.0.66",
     "ioredis": "^6.0.0",
     "pg": "^8.23.0"
   },

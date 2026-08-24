@@ -15,21 +15,33 @@
  */
 
 import { createPostgresMessageStore } from "@agentkit/backend";
-import type { ConversationId, SqlExecutor, TenantId, TurnMessage } from "@agentkit/backend";
+import type { ConversationId, Message, SqlExecutor, TenantId, TurnMessage } from "@agentkit/backend";
+
+/**
+ * One turn, with the parts it was made of.
+ *
+ * The engine wants text and the page wants text *and* citations, and the temptation is two functions. Two
+ * functions is two projections of one conversation that can disagree, which is the whole reason this file
+ * exists. So there is one read, returning everything, and `historyForModel` narrows it.
+ */
+export type ConversationTurn = TurnMessage & {
+  /** The stored parts. The page derives citation markers from these; the model is given only `text`. */
+  readonly parts: readonly Message["parts"][number][];
+};
 
 export const conversationTurns = async (input: {
   readonly sql: SqlExecutor;
   readonly tenantId: string;
   readonly conversationId: string;
   readonly limit?: number;
-}): Promise<readonly TurnMessage[]> => {
+}): Promise<readonly ConversationTurn[]> => {
   const page = await createPostgresMessageStore(input.sql).listByConversation({
     tenantId: input.tenantId as TenantId,
     conversationId: input.conversationId as ConversationId,
     limit: input.limit ?? 100,
   });
 
-  const turns: TurnMessage[] = [];
+  const turns: ConversationTurn[] = [];
   for (const message of page.items) {
     // Text only. Tool calls and their results are in the parts too, and a model does not need to be told
     // again what it already has in its own transcript — but an empty turn would be a hole in the history,
@@ -39,7 +51,17 @@ export const conversationTurns = async (input: {
       .map((part) => String((part as { text?: unknown }).text ?? ""))
       .join("");
     if (text.trim() === "") continue;
-    turns.push({ role: message.role === "assistant" ? "assistant" : "user", text });
+    turns.push({ role: message.role === "assistant" ? "assistant" : "user", text, parts: message.parts });
   }
   return turns;
 };
+
+/**
+ * The same turns, narrowed to what a model is given.
+ *
+ * Text only. Tool calls, results and citations are in the parts, and a model does not need to be told again what
+ * it already has in its own transcript — a citation especially: it is evidence *for* the reader, and feeding it
+ * back invites the model to paraphrase provenance in prose.
+ */
+export const historyForModel = (turns: readonly ConversationTurn[]): readonly TurnMessage[] =>
+  turns.map(({ role, text }) => ({ role, text }));

@@ -63,6 +63,10 @@ describe("runs migration 0002", () => {
         "id",
         "keepalive_at",
         "lease_expires_at",
+        // Who the run is for — #164. Until these existed, a durable worker had nothing to rebuild the caller's
+        // identity from and every host invented one.
+        "principal_id",
+        "role_ids",
         "started_at",
         "status",
         "tenant_id",
@@ -70,6 +74,15 @@ describe("runs migration 0002", () => {
     );
     // agent_version is required by NewRun; the SPEC's original column list omitted it entirely.
     expect(cols.find((c) => c.column_name === "agent_version")?.is_nullable).toBe("NO");
+    /**
+     * Nullable, deliberately — #164.
+     *
+     * Rows written before the column existed have no answer, and a `NOT NULL DEFAULT 'something'` would put the
+     * invented identity in the schema, which is the same bug one layer down and much harder to see. A run with
+     * no principal is refused at `buildContext` instead.
+     */
+    expect(cols.find((c) => c.column_name === "principal_id")?.is_nullable).toBe("YES");
+    expect(cols.find((c) => c.column_name === "role_ids")?.is_nullable).toBe("YES");
   });
 
   it("migrates up, rolls back (table and indexes gone), and re-migrates", async () => {

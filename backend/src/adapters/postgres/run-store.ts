@@ -13,7 +13,7 @@
  */
 import { AgentPlatformError } from "../../core/errors.js";
 import type { PlatformError } from "../../core/errors.js";
-import type { AgentId, ConversationId, RunId, TenantId } from "../../core/ids.js";
+import type { AgentId, ConversationId, PrincipalId, RunId, TenantId } from "../../core/ids.js";
 import type { RunStore } from "../../persistence/index.js";
 import { canTransition, isTerminal, type Run, type RunStatus } from "../../runtime/index.js";
 import type { SqlExecutor } from "./sql.js";
@@ -33,6 +33,8 @@ type Row = {
   keepalive_at: string | Date | null;
   lease_expires_at: string | Date | null;
   cancel_requested_at: string | Date | null;
+  principal_id: string | null;
+  role_ids: readonly string[] | null;
 };
 
 const iso = (v: string | Date): string => (v instanceof Date ? v.toISOString() : new Date(v).toISOString());
@@ -52,6 +54,11 @@ const toRun = (r: Row): Run => ({
   ...(r.keepalive_at === null ? {} : { keepaliveAt: iso(r.keepalive_at) }),
   ...(r.lease_expires_at === null ? {} : { leaseExpiresAt: iso(r.lease_expires_at) }),
   ...(r.cancel_requested_at === null ? {} : { cancelRequestedAt: iso(r.cancel_requested_at) }),
+  // #164. Null-and-undefined both mean "not recorded": the column is nullable for rows written before it
+  // existed, and `??` here rather than a `?? []` default because an empty role list and an unknown one are
+  // different facts — one is a caller with no roles, the other is a run nobody can attribute.
+  ...(r.principal_id === null || r.principal_id === undefined ? {} : { principalId: r.principal_id as PrincipalId }),
+  ...(r.role_ids === null || r.role_ids === undefined ? {} : { roleIds: r.role_ids }),
 });
 
 const conflict = (m: string) => new AgentPlatformError({ code: "conflict", message: m, retryable: false });
@@ -69,13 +76,14 @@ export const createPostgresRunStore = (sql: SqlExecutor): RunStore => {
   };
 
   return {
-    async create({ tenantId, id, conversationId, agentId, agentVersion }) {
+    async create({ tenantId, id, conversationId, agentId, agentVersion, principalId, roleIds }) {
       const rows = await sql.query<Row>(
-        `INSERT INTO runs (tenant_id, id, conversation_id, agent_id, agent_version, status, created_at)
-         VALUES ($1, $2, $3, $4, $5, 'queued', now())
+        `INSERT INTO runs (tenant_id, id, conversation_id, agent_id, agent_version, status, created_at,
+                           principal_id, role_ids)
+         VALUES ($1, $2, $3, $4, $5, 'queued', now(), $6, $7)
          ON CONFLICT (tenant_id, id) DO NOTHING
          RETURNING *`,
-        [tenantId, id, conversationId, agentId, agentVersion],
+        [tenantId, id, conversationId, agentId, agentVersion, principalId ?? null, roleIds ?? null],
       );
       const row = rows[0];
       if (!row) throw conflict(`Run ${id} already exists`);

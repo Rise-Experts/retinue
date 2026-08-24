@@ -9,11 +9,22 @@
 import { boot } from "./boot.js";
 import { APP_MODULE_VARIABLE, type AgentkitApp } from "./cli.js";
 import { loadConfig, type AgentkitConfig } from "./config.js";
-import type { AgentEngine, ResolverDeps, SqlExecutor } from "@agentkit/backend";
+import type { AgentEngine, PricingResolver, ResolverDeps, SqlExecutor } from "@agentkit/backend";
 
 export type AgentkitWorkerApp = AgentkitApp & {
   readonly engine: (input: { readonly config: AgentkitConfig; readonly sql: SqlExecutor }) => AgentEngine;
   readonly buildContext: Parameters<typeof import("@agentkit/backend").createDurableWorker>[0]["buildContext"];
+  /**
+   * What a model costs — #166.
+   *
+   * Optional, and its absence costs **cost** and not usage: tokens are recorded either way, because how many
+   * tokens a run consumed is a fact whether or not anyone knows the price. Dropping the record for want of a
+   * price would lose the fact to protect a figure.
+   *
+   * Supplied by the app rather than built here because only the app knows its model catalogue. See
+   * `createRegistryPricingResolver` for the usual one-liner over a `ModelRegistry`.
+   */
+  readonly pricing?: PricingResolver;
 };
 
 export const runWorker = async (
@@ -81,6 +92,22 @@ export const runWorker = async (
      * amnesiac agent the first time someone forgets.
      */
     messages: backend.createPostgresMessageStore(sql),
+    /**
+     * Usage is recorded — #166.
+     *
+     * `DurableWorkerDeps.usage` is optional and nothing wired it, so no deployment using the documented worker
+     * command recorded a single usage event. Every consumer of that ledger was therefore reading zero: the
+     * spend panel, the quota guard at admission, and the rollup job. A quota that cannot be exceeded because
+     * nothing is ever counted is not a quota.
+     *
+     * Built here, like the checkpoint and message stores, for the same reason: an app module that has to
+     * remember is an app module that bills silently the first time someone forgets.
+     */
+    usage: backend.createUsageRecorder({
+      store: backend.createPostgresUsageStore(sql),
+      // No catalogue means no prices, and `record` writes the tokens regardless.
+      pricing: app.pricing ?? { resolve: () => null },
+    }),
     buildContext: app.buildContext,
     workerId: `worker-${process.pid}`,
   });
