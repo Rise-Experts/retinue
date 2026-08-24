@@ -27,6 +27,7 @@
     "@agentkit/backend": "*",
     "@agentkit/frontend": "*",
     "@agentkit/server": "*",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "ioredis": "^6.0.0",
     "pg": "^8.23.0"
   },

@@ -6,7 +6,8 @@ import { exampleAgentManifest, exampleContextProviders } from "../agent.js";
 import { questionSpecsFrom } from "../questions.js";
 import { buildWorkerContext } from "../worker-context.js";
 import { ASSIGNED_SKILLS, EXAMPLE_SKILLS, renderSkillCatalogue } from "../skills.js";
-import { SKILL_LIMITS } from "@agentkit/backend";
+import { SKILL_LIMITS, classifyMcpTool, hashToolList, mcpToolName } from "@agentkit/backend";
+import { DOCS_MCP_EFFECTS, DOCS_MCP_SERVER_ID, DOCS_MCP_TOOLS, docsMcpConnection } from "../mcp.js";
 import {
   CONVERSATION_MODES,
   DEFAULT_MODE,
@@ -464,5 +465,75 @@ describe("skills", () => {
       expect(skill.instructions).toMatch(/^#\s/);
       expect(skill.instructions.length).toBeGreaterThan(200);
     }
+  });
+});
+
+/**
+ * The MCP bridge — #173.
+ *
+ * `createMcpToolProvider` takes a two-method `McpClient` precisely so the platform never depends on an MCP SDK,
+ * and no host provided one. These cover the wiring decisions that are not obvious from the types: what the
+ * administrator classification is for, and why a server's own hints cannot be trusted.
+ */
+describe("the MCP bridge", () => {
+  it("classifies every declared docs tool as a read, by administrator decision", () => {
+    // Not by trusting the server. `classifyMcpTool` returns `external-write` for anything an administrator has
+    // not classified, whatever the server's annotations claim — so this list *is* the review step.
+    for (const effect of Object.values(DOCS_MCP_EFFECTS)) expect(effect).toBe("read");
+  });
+
+  it("refuses to take a server's readOnlyHint as a classification", () => {
+    /**
+     * The security property, asserted against the platform's own classifier.
+     *
+     * A hostile server marking everything `readOnlyHint: true` must not import a silent side effect. Only an
+     * administrator's explicit classification relaxes the default, and that default is `external-write` — which
+     * requires human approval before it can run even once.
+     */
+    expect(classifyMcpTool({ readOnlyHint: true }).effect).toBe("external-write");
+    expect(classifyMcpTool({ readOnlyHint: true }).source).toBe("default");
+    expect(classifyMcpTool({}, "read").source).toBe("administrator");
+  });
+
+  it("treats a destructive hint as destructive, since that direction is safe to believe", () => {
+    // A server volunteering that its tool is dangerous is the one hint worth taking at face value: believing it
+    // can only tighten the classification.
+    expect(classifyMcpTool({ destructiveHint: true }).effect).toBe("destructive");
+  });
+
+  it("namespaces imported tools so a server cannot shadow a first-party one", () => {
+    // A remote server naming its own tool `share_note` must not become the `share_note` the agent already has.
+    expect(mcpToolName(DOCS_MCP_SERVER_ID, "share_note")).toBe("mcp__agentkit-docs__share_note");
+    expect(mcpToolName(DOCS_MCP_SERVER_ID, "read_document")).not.toBe("read_document");
+  });
+
+  it("grants imported tools by name, so a server adding one does not silently become callable", () => {
+    /**
+     * The authorization model, and the reason the role lists these individually rather than by wildcard: a tool
+     * the server adds tomorrow appears in the catalogue only once a person adds it to the role. That review step
+     * is what makes importing a remote server safe.
+     */
+    const granted = new Set(DOCS_MCP_TOOLS);
+    for (const name of Object.keys(DOCS_MCP_EFFECTS)) {
+      expect(granted.has(mcpToolName(DOCS_MCP_SERVER_ID, name))).toBe(true);
+    }
+    expect(granted.has(mcpToolName(DOCS_MCP_SERVER_ID, "delete_everything"))).toBe(false);
+  });
+
+  it("records the connection without a credential", () => {
+    // A connection record must never hold a secret — only a reference something else resolves. True here even
+    // though a local process needs none, because the shape is what stops the next server leaking one.
+    const connection = docsMcpConnection("t1" as never);
+    expect(JSON.stringify(connection)).not.toContain("password");
+    expect(connection.auth).toEqual({ kind: "none" });
+    expect(connection.transport).toBe("stdio");
+  });
+
+  it("detects a tool list that changed between two snapshots", () => {
+    // A remote server can change its tools between turns of one conversation. A run that approved
+    // `mcp__x__publish` must not silently end up calling something else.
+    const before = hashToolList([{ name: "a" }, { name: "b" }]);
+    expect(hashToolList([{ name: "b" }, { name: "a" }])).toBe(before);
+    expect(hashToolList([{ name: "a" }, { name: "c" }])).not.toBe(before);
   });
 });

@@ -22,9 +22,23 @@ const { runWorker } = await import("@agentkit/server");
 const { shutdown } = await runWorker();
 console.log(`  agentkit example — worker running (schema ${SCHEMA}). Ctrl-C to drain.`);
 
+/**
+ * Drain, then close the MCP server — #173.
+ *
+ * The MCP client spawns a child process, so a shutdown that forgets it leaves an orphan behind. Restart a few
+ * times while developing and there is a small pile of documentation servers holding stdio open.
+ *
+ * After `shutdown()`, not before: a run still draining may be part-way through an MCP tool call, and closing the
+ * transport under it would turn an in-flight tool into a transport error on a run that was about to finish
+ * cleanly.
+ */
+const { closeExampleMcp } = await import(pathToFileURL(resolve(import.meta.dirname, "../dist/index.js")).href);
+
 for (const signal of ["SIGINT", "SIGTERM"]) {
   process.on(signal, () => {
     console.log(`\n  ${signal} — draining…`);
-    void shutdown().then(() => process.exit(0));
+    void shutdown()
+      .then(() => closeExampleMcp())
+      .then(() => process.exit(0));
   });
 }

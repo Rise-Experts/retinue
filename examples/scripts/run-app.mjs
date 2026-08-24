@@ -37,7 +37,10 @@ const runner = scope.runner;
 const [{ search_path: path }] = await sql.query("SHOW search_path");
 if (!path.includes(SCHEMA)) throw new Error(`search_path is "${path}", expected ${SCHEMA}`);
 
-const app = (await import(pathToFileURL(resolve(import.meta.dirname, "../dist/index.js")).href)).default;
+// The module and its default export: `deps`/`authenticate` are the app module's contract, and
+// `closeExampleMcp` is a named export beside it.
+const appModule = await import(pathToFileURL(resolve(import.meta.dirname, "../dist/index.js")).href);
+const app = appModule.default;
 const { startExampleServer } = await import(pathToFileURL(resolve(import.meta.dirname, "../dist/server.js")).href);
 
 const deps = await app.deps({ config: { redisUrl: process.env.AGENTKIT_REDIS_URL ?? "" }, sql, runner });
@@ -55,3 +58,17 @@ console.log(`
   Nothing executes until the worker runs — start it in a second terminal:
     npm run worker -w @agentkit/example-app
 `);
+
+/**
+ * The MCP child process is closed on shutdown — #173.
+ *
+ * The API host builds a catalogue on every turn, which means it too holds an MCP client and its spawned
+ * documentation server. Both processes need this; only the worker having it would leave an orphan per API
+ * restart, which is the harder one to notice because the API restarts more often.
+ */
+for (const signal of ["SIGINT", "SIGTERM"]) {
+  process.on(signal, () => {
+    console.log(`\n  ${signal} — closing…`);
+    void appModule.closeExampleMcp().then(() => process.exit(0));
+  });
+}

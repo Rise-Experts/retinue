@@ -41,6 +41,7 @@ import {
   createApprovalService,
   computeModelCostMinorUnits,
   commitExtractedMemories,
+  asId,
   assemblePrompt,
   createCitationEmitter,
   createPrincipalMemoryProvider,
@@ -78,6 +79,8 @@ import { MAX_MEMORY_ENTRIES, NoteNotFound, createExampleTools } from "./tools.js
 import { exampleStore } from "./store.js";
 import { exampleProviders } from "./providers.js";
 import { ASSIGNED_SKILLS, EXAMPLE_SKILLS, renderSkillCatalogue } from "./skills.js";
+import { DOCS_MCP_SERVER_ID, DOCS_MCP_TOOLS, createDocsMcpClient, createDocsMcpProvider } from "./mcp.js";
+import { fileURLToPath } from "node:url";
 import { exampleAgentManifest, exampleContextProviders } from "./agent.js";
 import { EXCLUDED_EFFECTS, MODE_DESCRIPTIONS, type ConversationMode } from "./modes.js";
 import { createModeStore } from "./mode-store.js";
@@ -98,6 +101,19 @@ export const exampleState = { store, impl };
  * `filterTools` visibly removes `publish_note` from the catalogue rather than the tool failing at execution.
  * `requiresApproval` on the publish permission is what routes it through the HITL gate.
  */
+/**
+ * The tool names each role may see, split so the two lists cannot drift apart by editing one.
+ *
+ * They used to be two hand-maintained arrays, and adding a tool meant remembering both. `viewer` silently
+ * missing a new read-only tool is the failure that shape invites, and it looks like the tool being broken.
+ */
+const FIRST_PARTY_TOOLS = ["remember", "recall", "list_notes", "search_notes", "calculate", "now", "ask_user", "load_skill"] as const;
+
+/** Only `editor` gets these: they change or share something. */
+const WRITE_TOOLS = ["write_note", "share_note"] as const;
+
+// The imported MCP tools come from `./mcp.ts`, derived from the administrator classification there.
+
 const ROLES = [
   {
     roleId: "editor",
@@ -107,7 +123,7 @@ const ROLES = [
       { action: "execute", resourceType: "tool" },
       { action: "publish", resourceType: "note", requiresApproval: true },
     ],
-    tools: ["remember", "recall", "list_notes", "search_notes", "write_note", "share_note", "calculate", "now", "ask_user", "load_skill"],
+    tools: [...FIRST_PARTY_TOOLS, ...WRITE_TOOLS, ...DOCS_MCP_TOOLS],
   },
   {
     roleId: "viewer",
@@ -117,7 +133,7 @@ const ROLES = [
     ],
     // No `write_note`, no `share_note`. `viewer` cannot *see* them in the catalogue, so the model never offers
     // something the person cannot do — which is a better experience than a refusal after asking.
-    tools: ["remember", "recall", "list_notes", "search_notes", "calculate", "now", "ask_user", "load_skill"],
+    tools: [...FIRST_PARTY_TOOLS, ...DOCS_MCP_TOOLS],
   },
 ] as const;
 
@@ -154,6 +170,51 @@ const approvalGateFor = (sql: SqlExecutor) =>
     // approval would still never authorise its execution.
     interactions: createPostgresInteractionStore(sql),
   });
+
+/**
+ * Every tool provider the registry draws on — first-party plus MCP (#173).
+ *
+ * One list, so the API host and the worker offer the same tools. They must: the catalogue is filtered at the API
+ * boundary *and* re-authorised in the worker, and a tool present in one and absent in the other would be a run
+ * that is admitted and then cannot finish.
+ *
+ * The MCP client is a **singleton**, like the skill tracker and for a related reason: it owns a spawned child
+ * process. A client per call would spawn a documentation server per turn and leave them running.
+ */
+let mcpClientSingleton: ReturnType<typeof createDocsMcpClient> | undefined;
+
+/**
+ * Where the MCP server is spawned from.
+ *
+ * `examples/` rather than the process cwd, because the worker and the API host are started from different places
+ * and a relative command that resolves in one would fail in the other — the kind of difference that shows up as
+ * "MCP works in the API and not the worker", which is a nasty thing to debug.
+ */
+const EXAMPLE_ROOT = fileURLToPath(new URL("..", import.meta.url));
+
+export const exampleMcpClient = () => {
+  mcpClientSingleton ??= createDocsMcpClient({ cwd: EXAMPLE_ROOT });
+  return mcpClientSingleton;
+};
+
+/** Closes the spawned MCP server. Called on shutdown so a restart does not leave orphans behind. */
+export const closeExampleMcp = async (): Promise<void> => {
+  const client = mcpClientSingleton;
+  mcpClientSingleton = undefined;
+  await client?.close();
+};
+
+const exampleToolProviders = (sql: SqlExecutor) => [
+  { id: "example.notes-tools", async listTools() { return buildTools(sql); } },
+  /**
+   * The MCP server's tools, arriving through the same registry as the first-party ones.
+   *
+   * That is the point of the whole bridge: an imported tool inherits authorization filtering, the approval gate,
+   * idempotency keys and the audit trail, rather than sitting beside them with its own rules. It is namespaced
+   * `mcp__agentkit-docs__*`, so a remote server cannot shadow `share_note` by naming its own tool that.
+   */
+  createDocsMcpProvider(asId("demo"), exampleMcpClient()),
+];
 
 /**
  * The skill resolver, and the per-run tracker — #171.
@@ -576,7 +637,7 @@ const app = {
     const dispatcher = createBullMqJobDispatcher(queue);
 
     const registry = createToolRegistry({
-      providers: [{ id: "example.notes-tools", async listTools() { return buildTools(sql); } }],
+      providers: exampleToolProviders(sql),
       authorization,
       idempotency: createPostgresIdempotencyStore(sql),
       // The registry's own fail-closed check. Without it every `policy`/`always` tool is refused, however the
@@ -629,7 +690,7 @@ const app = {
     const resolved = resolveExampleModel();
     const interactions = createPostgresInteractionStore(sql);
     const registry = createToolRegistry({
-      providers: [{ id: "example.notes-tools", async listTools() { return buildTools(sql); } }],
+      providers: exampleToolProviders(sql),
       authorization,
       idempotency: createPostgresIdempotencyStore(sql),
       // The registry's own fail-closed check. Without it every `policy`/`always` tool is refused, however the
@@ -738,7 +799,19 @@ const app = {
           conversationId: String(context.conversationId ?? ""),
         });
         const blocked = new Set(EXCLUDED_EFFECTS[mode]);
-        const all = await registry.catalog(context, { preloaded: [], categories: ["assistant"], excluded: [] });
+        /**
+         * Both categories: the first-party tools and the imported MCP ones (#173).
+         *
+         * The platform namespaces an imported tool's *category* as `mcp:<server>`, which is what keeps a remote
+         * server's tools identifiable in a catalogue — and means a preload list naming only `assistant` silently
+         * excludes every one of them. The tools would be authorized, registered and invisible, which reads exactly
+         * like the MCP bridge not working.
+         */
+        const all = await registry.catalog(context, {
+          preloaded: [],
+          categories: ["assistant", `mcp:${DOCS_MCP_SERVER_ID}`],
+          excluded: [],
+        });
         const catalog = {
           preloaded: all.preloaded.filter((d) => !blocked.has(String(d.effect))),
         };

@@ -201,6 +201,22 @@ const CAPABILITIES = [
     why: "#171 — without it maxLoadedPerRun never binds and no run records which skill versions it used.",
   },
   {
+    name: "MCP tool import",
+    symbol: "createMcpToolProvider",
+    scope: "host",
+    why: "#173 — the provider took an injectable client precisely so a host would wire one, and none did.",
+  },
+  {
+    name: "MCP connection lifecycle",
+    symbol: "closeExampleMcp",
+    scope: "host",
+    /**
+     * The close, specifically. An MCP client over stdio owns a child process, so a shutdown that forgets it
+     * leaves an orphan per restart — and the API host restarts often enough that the pile is easy to miss.
+     */
+    why: "#173 — a spawned MCP server must be closed on shutdown, not orphaned.",
+  },
+  {
     name: "context inspection",
     symbol: "inspectAssembledPrompt",
     scope: "host",
