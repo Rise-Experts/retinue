@@ -236,3 +236,63 @@ describe("bucket arithmetic for week and month", () => {
     }
   });
 });
+
+/**
+ * The recorder stamps the principal from the context — #175.
+ *
+ * This test exists because its absence cost me the feature twice over. The stamping was written, then lost to a
+ * `cp` restoring a backup taken before it, and **nothing failed**: the column was there, the rollups ran, the
+ * limits resolved, and every per-person figure was silently null. It surfaced only by running the app and looking
+ * at the table.
+ *
+ * The lesson is the general one this codebase keeps relearning: a value that is supposed to *arrive* somewhere
+ * needs a test at the arrival, not only at the departure.
+ */
+describe("usage recorder — identity comes from the context", () => {
+  const stored = async (over: Partial<ExecutionContext> = {}) => {
+    const store = createMemoryUsageStore();
+    const rec = createUsageRecorder({ store, pricing, clock: () => "t" });
+    await rec.record({ ...ctx(), ...over } as ExecutionContext, {
+      runId: R,
+      modelId: "m1",
+      inputTokens: 1,
+      outputTokens: 1,
+      cachedInputTokens: 0,
+      costMinorUnits: 1,
+      currency: "USD",
+      stepId: "s1",
+    });
+    return (await store.listByRun({ tenantId: T, runId: R, limit: 10 })).items[0];
+  };
+
+  it("records the principal from the execution context", async () => {
+    expect((await stored())?.principalId).toBe("p1");
+  });
+
+  it("records the tenant from the context too", async () => {
+    expect((await stored())?.tenantId).toBe(T);
+  });
+
+  /**
+   * The caller cannot name the principal. `UsageEventInput` omits it from the type, and this asserts the runtime
+   * behaviour matches — a caller able to name it could bill someone else's budget, which is the same rule
+   * `tenantId` has always followed.
+   */
+  it("ignores a principal supplied on the event payload", async () => {
+    const store = createMemoryUsageStore();
+    const rec = createUsageRecorder({ store, pricing, clock: () => "t" });
+    await rec.record(ctx(), {
+      runId: R,
+      modelId: "m1",
+      inputTokens: 1,
+      outputTokens: 1,
+      cachedInputTokens: 0,
+      costMinorUnits: 1,
+      currency: "USD",
+      stepId: "s1",
+      // Deliberately smuggled past the type, which is what a compromised or careless caller would do.
+      principalId: "somebody-else",
+    } as never);
+    expect((await store.listByRun({ tenantId: T, runId: R, limit: 10 })).items[0]?.principalId).toBe("p1");
+  });
+});

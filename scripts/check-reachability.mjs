@@ -217,6 +217,23 @@ const CAPABILITIES = [
     why: "#173 — a spawned MCP server must be closed on shutdown, not orphaned.",
   },
   {
+    name: "quota enforcement",
+    symbol: "createQuotaGuard",
+    scope: "host",
+    /**
+     * `ResolverDeps.quota` is optional and nothing wired it, so a deployment with limits configured had no
+     * limits — `assertAdmitted` was never called. #166 made the ledger non-empty; without this the guard still
+     * had nothing consulting it.
+     */
+    why: "#175 — a configured spend limit that nothing checks is not a limit.",
+  },
+  {
+    name: "configurable spend limits",
+    symbol: "createStoredLimitResolver",
+    scope: "host",
+    why: "#175 — limits must come from a store an admin can change, not from a hardcoded value.",
+  },
+  {
     name: "context inspection",
     symbol: "inspectAssembledPrompt",
     scope: "host",

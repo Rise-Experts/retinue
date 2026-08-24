@@ -76,13 +76,15 @@ export const createUsageRecorder = (config: {
 
   return {
     async record(context, event: UsageEventInput) {
-      // Identity (tenant) comes from the trusted context, never from the event payload.
+      // Identity comes from the trusted context, never from the event payload — tenant *and* principal (#175).
+      // A caller able to name either could bill someone else's budget.
       await config.store.append({
         tenantId: context.tenantId,
         event: {
           ...event,
           id: idFactory(),
           tenantId: context.tenantId as unknown as string,
+          principalId: context.principalId,
           occurredAt: clock(),
         },
       });

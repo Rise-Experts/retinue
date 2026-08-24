@@ -58,6 +58,15 @@ export const createRollupJob = (deps: RollupJobDeps) => {
           tenantId: context.tenantId,
           period: bucket.period,
           bucketStart: bucket.bucketStart,
+          /**
+           * The grain the store reported — #175.
+           *
+           * Dropping it would rebuild the tenant row twice and never build a principal's at all, so every
+           * per-person figure would read zero and every per-person quota would be unenforceable. The store
+           * reports both grains from one ledger pass precisely so the job does not have to know which
+           * principals were active.
+           */
+          ...(bucket.principalId === undefined ? {} : { principalId: bucket.principalId }),
         });
       }
       // Asked again rather than computed, because events may have landed while this page ran — and a stale

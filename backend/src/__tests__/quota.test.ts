@@ -680,3 +680,163 @@ describe("quota enforcement per principal", () => {
     expect(resolved?.costMinorUnits).toBe(400);
   });
 });
+
+/**
+ * The rollup job builds both grains — #175.
+ *
+ * The store reports stale buckets at both grains from one ledger pass, precisely so the job does not have to know
+ * which principals were active. A job that dropped the grain would rebuild the tenant row twice and never build a
+ * principal's at all — so every per-person figure would read zero and every per-person quota would be
+ * unenforceable, with nothing failing anywhere.
+ */
+describe("the rollup job and per-principal buckets", () => {
+  const P1 = asId<PrincipalId>("alice");
+  const AT = "2026-08-24T10:30:00.000Z";
+  const HOUR = "2026-08-24T10:00:00.000Z";
+
+  it("rebuilds a principal's bucket, not just the tenant's", async () => {
+    const backend = createMemoryUsageBackend();
+    await backend.usage.append({
+      tenantId: T1,
+      event: {
+        id: "e1",
+        tenantId: T1,
+        principalId: P1,
+        runId: asId<RunId>("run-1"),
+        modelId: "m1",
+        inputTokens: 10,
+        outputTokens: 5,
+        cachedInputTokens: 0,
+        costMinorUnits: 42,
+        currency: "USD",
+        occurredAt: AT,
+      } satisfies UsageEvent,
+    });
+
+    const job = createRollupJob({ rollups: backend.rollups });
+    const { rebuilt } = await job.run({ tenantId: T1 }, { period: "hour", since: HOUR, limit: 50 });
+
+    // Both grains, from one run.
+    expect(rebuilt).toBe(2);
+    expect((await backend.rollups.get({ tenantId: T1, period: "hour", bucketStart: HOUR }))?.costMinorUnits).toBe(42);
+    expect(
+      (await backend.rollups.get({ tenantId: T1, period: "hour", bucketStart: HOUR, principalId: P1 }))
+        ?.costMinorUnits,
+    ).toBe(42);
+  });
+
+  it("drains, so the job does not rebuild forever", async () => {
+    // With two grains there are two rows to satisfy, and a job that only ever wrote one would report the other
+    // as stale on every pass.
+    const backend = createMemoryUsageBackend();
+    await backend.usage.append({
+      tenantId: T1,
+      event: {
+        id: "e1",
+        tenantId: T1,
+        principalId: P1,
+        runId: asId<RunId>("run-1"),
+        modelId: "m1",
+        inputTokens: 1,
+        outputTokens: 1,
+        cachedInputTokens: 0,
+        costMinorUnits: 1,
+        currency: "USD",
+        occurredAt: AT,
+      } satisfies UsageEvent,
+    });
+    const job = createRollupJob({ rollups: backend.rollups });
+    await job.run({ tenantId: T1 }, { period: "hour", since: HOUR, limit: 50 });
+    const second = await job.run({ tenantId: T1 }, { period: "hour", since: HOUR, limit: 50 });
+    expect(second.rebuilt).toBe(0);
+    expect(second.remaining).toBe(0);
+  });
+});
+
+/**
+ * What a refused person is told — #175.
+ *
+ * Two defects found by reading the actual response rather than the code. Both are in the sentence a human sees,
+ * which is the part no type checks.
+ */
+describe("quota refusal messages", () => {
+  const P1 = asId<PrincipalId>("alice");
+  const AT = "2026-08-24T10:30:00.000Z";
+  const MONTH = "2026-08-01T00:00:00.000Z";
+
+  const overspent = async () => {
+    const backend = createMemoryUsageBackend();
+    await backend.usage.append({
+      tenantId: T1,
+      event: {
+        id: "e1",
+        tenantId: T1,
+        principalId: P1,
+        runId: asId<RunId>("run-1"),
+        modelId: "m1",
+        inputTokens: 3100,
+        outputTokens: 0,
+        cachedInputTokens: 0,
+        costMinorUnits: 0,
+        currency: "USD",
+        occurredAt: AT,
+      } satisfies UsageEvent,
+    });
+    await backend.rollups.rebuild({ tenantId: T1, period: "month", bucketStart: MONTH });
+    await backend.rollups.rebuild({ tenantId: T1, period: "month", bucketStart: MONTH, principalId: P1 });
+    return backend;
+  };
+
+  const context = (): ExecutionContext => ({ ...ctx(), principalId: P1 });
+
+  it("says 'you' for a personal limit, not 'this workspace'", async () => {
+    /**
+     * Every message said "This workspace", which was true while every limit was a tenant's and became a lie the
+     * moment one could belong to a person. Someone refused for their own overspend was told the workspace had run
+     * out — so the obvious next step is asking a colleague to stop working.
+     */
+    const guard = createQuotaGuard({
+      rollups: (await overspent()).rollups,
+      resolveLimits: () => ({ period: "month", principalId: P1, inputTokens: 1000 }),
+    });
+    const decision = await guard.admit(context(), AT);
+    expect(decision.admitted).toBe(false);
+    if (decision.admitted) throw new Error("expected a refusal");
+    expect(decision.message).toContain("You have used");
+    expect(decision.message).not.toContain("workspace");
+  });
+
+  it("still says 'this workspace' for a tenant limit", async () => {
+    // The other half. A shared budget running out is not the person's fault, and telling them it is would send
+    // them to change a setting that is not theirs.
+    const guard = createQuotaGuard({
+      rollups: (await overspent()).rollups,
+      resolveLimits: () => ({ period: "month", inputTokens: 1000 }),
+    });
+    const decision = await guard.admit(context(), AT);
+    if (decision.admitted) throw new Error("expected a refusal");
+    expect(decision.message).toContain("This workspace has used");
+  });
+
+  it("carries the reset instant on the thrown refusal, so a retry can be scheduled", async () => {
+    /**
+     * "Retryable" without a time is not actionable. The HTTP surface had nothing to put in `retry-after` and sent
+     * `0`, which tells a client to retry immediately into the same refusal.
+     */
+    const guard = createQuotaGuard({
+      rollups: (await overspent()).rollups,
+      resolveLimits: () => ({ period: "month", principalId: P1, inputTokens: 1000 }),
+    });
+    await expect(guard.assertAdmitted(context(), AT)).rejects.toMatchObject({
+      code: "budget_exceeded",
+      retryable: true,
+      details: {
+        // The next bucket, so a caller can wait exactly as long as it takes.
+        retryAfter: "2026-09-01T00:00:00.000Z",
+        dimension: "input-tokens",
+        limit: 1000,
+        used: 3100,
+      },
+    });
+  });
+});

@@ -34,6 +34,7 @@ import {
   createPostgresSkillStore,
   createPostgresRunStore,
   createPostgresSessionStateStore,
+  createPostgresUsageLimitStore,
   createPostgresUsageRollupStore,
   createPostgresUsageStore,
   createPostgresConversationStore,
@@ -48,6 +49,8 @@ import {
   createRunSkillTracker,
   createSkillResolver,
   createQuestionService,
+  createQuotaGuard,
+  createStoredLimitResolver,
   questionPending,
   createRunApprovals,
   createToolRegistry,
@@ -669,6 +672,30 @@ const app = {
        * is a process someone has to know to start, and a chart that is empty until it runs looks like a bug.
        */
       rollups: createPostgresUsageRollupStore(sql),
+      /**
+       * Quota enforcement, driven by configured limits — #175.
+       *
+       * `quota` is optional in `ResolverDeps` and nothing wired it, so a deployment with limits configured had no
+       * limits: `assertAdmitted` was never called. Wired here with the store-backed resolver, so an
+       * administrator setting a limit through `/api/limits` changes behaviour on the next turn rather than
+       * requiring a redeploy.
+       *
+       * The **admission** path specifically. A limit enforced mid-run leaves a half-written answer and a person
+       * who has to guess whether to retry; refused at admission, nothing was started and nothing has to be
+       * undone.
+       */
+      quota: createQuotaGuard({
+        rollups: createPostgresUsageRollupStore(sql),
+        resolveLimits: createStoredLimitResolver({ limits: createPostgresUsageLimitStore(sql) }),
+        // Refusals and warnings to stderr, so driving the example by hand shows them. A deployment would use the
+        // platform's telemetry (#143).
+        observer: {
+          onWarning: (context, warning) =>
+            console.error(`[quota] warning ${String(context.principalId)}: ${warning.message}`),
+          onRefusal: (context, refusal) =>
+            console.error(`[quota] refused ${String(context.principalId)}: ${refusal.message}`),
+        },
+      }),
       toolRegistry: registry,
       // `runs` is passed to both services deliberately: without it an approved run is enqueued but stays in
       // `waiting-for-approval`, which `claim` will not accept — the bug the #144 load harness found.

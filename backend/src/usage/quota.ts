@@ -217,6 +217,18 @@ export const createQuotaGuard = (deps: QuotaGuardDeps) => {
   const clock = deps.clock ?? (() => new Date().toISOString());
   const log = deps.log ?? (() => {});
 
+  /**
+   * Who the message is about — #175.
+   *
+   * Every message said "This workspace", which was true while every limit was a tenant's and became a lie the
+   * moment one could belong to a person: someone refused for their own overspend was told the workspace was out,
+   * so the obvious next step is asking a colleague to stop working. The sentence a person reads has to name the
+   * thing that actually ran out.
+   */
+  const subject = (limits: QuotaLimits): string => (limits.principalId === undefined ? "This workspace" : "You");
+  const verb = (limits: QuotaLimits): string => (limits.principalId === undefined ? "has" : "have");
+  const possessive = (limits: QuotaLimits): string => (limits.principalId === undefined ? "its" : "your");
+
   return {
     /**
      * Decide whether a run may start — AC-2.
@@ -260,7 +272,10 @@ export const createQuotaGuard = (deps: QuotaGuardDeps) => {
             used: check.used,
             // Actionable: names the dimension, the figure, the limit and when it resets. "Quota exceeded"
             // leaves a user with nothing to do.
-            message: `This workspace has used ${check.used} of its ${check.limit} ${DIMENSION_LABEL[check.dimension]} limit for the ${limits.period}. It resets at ${nextBucket(limits.period, bucketStart)}.`,
+            message:
+              `${subject(limits)} ${verb(limits)} used ${check.used} of ${possessive(limits)} ${check.limit} ` +
+              `${DIMENSION_LABEL[check.dimension]} limit for the ${limits.period}. ` +
+              `It resets at ${nextBucket(limits.period, bucketStart)}.`,
             retryAfter: nextBucket(limits.period, bucketStart),
           };
           try {
@@ -284,7 +299,9 @@ export const createQuotaGuard = (deps: QuotaGuardDeps) => {
           limit: check.limit,
           used: check.used,
           fraction,
-          message: `This workspace has used ${Math.round(fraction * 100)}% of its ${DIMENSION_LABEL[check.dimension]} limit for the ${limits.period}.`,
+          message:
+            `${subject(limits)} ${verb(limits)} used ${Math.round(fraction * 100)}% of ${possessive(limits)} ` +
+            `${DIMENSION_LABEL[check.dimension]} limit for the ${limits.period}.`,
         });
       }
       for (const warning of warnings) {
@@ -320,6 +337,23 @@ export const createQuotaGuard = (deps: QuotaGuardDeps) => {
           // Retryable: the limit resets. A caller that treats this as permanent would give up on a workspace
           // that is fine again in an hour.
           retryable: true,
+          /**
+           * **When** it resets — #175.
+           *
+           * "Retryable" without a time is not actionable: a caller can only guess, and an HTTP surface has no
+           * `retry-after` to send. A client reading zero, or defaulting to immediately, retries straight back
+           * into the same refusal.
+           *
+           * In `details` because that field is the redacted, user-safe context — and a bucket boundary is not a
+           * secret. The dimension and figures are here too, so a client can say *which* limit without parsing
+           * the sentence.
+           */
+          details: {
+            retryAfter: decision.retryAfter,
+            dimension: decision.dimension,
+            limit: decision.limit,
+            used: decision.used,
+          },
         });
       return decision;
     },

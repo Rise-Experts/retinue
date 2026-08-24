@@ -25,8 +25,11 @@ import {
   createPostgresSessionStateStore,
   startOrEnqueueRun,
   createResolvers,
+  bucketStartFor,
   createRollupJob,
+  createPostgresUsageLimitStore,
   createPostgresUsageRollupStore,
+  ROLLUP_PERIODS,
 } from "@agentkit/backend";
 import { citationViewModel, formatCost, formatTokens, shapeUsagePanel } from "@agentkit/frontend";
 import { COMPACT_AT_FRACTION, compactConversation, createExampleSummarizer } from "./compaction.js";
@@ -38,6 +41,7 @@ import type { ConversationMode } from "./modes.js";
 import type {
   ConversationId,
   ExecutionContext,
+  PrincipalId,
   MessageId,
   MessagePartId,
   ResolverDeps,
@@ -143,6 +147,20 @@ export const startExampleServer = async (options: ExampleServerOptions) => {
     context: ExecutionContext,
     input: { readonly conversationId?: string; readonly text: string; readonly mode?: ConversationMode },
   ): Promise<{ conversationId: string; runId: string; messageId: string; started: string; mode: ConversationMode }> => {
+    /**
+     * The quota check, **before** anything is created — #175.
+     *
+     * Here and not later: a refused run must leave no message row, no run row, no slot held and no job on the
+     * queue. A limit enforced after any of that leaves a half-started turn and a person who has to guess whether
+     * to retry, and the platform's own GraphQL `sendMessage` puts the check in exactly this position for the same
+     * reason.
+     *
+     * Optional, because a deployment with no limits configured is valid — and its absence means unbounded rather
+     * than zero. `assertAdmitted` throws a typed, non-retryable refusal naming the figure and the reset, which
+     * the handler turns into a 429.
+     */
+    if (options.deps.quota !== undefined) await options.deps.quota.assertAdmitted(context);
+
     const conversationId = asId<ConversationId>(input.conversationId ?? `conv-${Date.now().toString(36)}`);
     // Idempotent: re-sending the same first message to an existing conversation does not create a second.
     const existing = await conversations.findById({ tenantId: context.tenantId, id: conversationId });
@@ -301,9 +319,41 @@ export const startExampleServer = async (options: ExampleServerOptions) => {
       if (body.mode !== undefined && !isConversationMode(body.mode))
         return Response.json({ error: `mode must be one of ${CONVERSATION_MODES.join(", ")}` }, { status: 400 });
 
-      return Response.json(
-        await startTurn(context, { conversationId: body.conversationId, text, mode: body.mode }),
-      );
+      try {
+        return Response.json(
+          await startTurn(context, { conversationId: body.conversationId, text, mode: body.mode }),
+        );
+      } catch (thrown) {
+        /**
+         * A quota refusal is a 429 with a reset time, not a 500.
+         *
+         * Distinguished by the platform's own error code rather than by matching a message: the difference
+         * between "you are over your limit" and "something broke" is the difference between a person waiting and
+         * a person filing a bug.
+         */
+        const error = thrown as {
+          code?: string;
+          message?: string;
+          details?: { readonly retryAfter?: string };
+        };
+        if (error.code === "budget_exceeded") {
+          /**
+           * `retry-after` in seconds, from the reset **instant**.
+           *
+           * Read from `details.retryAfter`, which is when the bucket rolls over, rather than from a
+           * `retryAfterMs` the refusal does not carry — my first version read that field and emitted
+           * `retry-after: 0`, which tells a client to retry immediately into the same refusal.
+           */
+          const resetAt = error.details?.retryAfter;
+          const seconds =
+            resetAt === undefined ? 60 : Math.max(1, Math.ceil((Date.parse(resetAt) - Date.now()) / 1000));
+          return Response.json(
+            { error: error.message ?? "Usage limit reached", code: error.code, resetAt },
+            { status: 429, headers: { "retry-after": String(seconds) } },
+          );
+        }
+        throw thrown;
+      }
     }
 
     /**
@@ -403,13 +453,23 @@ export const startExampleServer = async (options: ExampleServerOptions) => {
        * and a chart empty until it runs looks like a bug in the panel.
        */
       const job = createRollupJob({ rollups: createPostgresUsageRollupStore(options.sql) });
-      // Bounded. An unbounded loop over stale buckets would turn one page load into a backfill.
-      for (let page = 0; page < 8; page += 1) {
-        const { remaining } = await job.run(
-          { tenantId: context.tenantId },
-          { period, since: from.toISOString(), limit: 50 },
-        );
-        if (remaining === 0) break;
+      /**
+       * Every period this endpoint reads, not just the chart's — #175.
+       *
+       * The panel charts days; the per-person figures are weekly and monthly. Rebuilding only the chart's period
+       * would leave the week and month buckets permanently absent, so every per-person figure would read zero and
+       * look like nobody had spent anything.
+       *
+       * Bounded per period: an unbounded loop over stale buckets turns one page load into a backfill.
+       */
+      for (const p of [period, "week", "month"] as const) {
+        for (let page = 0; page < 8; page += 1) {
+          const { remaining } = await job.run(
+            { tenantId: context.tenantId },
+            { period: p, since: from.toISOString(), limit: 50 },
+          );
+          if (remaining === 0) break;
+        }
       }
 
       const resolvers = createResolvers(options.deps);
@@ -419,8 +479,59 @@ export const startExampleServer = async (options: ExampleServerOptions) => {
         { execution: context },
       );
       const panel = shapeUsagePanel(report as never);
+
+      /**
+       * Per-person figures, at the periods a person's allowance is expressed in — #175.
+       *
+       * Week and month rather than the panel's daily buckets, because "what have I spent this month" and "who is
+       * spending the most" are the questions these answer, and a day is neither.
+       *
+       * `by: "principal"` is the breakdown that made the second question answerable at all; before #175 the
+       * dimension did not exist because the ledger never recorded who consumed anything.
+       *
+       * A non-admin sees **only their own**. The breakdown is every colleague's spend, which is a leak dressed up
+       * as a dashboard.
+       */
+      const isAdmin = context.roleIds.some((role) => String(role) === "admin");
+      const rollups = createPostgresUsageRollupStore(options.sql);
+      const periodStart = (p: "week" | "month") => bucketStartFor(p, to.toISOString());
+      const mine = await Promise.all(
+        (["week", "month"] as const).map(async (p) => ({
+          period: p,
+          bucketStart: periodStart(p),
+          // Their own grain, so this is their spend and not the tenant's.
+          totals:
+            (await rollups.get({
+              tenantId: context.tenantId,
+              period: p,
+              bucketStart: periodStart(p),
+              principalId: context.principalId,
+            })) ?? null,
+          limit: await createPostgresUsageLimitStore(options.sql).resolve({
+            tenantId: context.tenantId,
+            principalId: context.principalId,
+            period: p,
+          }),
+        })),
+      );
+
+      const byPrincipal = isAdmin
+        ? await options.deps.usage.breakdown({
+            tenantId: context.tenantId,
+            from: from.toISOString(),
+            to: to.toISOString(),
+            by: "principal",
+            limit: 20,
+          })
+        : [];
+
       return Response.json({
         panel,
+        // The caller's own week and month, with the limit that applies — so a refusal is actionable rather than
+        // mysterious.
+        mine,
+        byPrincipal,
+        canSeeEveryone: isAdmin,
         // Formatted server-side with the platform's own formatters, so minor units become major ones in exactly
         // one place. Doing that division at a call site is how a figure ends up a hundred times wrong.
         formatted: {
@@ -492,6 +603,93 @@ export const startExampleServer = async (options: ExampleServerOptions) => {
 
       const outcome = await compactNow(context, body.conversationId);
       return Response.json(outcome);
+    }
+
+    /**
+     * Spend limits, readable and settable — #175.
+     *
+     * **Gated on a role, not on a flag.** A spend limit is exactly the setting a user would raise for themselves
+     * if they could, so "who may change this" is the whole feature and not a detail: the `admin` role sets them,
+     * everyone else may read their own.
+     *
+     * Reading your own is deliberately allowed. A person refused at admission needs to know what the limit *is*,
+     * or the refusal is unactionable — and it is a fact about them either way.
+     */
+    if (url.pathname === "/api/limits") {
+      const context = await options.authenticate(request);
+      if (context === null) return Response.json({ error: "Unauthenticated" }, { status: 401 });
+      const limits = createPostgresUsageLimitStore(options.sql);
+      // Compared as strings: `roleIds` is branded, and asserting the brand on a literal here would be claiming
+      // the literal is a valid role id rather than checking whether it is present.
+      const isAdmin = context.roleIds.some((role) => String(role) === "admin");
+
+      if (request.method === "GET") {
+        if (isAdmin) return Response.json({ limits: await limits.list({ tenantId: context.tenantId }) });
+        /**
+         * Not an admin: the limit that applies to *you*, resolved.
+         *
+         * The resolved one rather than the raw rows, because "your limit" is the answer — whether it came from
+         * your own override or the tenant default is administrative detail, and listing every colleague's
+         * allowance to anyone who asks would be a leak dressed up as transparency.
+         */
+        const own = await limits.resolve({
+          tenantId: context.tenantId,
+          principalId: context.principalId,
+          period: (url.searchParams.get("period") as never) ?? "month",
+        });
+        return Response.json({ limits: own === null ? [] : [own], resolved: true });
+      }
+
+      if (request.method === "POST") {
+        // The refusal is the point of the endpoint. A limit anyone can raise is not a limit.
+        if (!isAdmin) return Response.json({ error: "Only an admin may set limits" }, { status: 403 });
+        const body = (await request.json()) as {
+          principalId?: string;
+          period?: string;
+          costMinorUnits?: number;
+          inputTokens?: number;
+          outputTokens?: number;
+          warnAt?: number;
+        };
+        if (!ROLLUP_PERIODS.includes(body.period as never))
+          return Response.json({ error: `period must be one of ${ROLLUP_PERIODS.join(", ")}` }, { status: 400 });
+
+        const stored = await limits.put({
+          tenantId: context.tenantId,
+          limit: {
+            tenantId: context.tenantId,
+            // Absent means the tenant default. Not an empty string: that would be a principal named "".
+            ...(body.principalId === undefined || body.principalId === ""
+              ? {}
+              : { principalId: asId<PrincipalId>(body.principalId) }),
+            period: body.period as never,
+            // Every field optional, and omitted means **unbounded** rather than zero — the direction that fails
+            // towards a bill rather than towards an outage. `?? undefined` and never `?? 0`.
+            ...(body.costMinorUnits === undefined ? {} : { costMinorUnits: body.costMinorUnits }),
+            ...(body.inputTokens === undefined ? {} : { inputTokens: body.inputTokens }),
+            ...(body.outputTokens === undefined ? {} : { outputTokens: body.outputTokens }),
+            ...(body.warnAt === undefined ? {} : { warnAt: body.warnAt }),
+            updatedAt: new Date().toISOString(),
+            // Who changed it. A spend limit is the kind of setting somebody eventually has to explain.
+            updatedBy: String(context.principalId),
+          },
+        });
+        return Response.json({ limit: stored });
+      }
+
+      if (request.method === "DELETE") {
+        if (!isAdmin) return Response.json({ error: "Only an admin may remove limits" }, { status: 403 });
+        const principalId = url.searchParams.get("principalId");
+        const period = url.searchParams.get("period") ?? "month";
+        await limits.remove({
+          tenantId: context.tenantId,
+          ...(principalId === null || principalId === "" ? {} : { principalId: asId<PrincipalId>(principalId) }),
+          period: period as never,
+        });
+        // Removed means "inherit the tenant default", not "zero" — said in the response so a caller does not
+        // have to infer it.
+        return Response.json({ removed: true, inherits: principalId === null ? "unbounded" : "the tenant default" });
+      }
     }
 
     if (url.pathname === "/api/history" && request.method === "GET") {

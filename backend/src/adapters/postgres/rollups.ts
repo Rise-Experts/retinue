@@ -65,7 +65,27 @@ const COLUMNS = `principal_id, period, bucket_start, input_tokens, output_tokens
                  reasoning_tokens, cost_minor_units, event_count, currency, computed_at`;
 
 /** The interval a period spans, as a SQL literal. Two values, both from a closed union — never user input. */
-const intervalFor = (period: RollupPeriod): string => (period === "hour" ? "1 hour" : "1 day");
+/**
+ * The width of a bucket, as a SQL interval — total over `RollupPeriod`.
+ *
+ * A `Record` rather than a ternary chain, and that is the fix: it read
+ * `period === "hour" ? "1 hour" : "1 day"`, so adding `week` and `month` to `ROLLUP_PERIODS` silently gave both
+ * a **one-day** window. A month bucket starting on the 1st then aggregated only the 1st, and every monthly figure
+ * was whatever happened on the first of the month — zero for most of any month, and never obviously wrong.
+ *
+ * Nothing failed: the migration's CHECK accepted the period, the bucket arithmetic truncated correctly, the row
+ * was written. Only the number was wrong. A total map makes the next period a compile error instead.
+ */
+const BUCKET_INTERVAL: Readonly<Record<RollupPeriod, string>> = {
+  hour: "1 hour",
+  day: "1 day",
+  week: "7 days",
+  // Postgres resolves `1 month` against the bucket's own start, so February gets 28 days and March 31 — the
+  // calendar behaviour the bucket boundaries already assume.
+  month: "1 month",
+};
+
+const intervalFor = (period: RollupPeriod): string => BUCKET_INTERVAL[period];
 
 export const createPostgresUsageRollupStore = (sql: SqlExecutor): UsageRollupStore => ({
   /**
