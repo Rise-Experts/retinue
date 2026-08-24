@@ -71,6 +71,8 @@ import { fileMetadataStoreConformance } from "../testing/conformance/files.js";
 import { artifactStoreConformance } from "../testing/conformance/artifacts.js";
 import { artifactExportStoreConformance } from "../testing/conformance/artifact-exports.js";
 import { usageRollupStoreConformance } from "../testing/conformance/rollups.js";
+import { usageLimitStoreConformance } from "../testing/conformance/usage-limits.js";
+import { createPostgresUsageLimitStore } from "../adapters/postgres/usage-limits.js";
 import { evaluationStoreConformance } from "../testing/conformance/evaluation.js";
 import {
   keywordIndexConformance,
@@ -506,6 +508,8 @@ keywordIndexConformance(vectorFixture, VECTOR_DECLARATION);
 
 evaluationStoreConformance(() => createPostgresEvaluationStore(freshExecutor()));
 
+usageLimitStoreConformance(() => createPostgresUsageLimitStore(freshExecutor()));
+
 usageRollupStoreConformance(() => {
   const sql = freshExecutor();
   return {
@@ -607,6 +611,8 @@ describe("postgres adapter coverage", () => {
       "VectorIndex",
       "KeywordIndex",
       "UsageRollupStore",
+      // #175 — admin-configured per-person and per-tenant spend limits.
+      "UsageLimitStore",
       "EvaluationStore",
     ]);
   });

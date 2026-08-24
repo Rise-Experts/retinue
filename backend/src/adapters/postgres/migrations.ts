@@ -1029,6 +1029,95 @@ export const MIGRATIONS: readonly Migration[] = [
       `ALTER TABLE runs DROP COLUMN IF EXISTS principal_id`,
     ],
   },
+  {
+    id: "0023_usage_per_principal",
+    up: [
+      // Who consumed it — #175.
+      //
+      // A usage record carried a tenant and no principal, so "what has this person spent" was unanswerable: the
+      // data was never recorded. Nullable, because rows written before this exist and a record with an unknown
+      // principal is a fact rather than something to invent.
+      `ALTER TABLE usage_records ADD COLUMN IF NOT EXISTS principal_id text`,
+      // Serves the per-principal breakdown and the per-principal rollup rebuild. `occurred_at` trails the
+      // principal so a range scan for one person is a range scan rather than a filter over the tenant.
+      `CREATE INDEX IF NOT EXISTS usage_records_principal_idx
+        ON usage_records (tenant_id, principal_id, occurred_at)`,
+
+      // Week and month buckets. The existing CHECK named only hour and day, so a weekly rollup would have been
+      // rejected by the constraint rather than by any code — the least discoverable kind of failure.
+      `ALTER TABLE usage_rollups DROP CONSTRAINT IF EXISTS usage_rollups_period_check`,
+      `ALTER TABLE usage_rollups ADD CONSTRAINT usage_rollups_period_check
+        CHECK (period IN ('hour','day','week','month'))`,
+
+      /**
+       * Per-principal rollups, as a nullable dimension on the existing table.
+       *
+       * `principal_id IS NULL` is the **tenant total**; a non-null row is one person's. That is the standard
+       * grouping-set shape, and it is what lets a per-principal quota read one row on the admission path instead
+       * of scanning the ledger — which is the whole reason rollups exist.
+       *
+       * Nullable rather than a separate table because the two are the same measurement at two grains: a second
+       * table would mean two rebuild paths, and the day they disagree is the day an invoice is wrong.
+       *
+       * The primary key has to change to include it, and a NULL is not comparable in a primary key — so the
+       * uniqueness is expressed as two partial unique indexes instead, one for the tenant row and one per
+       * principal. `COALESCE` in a single index would work too and would hide which row is which.
+       */
+      `ALTER TABLE usage_rollups ADD COLUMN IF NOT EXISTS principal_id text`,
+      `ALTER TABLE usage_rollups DROP CONSTRAINT IF EXISTS usage_rollups_pkey`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS usage_rollups_tenant_bucket_idx
+        ON usage_rollups (tenant_id, period, bucket_start)
+        WHERE principal_id IS NULL`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS usage_rollups_principal_bucket_idx
+        ON usage_rollups (tenant_id, principal_id, period, bucket_start)
+        WHERE principal_id IS NOT NULL`,
+
+      /**
+       * Admin-configured limits — #175.
+       *
+       * `principal_id IS NULL` is the tenant-wide default and a non-null row overrides it for one person, which
+       * is the same nullable-dimension shape as the rollups above. One table rather than two because "the
+       * default" and "an override" are the same kind of fact, and resolution is then one query ordered by
+       * specificity rather than two queries and a merge.
+       *
+       * Every limit column is nullable, and NULL means **unbounded** rather than zero. That direction is
+       * deliberate and matches `QuotaLimits`: a misconfigured quota that blocks everything is an outage, and one
+       * that blocks nothing is a bill — and the bill is visible in the rollups, whereas the outage is only
+       * visible to the customer it is happening to.
+       */
+      `CREATE TABLE IF NOT EXISTS usage_limits (
+        tenant_id        text        NOT NULL,
+        principal_id     text,
+        period           text        NOT NULL,
+        cost_minor_units bigint,
+        input_tokens     bigint,
+        output_tokens    bigint,
+        warn_at          real,
+        updated_at       timestamptz NOT NULL,
+        -- Who changed it. A spend limit is the kind of setting whose history someone eventually has to explain.
+        updated_by       text,
+        CHECK (period IN ('hour','day','week','month')),
+        -- A negative limit would refuse every run while reading like a configuration.
+        CHECK (cost_minor_units IS NULL OR cost_minor_units >= 0),
+        CHECK (input_tokens IS NULL OR input_tokens >= 0),
+        CHECK (output_tokens IS NULL OR output_tokens >= 0),
+        -- A warn threshold outside (0, 1] is a fraction that can never fire, or one that fires always.
+        CHECK (warn_at IS NULL OR (warn_at > 0 AND warn_at <= 1))
+      )`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS usage_limits_tenant_idx
+        ON usage_limits (tenant_id, period) WHERE principal_id IS NULL`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS usage_limits_principal_idx
+        ON usage_limits (tenant_id, principal_id, period) WHERE principal_id IS NOT NULL`,
+    ],
+    down: [
+      `DROP TABLE IF EXISTS usage_limits`,
+      `DROP INDEX IF EXISTS usage_rollups_principal_bucket_idx`,
+      `DROP INDEX IF EXISTS usage_rollups_tenant_bucket_idx`,
+      `ALTER TABLE usage_rollups DROP COLUMN IF EXISTS principal_id`,
+      `DROP INDEX IF EXISTS usage_records_principal_idx`,
+      `ALTER TABLE usage_records DROP COLUMN IF EXISTS principal_id`,
+    ],
+  },
 ];
 
 /**

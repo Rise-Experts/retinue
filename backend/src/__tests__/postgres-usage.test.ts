@@ -102,9 +102,19 @@ describe("migration 0009", () => {
     // And the SPEC omitted currency entirely, without which a minor-unit integer means nothing:
     // 250 is EUR 2.50 or JPY 250.
     expect(byName.get("currency")).toBe("text");
-    // step_id is load-bearing for append idempotency; principal_id has nothing to populate it.
+    // step_id is load-bearing for append idempotency.
     expect(byName.has("step_id")).toBe(true);
-    expect(byName.has("principal_id")).toBe(false);
+    /**
+     * `principal_id` **is** required now — #175.
+     *
+     * This asserted its *absence*, on the reasoning that nothing could populate it. That was true and is the
+     * right instinct: a column no code writes is a column that reads as data and holds nothing. The recorder
+     * stamps it from the execution context now, so the reasoning has expired rather than been wrong.
+     *
+     * Kept as an assertion rather than deleted, because "who spent this" being unanswerable was the bug, and a
+     * dropped column would make it unanswerable again with nothing to notice.
+     */
+    expect(byName.has("principal_id")).toBe(true);
   });
 
   it("carries no scope or expires_at on idempotency_keys, because nothing could fill them", async () => {

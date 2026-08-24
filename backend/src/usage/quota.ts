@@ -24,7 +24,8 @@
 
 import { AgentPlatformError } from "../core/errors.js";
 import type { ExecutionContext } from "../core/context.js";
-import type { RollupPeriod, UsageRollupStore, UsageTotals } from "../persistence/index.js";
+import type { RollupPeriod, UsageLimitStore, UsageRollupStore, UsageTotals } from "../persistence/index.js";
+import type { PrincipalId } from "../core/ids.js";
 
 /** Zero, as a total. Named because "no usage" appears in several places and an object literal invites drift. */
 export const NO_USAGE: UsageTotals = {
@@ -52,6 +53,24 @@ export const bucketStartFor = (period: RollupPeriod, at: string): string => {
       message: `not a timestamp: ${JSON.stringify(at)}`,
       retryable: false,
     });
+  /**
+   * Week and month are calendar truncations, not fixed spans — #175.
+   *
+   * A month is 28 to 31 days and a week crosses month boundaries, so neither can be expressed as a multiple of
+   * milliseconds from an epoch. Getting that wrong drifts: buckets that start mid-day, and a "month" that slowly
+   * detaches from the calendar.
+   *
+   * The week starts **Monday**, per ISO 8601. `getUTCDay()` returns 0 for Sunday, so the offset is
+   * `(day + 6) % 7` — the arithmetic that turns a Sunday-based index into a Monday-based one, and the reason this
+   * is written out rather than inlined.
+   */
+  if (period === "month") {
+    return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1)).toISOString();
+  }
+  if (period === "week") {
+    const mondayOffset = (d.getUTCDay() + 6) % 7;
+    return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() - mondayOffset)).toISOString();
+  }
   const truncated = new Date(
     Date.UTC(
       d.getUTCFullYear(),
@@ -66,7 +85,19 @@ export const bucketStartFor = (period: RollupPeriod, at: string): string => {
 /** The bucket after this one. For tiling a range without arithmetic at the call site. */
 export const nextBucket = (period: RollupPeriod, bucketStart: string): string => {
   const d = new Date(bucketStart);
-  const ms = period === "hour" ? 3_600_000 : 86_400_000;
+  /**
+   * A month advances by **calendar** month, not by 30 days — #175.
+   *
+   * `Date.UTC(y, m + 1, 1)` handles the December rollover and the varying length without a special case, where
+   * adding a fixed span would put February's next bucket on the 2nd or 3rd of March and every subsequent bucket
+   * further adrift.
+   */
+  if (period === "month") {
+    return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1)).toISOString();
+  }
+  // A week *is* exactly seven days, and unlike a month it has no calendar irregularity to respect — DST does not
+  // exist in UTC, which is why the buckets are stored in UTC in the first place.
+  const ms = period === "hour" ? 3_600_000 : period === "week" ? 7 * 86_400_000 : 86_400_000;
   return new Date(d.getTime() + ms).toISOString();
 };
 
@@ -94,6 +125,16 @@ export const bucketsBetween = (period: RollupPeriod, from: string, to: string): 
  */
 export type QuotaLimits = {
   readonly period: RollupPeriod;
+  /**
+   * Whose allowance this is — absent means the whole tenant's (#175).
+   *
+   * Load-bearing, not informational: it decides **which rollup the usage is read from**. A per-person limit
+   * checked against the tenant's total is not a per-person limit — the first busy colleague exhausts everyone's
+   * allowance, and the person refused has spent nothing. That was the shape of the bug before this existed: the
+   * guard already accepted per-principal *limits* through `resolveLimits`, and always compared them against
+   * tenant-wide usage.
+   */
+  readonly principalId?: PrincipalId;
   readonly costMinorUnits?: number;
   readonly inputTokens?: number;
   readonly outputTokens?: number;
@@ -194,6 +235,9 @@ export const createQuotaGuard = (deps: QuotaGuardDeps) => {
         tenantId: context.tenantId,
         period: limits.period,
         bucketStart,
+        // The grain the limit is expressed at — #175. A per-person limit must read that person's bucket, or the
+        // first busy colleague exhausts an allowance the refused person has not touched.
+        ...(limits.principalId === undefined ? {} : { principalId: limits.principalId }),
       });
       const usage: UsageTotals = rollup ?? NO_USAGE;
       const warnAt = limits.warnAt ?? DEFAULT_WARN_AT;
@@ -283,3 +327,66 @@ export const createQuotaGuard = (deps: QuotaGuardDeps) => {
 };
 
 export type QuotaGuard = ReturnType<typeof createQuotaGuard>;
+
+/**
+ * `resolveLimits` backed by the admin-configured store — #175.
+ *
+ * The guard already took `resolveLimits` as a function so limits could change without a redeploy. What was
+ * missing was anything to resolve them *from*: every deployment had to hardcode them, which is not a
+ * configuration.
+ *
+ * **Per-person first, tenant default second, unbounded last.** The store decides which row applies; this decides
+ * what to do when a person has no override — and it deliberately does *not* fall back to checking the tenant
+ * default against the person's own usage. That would compare a tenant-sized allowance to one person's spend, so
+ * nobody would ever hit it and the limit would silently do nothing.
+ *
+ * So the resolved limit carries the grain it was configured at, and the guard reads the matching rollup. A limit
+ * and the usage it is compared against have to be the same shape, and this is the one place that can guarantee
+ * it.
+ */
+export const createStoredLimitResolver = (deps: {
+  readonly limits: UsageLimitStore;
+  /**
+   * Which periods to consider, most specific first.
+   *
+   * A person can have a weekly *and* a monthly allowance, and both should bind. `admit` checks one period per
+   * call, so a caller wanting both checks twice — this returns the first configured one, in the given order, and
+   * `PERIOD_PRECEDENCE` documents why that order is what it is.
+   */
+  readonly periods?: readonly RollupPeriod[];
+}) => {
+  const periods = deps.periods ?? PERIOD_PRECEDENCE;
+
+  return async (context: ExecutionContext): Promise<QuotaLimits | undefined> => {
+    for (const period of periods) {
+      const record = await deps.limits.resolve({
+        tenantId: context.tenantId,
+        principalId: context.principalId,
+        period,
+      });
+      if (record === null) continue;
+      return {
+        period,
+        // The grain the limit was configured at, so the guard reads the matching rollup rather than the tenant's.
+        ...(record.principalId === undefined ? {} : { principalId: record.principalId }),
+        ...(record.costMinorUnits === undefined ? {} : { costMinorUnits: record.costMinorUnits }),
+        ...(record.inputTokens === undefined ? {} : { inputTokens: record.inputTokens }),
+        ...(record.outputTokens === undefined ? {} : { outputTokens: record.outputTokens }),
+        ...(record.warnAt === undefined ? {} : { warnAt: record.warnAt }),
+      };
+    }
+    // Nothing configured at any period: unbounded, which is the direction that fails towards a bill rather than
+    // towards an outage.
+    return undefined;
+  };
+};
+
+/**
+ * The order periods are considered in, shortest first.
+ *
+ * Shortest first because a shorter window is the tighter constraint in practice: someone with a monthly
+ * allowance who has burned it in a day is stopped by the daily limit a day earlier, and being stopped early is
+ * recoverable where a surprise at month end is not. It is a default, and a deployment that disagrees passes its
+ * own order.
+ */
+export const PERIOD_PRECEDENCE: readonly RollupPeriod[] = ["hour", "day", "week", "month"];

@@ -364,11 +364,19 @@ export type UsageTotals = {
 /**
  * Rollup granularities (#139).
  *
- * Hour and day, and nothing finer. A minute bucket multiplies the row count sixty-fold to answer a question
- * nobody asks — a spend dashboard is read at hour or day resolution — and a coarser-than-day bucket cannot
- * answer "what did today cost", which is the question a quota is about.
+ * Hour, day, week and month, and nothing finer than an hour. A minute bucket multiplies the row count
+ * sixty-fold to answer a question nobody asks.
+ *
+ * Week and month were added by #175, because they are the periods a *person's* allowance is actually expressed
+ * in — "500k tokens a month" is a plan, "500k tokens a day" is not. They cannot be derived by summing days
+ * either: a month is 28 to 31 days and a week crosses month boundaries, so a caller summing day buckets has to
+ * reimplement calendar arithmetic, and two callers doing it differently is two answers to what a month cost.
+ *
+ * A week starts **Monday**, in UTC, following ISO 8601 — chosen rather than defaulted, because a Sunday start
+ * would split a working week across two buckets and every weekly figure would describe half of one week and half
+ * of another.
  */
-export const ROLLUP_PERIODS = ["hour", "day"] as const;
+export const ROLLUP_PERIODS = ["hour", "day", "week", "month"] as const;
 export type RollupPeriod = (typeof ROLLUP_PERIODS)[number];
 
 /**
@@ -381,6 +389,13 @@ export type UsageRollup = UsageTotals & {
   readonly period: RollupPeriod;
   readonly bucketStart: string;
   readonly currency: string;
+  /**
+   * Whose bucket this is — absent for the tenant's own total (#175).
+   *
+   * On the row rather than only in the query, because a caller holding a mixed list otherwise cannot tell a
+   * tenant total from one person's, and adding them together double-counts everything.
+   */
+  readonly principalId?: PrincipalId;
   /** When this bucket was last recomputed. For spotting a rollup job that has stopped running. */
   readonly computedAt: string;
 };
@@ -412,11 +427,21 @@ export interface UsageRollupStore {
    * runs slow, or which passes a fixed value, would mark a bucket permanently stale or permanently fresh.
    * Found by a conformance fixture passing a constant and every bucket coming back stale.
    */
-  rebuild(input: TenantScope & { period: RollupPeriod; bucketStart: string }): Promise<UsageRollup>;
+  rebuild(
+    input: TenantScope & { period: RollupPeriod; bucketStart: string; principalId?: PrincipalId },
+  ): Promise<UsageRollup>;
 
-  /** One bucket, or null when nothing has been recorded in it. */
+  /**
+   * One bucket, or null when nothing has been recorded in it.
+   *
+   * `principalId` omitted reads the **tenant** row; supplied reads that person's — #175. They are the same
+   * measurement at two grains, stored as a nullable dimension on one table rather than in two tables, because
+   * two rebuild paths is two chances to disagree and the day they disagree is the day an invoice is wrong.
+   *
+   * A per-principal quota needs this: without it, a limit on one person is checked against everybody's usage.
+   */
   get(
-    input: TenantScope & { period: RollupPeriod; bucketStart: string },
+    input: TenantScope & { period: RollupPeriod; bucketStart: string; principalId?: PrincipalId },
   ): Promise<UsageRollup | null>;
 
   /**
@@ -426,7 +451,12 @@ export interface UsageRollupStore {
    * double-count a boundary bucket by asking for two ranges.
    */
   list(
-    input: TenantScope & PageRequest & { period: RollupPeriod; from: string; to: string },
+    input: TenantScope & PageRequest & {
+      period: RollupPeriod;
+      from: string;
+      to: string;
+      principalId?: PrincipalId;
+    },
   ): Promise<Page<UsageRollup>>;
 
   /**
@@ -436,7 +466,7 @@ export interface UsageRollupStore {
    * check page through buckets would put the read path's cost on the admission path.
    */
   sum(
-    input: TenantScope & { period: RollupPeriod; from: string; to: string },
+    input: TenantScope & { period: RollupPeriod; from: string; to: string; principalId?: PrincipalId },
   ): Promise<UsageTotals>;
 
   /**
@@ -447,7 +477,69 @@ export interface UsageRollupStore {
    */
   listStaleBuckets(
     input: TenantScope & PageRequest & { period: RollupPeriod; since: string },
-  ): Promise<Page<{ readonly period: RollupPeriod; readonly bucketStart: string }>>;
+  ): Promise<
+    Page<{
+      readonly period: RollupPeriod;
+      readonly bucketStart: string;
+      /**
+       * The principal whose bucket is stale, or undefined for the tenant's own — #175.
+       *
+       * Returned rather than left for the job to enumerate, because the job cannot know which principals were
+       * active in a bucket without reading the ledger, which is the scan a rollup exists to avoid. The store
+       * already has to look at the ledger to decide staleness, so it is the only place that knows cheaply.
+       */
+      readonly principalId?: PrincipalId;
+    }>
+  >;
+}
+
+/**
+ * Admin-configured spend limits — #175.
+ *
+ * `principalId` absent is the **tenant default**; present overrides it for one person. One store rather than
+ * two, because "the default" and "an override" are the same kind of fact and resolution is then a single query
+ * ordered by specificity rather than two queries and a merge.
+ *
+ * Every limit is optional and an omitted one is **unbounded**, not zero — matching `QuotaLimits`, and for the
+ * reason stated there: a misconfigured quota that blocks everything is an outage, and one that blocks nothing is
+ * a bill that the rollups make visible.
+ */
+export type UsageLimitRecord = {
+  readonly tenantId: TenantId;
+  readonly principalId?: PrincipalId;
+  readonly period: RollupPeriod;
+  readonly costMinorUnits?: number;
+  readonly inputTokens?: number;
+  readonly outputTokens?: number;
+  readonly warnAt?: number;
+  readonly updatedAt: string;
+  /** Who set it. A spend limit is the kind of setting somebody eventually has to explain. */
+  readonly updatedBy?: string;
+};
+
+export interface UsageLimitStore {
+  /**
+   * Set or replace one limit. Keyed on `(tenant, principal, period)`, so an admin editing a limit updates it
+   * rather than accumulating rows that a resolver would then have to disambiguate.
+   */
+  put(input: TenantScope & { limit: UsageLimitRecord }): Promise<UsageLimitRecord>;
+
+  /**
+   * The limit that applies to this principal in this period — **most specific wins**.
+   *
+   * A principal's own row if there is one, else the tenant default, else null for unbounded. Resolved in the
+   * store rather than by the caller because "most specific wins" is a rule, and a rule implemented at two call
+   * sites is a rule with two behaviours.
+   */
+  resolve(
+    input: TenantScope & { principalId?: PrincipalId; period: RollupPeriod },
+  ): Promise<UsageLimitRecord | null>;
+
+  /** Every configured limit for a tenant, for an admin screen. */
+  list(input: TenantScope): Promise<readonly UsageLimitRecord[]>;
+
+  /** Remove one. Absent afterwards means "inherit the tenant default", not "zero". */
+  remove(input: TenantScope & { principalId?: PrincipalId; period: RollupPeriod }): Promise<void>;
 }
 
 /**
@@ -474,7 +566,13 @@ export interface UsageStore {
     input: TenantScope & {
       from: string;
       to: string;
-      by: "model" | "conversation";
+      /**
+       * `principal` added by #175 — "who spent this" was unanswerable because the dimension did not exist.
+       *
+       * Its cardinality is bounded by the people in a tenant rather than by their activity, which is what makes
+       * it a cheaper breakdown than `conversation` rather than a more expensive one.
+       */
+      by: "model" | "conversation" | "principal";
       limit: number;
     },
   ): Promise<readonly { readonly key: string; readonly totals: UsageTotals }[]>;

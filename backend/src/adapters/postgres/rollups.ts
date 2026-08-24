@@ -12,6 +12,7 @@
  * event set, nothing to keep exactly right forever, and no way to double count.
  */
 
+import type { PrincipalId } from "../../core/ids.js";
 import type { Page } from "../../core/context.js";
 import type {
   RollupPeriod,
@@ -22,6 +23,7 @@ import type {
 import type { SqlExecutor } from "./sql.js";
 
 type Row = {
+  principal_id: string | null;
   period: string;
   bucket_start: string | Date;
   input_tokens: number | string;
@@ -43,6 +45,10 @@ const iso = (v: string | Date): string => (v instanceof Date ? v.toISOString() :
  * in one hour to overflow. Left as strings, a caller adding two rollups would concatenate them.
  */
 const toRollup = (r: Row): UsageRollup => ({
+  // #175: the grain, so a caller holding a mixed list can tell a tenant total from one person's.
+  ...(r.principal_id === null || r.principal_id === undefined
+    ? {}
+    : { principalId: r.principal_id as PrincipalId }),
   period: r.period as RollupPeriod,
   bucketStart: iso(r.bucket_start),
   inputTokens: Number(r.input_tokens),
@@ -55,14 +61,26 @@ const toRollup = (r: Row): UsageRollup => ({
   computedAt: iso(r.computed_at),
 });
 
-const COLUMNS = `period, bucket_start, input_tokens, output_tokens, cached_input_tokens,
+const COLUMNS = `principal_id, period, bucket_start, input_tokens, output_tokens, cached_input_tokens,
                  reasoning_tokens, cost_minor_units, event_count, currency, computed_at`;
 
 /** The interval a period spans, as a SQL literal. Two values, both from a closed union — never user input. */
 const intervalFor = (period: RollupPeriod): string => (period === "hour" ? "1 hour" : "1 day");
 
 export const createPostgresUsageRollupStore = (sql: SqlExecutor): UsageRollupStore => ({
-  async rebuild({ tenantId, period, bucketStart }) {
+  /**
+   * Rebuild one bucket — the tenant's, or one principal's (#175).
+   *
+   * `principalId` absent aggregates every event in the bucket and writes the row where `principal_id IS NULL`;
+   * supplied aggregates that person's events and writes their row. The same statement either way, because the
+   * two are the same measurement at two grains and a second statement would be a second chance to disagree.
+   *
+   * `IS NOT DISTINCT FROM` in the conflict target rather than `=`, because the tenant row's `principal_id` is
+   * NULL and `NULL = NULL` is not true — an equality predicate would fail to match the existing row and try to
+   * insert a duplicate, which the partial unique index would then reject. The kind of bug that only appears on
+   * the *second* rebuild.
+   */
+  async rebuild({ tenantId, period, bucketStart, principalId }) {
     const rows = await sql.query<Row>(
       `WITH agg AS (
          SELECT COALESCE(SUM(input_tokens), 0)        AS input_tokens,
@@ -85,11 +103,13 @@ export const createPostgresUsageRollupStore = (sql: SqlExecutor): UsageRollupSto
           WHERE tenant_id = $1
             AND occurred_at >= $3::timestamptz
             AND occurred_at <  $3::timestamptz + INTERVAL '${intervalFor(period)}'
+            -- The whole tenant when $4 is NULL, one person otherwise. One predicate rather than two queries.
+            AND ($4::text IS NULL OR principal_id = $4::text)
        )
-       INSERT INTO usage_rollups (tenant_id, period, bucket_start, input_tokens, output_tokens,
+       INSERT INTO usage_rollups (tenant_id, principal_id, period, bucket_start, input_tokens, output_tokens,
                                   cached_input_tokens, reasoning_tokens, cost_minor_units, event_count,
                                   currency, computed_at, covers_seq)
-       SELECT $1, $2, $3::timestamptz, input_tokens, output_tokens, cached_input_tokens, reasoning_tokens,
+       SELECT $1, $4::text, $2, $3::timestamptz, input_tokens, output_tokens, cached_input_tokens, reasoning_tokens,
               -- clock_timestamp(), not now(). now() is the *transaction* timestamp and therefore constant
               -- within one -- so a rebuild and an append in the same transaction would stamp the identical
               -- instant, the staleness comparison would always hold, and the bucket would be rebuilt forever.
@@ -99,7 +119,7 @@ export const createPostgresUsageRollupStore = (sql: SqlExecutor): UsageRollupSto
        -- The upsert *is* the idempotency: a re-run replaces rather than accumulates, and two workers racing
        -- this bucket write the same value. DO UPDATE rather than DO NOTHING because a rebuild after new events
        -- must actually change the row.
-       ON CONFLICT (tenant_id, period, bucket_start) DO UPDATE SET
+       ON CONFLICT (tenant_id, period, bucket_start) WHERE principal_id IS NULL DO UPDATE SET
          input_tokens = EXCLUDED.input_tokens,
          output_tokens = EXCLUDED.output_tokens,
          cached_input_tokens = EXCLUDED.cached_input_tokens,
@@ -110,7 +130,7 @@ export const createPostgresUsageRollupStore = (sql: SqlExecutor): UsageRollupSto
          computed_at = EXCLUDED.computed_at,
          covers_seq = EXCLUDED.covers_seq
        RETURNING ${COLUMNS}`,
-      [tenantId, period, bucketStart],
+      [tenantId, period, bucketStart, principalId ?? null],
     );
     const row = rows[0];
     if (row === undefined)
@@ -131,28 +151,33 @@ export const createPostgresUsageRollupStore = (sql: SqlExecutor): UsageRollupSto
     return toRollup(row);
   },
 
-  async get({ tenantId, period, bucketStart }) {
+  async get({ tenantId, period, bucketStart, principalId }) {
     const rows = await sql.query<Row>(
       `SELECT ${COLUMNS} FROM usage_rollups
-        WHERE tenant_id = $1 AND period = $2 AND bucket_start = $3::timestamptz`,
-      [tenantId, period, bucketStart],
+        WHERE tenant_id = $1 AND period = $2 AND bucket_start = $3::timestamptz
+          -- IS NOT DISTINCT FROM, so a NULL parameter matches the tenant row where = would match nothing.
+          AND principal_id IS NOT DISTINCT FROM $4::text`,
+      [tenantId, period, bucketStart, principalId ?? null],
     );
     // A foreign tenant's bucket yields no row, so no aggregate can span tenants and the answer is null without
     // a comparison anyone could get wrong.
     return rows[0] === undefined ? null : toRollup(rows[0]);
   },
 
-  async list({ tenantId, period, from, to, limit, cursor }) {
+  async list({ tenantId, period, from, to, limit, cursor, principalId }) {
     const rows = await sql.query<Row>(
       `SELECT ${COLUMNS} FROM usage_rollups
         WHERE tenant_id = $1 AND period = $2
+          -- The tenant's own buckets when $7 is NULL, one person's otherwise (#175). Without this predicate a
+          -- tenant chart would sum its own row *and* every principal's, double-counting everything.
+          AND principal_id IS NOT DISTINCT FROM $7::text
           AND bucket_start >= $3::timestamptz
           -- Exclusive upper bound, so adjacent ranges tile without a caller double-counting a boundary bucket.
           AND bucket_start <  $4::timestamptz
           AND ($5::text IS NULL OR bucket_start > $5::timestamptz)
         ORDER BY bucket_start
         LIMIT $6`,
-      [tenantId, period, from, to, cursor ?? null, limit + 1],
+      [tenantId, period, from, to, cursor ?? null, limit + 1, principalId ?? null],
     );
     const items = rows.slice(0, limit).map(toRollup);
     const last = items[items.length - 1];
@@ -161,7 +186,7 @@ export const createPostgresUsageRollupStore = (sql: SqlExecutor): UsageRollupSto
       : ({ items } satisfies Page<UsageRollup>);
   },
 
-  async sum({ tenantId, period, from, to }) {
+  async sum({ tenantId, period, from, to, principalId }) {
     const rows = await sql.query<{
       input_tokens: number | string;
       output_tokens: number | string;
@@ -180,8 +205,11 @@ export const createPostgresUsageRollupStore = (sql: SqlExecutor): UsageRollupSto
               COALESCE(SUM(event_count), 0)        AS event_count
          FROM usage_rollups
         WHERE tenant_id = $1 AND period = $2
+          -- Same predicate as list, and load-bearing for the same reason: summing across the principal
+          -- dimension would add each person's total to the tenant's and double every figure.
+          AND principal_id IS NOT DISTINCT FROM $5::text
           AND bucket_start >= $3::timestamptz AND bucket_start < $4::timestamptz`,
-      [tenantId, period, from, to],
+      [tenantId, period, from, to, principalId ?? null],
     );
     const r = rows[0];
     return {
@@ -195,33 +223,65 @@ export const createPostgresUsageRollupStore = (sql: SqlExecutor): UsageRollupSto
   },
 
   async listStaleBuckets({ tenantId, period, since, limit, cursor }) {
-    const rows = await sql.query<{ bucket_start: string | Date }>(
+    const rows = await sql.query<{ bucket_start: string | Date; principal_id: string | null; is_tenant_row: number }>(
       // Derived from the ledger: a bucket is stale when it holds an event at or after its last computation, or
       // has never been computed. So the job's work list needs no persisted cursor -- an interrupted run resumes
       // by asking again, and there is nothing to lose.
       `WITH buckets AS (
+         /**
+          * GROUPING SETS, so one pass finds both grains — #175.
+          *
+          * A per-principal rollup is only useful if something rebuilds it, and the job cannot enumerate which
+          * principals were active in a bucket without reading the ledger — which is the scan a rollup exists to
+          * avoid. This query already reads the ledger to decide staleness, so it is the one place that knows
+          * cheaply, and GROUPING SETS ((bucket), (bucket, principal)) gets both for the price of the pass it
+          * was already making.
+          *
+          * The (bucket) set produces the tenant row with a NULL principal_id, which is exactly how the tenant
+          * row is stored — so the LEFT JOIN below matches without a special case.
+          */
          SELECT date_trunc($2, occurred_at) AS bucket_start,
+                principal_id,
+                -- Which grouping set produced this row.
+                --
+                -- Necessary, not decoration: a NULL principal_id means "aggregated over every principal" in the
+                -- (bucket) set and "this event has no principal" in the (bucket, principal) set. Without
+                -- GROUPING they are indistinguishable, and a ledger of events with no principal produces the
+                -- same row twice — which is exactly what the conformance suite caught.
+                GROUPING(principal_id)      AS is_tenant_row,
                 -- The newest *sequence* in this bucket, not the newest time. An event recorded late with an
                 -- occurred_at in the past still has a higher sequence, so its bucket is correctly stale.
                 MAX(record_seq)             AS newest_seq
            FROM usage_records
           WHERE tenant_id = $1 AND occurred_at >= $3::timestamptz
-          GROUP BY 1
+          GROUP BY GROUPING SETS ((1), (1, 2))
        )
-       SELECT b.bucket_start
+       SELECT b.bucket_start, b.principal_id
          FROM buckets b
          LEFT JOIN usage_rollups r
            ON r.tenant_id = $1 AND r.period = $2 AND r.bucket_start = b.bucket_start
+          AND r.principal_id IS NOT DISTINCT FROM b.principal_id
         -- Parenthesised deliberately: AND binds tighter than OR, so without these the cursor filter would
         -- apply only to the second branch and every never-computed bucket would come back on every page.
         -- Strictly greater: an integer comparison with no ties, so a drained bucket is *not* listed.
         WHERE (r.bucket_start IS NULL OR COALESCE(r.covers_seq, 0) < b.newest_seq)
           AND ($4::text IS NULL OR b.bucket_start > $4::timestamptz)
-        ORDER BY b.bucket_start
+          -- Keep the tenant row, and a principal row only when there is an actual principal. Events with no
+          -- principal contribute to the tenant total and to no per-person total, which is what "unattributed"
+          -- honestly means.
+          AND (b.is_tenant_row = 1 OR b.principal_id IS NOT NULL)
+        -- The tenant row first within a bucket, so a job that stops mid-bucket has at least the total.
+        ORDER BY b.bucket_start, b.principal_id NULLS FIRST
         LIMIT $5`,
       [tenantId, period, since, cursor ?? null, limit + 1],
     );
-    const items = rows.slice(0, limit).map((r) => ({ period, bucketStart: iso(r.bucket_start) }));
+    const items = rows.slice(0, limit).map((r) => ({
+      period,
+      bucketStart: iso(r.bucket_start),
+      ...(r.principal_id === null || r.principal_id === undefined
+        ? {}
+        : { principalId: r.principal_id as PrincipalId }),
+    }));
     const last = items[items.length - 1];
     return rows.length > limit && last !== undefined
       ? { items, nextCursor: last.bucketStart }

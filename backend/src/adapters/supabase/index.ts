@@ -41,6 +41,9 @@ export {
   createPostgresUsageStore as createSupabaseUsageStore,
   createPostgresIdempotencyStore as createSupabaseIdempotencyStore,
 } from "../postgres/usage.js";
+// The limit store is the Postgres one: it is ordinary SQL over an ordinary table, and Supabase's differences
+// (RLS, the connection mode) are handled by the executor rather than by the statement (#175).
+export { createPostgresUsageLimitStore as createSupabaseUsageLimitStore } from "../postgres/usage-limits.js";
 export {
   createPostgresSkillStore as createSupabaseSkillStore,
   createPostgresMcpConnectionStore as createSupabaseMcpConnectionStore,

@@ -1,3 +1,4 @@
+import type { PrincipalId } from "../../core/ids.js";
 /**
  * In-memory usage ledger — `docs/12-usage-and-accounting.md`.
  *
@@ -88,7 +89,11 @@ export const createMemoryUsageBackend = (options: { readonly clock?: () => strin
       for (const e of scoped) {
         // A conversation is optional on a usage event — a background extraction has none — so those group under
         // an explicit key rather than being silently dropped, which would make the breakdown not add up.
-        const key = by === "model" ? e.modelId : (e.conversationId ?? "");
+        // #175: `principal` alongside the other two. The empty-string fallback is deliberate and matches the
+        // SQL adapter — an event with no principal groups under an explicit key rather than being silently
+        // dropped, which would make the breakdown not add up.
+        const key =
+          by === "model" ? e.modelId : by === "principal" ? (e.principalId ?? "") : (e.conversationId ?? "");
         const current = groups.get(key) ?? ZERO_TOTALS;
         groups.set(key, {
           inputTokens: current.inputTokens + e.inputTokens,
@@ -160,38 +165,63 @@ export const createMemoryUsageBackend = (options: { readonly clock?: () => strin
       ZERO_TOTALS,
     );
 
+  /**
+   * The rollup map's key, which now carries the grain — #175.
+   *
+   * `principalId` absent is the **tenant** row; present is one person's. Written as a helper rather than
+   * interpolated at five call sites, because the tenant row and a principal's row differing by one segment of a
+   * string key is exactly the sort of thing that gets typed slightly differently in one place and reads back
+   * empty.
+   */
+  const rollupKey = (period: string, bucketStart: string, principalId?: string) =>
+    `${period} ${bucketStart} ${principalId ?? ""}`;
+
   const rollups: UsageRollupStore = {
-    async rebuild({ tenantId, period, bucketStart }) {
+    async rebuild({ tenantId, period, bucketStart, principalId }) {
       const computedAt = clock();
       // A **recomputation**, not an accumulation. Re-running writes the same numbers and two writers racing
       // one bucket write the same value, which is what makes idempotency structural rather than bookkept.
-      const events = eventsIn(tenantId, period, bucketStart);
+      // The whole bucket, or one person's slice of it. Same computation either way, which is what keeps the
+      // two grains from disagreeing.
+      const events = eventsIn(tenantId, period, bucketStart).filter(
+        (e) => principalId === undefined || e.principalId === principalId,
+      );
       const totals = sumOf(events);
       const row: UsageRollup = {
         ...totals,
         period,
         bucketStart,
+        // Carried on the row so `list` and `sum` can filter by grain. Without it a tenant chart would include
+        // every principal's row alongside the tenant's and double every figure.
+        ...(principalId === undefined ? {} : { principalId }),
         // The currency of the events in the bucket. Empty when there are none — a bucket with no spend has no
         // currency, and claiming one would be inventing a fact.
         currency: events[0]?.currency ?? "",
         computedAt,
       };
-      rollupsFor(tenantId).set(`${period} ${bucketStart}`, row);
+      rollupsFor(tenantId).set(rollupKey(period, bucketStart, principalId), row);
       // The sequence at the moment of computation, so a *later* append marks the bucket stale again regardless
       // of when the event claims to have occurred.
-      computedAtSequence.set(`${tenantId} ${period} ${bucketStart}`, recordSequence);
+      computedAtSequence.set(`${tenantId} ${rollupKey(period, bucketStart, principalId)}`, recordSequence);
       return row;
     },
 
-    async get({ tenantId, period, bucketStart }) {
+    async get({ tenantId, period, bucketStart, principalId }) {
       // Absent from *this tenant's* map, so a foreign bucket is null without a comparison anyone could get
       // wrong — and no aggregate can span tenants.
-      return rollupsFor(tenantId).get(`${period} ${bucketStart}`) ?? null;
+      return rollupsFor(tenantId).get(rollupKey(period, bucketStart, principalId)) ?? null;
     },
 
-    async list({ tenantId, period, from, to, limit, cursor }) {
+    async list({ tenantId, period, from, to, limit, cursor, principalId }) {
       const rows = [...rollupsFor(tenantId).values()]
-        .filter((r) => r.period === period && r.bucketStart >= from && r.bucketStart < to)
+        .filter(
+          (r) =>
+            r.period === period &&
+            r.bucketStart >= from &&
+            r.bucketStart < to &&
+            // Exactly one grain. `undefined === undefined` selects the tenant rows.
+            r.principalId === principalId,
+        )
         .sort((a, b) => a.bucketStart.localeCompare(b.bucketStart));
       const start = cursor === undefined ? 0 : rows.findIndex((r) => r.bucketStart > cursor);
       const at = start < 0 ? rows.length : start;
@@ -202,10 +232,16 @@ export const createMemoryUsageBackend = (options: { readonly clock?: () => strin
         : { items };
     },
 
-    async sum({ tenantId, period, from, to }) {
+    async sum({ tenantId, period, from, to, principalId }) {
       // Over the *rollups*, not the ledger: the whole point of AC-1 is that a read never scans raw records.
       return [...rollupsFor(tenantId).values()]
-        .filter((r) => r.period === period && r.bucketStart >= from && r.bucketStart < to)
+        .filter(
+          (r) =>
+            r.period === period &&
+            r.bucketStart >= from &&
+            r.bucketStart < to &&
+            r.principalId === principalId,
+        )
         .reduce<UsageTotals>(
           (acc, r) => ({
             inputTokens: acc.inputTokens + r.inputTokens,
@@ -223,24 +259,48 @@ export const createMemoryUsageBackend = (options: { readonly clock?: () => strin
       // Derived from the ledger: a bucket is stale when it holds an event newer than its last computation, or
       // has never been computed. So an interrupted job resumes by asking again -- there is no cursor to lose.
       const rows = rollupsFor(tenantId);
-      // Keyed on the newest *record* sequence in each bucket, not the newest `occurredAt`.
-      const buckets = new Map<string, number>();
+      /**
+       * Both grains, in one pass — #175, matching the SQL adapter's GROUPING SETS.
+       *
+       * A per-principal rollup is only useful if something rebuilds it, and the job cannot know which principals
+       * were active in a bucket without reading the ledger. This walk is already reading it, so it reports both:
+       * one entry per bucket for the tenant, and one per (bucket, principal).
+       *
+       * Keyed on the newest *record* sequence, not the newest `occurredAt`, so an event recorded late with a
+       * backdated timestamp still marks its bucket stale.
+       */
+      const buckets = new Map<string, { bucketStart: string; principalId?: string; seq: number }>();
       for (const [key, event] of tenant(tenantId)) {
         if (event.occurredAt < since) continue;
         const bucketStart = bucketStartFor(period, event.occurredAt);
         const seq = recordedAt.get(`${tenantId} ${key}`) ?? 0;
-        const newest = buckets.get(bucketStart);
-        if (newest === undefined || seq > newest) buckets.set(bucketStart, seq);
+        const grains: readonly (string | undefined)[] =
+          event.principalId === undefined ? [undefined] : [undefined, event.principalId];
+        for (const principalId of grains) {
+          const mapKey = rollupKey(period, bucketStart, principalId);
+          const seen = buckets.get(mapKey);
+          if (seen === undefined || seq > seen.seq)
+            buckets.set(mapKey, { bucketStart, ...(principalId === undefined ? {} : { principalId }), seq });
+        }
       }
       const stale = [...buckets.entries()]
-        .filter(([bucketStart, newestRecord]) => {
-          const existing = rows.get(`${period} ${bucketStart}`);
+        .filter(([mapKey, entry]) => {
+          const existing = rows.get(mapKey);
           if (existing === undefined) return true;
-          const computedSeq = computedAtSequence.get(`${tenantId} ${period} ${bucketStart}`) ?? 0;
-          return newestRecord > computedSeq;
+          const computedSeq = computedAtSequence.get(`${tenantId} ${mapKey}`) ?? 0;
+          return entry.seq > computedSeq;
         })
-        .map(([bucketStart]) => ({ period, bucketStart }))
-        .sort((a, b) => a.bucketStart.localeCompare(b.bucketStart));
+        .map(([, entry]) => ({
+          period,
+          bucketStart: entry.bucketStart,
+          ...(entry.principalId === undefined ? {} : { principalId: entry.principalId as PrincipalId }),
+        }))
+        // The tenant row first within a bucket, so a job that stops mid-bucket has at least the total.
+        .sort(
+          (a, b) =>
+            a.bucketStart.localeCompare(b.bucketStart) ||
+            (a.principalId ?? "").localeCompare(b.principalId ?? ""),
+        );
       const start = cursor === undefined ? 0 : stale.findIndex((b) => b.bucketStart > cursor);
       const at = start < 0 ? stale.length : start;
       const items = stale.slice(at, at + limit);

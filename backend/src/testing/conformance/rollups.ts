@@ -12,7 +12,7 @@
 
 import { describe, expect, it } from "vitest";
 import { asId } from "../../core/ids.js";
-import type { RunId, TenantId } from "../../core/ids.js";
+import type { PrincipalId, RunId, TenantId } from "../../core/ids.js";
 import type { UsageEvent, UsageRollupStore, UsageStore } from "../../persistence/index.js";
 
 const T1 = asId<TenantId>("conf-rollup-tenant-1");
@@ -20,6 +20,9 @@ const T2 = asId<TenantId>("conf-rollup-tenant-2");
 const HOUR = "2026-08-23T10:00:00.000Z";
 const NEXT_HOUR = "2026-08-23T11:00:00.000Z";
 const DAY = "2026-08-23T00:00:00.000Z";
+/** Two people in one tenant — the case every earlier rollup test lacked, which is how #175 hid. */
+const P1 = asId<PrincipalId>("conf-principal-1");
+const P2 = asId<PrincipalId>("conf-principal-2");
 
 /**
  * Both ports over one set of events, which is how a real deployment provides them.
@@ -49,6 +52,9 @@ const event = (overrides: Partial<UsageEvent> & { readonly n: number }): UsageEv
   currency: overrides.currency ?? "EUR",
   occurredAt: overrides.occurredAt ?? "2026-08-23T10:30:00.000Z",
   ...(overrides.stepId === undefined ? {} : { stepId: overrides.stepId }),
+  // #175. Absent by default so the pre-existing cases keep testing the tenant grain alone, and a case that wants
+  // two people in one tenant says so — which is the case every earlier test lacked.
+  ...(overrides.principalId === undefined ? {} : { principalId: overrides.principalId }),
 });
 
 export function usageRollupStoreConformance(
@@ -282,6 +288,89 @@ export function usageRollupStoreConformance(
       expect(await rollups.get({ tenantId: T1, period: "hour", bucketStart: HOUR })).not.toBeNull();
       expect(await rollups.get({ tenantId: T1, period: "day", bucketStart: DAY })).not.toBeNull();
       expect(await rollups.get({ tenantId: T1, period: "day", bucketStart: HOUR })).toBeNull();
+    });
+
+    /**
+     * Per-principal rollups — #175.
+     *
+     * The tenant row and a person's row are the same measurement at two grains, stored as a nullable dimension
+     * on one table. The failure to guard against is them bleeding into each other: a tenant chart that summed its
+     * own row *and* every principal's would double every figure, and a per-person quota reading the tenant row
+     * would refuse someone for a colleague's spending.
+     */
+    it("keeps a principal's bucket separate from the tenant's", async () => {
+      const { rollups } = await seeded([
+        event({ n: 1, principalId: P1, costMinorUnits: 10 }),
+        event({ n: 2, principalId: P2, costMinorUnits: 90 }),
+      ]);
+      await rollups.rebuild({ tenantId: T1, period: "hour", bucketStart: HOUR });
+      await rollups.rebuild({ tenantId: T1, period: "hour", bucketStart: HOUR, principalId: P1 });
+      await rollups.rebuild({ tenantId: T1, period: "hour", bucketStart: HOUR, principalId: P2 });
+
+      // The tenant row is the whole bucket.
+      expect((await rollups.get({ tenantId: T1, period: "hour", bucketStart: HOUR }))?.costMinorUnits).toBe(100);
+      // Each principal row is that person's slice, and they do not see each other's.
+      expect(
+        (await rollups.get({ tenantId: T1, period: "hour", bucketStart: HOUR, principalId: P1 }))?.costMinorUnits,
+      ).toBe(10);
+      expect(
+        (await rollups.get({ tenantId: T1, period: "hour", bucketStart: HOUR, principalId: P2 }))?.costMinorUnits,
+      ).toBe(90);
+    });
+
+    it("does not add principal rows into a tenant sum", async () => {
+      // The double-count this dimension invites. Without a grain predicate, summing the range picks up the
+      // tenant row *and* both principal rows and reports 200 for 100 spent.
+      const { rollups } = await seeded([
+        event({ n: 1, principalId: P1, costMinorUnits: 10 }),
+        event({ n: 2, principalId: P2, costMinorUnits: 90 }),
+      ]);
+      for (const principalId of [undefined, P1, P2]) {
+        await rollups.rebuild({
+          tenantId: T1,
+          period: "hour",
+          bucketStart: HOUR,
+          ...(principalId === undefined ? {} : { principalId }),
+        });
+      }
+      const summed = await rollups.sum({ tenantId: T1, period: "hour", from: HOUR, to: NEXT_HOUR });
+      expect(summed.costMinorUnits).toBe(100);
+      // And a chart of the tenant lists one bucket, not three.
+      const listed = await rollups.list({ tenantId: T1, period: "hour", from: HOUR, to: NEXT_HOUR, limit: 10 });
+      expect(listed.items).toHaveLength(1);
+      expect(listed.items[0]?.principalId).toBeUndefined();
+    });
+
+    it("carries the grain on the row, so a caller can tell them apart", async () => {
+      // Without this a caller holding a mixed list has no way to know which row is whose, and adding them up is
+      // the obvious next mistake.
+      const { rollups } = await seeded([event({ n: 1, principalId: P1 })]);
+      const own = await rollups.rebuild({ tenantId: T1, period: "hour", bucketStart: HOUR, principalId: P1 });
+      const tenant = await rollups.rebuild({ tenantId: T1, period: "hour", bucketStart: HOUR });
+      expect(own.principalId).toBe(P1);
+      expect(tenant.principalId).toBeUndefined();
+    });
+
+    it("reports a stale bucket at both grains, so the job rebuilds both", async () => {
+      /**
+       * A per-principal rollup is only useful if something rebuilds it, and the job cannot enumerate which
+       * principals were active without reading the ledger — the scan a rollup exists to avoid. The store already
+       * reads it to decide staleness, so it is the only place that knows cheaply.
+       */
+      const { rollups } = await seeded([event({ n: 1, principalId: P1 })]);
+      const stale = await rollups.listStaleBuckets({ tenantId: T1, period: "hour", since: DAY, limit: 10 });
+      expect(stale.items).toHaveLength(2);
+      // The tenant row first, so a job that stops mid-bucket has at least the total.
+      expect(stale.items[0]?.principalId).toBeUndefined();
+      expect(stale.items[1]?.principalId).toBe(P1);
+    });
+
+    it("reports only the tenant grain when no event names a principal", async () => {
+      // The other half, and the one that caught a real bug: with a NULL principal both grouping sets produce the
+      // same row, so the tenant bucket was listed twice and the job rebuilt it twice.
+      const { rollups } = await seeded([event({ n: 1 })]);
+      const stale = await rollups.listStaleBuckets({ tenantId: T1, period: "hour", since: DAY, limit: 10 });
+      expect(stale.items).toEqual([{ period: "hour", bucketStart: HOUR }]);
     });
 
     it("lists a bucket with events but no rollup as stale", async () => {

@@ -72,6 +72,18 @@ export const TENANT_SCOPED_TABLES: readonly RlsTable[] = [
   { table: "approval_grants" },
   { table: "usage_records" },
   { table: "usage_rollups" },
+  /**
+   * Tenant-scoped only, deliberately — #175.
+   *
+   * Not `PRINCIPAL_PREDICATE`, even though the table has a `principal_id`. A spend limit is a fact *about* a
+   * person that belongs to the tenant's administrator, not to the person it constrains: someone who could only
+   * see their own row could not be shown the tenant default they inherit, and — the part that matters — a
+   * limit nobody but its subject can read is a limit its subject can quietly delete.
+   *
+   * The principal column here is a dimension, not an owner. That distinction is why this needs saying: the
+   * neighbouring `principal_memory` has the same column and the opposite answer.
+   */
+  { table: "usage_limits" },
   { table: "evaluation_runs" },
   { table: "evaluation_case_results" },
   { table: "idempotency_keys" },

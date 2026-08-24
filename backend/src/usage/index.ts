@@ -6,12 +6,26 @@
  */
 
 import type { ExecutionContext } from "../core/context.js";
-import type { ConversationId, RunId } from "../core/ids.js";
+import type { ConversationId, PrincipalId, RunId } from "../core/ids.js";
 import type { ModelPricing } from "../models/index.js";
 
 export type UsageEvent = {
   readonly id: string;
   readonly tenantId: string;
+  /**
+   * Who consumed it — #175.
+   *
+   * A usage record carried a tenant and no principal, so "what has this person spent" was unanswerable: the data
+   * was never recorded. Per-user metrics and per-user limits both start here.
+   *
+   * Stamped by the recorder from the **trusted context**, never from the event payload — the same rule `tenantId`
+   * follows, and for the same reason: a caller that could name the principal on a usage event could bill someone
+   * else's budget.
+   *
+   * Optional on the type, because rows written before this exist and a record with an unknown principal is a
+   * fact rather than a thing to invent. It is nullable in storage for that reason too.
+   */
+  readonly principalId?: PrincipalId;
   readonly conversationId?: ConversationId;
   readonly runId: RunId;
   readonly stepId?: string;
@@ -41,7 +55,13 @@ export const usageDedupeKey = (
 ): string => (event.stepId === undefined ? event.id : `${event.runId}:${event.stepId}`);
 
 /** What a caller supplies; the recorder stamps `id`, `tenantId` and `occurredAt`. */
-export type UsageEventInput = Omit<UsageEvent, "id" | "tenantId" | "occurredAt">;
+/**
+ * What a caller supplies. `id`, `tenantId`, `principalId` and `occurredAt` are the recorder's to stamp.
+ *
+ * `principalId` moved into that set by #175: identity comes from the execution context, so accepting it here
+ * would be accepting a claim about whose budget to charge.
+ */
+export type UsageEventInput = Omit<UsageEvent, "id" | "tenantId" | "principalId" | "occurredAt">;
 
 export type CostEstimate = {
   readonly modelId: string;

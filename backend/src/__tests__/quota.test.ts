@@ -12,6 +12,7 @@ import type { PrincipalId, RequestId, RunId, TenantId } from "../core/ids.js";
 import type { ExecutionContext } from "../core/context.js";
 import { AgentPlatformError } from "../core/errors.js";
 import { createMemoryUsageBackend } from "../adapters/memory/usage.js";
+import { createMemoryUsageLimitStore } from "../adapters/memory/usage-limits.js";
 import type { UsageEvent } from "../persistence/index.js";
 import {
   DEFAULT_RECONCILIATION_TOLERANCE,
@@ -20,6 +21,7 @@ import {
   bucketStartFor,
   bucketsBetween,
   createQuotaGuard,
+  createStoredLimitResolver,
   createRollupJob,
   nextBucket,
   reconcileUsage,
@@ -539,5 +541,142 @@ describe("AC-5: reconciliation against provider figures", () => {
       },
     );
     expect(report.ledgerMinorUnits).toBe(0);
+  });
+});
+
+/**
+ * Per-person allowances — #175.
+ *
+ * The guard already accepted per-principal limits through `resolveLimits`, and always compared them against
+ * **tenant-wide** usage. So a per-person limit was not a per-person limit: the first busy colleague exhausted
+ * everyone's allowance, and the person refused had spent nothing. Every test of the guard passed, because none of
+ * them had two principals in one tenant.
+ */
+describe("quota enforcement per principal", () => {
+  const P1 = asId<PrincipalId>("alice");
+  const P2 = asId<PrincipalId>("bob");
+  const AT = "2026-08-24T10:30:00.000Z";
+  const MONTH = "2026-08-01T00:00:00.000Z";
+
+  const withPrincipal = (principalId: PrincipalId): ExecutionContext => ({ ...ctx(), principalId });
+
+  const spend = async (
+    backend: ReturnType<typeof createMemoryUsageBackend>,
+    principalId: PrincipalId,
+    costMinorUnits: number,
+    n: number,
+  ) => {
+    await backend.usage.append({
+      tenantId: T1,
+      event: {
+        id: `e-${principalId}-${n}`,
+        tenantId: T1,
+        principalId,
+        runId: asId<RunId>(`run-${principalId}-${n}`),
+        modelId: "m1",
+        inputTokens: 10,
+        outputTokens: 5,
+        cachedInputTokens: 0,
+        costMinorUnits,
+        currency: "USD",
+        occurredAt: AT,
+      } satisfies UsageEvent,
+    });
+  };
+
+  it("checks one person's limit against that person's usage, not the tenant's", async () => {
+    const backend = createMemoryUsageBackend();
+    // Bob burns a lot. Alice has spent nothing.
+    await spend(backend, P2, 900, 1);
+    await backend.rollups.rebuild({ tenantId: T1, period: "month", bucketStart: MONTH });
+    await backend.rollups.rebuild({ tenantId: T1, period: "month", bucketStart: MONTH, principalId: P1 });
+    await backend.rollups.rebuild({ tenantId: T1, period: "month", bucketStart: MONTH, principalId: P2 });
+
+    const guard = createQuotaGuard({
+      rollups: backend.rollups,
+      resolveLimits: (context) => ({
+        period: "month",
+        principalId: context.principalId,
+        costMinorUnits: 500,
+      }),
+    });
+
+    // Alice is admitted: her own spend is zero, even though the tenant is over.
+    expect((await guard.admit(withPrincipal(P1), AT)).admitted).toBe(true);
+    // Bob is refused: it is his spend that passed the limit.
+    const bob = await guard.admit(withPrincipal(P2), AT);
+    expect(bob.admitted).toBe(false);
+    if (bob.admitted) throw new Error("expected a refusal");
+    expect(bob.used).toBe(900);
+  });
+
+  it("checks a tenant-wide limit against tenant usage, so a shared budget is still shared", async () => {
+    // The other half: a limit with no principal must *not* narrow to the caller, or a tenant budget would only
+    // ever be spent by whoever asked last.
+    const backend = createMemoryUsageBackend();
+    await spend(backend, P2, 900, 1);
+    await backend.rollups.rebuild({ tenantId: T1, period: "month", bucketStart: MONTH });
+
+    const guard = createQuotaGuard({
+      rollups: backend.rollups,
+      resolveLimits: () => ({ period: "month", costMinorUnits: 500 }),
+    });
+    const alice = await guard.admit(withPrincipal(P1), AT);
+    expect(alice.admitted).toBe(false);
+    if (alice.admitted) throw new Error("expected a refusal");
+    expect(alice.used).toBe(900);
+  });
+
+  it("admits a person with no rollup row yet", async () => {
+    // A first-time user has no bucket. Absent must read as zero spend, not as an error or an unbounded pass
+    // through some other grain's numbers.
+    const backend = createMemoryUsageBackend();
+    const guard = createQuotaGuard({
+      rollups: backend.rollups,
+      resolveLimits: (context) => ({ period: "month", principalId: context.principalId, costMinorUnits: 500 }),
+    });
+    const decision = await guard.admit(withPrincipal(P1), AT);
+    expect(decision.admitted).toBe(true);
+    if (!decision.admitted) throw new Error("expected admission");
+    expect(decision.usage).toEqual(NO_USAGE);
+  });
+
+  it("resolves a person's own limit over the tenant default, and the grain with it", async () => {
+    const limits = createMemoryUsageLimitStore();
+    await limits.put({ tenantId: T1, limit: { tenantId: T1, period: "month", costMinorUnits: 10_000, updatedAt: "t" } });
+    await limits.put({
+      tenantId: T1,
+      limit: { tenantId: T1, principalId: P1, period: "month", costMinorUnits: 100, updatedAt: "t" },
+    });
+    const resolve = createStoredLimitResolver({ limits, periods: ["month"] });
+
+    const alice = await resolve(withPrincipal(P1));
+    expect(alice?.costMinorUnits).toBe(100);
+    // The grain travels with the limit: without it the guard would compare her allowance to the tenant's spend.
+    expect(alice?.principalId).toBe(P1);
+
+    const bob = await resolve(withPrincipal(P2));
+    expect(bob?.costMinorUnits).toBe(10_000);
+    // The tenant default carries no principal, so the guard reads the tenant bucket — a shared budget stays
+    // shared rather than becoming a 10,000 allowance each.
+    expect(bob?.principalId).toBeUndefined();
+  });
+
+  it("is unbounded when nothing is configured at any period", async () => {
+    const resolve = createStoredLimitResolver({ limits: createMemoryUsageLimitStore() });
+    expect(await resolve(withPrincipal(P1))).toBeUndefined();
+  });
+
+  it("prefers the shortest configured period", async () => {
+    /**
+     * A shorter window is the tighter constraint in practice: someone who has burned a monthly allowance in a
+     * day is stopped a day earlier, and being stopped early is recoverable where a surprise at month end is not.
+     */
+    const limits = createMemoryUsageLimitStore();
+    await limits.put({ tenantId: T1, limit: { tenantId: T1, principalId: P1, period: "month", costMinorUnits: 10_000, updatedAt: "t" } });
+    await limits.put({ tenantId: T1, limit: { tenantId: T1, principalId: P1, period: "day", costMinorUnits: 400, updatedAt: "t" } });
+    const resolved = await createStoredLimitResolver({ limits })(withPrincipal(P1));
+    expect(resolved?.period).toBe("day");
+    expect(resolved?.costMinorUnits).toBe(400);
   });
 });

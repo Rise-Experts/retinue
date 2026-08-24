@@ -104,6 +104,11 @@ const SEEDS: Readonly<Record<string, (tenant: string, principal: string) => stri
        (tenant_id, period, bucket_start, input_tokens, output_tokens, cached_input_tokens,
         reasoning_tokens, cost_minor_units, event_count, currency, computed_at)
      VALUES ('${t}', 'hour', date_trunc('hour', now()), 100, 20, 5, 0, 7, 1, 'EUR', now())`,
+  // #175. A tenant default rather than a per-principal override, so the row exercises the common case — and the
+  // tenant predicate is the whole policy here, unlike `principal_memory` next door.
+  usage_limits: (t) =>
+    `INSERT INTO usage_limits (tenant_id, principal_id, period, cost_minor_units, updated_at)
+     VALUES ('${t}', NULL, 'month', 5000, now())`,
   evaluation_runs: (t) =>
     `INSERT INTO evaluation_runs
        (tenant_id, id, release, started_at, total, passed, mean_score, by_dimension, cost_minor_units,
@@ -251,9 +256,8 @@ describe("policy coverage is derived from MIGRATIONS, not transcribed", () => {
       expect(RLS_STATEMENTS).toContain(`ALTER TABLE ${table} ENABLE ROW LEVEL SECURITY`);
       expect(RLS_STATEMENTS).toContain(`ALTER TABLE ${table} FORCE ROW LEVEL SECURITY`);
     }
-    // 26 tables as of #141 (`evaluation_runs`, `evaluation_case_results`); the count is asserted so a table silently
-    // dropping out is visible.
-    expect(TENANT_SCOPED_TABLES).toHaveLength(26);
+    // 27 tables as of #175 (`usage_limits`); the count is asserted so a table silently dropping out is visible.
+    expect(TENANT_SCOPED_TABLES).toHaveLength(27);
 
     // #135. `knowledge_chunks` lives behind the optional pgvector migration, so its policies are a separate
     // list applied by whoever ran that migration -- `ALTER TABLE ... ENABLE ROW LEVEL SECURITY` on an absent

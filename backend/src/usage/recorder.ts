@@ -34,8 +34,25 @@ export const createRegistryPricingResolver = (registry: ModelRegistry): PricingR
   resolve: (modelId) => registry.list().find((m) => m.modelId === modelId)?.pricing ?? null,
 });
 
-let counter = 0;
-const defaultIdFactory = (): string => `usage-${(counter += 1)}`;
+/**
+ * A usage record id that survives a restart — #174.
+ *
+ * This was `usage-${counter += 1}` over a **module-level** counter, which is per-process. `usage_records` has
+ * `PRIMARY KEY (tenant_id, id)`, so restarting a worker reset the counter to 1 and the next record collided with
+ * the `usage-1` already in the table: `duplicate key value violates unique constraint "usage_records_pkey"`, and
+ * the run failed. Two workers in one deployment collided the same way without restarting at all.
+ *
+ * Invisible to every test, because a test starts with a fresh schema *and* a fresh module — the counter and the
+ * table are always in step. It only breaks against a database that outlives the process, which is the only kind
+ * a deployment has.
+ *
+ * The dedupe index on `(tenant_id, dedupe_key)` is the *intended* idempotency mechanism and it works: a recovered
+ * run re-recording a step it already logged is a no-op. That is a different thing from two distinct events
+ * colliding on a surrogate id, which is why this is fixed by making the id unique rather than by adding another
+ * `ON CONFLICT` — swallowing a PK collision would silently drop a real record, and the dropped one would be
+ * revenue.
+ */
+const defaultIdFactory = (): string => `usage-${crypto.randomUUID()}`;
 
 export const createUsageRecorder = (config: {
   readonly store: UsageStore;

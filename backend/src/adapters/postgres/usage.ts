@@ -11,7 +11,7 @@
  * drift and the drift would end up on a bill.
  */
 import type { Page } from "../../core/context.js";
-import type { ConversationId, RunId } from "../../core/ids.js";
+import type { ConversationId, PrincipalId, RunId } from "../../core/ids.js";
 import type { IdempotencyKey, IdempotencyStore, IdempotentResult } from "../../idempotency/index.js";
 import type { UsageStore, UsageTotals } from "../../persistence/index.js";
 import { usageDedupeKey } from "../../usage/index.js";
@@ -28,6 +28,7 @@ const json = <T>(value: unknown): T => (typeof value === "string" ? (JSON.parse(
 type UsageRow = {
   id: string;
   tenant_id: string;
+  principal_id: string | null;
   run_id: string;
   conversation_id: string | null;
   step_id: string | null;
@@ -45,6 +46,11 @@ type UsageRow = {
 const toEvent = (r: UsageRow): UsageEvent => ({
   id: r.id,
   tenantId: r.tenant_id,
+  // #175. Omitted when null: a record from before the column existed has an unknown principal, and that is a
+  // fact rather than something to fill in.
+  ...(r.principal_id === null || r.principal_id === undefined
+    ? {}
+    : { principalId: r.principal_id as PrincipalId }),
   runId: r.run_id as RunId,
   ...(r.conversation_id === null ? {} : { conversationId: r.conversation_id as ConversationId }),
   ...(r.step_id === null ? {} : { stepId: r.step_id }),
@@ -59,7 +65,7 @@ const toEvent = (r: UsageRow): UsageEvent => ({
   occurredAt: iso(r.occurred_at),
 });
 
-const USAGE_COLUMNS = `id, tenant_id, run_id, conversation_id, step_id, tool_call_id, model_id,
+const USAGE_COLUMNS = `id, tenant_id, principal_id, run_id, conversation_id, step_id, tool_call_id, model_id,
          input_tokens, output_tokens, cached_input_tokens, reasoning_tokens,
          cost_minor_units, currency, occurred_at`;
 
@@ -69,15 +75,16 @@ export const createPostgresUsageStore = (sql: SqlExecutor): UsageStore => ({
     // under a fresh event id, and that must still be a no-op. Keying only on id would let it through.
     await sql.query(
       `INSERT INTO usage_records
-         (tenant_id, id, dedupe_key, run_id, conversation_id, step_id, tool_call_id, model_id,
+         (tenant_id, id, dedupe_key, principal_id, run_id, conversation_id, step_id, tool_call_id, model_id,
           input_tokens, output_tokens, cached_input_tokens, reasoning_tokens,
           cost_minor_units, currency, occurred_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::timestamptz)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::timestamptz)
        ON CONFLICT (tenant_id, dedupe_key) DO NOTHING`,
       [
         tenantId,
         event.id,
         usageDedupeKey(event),
+        event.principalId ?? null,
         event.runId,
         event.conversationId ?? null,
         event.stepId ?? null,
@@ -122,9 +129,20 @@ export const createPostgresUsageStore = (sql: SqlExecutor): UsageStore => ({
   },
 
   async breakdown({ tenantId, from, to, by, limit }) {
-    // The grouping column is chosen from a closed union, never interpolated from user input — `by` has two
-    // possible values and both are literals here.
-    const column = by === "model" ? "model_id" : "COALESCE(conversation_id, '')";
+    /**
+     * The grouping column is chosen from a closed union, never interpolated from user input — every arm is a
+     * literal in this file.
+     *
+     * `principal` is `COALESCE(principal_id, '')` for the same reason `conversation` is: rows written before the
+     * column existed have NULL, and a NULL group key would be dropped by the client rather than shown as
+     * "unattributed" — which is what it honestly is.
+     */
+    const column =
+      by === "model"
+        ? "model_id"
+        : by === "principal"
+          ? "COALESCE(principal_id, '')"
+          : "COALESCE(conversation_id, '')";
     const rows = await sql.query<{
       key: string;
       input_tokens: number | string;

@@ -29,6 +29,7 @@ export * from "./artifacts.js";
 export * from "./artifact-exports.js";
 export * from "./knowledge.js";
 export * from "./rollups.js";
+export * from "./usage-limits.js";
 export * from "./evaluation.js";
 export * from "./invariants.js";
 
@@ -70,6 +71,7 @@ export const REGISTERED_PORTS: readonly PortCoverage[] = [
   { port: "VectorIndex", harness: "vectorIndexConformance" },
   { port: "KeywordIndex", harness: "keywordIndexConformance" },
   { port: "UsageRollupStore", harness: "usageRollupStoreConformance" },
+  { port: "UsageLimitStore", harness: "usageLimitStoreConformance" },
   { port: "EvaluationStore", harness: "evaluationStoreConformance" },
 ];
 
@@ -255,6 +257,7 @@ export const ADAPTER_COVERAGE: readonly AdapterCoverage[] = [
       "VectorIndex",
       "KeywordIndex",
       "UsageRollupStore",
+      "UsageLimitStore",
       "EvaluationStore",
     ],
     notImplemented: POSTGRES_PENDING,
@@ -298,5 +301,6 @@ export const HARNESS_MODULES: readonly string[] = [
   "src/testing/conformance/artifact-exports.ts",
   "src/testing/conformance/knowledge.ts",
   "src/testing/conformance/rollups.ts",
+  "src/testing/conformance/usage-limits.ts",
   "src/testing/conformance/evaluation.ts",
 ];

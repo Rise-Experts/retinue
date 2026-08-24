@@ -95,6 +95,7 @@ export * from "./sessions.js";
 
 /** Append-only usage ledger reference adapter. */
 export * from "./usage.js";
+export * from "./usage-limits.js";
 
 /** Blob store reference adapter (spilled tool output). */
 export * from "./blobs.js";
