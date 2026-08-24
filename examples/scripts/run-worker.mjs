@@ -18,6 +18,20 @@ if (process.env.AGENTKIT_DATABASE_URL && !process.env.AGENTKIT_DATABASE_URL.incl
 }
 process.env.AGENTKIT_APP_MODULE = pathToFileURL(resolve(import.meta.dirname, "../dist/index.js")).href;
 
+// The dev-auth gate, before anything boots — #155 AC-6. The authenticator itself is built lazily now, so this
+// is what keeps "refuses to start" true rather than "fails on the first request".
+{
+  const { assertDevAuthEnabled } = await import(
+    pathToFileURL(resolve(import.meta.dirname, "../dist/auth.js")).href
+  );
+  try {
+    assertDevAuthEnabled();
+  } catch (error) {
+    console.error(`✗ ${error.message}`);
+    process.exit(2);
+  }
+}
+
 const { runWorker } = await import("@agentkit/server");
 const { shutdown } = await runWorker();
 console.log(`  agentkit example — worker running (schema ${SCHEMA}). Ctrl-C to drain.`);

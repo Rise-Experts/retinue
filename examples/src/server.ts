@@ -38,6 +38,8 @@ import { contextUsage } from "./context-usage.js";
 import { exampleProviders } from "./providers.js";
 import { resolveExampleModel } from "./model.js";
 import type { ConversationMode } from "./modes.js";
+import type { ContextProvider } from "@agentkit/backend";
+import type { ExampleStores } from "./stores.js";
 import type {
   ConversationId,
   ExecutionContext,
@@ -64,7 +66,27 @@ import { createModeStore } from "./mode-store.js";
 export type ExampleServerOptions = {
   readonly deps: ResolverDeps;
   readonly authenticate: Authenticate;
-  readonly sql: SqlExecutor;
+  /**
+   * The stores the app's own routes use — #155 AC-7.
+   *
+   * Injected rather than built from a `SqlExecutor`, so the HTTP layer does not know which adapter it has. That
+   * is what lets one set of routes serve both the Postgres composition and the single-process memory one, instead
+   * of a second copy that drifts.
+   */
+  readonly stores: ExampleStores;
+  /**
+   * Still here, and only for the things that are genuinely SQL.
+   *
+   * `contextUsage` counts a conversation's messages with a `count(*)` — `MessageStore` has no count and adding
+   * one to the port for a page's meter would be the wrong trade. Optional, so the memory path can omit it and
+   * get an honest "unknown" rather than a wrong number.
+   */
+  readonly sql?: SqlExecutor;
+  /**
+   * The context providers, passed in for the same reason the stores are: the notebook's provider closes over an
+   * in-process store, and the memory composition's principal-memory provider closes over a different one.
+   */
+  readonly providers: readonly ContextProvider[];
   readonly port: number;
   readonly pagePath?: string;
 };
@@ -83,8 +105,8 @@ export const startExampleServer = async (options: ExampleServerOptions) => {
     sse: { enabled: true },
   });
 
-  const conversations = createPostgresConversationStore(options.sql);
-  const messages = createPostgresMessageStore(options.sql);
+  const conversations = options.stores.conversations;
+  const messages = options.stores.messages;
   const pagePath = options.pagePath ?? resolve(import.meta.dirname, "../public/index.html");
   /**
    * Read **per request**, not once at boot.
@@ -100,10 +122,7 @@ export const startExampleServer = async (options: ExampleServerOptions) => {
 
   /** One factory for the three routes that need the mode: the selector, the plan button, and history. */
   const modeStore = () =>
-    createModeStore({
-      sessions: createPostgresSessionStateStore(options.sql),
-      grants: createPostgresApprovalGrantStore(options.sql),
-    });
+    createModeStore({ sessions: options.stores.sessions, grants: options.stores.grants });
 
   /**
    * Compact a conversation — #169.
@@ -113,13 +132,13 @@ export const startExampleServer = async (options: ExampleServerOptions) => {
    * it is testable without a model.
    */
   const compactNow = async (context: ExecutionContext, conversationId: string) => {
-    const messages = await createPostgresMessageStore(options.sql).listByConversation({
+    const messages = await options.stores.messages.listByConversation({
       tenantId: context.tenantId,
       conversationId: asId<ConversationId>(conversationId),
       limit: 500,
     });
     return compactConversation({
-      sql: options.sql,
+      stores: options.stores,
       context,
       conversationId,
       messages: messages.items,
@@ -234,12 +253,23 @@ export const startExampleServer = async (options: ExampleServerOptions) => {
     });
     try {
       const usage = await contextUsage({
-        sql: options.sql,
+        stores: options.stores,
+        ...(options.sql === undefined ? {} : { sql: options.sql }),
         context: { ...context, conversationId },
         mode: effectiveMode,
-        providers: exampleProviders(options.sql),
+        providers: options.providers,
       });
-      if (usage.fraction >= COMPACT_AT_FRACTION || usage.totalMessages > HISTORY_READ_LIMIT) {
+      /**
+       * A null count means "unknown", and unknown must not trigger — #155 AC-7.
+       *
+       * The memory composition cannot count messages cheaply, so it reports null. Treating null as "over the
+       * limit" would compact every conversation on every turn; treating it as zero is right, because the fraction
+       * check still catches a genuinely full window.
+       */
+      if (
+        usage.fraction >= COMPACT_AT_FRACTION ||
+        (usage.totalMessages !== null && usage.totalMessages > HISTORY_READ_LIMIT)
+      ) {
         const outcome = await compactNow(context, String(conversationId));
         if (outcome.compacted) {
           console.log(
@@ -298,7 +328,29 @@ export const startExampleServer = async (options: ExampleServerOptions) => {
     };
   };
 
+  /**
+   * The app's own routes, wrapped so an unexpected throw becomes JSON — #176.
+   *
+   * Reported by a user as `Could not load usage: Unexpected token 'e', "error: dup"... is not valid JSON`. Two
+   * faults in one line: a real bug (a rollup rebuild whose conflict target matched the wrong index), and the
+   * *shape* of what came back — a bare `error: …` string with a stack trace, from an unhandled throw. A JSON
+   * endpoint answering with a stack is a page that cannot even show the error, and a stack in a response body is
+   * a description of the server's filesystem.
+   *
+   * The message is kept, because an example that hid it would be worse to debug than one that shouted it. A
+   * deployment would log and return a reference instead.
+   */
   const handler = async (request: Request): Promise<Response> => {
+    try {
+      return await route(request);
+    } catch (thrown) {
+      const message = (thrown as Error).message ?? "unexpected error";
+      console.error(`[server] ${new URL(request.url).pathname}:`, thrown);
+      return Response.json({ error: message }, { status: 500 });
+    }
+  };
+
+  const route = async (request: Request): Promise<Response> => {
     const url = new URL(request.url);
 
     if (url.pathname === "/" || url.pathname === "/index.html") {
@@ -452,7 +504,7 @@ export const startExampleServer = async (options: ExampleServerOptions) => {
        * here safe rather than merely convenient. A cron in an example is a process someone has to know to start,
        * and a chart empty until it runs looks like a bug in the panel.
        */
-      const job = createRollupJob({ rollups: createPostgresUsageRollupStore(options.sql) });
+      const job = createRollupJob({ rollups: options.stores.rollups });
       /**
        * Every period this endpoint reads, not just the chart's — #175.
        *
@@ -493,7 +545,7 @@ export const startExampleServer = async (options: ExampleServerOptions) => {
        * as a dashboard.
        */
       const isAdmin = context.roleIds.some((role) => String(role) === "admin");
-      const rollups = createPostgresUsageRollupStore(options.sql);
+      const rollups = options.stores.rollups;
       const periodStart = (p: "week" | "month") => bucketStartFor(p, to.toISOString());
       const mine = await Promise.all(
         (["week", "month"] as const).map(async (p) => ({
@@ -507,7 +559,7 @@ export const startExampleServer = async (options: ExampleServerOptions) => {
               bucketStart: periodStart(p),
               principalId: context.principalId,
             })) ?? null,
-          limit: await createPostgresUsageLimitStore(options.sql).resolve({
+          limit: await options.stores.limits.resolve({
             tenantId: context.tenantId,
             principalId: context.principalId,
             period: p,
@@ -563,11 +615,12 @@ export const startExampleServer = async (options: ExampleServerOptions) => {
           : await modeStore().get({ tenantId: String(context.tenantId), conversationId });
 
       const usage = await contextUsage({
-        sql: options.sql,
+        stores: options.stores,
+        ...(options.sql === undefined ? {} : { sql: options.sql }),
         context: scoped,
         mode,
         // The same list the app module assembles from — see `./providers.ts`.
-        providers: exampleProviders(options.sql),
+        providers: options.providers,
       });
       return Response.json({
         ...usage,
@@ -583,8 +636,12 @@ export const startExampleServer = async (options: ExampleServerOptions) => {
          * never compacts.
          */
         totalMessages: usage.totalMessages,
-        overflowing: usage.totalMessages > HISTORY_READ_LIMIT,
-        shouldCompact: usage.fraction >= COMPACT_AT_FRACTION || usage.totalMessages > HISTORY_READ_LIMIT,
+        // Unknown is not "overflowing". A meter that warned because it could not count would be worse than one
+        // that says nothing.
+        overflowing: usage.totalMessages !== null && usage.totalMessages > HISTORY_READ_LIMIT,
+        shouldCompact:
+          usage.fraction >= COMPACT_AT_FRACTION ||
+          (usage.totalMessages !== null && usage.totalMessages > HISTORY_READ_LIMIT),
       });
     }
 
@@ -618,7 +675,7 @@ export const startExampleServer = async (options: ExampleServerOptions) => {
     if (url.pathname === "/api/limits") {
       const context = await options.authenticate(request);
       if (context === null) return Response.json({ error: "Unauthenticated" }, { status: 401 });
-      const limits = createPostgresUsageLimitStore(options.sql);
+      const limits = options.stores.limits;
       // Compared as strings: `roleIds` is branded, and asserting the brand on a literal here would be claiming
       // the literal is a valid role id rather than checking whether it is present.
       const isAdmin = context.roleIds.some((role) => String(role) === "admin");
@@ -700,7 +757,7 @@ export const startExampleServer = async (options: ExampleServerOptions) => {
 
       /** The same projection the engine uses for history, so the page and the model see the same conversation. */
       const turns = await conversationTurns({
-        sql: options.sql,
+        stores: options.stores,
         tenantId: String(context.tenantId),
         conversationId,
       });

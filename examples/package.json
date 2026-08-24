@@ -21,7 +21,9 @@
     "worker": "node --env-file=../.env ./scripts/run-worker.mjs",
     "migrate": "node --env-file=../.env ./scripts/migrate.mjs",
     "app": "node --env-file=../.env ./scripts/run-app.mjs",
-    "loadtest": "node --env-file=../.env ./scripts/loadtest.mjs"
+    "loadtest": "node --env-file=../.env ./scripts/loadtest.mjs",
+    "memory": "node --env-file=../.env ./scripts/run-memory.mjs",
+    "test:kill": "node --env-file=../.env ./scripts/kill-worker-test.mjs"
   },
   "dependencies": {
     "@agentkit/backend": "*",

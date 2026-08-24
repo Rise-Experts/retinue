@@ -15,11 +15,11 @@
  */
 
 import { compactThread, estimateTokens } from "@agentkit/backend";
+import type { ExampleStores } from "./stores.js";
 import type {
   ConversationId,
   ExecutionContext,
   Message,
-  SqlExecutor,
   TenantId,
   ThreadSummarizer,
   ThreadSummary,
@@ -124,14 +124,14 @@ export type CompactionOutcome =
  * yet" is the honest answer; an error would suggest they broke something.
  */
 export const compactConversation = async (input: {
-  readonly sql: SqlExecutor;
+  /** The summary store, injected — so the memory composition compacts too (#155 AC-7). */
+  readonly stores: Pick<ExampleStores, "summaries">;
   readonly context: ExecutionContext;
   readonly conversationId: string;
   readonly messages: readonly Message[];
   readonly summarizer: ThreadSummarizer;
   readonly keepRecent?: number;
 }): Promise<CompactionOutcome> => {
-  const { createPostgresThreadSummaryStore } = await import("@agentkit/backend");
   const keepRecent = input.keepRecent ?? KEEP_RECENT_TURNS;
   if (input.messages.length <= keepRecent) return { compacted: false, reason: "too-short" };
 
@@ -140,7 +140,7 @@ export const compactConversation = async (input: {
     conversationId: input.conversationId as ConversationId,
     messages: input.messages,
     keepRecent,
-    summaries: createPostgresThreadSummaryStore(input.sql),
+    summaries: input.stores.summaries,
     summarizer: input.summarizer,
     // The platform's own estimator, so "tokens reclaimed" is measured the same way the budget measures spend.
     estimateTokens: (messages) =>

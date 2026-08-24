@@ -139,7 +139,17 @@ export const createPostgresUsageRollupStore = (sql: SqlExecutor): UsageRollupSto
        -- The upsert *is* the idempotency: a re-run replaces rather than accumulates, and two workers racing
        -- this bucket write the same value. DO UPDATE rather than DO NOTHING because a rebuild after new events
        -- must actually change the row.
-       ON CONFLICT (tenant_id, period, bucket_start) WHERE principal_id IS NULL DO UPDATE SET
+       -- The arbiter has to name the index that actually covers this row's grain — #175.
+       --
+       -- Uniqueness is two *partial* indexes, one where principal_id IS NULL and one where it is not, because a
+       -- NULL cannot participate in a normal unique constraint. A single ON CONFLICT clause therefore cannot
+       -- serve both: naming the tenant index while inserting a principal row finds no arbiter, inserts, and
+       -- violates the principal index on the *second* rebuild. Which is exactly what happened — the first
+       -- rebuild of each per-person bucket succeeded and every one after it threw a duplicate-key violation on
+       -- usage_rollups_principal_bucket_idx.
+       ON CONFLICT ${principalId === undefined
+         ? "(tenant_id, period, bucket_start) WHERE principal_id IS NULL"
+         : "(tenant_id, principal_id, period, bucket_start) WHERE principal_id IS NOT NULL"} DO UPDATE SET
          input_tokens = EXCLUDED.input_tokens,
          output_tokens = EXCLUDED.output_tokens,
          cached_input_tokens = EXCLUDED.cached_input_tokens,

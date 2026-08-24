@@ -10,6 +10,7 @@
  */
 
 import { assemblePrompt, estimateTokens, gatherSections, inspectAssembledPrompt } from "@agentkit/backend";
+import type { ExampleStores } from "./stores.js";
 import type {
   ContextBudget,
   ContextInspection,
@@ -33,11 +34,15 @@ export const contextLimitFor = (): number => resolveExampleModel().definition.li
 /**
  * Bucket budgets, as fractions of the window rather than fixed numbers.
  *
+ * A **function**, not a constant. It was a module-level IIFE, so importing anything that transitively reached
+ * this file demanded `AGENTKIT_MODEL_API_KEY` — which made the whole module untestable, and captured the budget
+ * of whatever model happened to be configured when the process loaded rather than the one resolved for the turn.
+ *
  * Fixed token counts are wrong the moment the configured model changes — a budget tuned for a 128k window
  * starves an 8k one and wastes a 1M one. History gets the largest share because a conversation *is* its history;
  * the notebook and memory are there to inform it, not to crowd it out.
  */
-export const EXAMPLE_CONTEXT_BUDGET: ContextBudget = (() => {
+export const exampleContextBudget = (): ContextBudget => {
   const limit = contextLimitFor();
   const share = (fraction: number) => Math.floor(limit * fraction);
   return {
@@ -48,7 +53,7 @@ export const EXAMPLE_CONTEXT_BUDGET: ContextBudget = (() => {
     knowledgeTokens: share(0.15),
     historyTokens: share(0.45),
   };
-})();
+};
 
 /**
  * What the window holds right now — #168.
@@ -64,7 +69,15 @@ export const EXAMPLE_CONTEXT_BUDGET: ContextBudget = (() => {
  * endpoint a reason to add a native module.
  */
 export const contextUsage = async (input: {
-  readonly sql: SqlExecutor;
+  readonly stores: Pick<ExampleStores, "messages" | "summaries">;
+  /**
+   * Only for the message count, and optional — #155 AC-7.
+   *
+   * `MessageStore` has no `count`, and adding one to the port for a page's meter would be the wrong trade. The
+   * memory composition omits it and gets `totalMessages: null`, which is an honest "unknown" rather than a wrong
+   * number — and the overflow warning is then simply not shown, which is better than showing a false one.
+   */
+  readonly sql?: SqlExecutor;
   readonly context: ExecutionContext;
   readonly mode: ConversationMode;
   /** Passed in, so this file knows nothing about what the app's context is made of. */
@@ -84,19 +97,19 @@ export const contextUsage = async (input: {
    * cap, and a conversation of 2000 messages showing "3% full" is the most misleading number this endpoint could
    * produce — it says there is room when 1600 turns have already fallen off the end.
    */
-  readonly totalMessages: number;
+  readonly totalMessages: number | null;
   readonly windowedMessages: number;
   readonly inspection: ContextInspection;
 }> => {
   const sections = await gatherSections(input.context, input.providers);
   const limit = contextLimitFor();
-  const assembled = assemblePrompt({ sections, budget: EXAMPLE_CONTEXT_BUDGET, modelContextTokens: limit });
+  const assembled = assemblePrompt({ sections, budget: exampleContextBudget(), modelContextTokens: limit });
 
   const turns =
     input.context.conversationId === undefined
       ? []
       : await conversationTurns({
-          sql: input.sql,
+          stores: input.stores,
           tenantId: String(input.context.tenantId),
           conversationId: String(input.context.conversationId),
           /**
@@ -118,8 +131,8 @@ export const contextUsage = async (input: {
   const usedTokens = promptTokens + historyTokens;
 
   const totalMessages =
-    input.context.conversationId === undefined
-      ? 0
+    input.context.conversationId === undefined || input.sql === undefined
+      ? null
       : await countMessages(input.sql, String(input.context.tenantId), String(input.context.conversationId));
 
   return {

@@ -39,12 +39,48 @@ if (!path.includes(SCHEMA)) throw new Error(`search_path is "${path}", expected 
 
 // The module and its default export: `deps`/`authenticate` are the app module's contract, and
 // `closeExampleMcp` is a named export beside it.
+// The dev-auth gate, before anything boots — #155 AC-6. The authenticator itself is built lazily now, so this
+// is what keeps "refuses to start" true rather than "fails on the first request".
+{
+  const { assertDevAuthEnabled } = await import(
+    pathToFileURL(resolve(import.meta.dirname, "../dist/auth.js")).href
+  );
+  try {
+    assertDevAuthEnabled();
+  } catch (error) {
+    console.error(`✗ ${error.message}`);
+    process.exit(2);
+  }
+}
+
 const appModule = await import(pathToFileURL(resolve(import.meta.dirname, "../dist/index.js")).href);
 const app = appModule.default;
 const { startExampleServer } = await import(pathToFileURL(resolve(import.meta.dirname, "../dist/server.js")).href);
 
 const deps = await app.deps({ config: { redisUrl: process.env.AGENTKIT_REDIS_URL ?? "" }, sql, runner });
-const { port } = await startExampleServer({ deps, authenticate: app.authenticate, sql, port: PORT });
+// The Postgres composition: stores and providers built from the executor, and `sql` still passed for the one
+// genuinely-SQL query (the message count behind the context meter).
+const { postgresBackend } = await import(pathToFileURL(resolve(import.meta.dirname, "../dist/stores.js")).href);
+const { exampleProviders } = await import(pathToFileURL(resolve(import.meta.dirname, "../dist/providers.js")).href);
+/**
+ * One backend, passed to both — the stores the routes use and the providers the prompt uses.
+ *
+ * The API host never subscribes to its own realtime source (the platform host does that), so the source throws
+ * rather than being a silent stub: a stub would make a missing subscription look like an idle stream.
+ */
+const backend = postgresBackend(sql, {
+  subscribe: () => {
+    throw new Error("the API host does not subscribe; the platform host owns the SSE route");
+  },
+});
+const { port } = await startExampleServer({
+  deps,
+  authenticate: app.authenticate,
+  stores: backend,
+  providers: exampleProviders(backend),
+  sql,
+  port: PORT,
+});
 
 console.log(`
   agentkit example — app

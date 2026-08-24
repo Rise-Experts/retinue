@@ -30,6 +30,53 @@ Then open <http://localhost:4000/>.
 the worker share nothing but Postgres and the queue. One process doing both would be the shape the platform
 exists to avoid — and #144 recorded that this boundary had never actually been exercised.
 
+## Or run it with nothing installed
+
+```bash
+AGENTKIT_MODEL_API_KEY=sk-… AGENTKIT_EXAMPLE_DEV_AUTH=1 npm run memory -w @agentkit/example-app
+```
+
+One process, in-memory adapters, an in-process queue. No database, no Redis, no migration, no second terminal.
+Same manifest, same tools, same engine, same page — only the adapters differ, which is the claim
+ports-and-adapters makes and this is where it gets tested rather than asserted.
+
+**What this mode cannot demonstrate**, which is the more useful half:
+
+| | |
+|---|---|
+| **Durability** | Every store is a `Map`. Restarting loses everything. Checkpointing still happens and you can watch it, so it proves the mechanism and not the guarantee. |
+| **The API/worker split** | One process makes the boundary a function call. #144 recorded that this boundary had never been exercised; running here does not exercise it either — which is how #161 (a no-op publisher) and #157 (an unwired message store) survived. |
+| **Lease recovery** | Nothing else can claim a run, so the atomic claim is never contended. |
+| **Slot contention** | The queue drains inline, so two runs never race. The FIFO serialisation is real code doing nothing. |
+| **RLS** | No database to enforce it. Isolation rests on the adapters partitioning by tenant — checked by conformance, but defence in depth minus a layer. |
+| **SQL** | A query that is wrong against Postgres is not wrong here, because there are none. |
+
+Use `npm run app` for anything past a first look.
+
+## Prove the durable path actually recovers
+
+```bash
+npm run app -w @agentkit/example-app        # terminal 1
+npm run test:kill -w @agentkit/example-app  # terminal 2 — starts and kills its own workers
+```
+
+Starts a run that performs an external write, `SIGKILL`s the worker mid-run, starts a replacement, and asserts
+the run completes with the side effect having happened **exactly once**. `SIGKILL` and not `SIGTERM`: a graceful
+shutdown drains, which is the opposite of what is being tested.
+
+It cannot prove the kill landed at the worst moment — the window between "tool has fired" and "result is
+checkpointed" is milliseconds wide, and a pass is evidence rather than proof. It is written to be run repeatedly.
+
+## Measure it at size
+
+```bash
+npm run loadtest -w @agentkit/example-app -- --messages=2000
+```
+
+Percentiles rather than averages at three sizes, so a linear scan hiding behind a small fixture shows up as a
+slope. It is what found #167 — reported context utilization was identical at 100, 500 and 2000 messages, because
+the figure described the read cap and not the conversation.
+
 ## Configuration
 
 Everything is in `.env` at the repository root; `.env.example` documents each variable. `.env` is gitignored and
@@ -68,6 +115,9 @@ schema.
 | `share_note` | The HITL approval gate — suspend, decide, resume, execute **exactly once**. |
 | `write_note`, `remember` | Internal writes, and what plan mode excludes. |
 | `ask_user` | A batch of questions, the run parking on them, and the answers reaching the model. |
+| `load_skill` | A named, versioned block of instructions pulled into context on demand — the catalogue is in the prompt, the bodies are not. |
+| `fetch_url` | The platform's egress policy where the *model* chooses the argument: SSRF refusals, no redirects, and the page fenced as untrusted content. |
+| `mcp__agentkit-docs__*` | A real MCP server (this repo's own docs, over stdio) imported through the same registry as the first-party tools. |
 | `calculate` | A recursive-descent parser behind a character whitelist. Not `eval`, deliberately. |
 | role selector | `viewer` cannot *see* `share_note` in the catalogue, rather than being refused after asking. |
 | note `n3` | Its body is a prompt-injection payload. Watch the model not comply. |

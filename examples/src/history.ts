@@ -14,8 +14,8 @@
  * The fold is not merely redundant now — keeping it would double every assistant turn.
  */
 
-import { createPostgresMessageStore, createPostgresThreadSummaryStore } from "@agentkit/backend";
-import type { ConversationId, Message, SqlExecutor, TenantId, TurnMessage } from "@agentkit/backend";
+import type { ConversationId, Message, TenantId, TurnMessage } from "@agentkit/backend";
+import type { ExampleStores } from "./stores.js";
 
 /**
  * One turn, with the parts it was made of.
@@ -44,7 +44,8 @@ export type ConversationTurn = TurnMessage & {
 };
 
 export const conversationTurns = async (input: {
-  readonly sql: SqlExecutor;
+  /** The stores, so this works against Postgres or the in-process composition alike (#155 AC-7). */
+  readonly stores: Pick<ExampleStores, "messages" | "summaries">;
   readonly tenantId: string;
   readonly conversationId: string;
   readonly limit?: number;
@@ -68,7 +69,7 @@ export const conversationTurns = async (input: {
    * Newest-first from the store, reversed here, because everything downstream — the transcript, the prompt — is
    * oldest-first. Reversing a bounded page is cheap; paging to the tail is O(n) round trips on every turn.
    */
-  const page = await createPostgresMessageStore(input.sql).listByConversation({
+  const page = await input.stores.messages.listByConversation({
     tenantId: input.tenantId as TenantId,
     conversationId: input.conversationId as ConversationId,
     limit: input.limit ?? HISTORY_READ_LIMIT,
@@ -83,7 +84,7 @@ export const conversationTurns = async (input: {
    * compaction ran are *after* that id and are kept, where a count would have silently dropped them.
    */
   const summary = input.compacted === true
-    ? await createPostgresThreadSummaryStore(input.sql).latest({
+    ? await input.stores.summaries.latest({
         tenantId: input.tenantId as TenantId,
         conversationId: input.conversationId as ConversationId,
       })

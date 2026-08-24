@@ -68,3 +68,23 @@ export const createDevAuthenticate = (
     });
   };
 };
+
+/**
+ * The startup check, separated from the authenticator — #155 AC-7.
+ *
+ * `createDevAuthenticate()` throws when the flag is unset, and the app module called it at module scope: which
+ * gave the guarantee AC-6 asks for — *refuses to start* — and also made the module unimportable, so anything
+ * reaching it (a test, the single-process composition) needed the flag too.
+ *
+ * Splitting it keeps both. Every runner calls this first, so the process still refuses to start with a message
+ * that says what is missing; and the authenticator is built when a request arrives, so importing the module is
+ * just importing a module.
+ *
+ * The refusal stays a **throw**, not a warning. A permissive default is how header auth reaches a deployment, and
+ * "it is only the example" is a sentence nobody re-reads before copying the file.
+ */
+export const assertDevAuthEnabled = (
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): void => {
+  if (env[DEV_AUTH_VARIABLE] !== "1") throw new DevAuthNotEnabled();
+};

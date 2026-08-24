@@ -7,15 +7,16 @@
  * confidently wrong.
  */
 
-import { createPostgresPrincipalMemoryStore, createPrincipalMemoryProvider } from "@agentkit/backend";
-import type { ContextProvider, SqlExecutor } from "@agentkit/backend";
+import { createPrincipalMemoryProvider } from "@agentkit/backend";
+import type { ContextProvider } from "@agentkit/backend";
+import type { ExampleBackend } from "./stores.js";
 import { exampleContextProviders } from "./agent.js";
 import { exampleStore } from "./store.js";
 
 /** How many memories may reach a prompt. Retrieval is salience-ranked, so this is a budget, not a cap on recall. */
 export const MEMORY_ENTRIES_IN_PROMPT = 8;
 
-export const exampleProviders = (sql: SqlExecutor): readonly ContextProvider[] => [
+export const exampleProviders = (backend: Pick<ExampleBackend, "principalMemory">): readonly ContextProvider[] => [
   ...exampleContextProviders(exampleStore),
   /**
    * The platform's provider over `PrincipalMemoryStore`, not a local one.
@@ -23,5 +24,5 @@ export const exampleProviders = (sql: SqlExecutor): readonly ContextProvider[] =
    * The example used to hand-roll this over an in-process `Map`, which is why a fact told in one conversation was
    * gone in the next: the map lived in the worker process and died with it (#164).
    */
-  createPrincipalMemoryProvider({ store: createPostgresPrincipalMemoryStore(sql), maxEntries: MEMORY_ENTRIES_IN_PROMPT }),
+  createPrincipalMemoryProvider({ store: backend.principalMemory, maxEntries: MEMORY_ENTRIES_IN_PROMPT }),
 ];

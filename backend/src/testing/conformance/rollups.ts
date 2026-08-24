@@ -341,6 +341,46 @@ export function usageRollupStoreConformance(
       expect(listed.items[0]?.principalId).toBeUndefined();
     });
 
+    /**
+     * Rebuilding a **principal** bucket twice, which is the test that was missing — #175.
+     *
+     * Every other case here rebuilt each grain once, and the tenant grain had its own idempotency test. So a
+     * per-person bucket that inserted the first time and violated its unique index the second time passed the
+     * whole suite: `/api/usage` worked once after a fresh deploy and then returned
+     * duplicate-key errors forever.
+     *
+     * Uniqueness is two *partial* indexes because a NULL cannot participate in a normal unique constraint, and a
+     * single `ON CONFLICT` clause cannot serve both — naming the tenant index while inserting a principal row
+     * finds no arbiter at all.
+     */
+    it("rebuilds a principal's bucket idempotently, not just the tenant's", async () => {
+      const { rollups } = await seeded([event({ n: 1, principalId: P1, costMinorUnits: 11 })]);
+      const first = await rollups.rebuild({ tenantId: T1, period: "hour", bucketStart: HOUR, principalId: P1 });
+      // The second call is the one that used to throw.
+      const second = await rollups.rebuild({ tenantId: T1, period: "hour", bucketStart: HOUR, principalId: P1 });
+      expect(second.costMinorUnits).toBe(first.costMinorUnits);
+      expect(second.costMinorUnits).toBe(11);
+      // A recomputation, not an accumulation: two rebuilds must not double the figure either.
+      expect((await rollups.get({ tenantId: T1, period: "hour", bucketStart: HOUR, principalId: P1 }))?.costMinorUnits).toBe(11);
+    });
+
+    it("rebuilds both grains repeatedly without either disturbing the other", async () => {
+      // Interleaved, because the two writes share a table and the arbiter is chosen per call — an arbiter picked
+      // from the wrong grain corrupts or rejects depending on the order.
+      const { rollups } = await seeded([
+        event({ n: 1, principalId: P1, costMinorUnits: 3 }),
+        event({ n: 2, principalId: P2, costMinorUnits: 4 }),
+      ]);
+      for (let pass = 0; pass < 2; pass += 1) {
+        await rollups.rebuild({ tenantId: T1, period: "hour", bucketStart: HOUR });
+        await rollups.rebuild({ tenantId: T1, period: "hour", bucketStart: HOUR, principalId: P1 });
+        await rollups.rebuild({ tenantId: T1, period: "hour", bucketStart: HOUR, principalId: P2 });
+      }
+      expect((await rollups.get({ tenantId: T1, period: "hour", bucketStart: HOUR }))?.costMinorUnits).toBe(7);
+      expect((await rollups.get({ tenantId: T1, period: "hour", bucketStart: HOUR, principalId: P1 }))?.costMinorUnits).toBe(3);
+      expect((await rollups.get({ tenantId: T1, period: "hour", bucketStart: HOUR, principalId: P2 }))?.costMinorUnits).toBe(4);
+    });
+
     it("carries the grain on the row, so a caller can tell them apart", async () => {
       // Without this a caller holding a mixed list has no way to know which row is whose, and adding them up is
       // the obvious next mistake.

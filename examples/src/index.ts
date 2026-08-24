@@ -74,9 +74,16 @@ import type {
 import { Redis } from "ioredis";
 import type { AgentkitConfig } from "@agentkit/server";
 import { createDevAuthenticate } from "./auth.js";
+import type { Authenticate } from "@agentkit/server";
+
+/** One authenticator, built the first time a request needs it. */
+let devAuth: Authenticate | undefined;
+const authenticateOnce = (): Authenticate => (devAuth ??= createDevAuthenticate());
 import { examplePricing, resolveExampleModel } from "./model.js";
 import { questionSpecsFrom } from "./questions.js";
-import { EXAMPLE_CONTEXT_BUDGET, contextLimitFor } from "./context-usage.js";
+import { contextLimitFor, exampleContextBudget } from "./context-usage.js";
+import { postgresBackend, postgresStores } from "./stores.js";
+import type { ExampleBackend } from "./stores.js";
 import { buildWorkerContext } from "./worker-context.js";
 import { MAX_MEMORY_ENTRIES, NoteNotFound, createExampleTools } from "./tools.js";
 import { exampleStore } from "./store.js";
@@ -167,12 +174,12 @@ const authorization = createAuthorizationPolicy({
  * and the registry guards *every* tool including MCP ones that never pass through the envelope. What is missing
  * is a way to be told you have wired one and not the other — see the note filed on #158.
  */
-const approvalGateFor = (sql: SqlExecutor) =>
+const approvalGateFor = (backend: ExampleBackend) =>
   createApprovalGate({
-    grants: createPostgresApprovalGrantStore(sql),
+    grants: backend.grants,
     // Without `interactions` the gate refuses every one-time ticket rather than trusting one, so a decided
     // approval would still never authorise its execution.
-    interactions: createPostgresInteractionStore(sql),
+    interactions: backend.interactions,
   });
 
 /**
@@ -208,8 +215,8 @@ export const closeExampleMcp = async (): Promise<void> => {
   await client?.close();
 };
 
-const exampleToolProviders = (sql: SqlExecutor) => [
-  { id: "example.notes-tools", async listTools() { return buildTools(sql); } },
+const exampleToolProviders = (backend: ExampleBackend) => [
+  { id: "example.notes-tools", async listTools() { return buildTools(backend); } },
   /**
    * The MCP server's tools, arriving through the same registry as the first-party ones.
    *
@@ -231,21 +238,21 @@ const exampleToolProviders = (sql: SqlExecutor) => [
  * That the tracker is stateful and the resolver is not is worth stating rather than discovering: it is the one
  * place in this app where a factory must not be called twice.
  */
-const skillResolver = (sql: SqlExecutor) =>
-  createSkillResolver({ builtIn: EXAMPLE_SKILLS, store: createPostgresSkillStore(sql) });
+const skillResolver = (backend: ExampleBackend) =>
+  createSkillResolver({ builtIn: EXAMPLE_SKILLS, store: backend.skills });
 
 let trackerSingleton: ReturnType<typeof createRunSkillTracker> | undefined;
-const skillTracker = (sql: SqlExecutor) => {
-  trackerSingleton ??= createRunSkillTracker({ resolver: skillResolver(sql) });
+const skillTracker = (backend: ExampleBackend) => {
+  trackerSingleton ??= createRunSkillTracker({ resolver: skillResolver(backend) });
   return trackerSingleton;
 };
 
 /** The question service, for the `ask_user` tool. Built per call so it shares the caller's executor. */
-const questionServiceFor = (sql: SqlExecutor) =>
+const questionServiceFor = (backend: ExampleBackend) =>
   createQuestionService({
-    interactions: createPostgresInteractionStore(sql),
+    interactions: backend.interactions,
     dispatcher: createBullMqJobDispatcher(createBullMqRunQueue({ url: process.env["AGENTKIT_REDIS_URL"] ?? "" })),
-    runs: createPostgresRunStore(sql),
+    runs: backend.runs,
   });
 
 /**
@@ -256,10 +263,28 @@ const questionServiceFor = (sql: SqlExecutor) =>
  */
 const fetchUrl = createFetchUrl({});
 
-const buildTools = (sql: SqlExecutor): readonly Tool[] => {
-  const idempotency = createPostgresIdempotencyStore(sql);
+/**
+ * The tool registry, built from the shared providers — used by both the engine and the GraphQL surface.
+ *
+ * Exported because the memory composition needs one too, and the alternative was listing the providers again
+ * there. Two registries over the same providers is fine — a registry holds no state — but two *provider lists*
+ * would be two catalogues, and the one nobody looks at is the one that goes stale.
+ */
+export const exampleRegistry = (backend: ExampleBackend) =>
+  createToolRegistry({
+    providers: exampleToolProviders(backend),
+    authorization,
+    idempotency: backend.idempotency,
+    // The registry's own fail-closed check. Without it every `policy`/`always` tool is refused, however the
+    // envelope was configured — which is what made an approved share still fail (#162).
+    approval: approvalGateFor(backend),
+    onMisconfiguration: (report) => console.error(`[tools] ${JSON.stringify(report)}`),
+  });
 
-  const deps = { authorization, idempotency, approvals: approvalGateFor(sql) };
+const buildTools = (backend: ExampleBackend): readonly Tool[] => {
+  const idempotency = backend.idempotency;
+
+  const deps = { authorization, idempotency, approvals: approvalGateFor(backend) };
   const str = (v: unknown): string => String(v ?? "");
 
   return [
@@ -284,7 +309,7 @@ const buildTools = (sql: SqlExecutor): readonly Tool[] => {
        */
       delegate: async (input: unknown, context: ExecutionContext) => {
         const fact = str((input as { fact?: unknown }).fact);
-        const stored = await commitExtractedMemories(createPostgresPrincipalMemoryStore(sql), {
+        const stored = await commitExtractedMemories(backend.principalMemory, {
           tenantId: context.tenantId,
           principalId: context.principalId,
           candidates: [{ text: fact }],
@@ -312,7 +337,7 @@ const buildTools = (sql: SqlExecutor): readonly Tool[] => {
        */
       delegate: async (input: unknown, context: ExecutionContext) => {
         const about = str((input as { about?: unknown }).about);
-        const entries = await createPostgresPrincipalMemoryStore(sql).retrieve({
+        const entries = await backend.principalMemory.retrieve({
           tenantId: context.tenantId,
           principalId: context.principalId,
           ...(about === "" ? {} : { query: about }),
@@ -504,7 +529,7 @@ const buildTools = (sql: SqlExecutor): readonly Tool[] => {
         const specs = questionSpecsFrom(input);
         // An empty ask is a model mistake, not a question. Parking a run on nothing answerable would hang it.
         if (specs.length === 0) throw new Error("ask_user needs at least one question with a prompt");
-        const question = await questionServiceFor(sql).ask(context, context.runId as never, specs);
+        const question = await questionServiceFor(backend).ask(context, context.runId as never, specs);
         // Thrown, not returned. The engine reads the `question_pending` code, tells the model the run is
         // parked, and emits `question.requested` — which is what actually suspends it.
         throw questionPending(question);
@@ -538,7 +563,7 @@ const buildTools = (sql: SqlExecutor): readonly Tool[] => {
        */
       delegate: async (input: unknown, context: ExecutionContext) => {
         const name = str((input as { name?: unknown }).name);
-        const catalogue = await skillResolver(sql).listCatalog({
+        const catalogue = await skillResolver(backend).listCatalog({
           tenantId: context.tenantId,
           assigned: ASSIGNED_SKILLS,
           allowTenantSkills: true,
@@ -553,7 +578,7 @@ const buildTools = (sql: SqlExecutor): readonly Tool[] => {
             available: catalogue.map((e) => e.name),
           };
         }
-        const body = await skillTracker(sql).load({
+        const body = await skillTracker(backend).load({
           tenantId: String(context.tenantId),
           runId: String(context.runId ?? ""),
           name: entry.name,
@@ -637,7 +662,15 @@ const lazyCoordinator = (
 };
 
 const app = {
-  authenticate: createDevAuthenticate(),
+  /**
+   * Built on first use, not at import — #155 AC-7.
+   *
+   * Eager construction made the whole app module unimportable without the dev-auth flag, so a test or a second
+   * composition could not reach `composeEngine`. The "refuses to start" guarantee moved to
+   * `assertDevAuthEnabled`, which every runner calls before anything else — so the process still stops with a
+   * message that says what is missing, rather than serving one request and then failing.
+   */
+  authenticate: ((request: Request) => authenticateOnce()(request)) as Authenticate,
 
   /**
    * What the configured model costs, so recorded usage can carry a price — #166.
@@ -651,10 +684,19 @@ const app = {
   },
 
   deps({ config, sql, runner }: { config: AgentkitConfig; sql: SqlExecutor; runner?: TransactionRunner }): ResolverDeps {
-    const runs = createPostgresRunStore(sql);
-    const interactions = createPostgresInteractionStore(sql);
-    const grants = createPostgresApprovalGrantStore(sql);
-    const eventLog = createPostgresRunEventLog(sql);
+    /**
+     * The Postgres composition, assembled once — #155 AC-7.
+     *
+     * `deps` and `engine` used to build a dozen stores each from `sql`, which made the whole app module a
+     * Postgres application. Threading a bundle instead is what lets the single-process mode reuse *this* wiring
+     * rather than carry a copy — and a copy is how a difference creeps in unnoticed, which is the shape of both
+     * #157 and #161.
+     */
+    const backend = postgresBackend(sql, createRedisLiveEventSource(new Redis(config.redisUrl)), runner);
+    const runs = backend.runs;
+    const interactions = backend.interactions;
+    const grants = backend.grants;
+    const eventLog = backend.eventLog;
     /**
      * Subscribe over **Redis**, not in process (#161).
      *
@@ -676,12 +718,12 @@ const app = {
     const dispatcher = createBullMqJobDispatcher(queue);
 
     const registry = createToolRegistry({
-      providers: exampleToolProviders(sql),
+      providers: exampleToolProviders(backend),
       authorization,
-      idempotency: createPostgresIdempotencyStore(sql),
+      idempotency: backend.idempotency,
       // The registry's own fail-closed check. Without it every `policy`/`always` tool is refused, however the
       // envelope was configured — which is what made an approved share still fail.
-      approval: approvalGateFor(sql),
+      approval: approvalGateFor(backend),
       /**
        * #162, and this app is why it exists. Wiring only the envelope's gate left `share_note` refused with a
        * message identical to a legitimate "not approved", so the fix that changed nothing looked like a
@@ -746,19 +788,36 @@ const app = {
   },
 
   engine({ sql }: { config: AgentkitConfig; sql: SqlExecutor }) {
+    // The worker needs no realtime *source* and no coordinator, so both are absent rather than invented — see
+    // `lazyCoordinator` for why that used to be a Proxy.
+    return composeEngine(postgresBackend(sql, { subscribe: () => { throw new Error("the worker does not subscribe"); } } as never));
+  },
+
+  buildContext: (run: Run) => buildWorkerContext(run),
+};
+
+/**
+ * The agent, composed from ports — one wiring for both adapters (#155 AC-7).
+ *
+ * Everything below is adapter-agnostic: the manifest, the tools, the registry, the approval loop, the skills,
+ * the modes, the context providers. That is the claim ports-and-adapters makes, and this function is where it
+ * is finally load-bearing rather than asserted — the memory composition calls exactly this.
+ */
+export const composeEngine = (backend: ExampleBackend) => {
+  {
     const modes = createModeStore({
-      sessions: createPostgresSessionStateStore(sql),
-      grants: createPostgresApprovalGrantStore(sql),
+      sessions: backend.sessions,
+      grants: backend.grants,
     });
     const resolved = resolveExampleModel();
-    const interactions = createPostgresInteractionStore(sql);
+    const interactions = backend.interactions;
     const registry = createToolRegistry({
-      providers: exampleToolProviders(sql),
+      providers: exampleToolProviders(backend),
       authorization,
-      idempotency: createPostgresIdempotencyStore(sql),
+      idempotency: backend.idempotency,
       // The registry's own fail-closed check. Without it every `policy`/`always` tool is refused, however the
       // envelope was configured — which is what made an approved share still fail.
-      approval: approvalGateFor(sql),
+      approval: approvalGateFor(backend),
       /**
        * #162, and this app is why it exists. Wiring only the envelope's gate left `share_note` refused with a
        * message identical to a legitimate "not approved", so the fix that changed nothing looked like a
@@ -774,9 +833,9 @@ const app = {
       interactions,
       approvals: createApprovalService({
         interactions,
-        grants: createPostgresApprovalGrantStore(sql),
+        grants: backend.grants,
         dispatcher: createBullMqJobDispatcher(createBullMqRunQueue({ url: process.env["AGENTKIT_REDIS_URL"] ?? "" })),
-        runs: createPostgresRunStore(sql),
+        runs: backend.runs,
       }) as never,
       tools: registry as never,
     });
@@ -819,7 +878,7 @@ const app = {
         if (context.conversationId === undefined) return [];
         return historyForModel(
           await conversationTurns({
-            sql,
+            stores: backend,
             tenantId: String(context.tenantId),
             conversationId: String(context.conversationId),
             // The compacted form, which is what compaction is for. The page reads the full transcript.
@@ -897,7 +956,7 @@ const app = {
             tenantId: String(context.tenantId),
             conversationId: String(context.conversationId ?? ""),
           }),
-          sql,
+          backend,
         ),
       approvals,
       /**
@@ -907,7 +966,7 @@ const app = {
        * so the model asked again. Watched it happen in the browser — picked two options from the picker, the run
        * resumed, and the identical picker came back.
        */
-      questions: questionServiceFor(sql),
+      questions: questionServiceFor(backend),
       /**
        * Citations reach the message — #155 AC-5, via #165.
        *
@@ -918,9 +977,7 @@ const app = {
        */
       citations: createCitationEmitter({ authorization }),
     });
-  },
-
-  buildContext: (run: Run) => buildWorkerContext(run),
+  }
 };
 
 /** Assembled through `gatherSections` + `renderContextBlock`, so the untrusted envelope is not bypassed. */
@@ -928,7 +985,7 @@ const exampleSystemPrompt = async (
   manifest: AgentManifest,
   context: ExecutionContext,
   mode: ConversationMode,
-  sql: SqlExecutor,
+  backend: ExampleBackend,
 ): Promise<string> => {
   const { gatherSections, renderContextBlock, makeNonce } = await import("@agentkit/backend");
   const { randomBytes } = await import("node:crypto");
@@ -943,7 +1000,7 @@ const exampleSystemPrompt = async (
    */
   // The one shared list — see `./providers.ts`. A second list here would make `/api/context` a report about a
   // prompt the model never saw.
-  const sections = await gatherSections(context, exampleProviders(sql));
+  const sections = await gatherSections(context, exampleProviders(backend));
   /**
    * The mode instruction goes in the **prompt as well as** the catalogue.
    *
@@ -963,7 +1020,7 @@ const exampleSystemPrompt = async (
    * Resolved from the store on every turn rather than cached, so a skill added or archived takes effect on the
    * next turn. The version in the catalogue is what `load_skill` pins to.
    */
-  const catalogue = await skillResolver(sql).listCatalog({
+  const catalogue = await skillResolver(backend).listCatalog({
     tenantId: context.tenantId,
     assigned: ASSIGNED_SKILLS,
     allowTenantSkills: true,
@@ -984,7 +1041,7 @@ const exampleSystemPrompt = async (
    */
   const assembled = assemblePrompt({
     sections,
-    budget: EXAMPLE_CONTEXT_BUDGET,
+    budget: exampleContextBudget(),
     modelContextTokens: contextLimitFor(),
   });
   const block = renderContextBlock(assembled.sections, makeNonce((n) => randomBytes(n).toString("hex")));

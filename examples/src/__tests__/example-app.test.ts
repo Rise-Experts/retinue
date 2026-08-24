@@ -9,6 +9,9 @@ import { ASSIGNED_SKILLS, EXAMPLE_SKILLS, renderSkillCatalogue } from "../skills
 import { SKILL_LIMITS, classifyMcpTool, hashToolList, mcpToolName } from "@agentkit/backend";
 import { DOCS_MCP_EFFECTS, DOCS_MCP_SERVER_ID, DOCS_MCP_TOOLS, docsMcpConnection } from "../mcp.js";
 import { createFetchUrl, htmlToText } from "../fetch-url.js";
+import { createInProcessBus, createMemoryBackend } from "../memory-app.js";
+import { asExampleBackend } from "../memory-composition.js";
+import { exampleProviders } from "../providers.js";
 import {
   CONVERSATION_MODES,
   DEFAULT_MODE,
@@ -696,5 +699,90 @@ describe("fetch_url", () => {
     })("https://internal.example/status");
     expect(result.ok).toBe(true);
     expect(calls).toEqual(["https://internal.example/status"]);
+  });
+});
+
+/**
+ * One wiring, two adapters — #155 AC-7.
+ *
+ * The single-process mode exists so the example runs with nothing installed. The risk it introduces is a *second*
+ * composition that drifts from the first, and drift of exactly that shape is how #157 (an unwired message store)
+ * and #161 (a no-op publisher) survived: both worked in one arrangement and were broken in the other.
+ *
+ * So these assert the two share what they must, rather than that the memory mode "works" — which only running it
+ * can show.
+ */
+describe("the memory composition", () => {
+  it("supplies every port the app's backend bundle requires", () => {
+    /**
+     * The check that would have caught a real break in this refactor.
+     *
+     * `run-app.mjs` kept passing a `SqlExecutor` where `exampleProviders` had started expecting a backend, so
+     * `principalMemory` was `undefined` and compaction failed with
+     * `Cannot read properties of undefined (reading 'retrieve')`. It was *swallowed and logged*, because a failed
+     * compaction should not fail a turn — so the only symptom was compaction silently never running.
+     */
+    const mapped = asExampleBackend(createMemoryBackend());
+    for (const port of [
+      "conversations",
+      "messages",
+      "sessions",
+      "grants",
+      "summaries",
+      "rollups",
+      "limits",
+      "runs",
+      "eventLog",
+      "interactions",
+      "idempotency",
+      "principalMemory",
+      "skills",
+      "usage",
+      "coordinator",
+      "live",
+    ] as const) {
+      expect(mapped[port], `${port} must be supplied`).toBeDefined();
+    }
+  });
+
+  it("gives the memory composition the same context providers as the Postgres one", () => {
+    // Same list, same order: the prompt is assembled from it, and a mode whose prompt differs is a mode whose
+    // behaviour differs for reasons nobody chose.
+    const mapped = asExampleBackend(createMemoryBackend());
+    expect(exampleProviders(mapped).map((p) => p.id)).toEqual(["example.notes", "principal-memory"]);
+  });
+
+  it("returns one store instance, not a factory called twice", async () => {
+    /**
+     * The difference that matters between the two adapters. A Postgres factory closes over an executor and is
+     * safe to call repeatedly; a memory factory *is* the state, so calling it twice gives two empty worlds — and
+     * the symptom is a message that vanishes between being written and being read.
+     */
+    const backend = createMemoryBackend();
+    const a = asExampleBackend(backend);
+    const b = asExampleBackend(backend);
+    expect(a.messages).toBe(b.messages);
+    expect(a.principalMemory).toBe(b.principalMemory);
+  });
+
+  it("delivers a published event to a subscriber", async () => {
+    // The in-process bus stands in for Redis. Its queue is the part worth testing: an event published between
+    // two `next()` calls must not be dropped, which is the failure the Redis source's buffer also exists for.
+    const bus = createInProcessBus();
+    const iterator = bus.live.subscribe("c1")[Symbol.asyncIterator]();
+    await bus.publisher.publish("c1", { type: "run.started" });
+    const first = await iterator.next();
+    expect(first.value).toEqual({ type: "run.started" });
+    await iterator.return?.();
+  });
+
+  it("does not deliver one channel's events to another", async () => {
+    const bus = createInProcessBus();
+    const other = bus.live.subscribe("c2")[Symbol.asyncIterator]();
+    await bus.publisher.publish("c1", { type: "run.started" });
+    // Nothing queued for c2, so a read would block — asserted by racing a resolved promise rather than waiting.
+    const raced = await Promise.race([other.next(), Promise.resolve("nothing")]);
+    expect(raced).toBe("nothing");
+    await other.return?.();
   });
 });
