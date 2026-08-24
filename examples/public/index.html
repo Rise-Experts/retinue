@@ -189,6 +189,17 @@
   /* ---------------------------------------------------------------- context meter */
   /* Beside the send hint, not in a panel: how full the window is matters while you are typing into it. */
   .ctx { display:inline-flex; align-items:center; gap:6px; margin-right:8px; }
+  /**
+   * `hidden` has to be restored explicitly — #178.
+   *
+   * The attribute works through `[hidden] { display: none }` in the UA stylesheet, and any class rule that sets
+   * `display` outruns it on specificity. So `<span class="ctx" hidden>` rendered anyway: an empty meter with a
+   * filled track, showing as a stray blue bar next to the send hint on every fresh page.
+   *
+   * The element reported `hidden === true` the whole time, which is why it survived — the DOM said hidden and the
+   * screen said otherwise.
+   */
+  .ctx[hidden] { display:none; }
   .ctx-track { width:52px; height:4px; border-radius:2px; background:var(--line); overflow:hidden; }
   .ctx-fill { display:block; height:100%; background:var(--accent); transition:width .3s ease; }
   /* Warn only when it means something. A meter that is orange from the first turn is a meter people stop

@@ -34,7 +34,6 @@
  */
 
 import {
-  createAuthorizationPolicy,
   createDefaultEngine,
   createMemoryApprovalGrantStore,
   createMemoryCheckpointStore,
@@ -198,13 +197,6 @@ export const createInProcessWorker = (input: {
     pending: () => dispatcher.pending(),
   };
 };
-
-/** The roles, identical to the Postgres path — the authorization policy is not an adapter concern. */
-export const memoryAuthorization = (roles: readonly unknown[]) =>
-  createAuthorizationPolicy({
-    roles: roles as never,
-    audit: (event) => console.error(`[audit] ${event.kind} ${event.action} ${JSON.stringify(event.resource)}`),
-  });
 
 /** Re-exported so the runner does not need a second import of the platform. */
 export type { RunId, TenantId };

@@ -20,7 +20,14 @@
  */
 
 import { createMcpToolProvider, hashToolList, mcpToolName } from "@agentkit/backend";
-import type { McpClient, McpRemoteTool, McpServerConnection, McpToolProvider, TenantId } from "@agentkit/backend";
+import type {
+  ExecutionContext,
+  McpClient,
+  McpRemoteTool,
+  McpServerConnection,
+  McpToolProvider,
+  TenantId,
+} from "@agentkit/backend";
 
 /**
  * The documentation server this example connects to.
@@ -183,12 +190,53 @@ export const DOCS_MCP_TOOLS: readonly string[] = Object.keys(DOCS_MCP_EFFECTS).m
   mcpToolName(DOCS_MCP_SERVER_ID, name),
 );
 
-/** The provider, and the snapshot hash a run records so mid-run catalog drift is detectable afterwards. */
-export const createDocsMcpProvider = (tenantId: TenantId, client: McpClient): McpToolProvider =>
-  createMcpToolProvider({
-    connection: docsMcpConnection(tenantId),
-    client,
-    adminEffects: DOCS_MCP_EFFECTS,
-  });
+/**
+ * A tenant used only to read the platform's provider `id`, which is derived from the server id alone. Named
+ * so it cannot be mistaken for a real one if it ever surfaces.
+ */
+const IDENTITY_TENANT = "tenant-independent-identity" as TenantId;
+
+/**
+ * The provider, built **per request** from the caller's own tenant — #178.
+ *
+ * It used to take a tenant at construction, and the example passed a literal `"demo"`. The tools still worked,
+ * because a stdio client ignores the connection's tenant — but the connection *record* is tenant-scoped, so every
+ * other tenant's provider claimed to belong to `demo`. That is what `redactConnection` reports, what an
+ * `McpConnectionStore` registration would be filed under, and what an audit trail would attribute the import to:
+ * a cross-tenant mislabelling that happens to be inert until something reads it.
+ *
+ * `ToolProvider.listTools(context)` and `snapshot(context)` both receive the execution context, so the tenant is
+ * available at exactly the moment it is needed. Constructing there costs an object per call and removes the
+ * question entirely.
+ *
+ * The `id` stays constant across tenants, deliberately: it forms the namespaced tool names, and a per-tenant id
+ * would make `mcp__agentkit-docs__read_document` a different tool for every tenant — so a role grant would have
+ * to name each one.
+ */
+/**
+ * The example's provider. `connectionFor` is the point of the type: the connection record is what a host
+ * registers in an `McpConnectionStore`, what `redactConnection` renders, and what an audit trail attributes an
+ * import to — so the tenant on it has to be observable, or "the provider uses the caller's tenant" is a claim no
+ * test can check. That is exactly how #178 stayed invisible.
+ */
+export interface DocsMcpProvider extends McpToolProvider {
+  connectionFor(context: ExecutionContext): McpServerConnection;
+}
+
+export const createDocsMcpProvider = (client: McpClient): DocsMcpProvider => {
+  const connectionFor = (context: ExecutionContext) => docsMcpConnection(context.tenantId);
+  const forContext = (context: ExecutionContext) =>
+    createMcpToolProvider({ connection: connectionFor(context), client, adminEffects: DOCS_MCP_EFFECTS });
+
+  return {
+    // Identity comes from the platform's own derivation over a tenant-independent connection id, rather than a
+    // second copy of the `mcp:` format written out here.
+    id: createMcpToolProvider({ connection: docsMcpConnection(IDENTITY_TENANT), client }).id,
+    connectionId: DOCS_MCP_SERVER_ID,
+    connectionFor,
+    listTools: (context) => forContext(context).listTools(context),
+    snapshot: (context) => forContext(context).snapshot(context),
+  };
+};
 
 export { hashToolList };

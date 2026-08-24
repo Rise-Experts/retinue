@@ -87,6 +87,42 @@ export type ExampleBackend = ExampleStores & {
   readonly live: LiveEventSource;
 };
 
+/**
+ * The coordinator, built only if something asks for it.
+ *
+ * Two facts collide. `claimOrEnqueue` takes the conversation's run slot `FOR UPDATE`, so it needs a real
+ * `TransactionRunner`. And the platform's `runWorker` calls `app.deps({ config, sql })` with no runner — because
+ * **the worker never uses the coordinator**: it reads `deps.runs` and `deps.eventLog` and nothing else. Admission
+ * is the API's job.
+ *
+ * So `deps()` cannot require a runner, and must not silently accept `undefined` either: the first version passed
+ * `undefined as never` and the first real request died on `Cannot read properties of undefined (reading
+ * 'transaction')`. Build lazily, and let the *use* fail with a message naming the missing piece. The API supplies
+ * one and works; the worker does not and never notices.
+ */
+export const lazyCoordinator = (
+  sql: SqlExecutor,
+  runner: TransactionRunner | undefined,
+): ConversationRunCoordinator => {
+  const build = (): ConversationRunCoordinator => {
+    if (runner === undefined)
+      throw new Error(
+        "this process has no TransactionRunner, so the conversation run coordinator cannot be used. The API " +
+          "host supplies one; the worker does not, and does not need it.",
+      );
+    return createPostgresConversationRunCoordinator(sql, runner);
+  };
+  // A proxy rather than an object of getters, so every method — present and future — is covered by one decision.
+  // Enumerating them would mean a method added later silently returning undefined.
+  return new Proxy({} as ConversationRunCoordinator, {
+    get: (_target, property) => {
+      const built = build() as unknown as Record<string | symbol, unknown>;
+      const value = built[property];
+      return typeof value === "function" ? (value as (...a: unknown[]) => unknown).bind(built) : value;
+    },
+  });
+};
+
 export const postgresBackend = (
   sql: SqlExecutor,
   live: LiveEventSource,
@@ -108,7 +144,19 @@ export const postgresBackend = (
   principalMemory: createPostgresPrincipalMemoryStore(sql),
   skills: createPostgresSkillStore(sql),
   usage: createPostgresUsageStore(sql),
-  coordinator: createPostgresConversationRunCoordinator(sql, runner as TransactionRunner),
+  /**
+   * The **lazy** coordinator, not an eager one — #178.
+   *
+   * This built it eagerly with `runner as TransactionRunner`, which meant the worker — which is handed no runner
+   * and never uses the coordinator — held one constructed over `undefined`. Inert only for as long as nothing in
+   * the worker touched it, and the failure would have been
+   * `Cannot read properties of undefined (reading 'transaction')` from somewhere that looks unrelated.
+   *
+   * It also left two coordinators in the API process: this one and the lazy one `deps()` built separately. Two
+   * handles on one slot table is the kind of thing that reads fine until one path claims through one and another
+   * releases through the other.
+   */
+  coordinator: lazyCoordinator(sql, runner),
   live,
 });
 

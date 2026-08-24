@@ -188,3 +188,29 @@ platform rather than here, and every one is fixed — see the issues for detail.
    questions had none, so an answered question was invisible to the run that asked it and the model asked
    again. Both were watched happening in the browser: an empty text box where the picker should be, then the
    identical picker returning after answering it.
+
+Nine platform defects, and the list above stops there deliberately — #164 onward were found the same way but by
+then the app had grown enough to be worth suspecting itself.
+
+### And things this app got wrong (#178)
+
+Worth recording separately, because all four are the same shape: **correct-looking state that nothing could
+observe**, which is why none of them failed a test.
+
+- **The docs MCP provider was built with a literal tenant.** Every other tenant's connection record claimed to
+  belong to `demo`. Inert — a stdio client ignores it — until an `McpConnectionStore` registration, a
+  `redactConnection` render or an audit trail reads it. The first test written for the fix asserted
+  `connectionId` was stable across tenants and **passed against the bug**, because the connection *id* never
+  depended on the tenant. The provider now exposes `connectionFor(context)` so the tenant is observable at all.
+- **The provider `id` was a hand-written copy of the platform's `mcp:` format.** Now taken from the platform's
+  own derivation and pinned by a test.
+- **`postgresBackend` built the run coordinator eagerly** with `runner as TransactionRunner`, so the worker —
+  handed no runner, and never using the coordinator — held one constructed over `undefined`. It also left the
+  API process with two coordinators on one run-slot table. Both processes now share the lazy one, which fails at
+  *use* with a message naming the missing piece.
+- **`.ctx { display:inline-flex }` outran the `hidden` attribute.** `[hidden] { display: none }` is a UA rule,
+  so any class that sets `display` beats it: an empty context meter rendered as a stray bar on every fresh page
+  while the element reported `hidden === true`. The DOM said hidden and the screen said otherwise.
+
+`memoryAuthorization` was also removed — an exported policy builder nothing called, kept alive only by an import
+`tsc` had no reason to complain about (`noUnusedLocals` is not set).

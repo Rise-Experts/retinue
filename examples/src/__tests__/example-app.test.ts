@@ -7,11 +7,13 @@ import { questionSpecsFrom } from "../questions.js";
 import { buildWorkerContext } from "../worker-context.js";
 import { ASSIGNED_SKILLS, EXAMPLE_SKILLS, renderSkillCatalogue } from "../skills.js";
 import { SKILL_LIMITS, classifyMcpTool, hashToolList, mcpToolName } from "@agentkit/backend";
-import { DOCS_MCP_EFFECTS, DOCS_MCP_SERVER_ID, DOCS_MCP_TOOLS, docsMcpConnection } from "../mcp.js";
+import { DOCS_MCP_EFFECTS, DOCS_MCP_SERVER_ID, DOCS_MCP_TOOLS, createDocsMcpProvider, docsMcpConnection } from "../mcp.js";
 import { createFetchUrl, htmlToText } from "../fetch-url.js";
+import { createMcpToolProvider } from "@agentkit/backend";
 import { createInProcessBus, createMemoryBackend } from "../memory-app.js";
 import { asExampleBackend } from "../memory-composition.js";
 import { exampleProviders } from "../providers.js";
+import { postgresBackend } from "../stores.js";
 import {
   CONVERSATION_MODES,
   DEFAULT_MODE,
@@ -524,6 +526,42 @@ describe("the MCP bridge", () => {
     expect(granted.has(mcpToolName(DOCS_MCP_SERVER_ID, "delete_everything"))).toBe(false);
   });
 
+  it("takes the tenant from the request, not from construction", async () => {
+    /**
+     * #178. The provider used to be built with a tenant, and the example passed a literal `"demo"` — so every
+     * other tenant's connection record claimed to belong to that one. The tools still worked, because a stdio
+     * client ignores the connection's tenant, which is what made it invisible: an inert mislabelling until
+     * something read it, and `redactConnection`, an `McpConnectionStore` registration and an audit trail all do.
+     *
+     * The first version of this test asserted `snapshot().connectionId` was stable across tenants — which it
+     * was, before and after, because the connection *id* never depended on the tenant. It passed against the
+     * bug. The tenant has to be read off the connection record itself, which is why `connectionFor` exists.
+     */
+    const client = { async listTools() { return []; }, async callTool() { return {}; } };
+    const provider = createDocsMcpProvider(client);
+    const context = (tenantId: string) =>
+      ({ tenantId, principalId: "p", roleIds: [], locale: "en", timezone: "UTC", requestId: "r" }) as never;
+
+    expect(provider.connectionFor(context("t1")).tenantId).toBe("t1");
+    expect(provider.connectionFor(context("t2")).tenantId).toBe("t2");
+
+    // The connection id is deliberately stable across tenants — it forms the namespaced tool names, and a
+    // per-tenant id would make `mcp__agentkit-docs__read_document` a different tool for each one.
+    const ids = [];
+    for (const tenantId of ["t1", "t2"]) ids.push((await provider.snapshot(context(tenantId))).connectionId);
+    expect(ids).toEqual([DOCS_MCP_SERVER_ID, DOCS_MCP_SERVER_ID]);
+  });
+
+  it("takes its provider id from the platform rather than restating the mcp: format", () => {
+    // The example builds `id` itself, so it holds a copy of a format the platform owns. Pin the copy against
+    // the platform's own derivation: a change to the prefix should fail here, not namespace tools wrongly.
+    const client = { async listTools() { return []; }, async callTool() { return {}; } };
+    const provider = createDocsMcpProvider(client);
+    const platform = createMcpToolProvider({ connection: docsMcpConnection("t1" as never), client });
+    expect(provider.id).toBe(platform.id);
+    expect(provider.connectionId).toBe(platform.connectionId);
+  });
+
   it("records the connection without a credential", () => {
     // A connection record must never hold a secret — only a reference something else resolves. True here even
     // though a local process needs none, because the shape is what stops the next server leaking one.
@@ -743,6 +781,20 @@ describe("the memory composition", () => {
     ] as const) {
       expect(mapped[port], `${port} must be supplied`).toBeDefined();
     }
+  });
+
+  it("builds the worker's coordinator lazily, so a runner-less process fails at use and says why (#178)", () => {
+    // The worker is handed no `TransactionRunner` and never uses the coordinator. `postgresBackend` used to
+    // build one eagerly with `runner as TransactionRunner`, so the worker held a coordinator constructed over
+    // `undefined`: inert only while nothing touched it, and the eventual failure would have read
+    // `Cannot read properties of undefined (reading 'transaction')` from a place that looks unrelated.
+    const sql = (() => { throw new Error("no query should be issued"); }) as unknown as SqlExecutor;
+    const backend = postgresBackend(sql, { subscribe: () => { throw new Error("unused"); } } as never);
+
+    // Construction is silent — that is the point, the worker's `deps()` must not throw.
+    expect(backend.coordinator).toBeDefined();
+    // Use names the missing piece.
+    expect(() => backend.coordinator.claimOrEnqueue).toThrow(/TransactionRunner/);
   });
 
   it("gives the memory composition the same context providers as the Postgres one", () => {

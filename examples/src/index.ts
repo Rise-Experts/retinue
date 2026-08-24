@@ -26,7 +26,6 @@ import {
   createRedisLiveEventSource,
   EMPTY_RUN_STREAM_STATE,
   createPostgresApprovalGrantStore,
-  createPostgresConversationRunCoordinator,
   createPostgresIdempotencyStore,
   createPostgresInteractionStore,
   createPostgresPrincipalMemoryStore,
@@ -224,7 +223,8 @@ const exampleToolProviders = (backend: ExampleBackend) => [
    * idempotency keys and the audit trail, rather than sitting beside them with its own rules. It is namespaced
    * `mcp__agentkit-docs__*`, so a remote server cannot shadow `share_note` by naming its own tool that.
    */
-  createDocsMcpProvider(asId("demo"), exampleMcpClient()),
+  // No tenant here: the provider reads it from each request's context (#178).
+  createDocsMcpProvider(exampleMcpClient()),
 ];
 
 /**
@@ -625,41 +625,7 @@ const buildTools = (backend: ExampleBackend): readonly Tool[] => {
   ];
 };
 
-/**
- * The coordinator, built only if something asks for it.
- *
- * Two facts collide. `claimOrEnqueue` takes the conversation's run slot `FOR UPDATE`, so it needs a real
- * `TransactionRunner`. And the platform's `runWorker` calls `app.deps({ config, sql })` with no runner — because
- * **the worker never uses the coordinator**: it reads `deps.runs` and `deps.eventLog` and nothing else. Admission
- * is the API's job.
- *
- * So `deps()` cannot require a runner, and must not silently accept `undefined` either: the first version passed
- * `undefined as never` and the first real request died on `Cannot read properties of undefined (reading
- * 'transaction')`. Build lazily, and let the *use* fail with a message naming the missing piece. The API supplies
- * one and works; the worker does not and never notices.
- */
-const lazyCoordinator = (
-  sql: SqlExecutor,
-  runner: TransactionRunner | undefined,
-): ResolverDeps["coordinator"] => {
-  const build = (): ResolverDeps["coordinator"] => {
-    if (runner === undefined)
-      throw new Error(
-        "this process has no TransactionRunner, so the conversation run coordinator cannot be used. The API " +
-          "host supplies one; the worker does not, and does not need it.",
-      );
-    return createPostgresConversationRunCoordinator(sql, runner);
-  };
-  // A proxy rather than an object of getters, so every method — present and future — is covered by one decision.
-  // Enumerating them would mean a method added later silently returning undefined.
-  return new Proxy({} as ResolverDeps["coordinator"], {
-    get: (_target, property) => {
-      const built = build() as unknown as Record<string | symbol, unknown>;
-      const value = built[property];
-      return typeof value === "function" ? (value as (...a: unknown[]) => unknown).bind(built) : value;
-    },
-  });
-};
+
 
 const app = {
   /**
@@ -779,8 +745,9 @@ const app = {
       // `waiting-for-approval`, which `claim` will not accept — the bug the #144 load harness found.
       questions: createQuestionService({ interactions, dispatcher, runs }),
       approvals: createApprovalService({ interactions, grants, dispatcher, runs }),
-      // Lazy: the worker gets no runner and never uses this. See `lazyCoordinator`.
-      coordinator: lazyCoordinator(sql, runner),
+      // One coordinator for the process, from the backend, and it is the lazy one — see `lazyCoordinator` in
+      // `stores.ts`. Building a second one here meant two handles on the same run-slot table.
+      coordinator: backend.coordinator,
       dispatcher,
       eventLog,
       live,
@@ -788,8 +755,8 @@ const app = {
   },
 
   engine({ sql }: { config: AgentkitConfig; sql: SqlExecutor }) {
-    // The worker needs no realtime *source* and no coordinator, so both are absent rather than invented — see
-    // `lazyCoordinator` for why that used to be a Proxy.
+    // The worker needs no realtime *source*, so it is absent rather than invented. It also gets no
+    // `TransactionRunner`, which is why the backend's coordinator has to be the lazy one — see `stores.ts`.
     return composeEngine(postgresBackend(sql, { subscribe: () => { throw new Error("the worker does not subscribe"); } } as never));
   },
 
