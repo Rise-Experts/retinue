@@ -71,13 +71,19 @@ const decodeCursor = (cursor: string): { c: string; i: string } =>
 
 export const createPostgresMessageStore = (
   sql: SqlExecutor,
-): MessageStore & { append(tenantId: string, message: Message): Promise<void> } => ({
+): MessageStore => ({
   /**
-   * Beyond the read-only port, mirroring the in-memory adapter's test-only affordance. Messages are
-   * immutable once written — there is deliberately no update path, since editing one would rewrite
-   * history a client has already streamed.
+   * On the port as of #157, no longer a "test-only affordance".
+   *
+   * The signature changed from `(tenantId, message)` to the object form every other port method uses — a
+   * positional pair was the shape a test-only helper could get away with, and it is the wrong shape for
+   * something callers depend on.
+   *
+   * Messages stay immutable: `DO NOTHING` on conflict, no update, no delete. Editing one would rewrite history a
+   * client has already streamed and a model has already been shown, and a repeat of the same id is a retry
+   * rather than an error.
    */
-  async append(tenantId, message) {
+  async append({ tenantId, message }) {
     await sql.query(
       `INSERT INTO messages (tenant_id, id, conversation_id, run_id, role, parts, created_at)
        VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::timestamptz)

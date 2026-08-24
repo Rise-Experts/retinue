@@ -19,11 +19,12 @@
  */
 
 import type { ExecutionContext } from "../core/context.js";
-import { AgentPlatformError } from "../core/errors.js";
-import type { InteractionId, MessageId, MessagePartId, ToolCallId } from "../core/ids.js";
+import { AgentPlatformError, isAgentPlatformError } from "../core/errors.js";
+import type { InteractionId, MessageId, MessagePartId, RunId, TenantId, ToolCallId } from "../core/ids.js";
 import { asId } from "../core/ids.js";
 import type { MessagePart, TextPart, ToolCallPart, ToolResultPart } from "../core/content-parts.js";
 import type {
+  ModelDefinition,
   ModelTurnRequest,
   ModelTurnTool,
   NeutralStreamChunk,
@@ -43,7 +44,8 @@ import {
   type RetryPolicy,
   type Run,
 } from "../runtime/index.js";
-import type { RunApprovals } from "../hitl/index.js";
+import type { PendingQuestion, RunApprovals } from "../hitl/index.js";
+import { isQuestionPending } from "../hitl/service.js";
 import type { AgentManifest } from "./index.js";
 
 /** A model resolved for a turn: the opaque handle plus what the engine needs to attribute usage. */
@@ -53,6 +55,13 @@ export type ResolvedModelInfo = {
   readonly currency?: string;
   /** Optional cost function (minor units) from the model's pricing, used to bill each turn. */
   readonly price?: (usage: NeutralUsage) => number;
+  /**
+   * The definition this model resolved from, so its declared limits can actually be applied (#160).
+   *
+   * Optional for compatibility with existing resolvers, and absent means "no declared ceiling" rather than
+   * "unbounded by policy" — the agent's own limit still applies.
+   */
+  readonly definition?: ModelDefinition;
 };
 
 export type DefaultEngineDeps = {
@@ -75,6 +84,16 @@ export type DefaultEngineDeps = {
    * pause on.
    */
   readonly approvals?: RunApprovals;
+  /**
+   * The question side of resumption — #163.
+   *
+   * Optional and symmetrical with `approvals`. Without it a run that parked on a question resumes with no idea
+   * it was answered, and the model asks the same question again — the person picks an option and gets the
+   * picker back. `approvals` has had a resume path from the start; this is the half that was missing.
+   */
+  readonly questions?: {
+    answered(input: { tenantId: TenantId; runId: RunId }): Promise<PendingQuestion | null>;
+  };
   readonly retry?: RetryPolicy;
   readonly sleep?: (ms: number) => Promise<void>;
   readonly now?: () => number;
@@ -83,6 +102,41 @@ export type DefaultEngineDeps = {
 };
 
 const defaultSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/**
+ * Recognise a parked question in whatever shape it reached us — #163.
+ *
+ * A tool's throw arrives as an `AgentPlatformError` when nothing is between the engine and the tool, and as a
+ * flattened `PlatformError` when the registry caught it. One reader for both, so the two paths cannot come to
+ * disagree about what a parked question looks like.
+ *
+ * Returns `null` for anything else, which the caller rethrows — a question is the one refusal that is not a
+ * failure, and everything else must stay one.
+ */
+const questionMarker = (
+  thrown: unknown,
+  toolName: string,
+): { readonly interactionId: string; readonly marker: Record<string, unknown> } | null => {
+  const error = isAgentPlatformError(thrown)
+    ? { code: thrown.code, details: thrown.details }
+    : typeof thrown === "object" && thrown !== null && "code" in thrown
+      ? (thrown as { code: string; details?: Record<string, unknown> })
+      : null;
+  if (error === null || !isQuestionPending(error)) return null;
+  const interactionId = error.details?.["interactionId"];
+  // No id means no way to route the answer back, so it is a broken signal rather than a parked run. Rethrown
+  // as an ordinary failure: parking a run nobody can ever un-park is the worse outcome.
+  if (typeof interactionId !== "string" || interactionId === "") return null;
+  return {
+    interactionId,
+    // Returned to the model in place of a result, mirroring the approval marker exactly.
+    marker: {
+      status: "question_pending",
+      interactionId,
+      message: `${toolName} has put a question to the person. The run is paused; do not retry or guess an answer.`,
+    },
+  };
+};
 
 export const createDefaultEngine = (deps: DefaultEngineDeps): AgentEngine => {
   const policy = deps.retry ?? DEFAULT_RETRY_POLICY;
@@ -108,6 +162,12 @@ export const createDefaultEngine = (deps: DefaultEngineDeps): AgentEngine => {
         const resumed = await deps.approvals.resume(context, run.id);
         for (const event of approvalEvents(resumed, messageId, messages)) yield event;
       }
+      // The answer to a question this run asked, if it was parked on one. Same shape as the approval
+      // resumption above: an event for the durable record, and a history line so the model stops asking.
+      if (deps.questions) {
+        const answered = await deps.questions.answered({ tenantId: context.tenantId, runId: run.id });
+        for (const event of questionEvents(answered, messages)) yield event;
+      }
 
       /**
        * The tools the model may call, with execution routed through the approval loop.
@@ -117,29 +177,62 @@ export const createDefaultEngine = (deps: DefaultEngineDeps): AgentEngine => {
        * exists to prevent.
        */
       let pendingApproval: string | null = null;
+      /**
+       * A question a tool put to a person this turn — #163.
+       *
+       * Tracked exactly like `pendingApproval`, and for the same reason: the run has to stop, and it has to
+       * stop on an *event* the worker understands rather than on an error the model would try to work around.
+       * Before this, `question.requested` was in the event union and handled by the worker, and no code path in
+       * the platform could produce one — so a tool that raised a question had it stored durably while the run
+       * carried on and completed. The person's answer arrived for a run that was already over.
+       */
+      let pendingQuestion: string | null = null;
       const approvals = deps.approvals;
-      const tools: readonly ModelTurnTool[] = approvals
-        ? declared.map((t) => ({
-            ...t,
-            execute: async (input: unknown) => {
-              const outcome = await approvals.runTool(context, run.id, { name: t.name, input });
-              if (outcome.outcome === "approval-requested") {
-                pendingApproval = outcome.approval.id;
-                // Returned to the model, not thrown. The tool call is a real part of the record with a
-                // real result, and the run pauses on the event below rather than on an error the model
-                // would try to work around.
-                return {
-                  status: "approval_required",
-                  interactionId: outcome.approval.id,
-                  summary: outcome.approval.summary,
-                  message: `${t.name} needs human approval before it can run. The run is paused; do not retry.`,
-                };
-              }
-              if (!outcome.result.ok) throw new AgentPlatformError(outcome.result.error);
-              return outcome.result.data;
-            },
-          }))
-        : declared;
+      /**
+       * Every tool is wrapped, whether or not an approval gate is configured.
+       *
+       * This used to wrap only when `deps.approvals` was set, which meant a deployment with no gate had no
+       * interception point at all — and a question raised by one of its tools could not be noticed. The gate
+       * decides *approvals*; parking a run on a question is not its business.
+       */
+      const tools: readonly ModelTurnTool[] = declared.map((t) => ({
+        ...t,
+        execute: async (input: unknown) => {
+          if (approvals === undefined) {
+            try {
+              return await t.execute(input);
+            } catch (thrown) {
+              const parked = questionMarker(thrown, t.name);
+              if (parked === null) throw thrown;
+              pendingQuestion = parked.interactionId;
+              return parked.marker;
+            }
+          }
+          const outcome = await approvals.runTool(context, run.id, { name: t.name, input });
+          if (outcome.outcome === "approval-requested") {
+            pendingApproval = outcome.approval.id;
+            // Returned to the model, not thrown. The tool call is a real part of the record with a
+            // real result, and the run pauses on the event below rather than on an error the model
+            // would try to work around.
+            return {
+              status: "approval_required",
+              interactionId: outcome.approval.id,
+              summary: outcome.approval.summary,
+              message: `${t.name} needs human approval before it can run. The run is paused; do not retry.`,
+            };
+          }
+          if (!outcome.result.ok) {
+            // The registry flattens a delegate's throw into a result, so the question arrives here as a code.
+            const parked = questionMarker(outcome.result.error, t.name);
+            if (parked !== null) {
+              pendingQuestion = parked.interactionId;
+              return parked.marker;
+            }
+            throw new AgentPlatformError(outcome.result.error);
+          }
+          return outcome.result.data;
+        },
+      }));
 
       let attempt = 1;
       for (;;) {
@@ -147,7 +240,31 @@ export const createDefaultEngine = (deps: DefaultEngineDeps): AgentEngine => {
         const textParts = new Map<string, { partId: MessagePartId; text: string }>();
         const controller = new AbortController();
         try {
-          const chunks = streamTurn({ model: resolved.model, ...(system ? { system } : {}), messages, tools, maxSteps, abortSignal: controller.signal });
+          /**
+           * Generation parameters, from the resolved definition with the agent as a **ceiling-respecting**
+           * override (#160).
+           *
+           * `maxOutputTokens` takes the *lower* of what the agent asks for and what the model's definition
+           * allows — otherwise the definition's limit still would not be a limit, only a default an agent could
+           * raise. That was the substance of the bug: the field existed, was set deliberately per model, and
+           * bounded nothing.
+           */
+          const limit = ((): number | undefined => {
+            const declared = resolved.definition?.limits?.maxOutputTokens;
+            const asked = manifest.limits?.maxOutputTokens;
+            if (declared === undefined) return asked;
+            return asked === undefined ? declared : Math.min(asked, declared);
+          })();
+          const chunks = streamTurn({
+            model: resolved.model,
+            ...(system ? { system } : {}),
+            messages,
+            tools,
+            maxSteps,
+            abortSignal: controller.signal,
+            ...(limit === undefined ? {} : { maxOutputTokens: limit }),
+            ...(manifest.limits?.temperature === undefined ? {} : { temperature: manifest.limits.temperature }),
+          });
           for await (const chunk of chunks) {
             if (signal.isCancelled()) {
               controller.abort();
@@ -162,6 +279,14 @@ export const createDefaultEngine = (deps: DefaultEngineDeps): AgentEngine => {
             if (pendingApproval !== null) {
               controller.abort();
               yield { type: "approval.requested", interactionId: asId<InteractionId>(pendingApproval) };
+              return;
+            }
+            // The same stop, for a question rather than an approval. Checked separately rather than folded into
+            // one flag so the emitted event says which kind of answer the run is waiting for — the worker parks
+            // it in `waiting-for-question` or `waiting-for-approval` accordingly, and those resume differently.
+            if (pendingQuestion !== null) {
+              controller.abort();
+              yield { type: "question.requested", interactionId: asId<InteractionId>(pendingQuestion) };
               return;
             }
           }
@@ -185,6 +310,36 @@ export const createDefaultEngine = (deps: DefaultEngineDeps): AgentEngine => {
     },
   };
 };
+
+/**
+ * Turn an answered question into the event and the history line it deserves — #163.
+ *
+ * Deliberately the same shape as `approvalEvents`, for the same reason it exists: the executed call is stored
+ * as run *parts* and `loadHistory` reads conversation *messages*, so without a line here the model resumes
+ * knowing nothing. For a question the consequence was sharper than for an approval — it asked again, so the
+ * person answered, and got the same picker back.
+ *
+ * A `user`-role note, matching the approval line: a mid-conversation `system` message is handled
+ * inconsistently across providers, and this is not an instruction — it is the person's answer.
+ */
+function* questionEvents(
+  answered: PendingQuestion | null,
+  messages: TurnMessage[],
+): Generator<EngineEvent> {
+  if (answered === null || answered.answers === undefined) return;
+  yield { type: "question.answered", interactionId: answered.id };
+  for (const spec of answered.questions) {
+    const value = answered.answers[spec.key];
+    if (value === undefined) continue;
+    // An array is rendered as a list rather than joined blind: a multi-select answer whose values contain
+    // commas would otherwise read as more choices than were made.
+    const rendered = Array.isArray(value) ? value.map((v) => `- ${v}`).join("\n") : String(value);
+    messages.push({
+      role: "user",
+      text: `[answer] ${spec.prompt}\n${rendered}`,
+    });
+  }
+}
 
 /**
  * Turn a resumption outcome into the events and the history line it deserves.

@@ -14,7 +14,8 @@ import { describe, expect, it } from "vitest";
 import { withConversation, type FixtureOrStore } from "./parents.js";
 import { asId } from "../../core/ids.js";
 import type {
-  BlobRef, MessageId, PrincipalId, RunId, TenantId, ToolCallId } from "../../core/ids.js";
+  BlobRef, MessageId, MessagePartId, PrincipalId, RunId, TenantId, ToolCallId } from "../../core/ids.js";
+import type { Message } from "../../core/content-parts.js";
 import type {
   AgentStore,
   BlobStore,
@@ -33,15 +34,45 @@ const P2 = asId<PrincipalId>("conf-principal-2");
 const RUN = asId<RunId>("conf-run-1");
 const C1 = asId<ConversationId>("conf-convo-1");
 
-export function messageStoreConformance(
-  makeFixture: () => FixtureOrStore<MessageStore>,
-  seed: (store: MessageStore, input: { tenantId: TenantId; conversationId: ConversationId; count: number }) => Promise<void>,
-): void {
-  // A message references a conversation, and Postgres enforces that with a foreign key (#96). The
-  // seed callback only receives the store, so it cannot create the parent itself — the fixture's
-  // `seedConversation` does, sharing the adapter's executor. See ./parents.ts.
+export function messageStoreConformance(makeFixture: () => FixtureOrStore<MessageStore>): void {
+  // A message references a conversation, and Postgres enforces that with a foreign key (#96) — the
+  // fixture's `seedConversation` creates the parent through the adapter's own executor. See ./parents.ts.
   const open = (conversationId: ConversationId = C1) =>
     withConversation(makeFixture(), [{ tenantId: T1, conversationId }]);
+
+  /**
+   * Seeding goes through the port as of #157. It used to be a callback each adapter test supplied, because
+   * `append` was a "test-only affordance" off the port with a positional signature — so all three adapter tests
+   * carried their own cast and their own copy of this loop, free to diverge on the very shapes the suite is
+   * supposed to be pinning down. The Postgres copy seeded `role: "user"` with a text part; the memory copy
+   * seeded `role: "assistant"` with none. The parts round-trip test below therefore proved nothing about the
+   * memory adapter: it asserted `Array.isArray(parts)`, and `[]` is an array.
+   */
+  const seed = async (
+    store: MessageStore,
+    { tenantId, conversationId, count }: { tenantId: TenantId; conversationId: ConversationId; count: number },
+  ): Promise<void> => {
+    for (let n = 0; n < count; n += 1) {
+      await store.append({ tenantId, message: message(conversationId, n) });
+    }
+  };
+
+  const message = (conversationId: ConversationId, n: number, id = `m${n}`): Message => ({
+    id: asId<MessageId>(id),
+    conversationId,
+    runId: RUN,
+    role: n % 2 === 0 ? "user" : "assistant",
+    parts: [
+      {
+        id: asId<MessagePartId>(`p${n}`),
+        type: "text",
+        schemaVersion: 1,
+        createdAt: `2020-01-01T00:00:${String(n).padStart(2, "0")}.000Z`,
+        text: `message ${n}`,
+      },
+    ],
+    createdAt: `2020-01-01T00:00:${String(n).padStart(2, "0")}.000Z`,
+  });
 
   describe("MessageStore conformance", () => {
     it("returns null for an unknown id", async () => {
@@ -49,11 +80,20 @@ export function messageStoreConformance(
       expect(await store.findById({ tenantId: T1, id: asId<MessageId>("nope") })).toBeNull();
     });
 
+    it("reads back an appended message by id", async () => {
+      const store = await open();
+      await store.append({ tenantId: T1, message: message(C1, 0) });
+      const found = await store.findById({ tenantId: T1, id: asId<MessageId>("m0") });
+      expect(found?.id).toBe("m0");
+      expect(found?.role).toBe("user");
+    });
+
     it("lists a conversation's messages in order", async () => {
       const store = await open();
       await seed(store, { tenantId: T1, conversationId: C1, count: 3 });
       const page = await store.listByConversation({ tenantId: T1, conversationId: C1, limit: 10 });
       expect(page.items).toHaveLength(3);
+      expect(page.items.map((m) => m.id)).toEqual(["m0", "m1", "m2"]);
     });
 
     it("pages by stable cursor with no overlap between pages", async () => {
@@ -76,9 +116,34 @@ export function messageStoreConformance(
       const store = await open();
       await seed(store, { tenantId: T1, conversationId: C1, count: 1 });
       const page = await store.listByConversation({ tenantId: T1, conversationId: C1, limit: 1 });
-      const message = page.items[0];
-      expect(message).toBeDefined();
-      expect(Array.isArray(message?.parts)).toBe(true);
+      const part = page.items[0]?.parts[0];
+      expect(part?.type).toBe("text");
+      expect(part).toMatchObject({ id: "p0", schemaVersion: 1, text: "message 0" });
+    });
+
+    /**
+     * A retried request must neither fail nor duplicate. #157 put `append` on the port, and a caller that
+     * retries — the same user turn re-submitted after a dropped connection — carries the same message id;
+     * a second row would show the user their own message twice and feed the model a doubled turn.
+     */
+    it("is idempotent on the message id", async () => {
+      const store = await open();
+      await store.append({ tenantId: T1, message: message(C1, 0) });
+      await store.append({ tenantId: T1, message: message(C1, 0) });
+      const page = await store.listByConversation({ tenantId: T1, conversationId: C1, limit: 10 });
+      expect(page.items).toHaveLength(1);
+    });
+
+    /** The same id under another tenant is a different message, not a conflict to swallow. */
+    it("scopes appended messages to the writing tenant", async () => {
+      const fixture = await withConversation(makeFixture(), [
+        { tenantId: T1, conversationId: C1 },
+        { tenantId: T2, conversationId: C1 },
+      ]);
+      await fixture.append({ tenantId: T1, message: message(C1, 0) });
+      await fixture.append({ tenantId: T2, message: { ...message(C1, 0), role: "assistant" } });
+      expect((await fixture.findById({ tenantId: T1, id: asId<MessageId>("m0") }))?.role).toBe("user");
+      expect((await fixture.findById({ tenantId: T2, id: asId<MessageId>("m0") }))?.role).toBe("assistant");
     });
 
     it("enforces tenant isolation", async () => {

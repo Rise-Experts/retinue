@@ -24,8 +24,36 @@ export interface JobQueue {
   getJobCounts(
     ...types: readonly string[]
   ): Promise<Record<string, number>>;
+  /**
+   * Fetch a job by id, so a *terminal* one can be cleared before a re-enqueue (#156).
+   *
+   * Optional, because a fake queue in a test has nothing to fetch and the dedup it is emulating cannot occur
+   * there. Absent means the clearing step is skipped, which is exactly the old behaviour.
+   */
+  getJob?(jobId: string): Promise<JobHandle | null | undefined>;
   close?(): Promise<void>;
 }
+
+/** The part of a BullMQ job this needs: its state, and the ability to remove it. */
+export interface JobHandle {
+  getState(): Promise<string>;
+  remove(): Promise<unknown>;
+}
+
+/**
+ * States in which a job is **finished**, so its id is history rather than a live duplicate.
+ *
+ * This distinction is the whole fix for #156. `runJobId` is deterministic on purpose — two concurrent enqueues of
+ * the same run must collapse into one job (#105). But the id is also reused across a *resume*: a run that
+ * suspends for an approval completes its job, BullMQ retains it under `removeOnComplete`, and the re-enqueue
+ * after the decision is silently dropped because the id already exists. The run then sits in `queued` with no
+ * job and no lease, and nothing ever picks it up.
+ *
+ * Dedup should protect against a job that is still going to run, not against one that already has. So a
+ * `waiting`, `active`, `delayed` or `paused` job still collapses — the #105 guarantee is untouched — and only a
+ * finished one is cleared out of the way.
+ */
+const FINISHED_JOB_STATES: ReadonlySet<string> = new Set(["completed", "failed"]);
 
 /** What a worker needs to execute the run. The tenant travels with the job, not with the queue. */
 export type RunJobData = {
@@ -130,6 +158,27 @@ export const createBullMqJobDispatcher = (
       traceparent?: string;
       enqueuedAt?: string;
     }): Promise<void> {
+      /**
+       * Clear a *finished* job holding this id, so a resumed run can be enqueued again (#156).
+       *
+       * Before the add, and deliberately not conditional on knowing whether this is a resume: the caller does not
+       * know either. `decideApproval` and `answerQuestion` just call `enqueueRun`, and a reaped run does too.
+       *
+       * A failure here is swallowed. The worst case is the old behaviour — the add is a no-op and the run waits —
+       * and turning a transient Redis hiccup during cleanup into a failed *admission* would be a worse trade.
+       */
+      if (queue.getJob !== undefined) {
+        try {
+          const existing = await queue.getJob(runJobId({ tenantId, runId }));
+          if (existing !== null && existing !== undefined) {
+            const state = await existing.getState();
+            if (FINISHED_JOB_STATES.has(state)) await existing.remove();
+          }
+        } catch {
+          // Cleanup is best-effort; the add below is the operation that matters.
+        }
+      }
+
       const add = queue.add(
         RUN_JOB_NAME,
         // Spread conditionally rather than passing `traceparent: undefined`: BullMQ serializes the payload to

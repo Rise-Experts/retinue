@@ -91,6 +91,24 @@ export interface ApprovalCheck {
 }
 type ApprovalPolicyValue = "never" | "policy" | "always";
 
+/**
+ * A tool that can never run, and why — #162.
+ *
+ * One type for both fail-closed layers, because wiring one and not the other is precisely the case that
+ * misled in #155: the report has to say *which* layer is unwired, or it sends the reader to the wrong file.
+ *
+ * `kind` is a union with one arm today rather than a bare string, so a second class of unrunnable tool has an
+ * obvious place to go and an exhaustive switch over it keeps compiling.
+ */
+export type ToolMisconfiguration = {
+  readonly kind: "approval-check-missing";
+  readonly layer: "registry" | "delegating-envelope";
+  readonly toolName: string;
+  readonly approvalPolicy: string;
+  /** The exact field the reader has to set, named so the report is actionable without a grep. */
+  readonly configField: string;
+};
+
 export type ToolRegistryConfig = {
   readonly providers: readonly ToolProvider[];
   readonly authorization: AuthorizationPolicy;
@@ -98,6 +116,17 @@ export type ToolRegistryConfig = {
   readonly blobs?: BlobStore;
   /** Makes approval unbypassable: a policy-classified tool cannot execute directly without a grant. */
   readonly approval?: ApprovalCheck;
+  /**
+   * Where "this tool can never run" is reported — #162.
+   *
+   * Optional, and its absence costs diagnosability rather than safety: the refusal still happens either way,
+   * and it still carries a message naming the tool and this config field. What the sink adds is a report at
+   * the *first* such call rather than one per call, which is the difference between noticing a wiring bug and
+   * reading the same refusal a hundred times.
+   *
+   * Called at most once per tool name per registry.
+   */
+  readonly onMisconfiguration?: (report: ToolMisconfiguration) => void;
   /** Results whose JSON exceeds this are spilled to `blobs` and referenced. Default 8 KiB. */
   readonly maxInlineOutputBytes?: number;
   readonly validator?: SchemaValidator;
@@ -135,6 +164,26 @@ export interface ToolRegistry {
 export const createToolRegistry = (config: ToolRegistryConfig): ToolRegistry => {
   const maxInline = config.maxInlineOutputBytes ?? 8 * 1024;
   const validator = config.validator ?? zodishValidator;
+
+  /**
+   * Reported once per tool, not once per call — #162 AC-2.
+   *
+   * A construction-time scan is not possible: `ToolProvider.listTools` takes an `ExecutionContext`, so which
+   * gated tools exist is not knowable until a request is being served. First encounter is therefore the
+   * earliest honest moment to say so, and the memo is what keeps it from becoming per-call noise.
+   */
+  const reported = new Set<string>();
+  const reportMisconfiguration = (d: ToolDescriptor): void => {
+    if (config.onMisconfiguration === undefined || reported.has(d.name)) return;
+    reported.add(d.name);
+    config.onMisconfiguration({
+      kind: "approval-check-missing",
+      layer: "registry",
+      toolName: d.name,
+      approvalPolicy: d.approvalPolicy,
+      configField: "ToolRegistryConfig.approval",
+    });
+  };
 
   /** Resolve every tool the caller could use, then keep only the authorized ones. */
   const authorizedTools = async (context: ExecutionContext): Promise<Tool[]> => {
@@ -225,13 +274,36 @@ export const createToolRegistry = (config: ToolRegistryConfig): ToolRegistry => 
       // Fail CLOSED — if no approval check is wired, a policy/always tool (e.g. every MCP external
       // write) is refused rather than silently executed unapproved.
       if (d.approvalPolicy !== "never") {
-        const allowed = config.approval
-          ? await config.approval.isAllowed(
-              context,
-              { name: d.name, category: d.category, approvalPolicy: d.approvalPolicy },
-              input.approval,
-            )
-          : false;
+        /**
+         * The two refusals are told apart — #162.
+         *
+         * Both used to be `approval_required: Tool <name> requires approval`: the correct refusal of a call
+         * nobody approved, and a registry with no approval check at all, where *nothing* could ever be
+         * approved. #155 lost two debugging rounds to that, and filed #158 against the platform for a bug
+         * that was its own missing wiring — fixing the envelope's gate changed nothing observable, because
+         * this second layer was still refusing with the identical message, which made the wrong diagnosis
+         * look confirmed.
+         *
+         * The safety behaviour is untouched: absent check still means refused. Only the story changes.
+         */
+        if (config.approval === undefined) {
+          reportMisconfiguration(d);
+          return {
+            ok: false,
+            error: {
+              code: "capability_unavailable",
+              message:
+                `Tool ${d.name} has approvalPolicy "${d.approvalPolicy}" and no approval check is configured ` +
+                `(ToolRegistryConfig.approval), so it can never run. This is a wiring error, not a refusal.`,
+              retryable: false,
+            },
+          };
+        }
+        const allowed = await config.approval.isAllowed(
+          context,
+          { name: d.name, category: d.category, approvalPolicy: d.approvalPolicy },
+          input.approval,
+        );
         if (!allowed)
           return { ok: false, error: { code: "approval_required", message: `Tool ${d.name} requires approval`, retryable: false } };
       }

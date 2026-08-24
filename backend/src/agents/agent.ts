@@ -259,14 +259,16 @@ export const createAgent = (config: CreateAgentConfig) => {
       if (!(await conversations.findById({ tenantId, id: conversationId }))) {
         await conversations.create({ tenantId, id: conversationId, title: input.message.slice(0, 80) || "Conversation" });
       }
-      messages.append(tenantId, userMessage(conversationId, `${runId}:user`, input.message));
+      await messages.append({ tenantId, message: userMessage(conversationId, `${runId}:user`, input.message) });
       await runs.create({ tenantId, id: runId, conversationId, agentId: asId(manifest.id), agentVersion: manifest.version });
 
       const result = await worker.process({ tenantId, runId });
       const checkpoint = await checkpoints.latest({ tenantId, runId });
       const parts = checkpoint?.parts ?? [];
       // Persist the assistant turn so the next run's history includes it.
-      if (parts.length > 0) messages.append(tenantId, assistantMessage(conversationId, `${runId}:assistant`, parts));
+      if (parts.length > 0) {
+        await messages.append({ tenantId, message: assistantMessage(conversationId, `${runId}:assistant`, parts) });
+      }
       contextByRun.delete(runId);
 
       return { runId, outcome: result.outcome, parts, text: textOf(parts) };

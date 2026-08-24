@@ -150,7 +150,10 @@ describe("SQL and SDL template literals (#140)", () => {
       "src/graphql/schema.ts",
     ];
     for (const file of files) {
-      const source = readFileSync(file, "utf8");
+      // Resolved against this test's own location, not the process cwd. As bare relative paths these read fine
+      // from `packages/backend` and threw ENOENT the moment the suite was run from the workspace root — a guard
+      // that only works when invoked from one directory is a guard that will one day be quietly skipped.
+      const source = readFileSync(new URL(`../../${file}`, import.meta.url), "utf8");
       // Inside a template literal, a `--` SQL comment or a `"""` SDL description must carry no backtick. This
       // finds a comment line whose content includes one, which is the shape every occurrence took.
       const offending = source

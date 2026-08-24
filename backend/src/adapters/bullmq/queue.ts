@@ -75,6 +75,17 @@ export const createBullMqRunQueue = (
     queue,
     add: (name, data, opts) => queue.add(name, data, opts),
     getJobCounts: (...types) => queue.getJobCounts(...(types as never[])),
+    /**
+     * Exposed so the dispatcher can clear a **finished** job holding a reusable id (#156).
+     *
+     * This object deliberately narrows the BullMQ `Queue` to the few methods the port needs, which is right — but
+     * it meant adding `getJob` to `JobQueue` and to the dispatcher changed nothing at all, because the method was
+     * never on the object the dispatcher received. The fix type-checked, the test against a raw `Queue` passed,
+     * and the real deployment silently kept the old behaviour: every approval resume still sat in `queued`.
+     *
+     * A narrowing wrapper is a second place every capability has to be added, and forgetting is invisible.
+     */
+    getJob: (jobId) => queue.getJob(jobId) as never,
     async close() {
       await queue.close();
       // The queue closes its own connection only when it created it; this one was injected.

@@ -8,7 +8,7 @@
  * and that BullMQ itself dedupes the id.
  */
 
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { AgentPlatformError } from "../core/errors.js";
 import { asId } from "../core/ids.js";
 import type { RunId, TenantId } from "../core/ids.js";
@@ -217,6 +217,66 @@ describe("against a real Redis", () => {
       });
       return { queue, connection, name: `${RUN_QUEUE_NAME}-${suffix}` };
     };
+
+    /**
+     * #156. A run that suspended and was re-enqueued must actually be queued again.
+     *
+     * `runJobId` is deterministic, and BullMQ retains a completed job under `removeOnComplete` — so the
+     * re-enqueue after an approval decision was silently a no-op, and every HITL resume sat in `queued` forever
+     * with no job and no lease.
+     *
+     * Against real Redis, because that is the only place the collision exists: a fake queue does not retain a
+     * completed job under a reusable id, so this test would pass on the broken code with any stand-in.
+     */
+    it("re-enqueues a run whose previous job already completed", async () => {
+      const { queue, name } = await freshQueue("resume");
+      const dispatcher = createBullMqJobDispatcher(queue as unknown as JobQueue);
+
+      const { Worker } = await import("bullmq");
+      const { Redis } = await import("ioredis");
+      const workerConnection = new Redis(REDIS_URL, { maxRetriesPerRequest: null });
+      const executed: RunJobData[] = [];
+      const worker = new Worker(name, async (job) => { executed.push(job.data as RunJobData); }, {
+        connection: workerConnection,
+      });
+      closers.push(async () => {
+        await worker.close().catch(() => undefined);
+        await workerConnection.quit().catch(() => undefined);
+      });
+
+      // First pass: the run executes and its job completes — exactly what happens when a run suspends for an
+      // approval, since the worker's unit of work is finished.
+      await dispatcher.enqueueRun({ tenantId: T1, runId: RUN });
+      await vi.waitFor(() => expect(executed).toHaveLength(1), { timeout: 5_000 });
+      await vi.waitFor(async () => {
+        expect(await queue.getJobCountByTypes("completed")).toBe(1);
+      }, { timeout: 5_000 });
+
+      // The resume. Same tenant, same run, therefore the same job id.
+      await dispatcher.enqueueRun({ tenantId: T1, runId: RUN });
+
+      // It runs a second time. Before the fix this assertion failed: `add` was a no-op and `executed` stayed at 1.
+      await vi.waitFor(() => expect(executed).toHaveLength(2), { timeout: 5_000 });
+      expect(executed[1]).toMatchObject({ tenantId: T1, runId: RUN });
+    });
+
+    /**
+     * The other half, and the reason the fix clears only *finished* jobs.
+     *
+     * #105's guarantee is that two enqueues of a run that has not run yet collapse into one job. A fix that
+     * cleared the id unconditionally would break that and this test would catch it — which is the point of
+     * asserting both directions rather than only the one that was broken.
+     */
+    it("still collapses two enqueues of a run that has not run yet", async () => {
+      const { queue } = await freshQueue("dedup");
+      const dispatcher = createBullMqJobDispatcher(queue as unknown as JobQueue);
+
+      // No worker: the job stays `waiting`, which is a live duplicate rather than history.
+      await dispatcher.enqueueRun({ tenantId: T1, runId: RUN });
+      await dispatcher.enqueueRun({ tenantId: T1, runId: RUN });
+
+      expect((await queueMetrics(queue as unknown as JobQueue)).waiting).toBe(1);
+    });
 
     it("executes work enqueued before any worker existed, exactly once", async () => {
       const { queue, name } = await freshQueue("ac1");

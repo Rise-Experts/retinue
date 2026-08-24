@@ -3,19 +3,26 @@
  */
 
 import type { ApprovalGrantId, InteractionId, RunId, TenantId } from "../core/ids.js";
+import type { QuestionAnswer } from "../core/content-parts.js";
+import type { QuestionSpec } from "./service.js";
 
 export type PendingQuestion = {
   readonly id: InteractionId;
   readonly tenantId: TenantId;
   readonly runId: RunId;
-  readonly questions: readonly {
-    readonly key: string;
-    readonly prompt: string;
-    readonly options?: readonly string[];
-  }[];
+  /**
+   * The specs as asked — `QuestionSpec`, not a narrower copy of it (#163).
+   *
+   * This was an inline duplicate carrying only `key`, `prompt` and `options`, so when `multiple` and
+   * `allowOther` were added to `QuestionSpec` they were stored and read back by the adapters and then dropped
+   * on the floor here. Anything reading a pending question — the GraphQL query, a host's own UI — saw a
+   * multi-select as a single choice, with nothing in the types to say so.
+   */
+  readonly questions: readonly QuestionSpec[];
   readonly createdAt: string;
   readonly answeredAt?: string;
-  readonly answers?: Readonly<Record<string, string>>;
+  /** A value may be a string or an array — see `QuestionSpec.multiple` (#155). */
+  readonly answers?: Readonly<Record<string, QuestionAnswer>>;
 };
 
 export const APPROVAL_DECISIONS = [

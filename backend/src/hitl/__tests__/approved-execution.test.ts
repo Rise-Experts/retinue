@@ -384,6 +384,17 @@ describe("failing closed", () => {
     ).rejects.toThrow();
   });
 
+  /**
+   * The tool is not reached — that has not changed and must not. What #162 changed is what happens *instead*.
+   *
+   * This used to raise a durable approval, on the reasoning that an unwired dependency is not permission. It
+   * isn't, but an approval is the wrong refusal: a human would decide it, the run would resume, present the
+   * one-time reference — and the registry would refuse again, because there is still no check to satisfy. That
+   * is the loop #158 was filed for, and asking someone to authorize something that can never be authorized
+   * teaches them their approval is theatre.
+   *
+   * So it is now a terminal error that names the missing wiring, and no approval is raised.
+   */
   it("never reaches the tool when no approval gate is configured at all", async () => {
     const published: unknown[] = [];
     const authorization = allowAllAuthorization();
@@ -418,8 +429,15 @@ describe("failing closed", () => {
     const runApprovals = createRunApprovals({ interactions, approvals: service, tools: registry });
 
     const outcome = await runApprovals.runTool(ctx(), RUN, { name: "publish_post", input: { draftId: "d1" } });
-    // An unwired dependency is not permission: it becomes an approval request, never an execution.
-    expect(outcome.outcome).toBe("approval-requested");
+    // The guarantee that matters, unchanged: an unwired dependency is not permission.
     expect(published).toEqual([]);
+    // And nobody is asked to approve what cannot be approved.
+    expect(outcome.outcome).toBe("result");
+    if (outcome.outcome !== "result") throw new Error("expected a result");
+    expect(outcome.result.ok).toBe(false);
+    if (outcome.result.ok) throw new Error("expected a refusal");
+    expect(outcome.result.error.code).toBe("capability_unavailable");
+    expect(outcome.result.error.message).toContain("ToolRegistryConfig.approval");
+    expect(await interactions.findPendingApproval({ tenantId: T, runId: RUN })).toBeNull();
   });
 });

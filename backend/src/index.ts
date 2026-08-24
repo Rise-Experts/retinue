@@ -27,6 +27,7 @@ export * from "./adapters/supabase/index.js";
 // `createBullMqRunQueue` does.
 export * from "./adapters/bullmq/index.js";
 export * from "./adapters/otel/index.js";
+export * from "./adapters/redis/index.js";
 export * from "./worker/main.js";
 export * from "./worker/extraction.js";
 export * from "./worker/export.js";

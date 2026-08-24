@@ -49,12 +49,38 @@ export const runWorker = async (
   const queue = backend.createBullMqRunQueue({ url: config.redisUrl });
   const dispatcher = backend.createBullMqJobDispatcher(queue);
 
+  /**
+   * A **real** publisher, over Redis pub/sub (#161).
+   *
+   * This was `publisher: { async publish() {} }` — a hard-coded no-op, so every deployment using the documented
+   * worker command threw its run events away and no client ever saw a token while a run was in progress. The SSE
+   * endpoint replayed the durable log and then waited forever on a channel nothing wrote to, which looks exactly
+   * like a working system with no streaming rather than a broken one.
+   *
+   * Redis, because it is already required configuration and already carries the queue: no new dependency and no
+   * new operational surface. Pub/sub's at-most-once delivery is the right trade — the durable log is the source of
+   * truth and the stream resumes from a sequence, so a dropped message costs latency, not correctness.
+   *
+   * Not overridable to a no-op. A deployment that wants no realtime can simply have no subscribers; making
+   * "publish nothing" reachable by configuration is what produced this bug.
+   */
+  const realtimeConnection = new (await import("ioredis")).Redis(config.redisUrl);
+  const publisher = backend.createRedisRealtimePublisher(realtimeConnection);
+
   const worker = backend.createDurableWorker({
     runs: deps.runs,
     checkpoints: backend.createPostgresCheckpointStore(sql),
-    publisher: { async publish() {} },
+    publisher,
     engine: app.engine({ config, sql }),
     eventLog: deps.eventLog,
+    /**
+     * The assistant's turn is persisted, not reconstructed (#157).
+     *
+     * Built here from `sql`, exactly as the checkpoint store above is: it is the same database and the same
+     * migration set, and an app module that had to remember to supply it would be an app module that ships an
+     * amnesiac agent the first time someone forgets.
+     */
+    messages: backend.createPostgresMessageStore(sql),
     buildContext: app.buildContext,
     workerId: `worker-${process.pid}`,
   });
@@ -90,6 +116,8 @@ export const runWorker = async (
       await runtime.shutdown("api");
       await queue.close();
       await connection.quit().catch(() => undefined);
+      // The realtime connection too, or a drained worker keeps a Redis client open and the process will not exit.
+      await realtimeConnection.quit().catch(() => undefined);
     },
   };
 };

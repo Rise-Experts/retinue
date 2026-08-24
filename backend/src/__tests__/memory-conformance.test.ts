@@ -114,23 +114,7 @@ checkpointStoreConformance(() => createMemoryCheckpointStore());
 
 // ---------------------------------------------------------------- records
 
-messageStoreConformance(
-  () => createMemoryMessageStore(),
-  async (store, { tenantId, conversationId, count }) => {
-    const appendable = store as ReturnType<typeof createMemoryMessageStore>;
-    for (let n = 1; n <= count; n += 1) {
-      const message: Message = {
-        id: asId<MessageId>(`m${n}`),
-        conversationId,
-        runId: asId<RunId>("conf-run-1"),
-        role: "assistant",
-        parts: [],
-        createdAt: `2020-01-01T00:00:0${n}.000Z`,
-      };
-      appendable.append(tenantId, message);
-    }
-  },
-);
+messageStoreConformance(() => createMemoryMessageStore());
 
 const manifest = (id: string, version: number): AgentManifest => ({
   id,

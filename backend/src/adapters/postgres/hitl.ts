@@ -15,6 +15,7 @@
  */
 import { AgentPlatformError } from "../../core/errors.js";
 import type { ApprovalGrantId, InteractionId, RunId, TenantId } from "../../core/ids.js";
+import type { QuestionAnswer } from "../../core/content-parts.js";
 import type {
   ApprovalDecision,
   ApprovalGrant,
@@ -57,7 +58,7 @@ const toQuestion = (r: QuestionRow): PendingQuestion => ({
   ...(r.answered_at === null ? {} : { answeredAt: iso(r.answered_at) }),
   ...(r.answers === null || r.answers === undefined
     ? {}
-    : { answers: json<Readonly<Record<string, string>>>(r.answers) }),
+    : { answers: json<Readonly<Record<string, QuestionAnswer>>>(r.answers) }),
 });
 
 const QUESTION_COLUMNS = `tenant_id, id, run_id, questions, created_at, answered_at, answers`;
@@ -141,6 +142,22 @@ export const createPostgresInteractionStore = (sql: SqlExecutor): InteractionSto
         `SELECT ${QUESTION_COLUMNS} FROM interaction_questions
           WHERE tenant_id = $1 AND run_id = $2 AND answered_at IS NULL
           ORDER BY created_at, id
+          LIMIT 1`,
+        [tenantId, runId],
+      );
+      const row = rows[0];
+      return row ? toQuestion(row) : null;
+    },
+
+    /**
+     * The newest answered question for the run — #163. Ordered by `answered_at` rather than `created_at`: a run
+     * that asked twice has both answered, and the one to tell the model about is the one just answered.
+     */
+    async findAnsweredQuestion({ tenantId, runId }) {
+      const rows = await sql.query<QuestionRow>(
+        `SELECT ${QUESTION_COLUMNS} FROM interaction_questions
+          WHERE tenant_id = $1 AND run_id = $2 AND answered_at IS NOT NULL
+          ORDER BY answered_at DESC, id DESC
           LIMIT 1`,
         [tenantId, runId],
       );

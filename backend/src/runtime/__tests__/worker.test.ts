@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { MessagePart, TextPart } from "../../core/content-parts.js";
+import type { Message, MessagePart, TextPart } from "../../core/content-parts.js";
 import type { ExecutionContext } from "../../core/context.js";
 import type { RealtimePublisher, RunEvent } from "../../core/events.js";
 import { asId } from "../../core/ids.js";
@@ -18,7 +18,7 @@ import {
 } from "../../adapters/memory/runtime.js";
 import { createMemoryUsageStore } from "../../adapters/memory/usage.js";
 import { createUsageRecorder, type PricingResolver } from "../../usage/index.js";
-import type { CheckpointStore, RunStore } from "../../persistence/index.js";
+import type { CheckpointStore, MessageStore, RunStore } from "../../persistence/index.js";
 import { createDurableWorker, deriveRunMessageId, type AgentEngine, type EngineEvent } from "../worker.js";
 import { emptyCheckpoint } from "../checkpoint.js";
 
@@ -456,5 +456,126 @@ describe("durable worker — heartbeat during a long tool call (#107 AC-5)", () 
     expect(reapable.map((r) => r.id)).not.toContain(RUN);
 
     expect((await processing).outcome).toBe("completed");
+  });
+});
+
+/**
+ * #157 — the assistant's turn reaches the message store.
+ *
+ * Before this, `MessageStore` was read-only and `DurableWorkerDeps` took no message store, so a host persisted
+ * the user's turn and nothing ever persisted the assistant's. Every host had to fold the run event log to
+ * reconstruct what the agent said, or ship an agent with amnesia between runs.
+ */
+describe("durable worker — assistant turn persistence (#157)", () => {
+  const recordingMessages = () => {
+    const appended: Message[] = [];
+    const store: MessageStore = {
+      async append({ message }) {
+        // Idempotent like every real adapter, so a second write of the same id is not a second row.
+        if (appended.some((m) => m.id === message.id)) return;
+        appended.push(message);
+      },
+      async findById() {
+        return null;
+      },
+      async listByConversation() {
+        return { items: [], nextCursor: undefined };
+      },
+    };
+    return { appended, store };
+  };
+
+  it("records the assistant's parts under the streamed message id when a run completes", async () => {
+    const clock = fakeClock();
+    const runs = createMemoryRunStore();
+    await runs.create({ tenantId: TENANT, id: RUN, conversationId: CONVO, agentId: asId("a1"), agentVersion: 1 });
+    const { appended, store } = recordingMessages();
+    const { deps } = baseDeps(runs, createMemoryCheckpointStore(), toolEngine({ count: 0 }), clock);
+
+    const result = await createDurableWorker({ ...deps, messages: store }).process({ tenantId: TENANT, runId: RUN });
+
+    expect(result.outcome).toBe("completed");
+    expect(appended).toHaveLength(1);
+    expect(appended[0]?.role).toBe("assistant");
+    expect(appended[0]?.conversationId).toBe(CONVO);
+    expect(appended[0]?.runId).toBe(RUN);
+    // The same id the client saw on every `part.added` — not a second convention for the persisted row.
+    expect(appended[0]?.id).toBe(deriveRunMessageId(RUN));
+    expect(appended[0]?.parts.map((p) => (p as TextPart).text)).toEqual(["thinking", "done"]);
+  });
+
+  /**
+   * The gate is `isTerminal`, not `status === "completed"`. A run that failed still streamed text the user
+   * read; dropping it would show them a reply that vanishes on reload.
+   */
+  it("records what was streamed before a failure", async () => {
+    const clock = fakeClock();
+    const runs = createMemoryRunStore();
+    await runs.create({ tenantId: TENANT, id: RUN, conversationId: CONVO, agentId: asId("a1"), agentVersion: 1 });
+    const { appended, store } = recordingMessages();
+    const engine: AgentEngine = {
+      async *run() {
+        yield { type: "part.added", messageId: deriveRunMessageId(RUN) as MessageId, part: textPart("p1", "partial") };
+        throw new Error("model exploded");
+      },
+    };
+    const { deps } = baseDeps(runs, createMemoryCheckpointStore(), engine, clock);
+
+    const result = await createDurableWorker({ ...deps, messages: store }).process({ tenantId: TENANT, runId: RUN });
+
+    expect(result.outcome).toBe("failed");
+    expect(appended).toHaveLength(1);
+    expect(appended[0]?.parts.some((p) => (p as TextPart).text === "partial")).toBe(true);
+  });
+
+  /**
+   * The one that matters most. A run waiting for approval is **not** terminal — it goes back to `queued` and
+   * finishes later. Writing at the pause would take the id first, and because the write is idempotent on that
+   * id the completed turn would then be silently discarded as a duplicate: the user would be left looking at
+   * the half of the answer that came before the approval, permanently.
+   */
+  it("writes nothing while a run is paused for approval, so the completed turn is not lost to its own partial", async () => {
+    const clock = fakeClock();
+    const runs = createMemoryRunStore();
+    await runs.create({ tenantId: TENANT, id: RUN, conversationId: CONVO, agentId: asId("a1"), agentVersion: 1 });
+    const { appended, store } = recordingMessages();
+    let resumed = false;
+    const engine: AgentEngine = {
+      // Emits only what is new on the second pass — the worker restores the earlier parts from the checkpoint,
+      // so an engine that re-yielded them would be duplicating, not replaying.
+      async *run() {
+        if (!resumed) {
+          resumed = true;
+          yield { type: "part.added", messageId: deriveRunMessageId(RUN) as MessageId, part: textPart("p1", "before") };
+          yield { type: "approval.requested", toolCallId: asId<ToolCallId>("tc1"), toolName: "publish", requestId: "req-1" };
+          return;
+        }
+        yield { type: "part.added", messageId: deriveRunMessageId(RUN) as MessageId, part: textPart("p2", "after") };
+      },
+    };
+    const { deps } = baseDeps(runs, createMemoryCheckpointStore(), engine, clock);
+    const worker = createDurableWorker({ ...deps, messages: store });
+
+    const paused = await worker.process({ tenantId: TENANT, runId: RUN });
+    expect(paused.outcome).toBe("paused");
+    expect(appended).toHaveLength(0);
+
+    // The continuation: back to queued, then driven to completion.
+    await runs.transition({ tenantId: TENANT, id: RUN, workerId: "worker-1", to: "queued", now: new Date(clock.now()).toISOString() });
+    const done = await worker.process({ tenantId: TENANT, runId: RUN });
+
+    expect(done.outcome).toBe("completed");
+    expect(appended).toHaveLength(1);
+    expect(appended[0]?.parts.map((p) => (p as TextPart).text)).toEqual(["before", "after"]);
+  });
+
+  it("stays absent when no message store is supplied", async () => {
+    const clock = fakeClock();
+    const runs = createMemoryRunStore();
+    await runs.create({ tenantId: TENANT, id: RUN, conversationId: CONVO, agentId: asId("a1"), agentVersion: 1 });
+    const { deps } = baseDeps(runs, createMemoryCheckpointStore(), toolEngine({ count: 0 }), clock);
+
+    // No throw, no silent requirement — the store is optional for hosts that read history from the event log.
+    expect((await createDurableWorker(deps).process({ tenantId: TENANT, runId: RUN })).outcome).toBe("completed");
   });
 });

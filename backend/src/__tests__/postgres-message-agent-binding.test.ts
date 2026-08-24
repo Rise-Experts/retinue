@@ -135,7 +135,7 @@ describe("migration 0005", () => {
     const sql = await withConversation();
     const messages = createPostgresMessageStore(sql);
     const bindings = createPostgresConversationBindingStore(sql);
-    await messages.append(T1, msg(1));
+    await messages.append({ tenantId: T1, message: msg(1) });
     await bindings.bind({ tenantId: T1, conversationId: C1, agentId: AGENT, agentVersionPolicy: "latest" });
 
     await sql.query(`DELETE FROM conversations WHERE tenant_id = $1 AND id = $2`, [T1, C1]);
@@ -146,7 +146,7 @@ describe("migration 0005", () => {
 
   it("refuses a message for a conversation that does not exist", async () => {
     const sql = await migrated();
-    await expect(createPostgresMessageStore(sql).append(T1, msg(1))).rejects.toThrow();
+    await expect(createPostgresMessageStore(sql).append({ tenantId: T1, message: msg(1) })).rejects.toThrow();
   });
 });
 
@@ -179,7 +179,7 @@ describe("message round-trip and validation", () => {
         },
       ] as Message["parts"],
     });
-    await store.append(T1, mixed);
+    await store.append({ tenantId: T1, message: mixed });
     // Deep equality: a dropped nested field inside a tool result is exactly the loss a shallower
     // assertion misses.
     expect(await store.findById({ tenantId: T1, id: mixed.id })).toEqual(mixed);
@@ -217,7 +217,7 @@ describe("paging under concurrent inserts (AC-2)", () => {
   it("pages a 500-message conversation with no duplicate and no skip while more arrive", async () => {
     const sql = await withConversation();
     const store = createPostgresMessageStore(sql);
-    for (let n = 0; n < 500; n += 1) await store.append(T1, msg(n));
+    for (let n = 0; n < 500; n += 1) await store.append({ tenantId: T1, message: msg(n) });
 
     const seen: string[] = [];
     let cursor: string | undefined;
@@ -231,7 +231,7 @@ describe("paging under concurrent inserts (AC-2)", () => {
       });
       seen.push(...result.items.map((m) => m.id));
       // A new message lands mid-pagination, exactly as it would in a live thread.
-      await store.append(T1, msg(inserted));
+      await store.append({ tenantId: T1, message: msg(inserted) });
       inserted += 1;
       if (result.nextCursor === undefined) break;
       cursor = result.nextCursor;
@@ -246,7 +246,7 @@ describe("paging under concurrent inserts (AC-2)", () => {
 
   it("serves the paging query from its index", async () => {
     const sql = await withConversation();
-    await createPostgresMessageStore(sql).append(T1, msg(1));
+    await createPostgresMessageStore(sql).append({ tenantId: T1, message: msg(1) });
     const plan = await sql.query<Record<string, string>>(
       `EXPLAIN SELECT * FROM messages
         WHERE tenant_id = $1 AND conversation_id = $2 AND (created_at, id) > ($3::timestamptz, $4)

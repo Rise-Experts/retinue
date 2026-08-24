@@ -1,7 +1,7 @@
 /**
  * In-memory message + agent stores — used by the embedded `createAgent` facade and for tests.
- * Tenant-partitioned. The MessageStore adds an `append` beyond the read-only port so the facade can
- * persist user and assistant turns; AgentStore serves manifests by version.
+ * Tenant-partitioned. `append` is on the port as of #157 — it used to be a "test-only affordance", which meant
+ * every host had to reach past the port to record what a user said. AgentStore serves manifests by version.
  */
 
 import type { Message } from "../../core/content-parts.js";
@@ -9,7 +9,7 @@ import type { Page } from "../../core/context.js";
 import type { AgentManifest } from "../../agents/index.js";
 import type { AgentStore, MessageStore } from "../../persistence/index.js";
 
-export const createMemoryMessageStore = (): MessageStore & { append(tenantId: string, message: Message): void } => {
+export const createMemoryMessageStore = (): MessageStore => {
   const byTenant = new Map<string, Message[]>();
   const list = (t: string) => {
     let m = byTenant.get(t);
@@ -17,8 +17,12 @@ export const createMemoryMessageStore = (): MessageStore & { append(tenantId: st
     return m;
   };
   return {
-    append(tenantId, message) {
-      list(tenantId).push(message);
+    async append({ tenantId, message }) {
+      // Idempotent on the id, matching the Postgres adapter's `ON CONFLICT DO NOTHING`. The reference adapter
+      // silently diverging on a retry is exactly the class of difference the conformance suite exists to catch.
+      const messages = list(tenantId);
+      if (messages.some((m) => m.id === message.id)) return;
+      messages.push(message);
     },
     async findById({ tenantId, id }) {
       return list(tenantId).find((m) => m.id === id) ?? null;

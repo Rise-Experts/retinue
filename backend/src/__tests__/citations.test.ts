@@ -394,15 +394,18 @@ describe("AC-4: provenance is durable and auditable months later", () => {
       }),
     ]);
     const messages = createMemoryMessageStore();
-    messages.append(T1, {
-      id: asId<MessageId>("msg-1"),
-      conversationId: asId("convo-1"),
-      role: "assistant",
-      parts: [
-        { id: CLAIM, type: "text", schemaVersion: 1, createdAt: "t", text: "Revenue rose." } as MessagePart,
-        ...parts,
-      ],
-      createdAt: "2026-08-23T10:00:00.000Z",
+    await messages.append({
+      tenantId: T1,
+      message: {
+        id: asId<MessageId>("msg-1"),
+        conversationId: asId("convo-1"),
+        role: "assistant",
+        parts: [
+          { id: CLAIM, type: "text", schemaVersion: 1, createdAt: "t", text: "Revenue rose." } as MessagePart,
+          ...parts,
+        ],
+        createdAt: "2026-08-23T10:00:00.000Z",
+      },
     });
     const stored = (await messages.listByConversation({ tenantId: T1, conversationId: asId("convo-1"), limit: 5 }))
       .items[0]?.parts;

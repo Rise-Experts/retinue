@@ -57,6 +57,14 @@ export type ExecutionLimits = {
   readonly retryBackoffMs: number;
   /** Beyond this, a tool result is spilled to blob storage and referenced. */
   readonly maxInlineToolOutputBytes: number;
+  /**
+   * Sampling temperature, when the agent wants to pin it (#160).
+   *
+   * Optional, because "leave the provider's default alone" is a real and common choice, and a required field
+   * would force every agent to invent a number. `0` is meaningful and distinct from absent — a graded run needs
+   * to be able to ask for it, which is what the evaluation harness's reproducibility argument rests on.
+   */
+  readonly temperature?: number;
 };
 
 export type Run = {

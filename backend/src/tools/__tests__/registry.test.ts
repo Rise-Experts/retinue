@@ -152,10 +152,78 @@ describe("execute_tool — re-auth, validation, idempotency, spill", () => {
     expect(result).toMatchObject({ ok: false, error: { code: "approval_required" } });
   });
 
+  /**
+   * Still refused — that is the whole point of failing closed, and #162 did not soften it. What changed is
+   * that it no longer refuses with the *same* code as a genuinely unapproved call. This test used to assert
+   * `approval_required` here, which is to say it pinned down the conflation as if it were the intent.
+   */
   it("fails closed: a policy-classified tool is refused when no approval check is wired", async () => {
     const reg = createToolRegistry({ providers: [makeProvider()], authorization: policy, idempotency: createMemoryIdempotencyStore() });
     const result = await reg.execute(ctx(["editor"]), { name: "danger", input: {}, idempotencyKey: "k1" });
-    expect(result).toMatchObject({ ok: false, error: { code: "approval_required" } });
+    expect(result).toMatchObject({ ok: false, error: { code: "capability_unavailable" } });
+    // The message has to be actionable on its own: a host with no report sink sees only this.
+    const message = result.ok ? "" : result.error.message;
+    expect(message).toContain("danger");
+    expect(message).toContain("ToolRegistryConfig.approval");
+  });
+
+  /**
+   * The distinction #162 exists for, asserted as a pair so neither side can drift into the other. Refusing an
+   * unapproved call and being unable to approve anything are different facts; one is the system working.
+   */
+  it("uses a different code for an unapproved call than for an unwired check", async () => {
+    const unwired = createToolRegistry({ providers: [makeProvider()], authorization: policy, idempotency: createMemoryIdempotencyStore() });
+    const refusing = createToolRegistry({
+      providers: [makeProvider()],
+      authorization: policy,
+      idempotency: createMemoryIdempotencyStore(),
+      approval: { isAllowed: async () => false },
+    });
+    const a = await unwired.execute(ctx(["editor"]), { name: "danger", input: {}, idempotencyKey: "ka" });
+    const b = await refusing.execute(ctx(["editor"]), { name: "danger", input: {}, idempotencyKey: "kb" });
+    if (a.ok || b.ok) throw new Error("both calls must be refused: fail-closed is not negotiable");
+    expect(a.error.code).toBe("capability_unavailable");
+    expect(b.error.code).toBe("approval_required");
+  });
+
+  /**
+   * AC-2: once per tool, not once per call. A wiring bug read a hundred times is a wiring bug nobody notices.
+   */
+  it("reports an unwired check once per tool, however many times it is called", async () => {
+    const reports: unknown[] = [];
+    const reg = createToolRegistry({
+      providers: [makeProvider()],
+      authorization: policy,
+      idempotency: createMemoryIdempotencyStore(),
+      onMisconfiguration: (r) => reports.push(r),
+    });
+    for (const key of ["r1", "r2", "r3"]) {
+      await reg.execute(ctx(["editor"]), { name: "danger", input: {}, idempotencyKey: key });
+    }
+    expect(reports).toEqual([
+      {
+        kind: "approval-check-missing",
+        layer: "registry",
+        toolName: "danger",
+        approvalPolicy: "always",
+        configField: "ToolRegistryConfig.approval",
+      },
+    ]);
+  });
+
+  /** A correctly wired registry has nothing to report, however many times a refusal happens. */
+  it("reports nothing when the check is wired and simply says no", async () => {
+    const reports: unknown[] = [];
+    const reg = createToolRegistry({
+      providers: [makeProvider()],
+      authorization: policy,
+      idempotency: createMemoryIdempotencyStore(),
+      approval: { isAllowed: async () => false },
+      onMisconfiguration: (r) => reports.push(r),
+    });
+    await reg.execute(ctx(["editor"]), { name: "danger", input: {}, idempotencyKey: "q1" });
+    await reg.execute(ctx(["editor"]), { name: "danger", input: {}, idempotencyKey: "q2" });
+    expect(reports).toEqual([]);
   });
 
   /**
@@ -202,6 +270,7 @@ describe("execute_tool — re-auth, validation, idempotency, spill", () => {
     expect(result).toMatchObject({ ok: false, error: { code: "approval_required" } });
   });
 
+  /** A presented approval cannot conjure a check to validate it against. Still refused, now legibly. */
   it("fails closed even with a one-time approval when no check is wired", async () => {
     const reg = createToolRegistry({ providers: [makeProvider()], authorization: policy, idempotency: createMemoryIdempotencyStore() });
     const result = await reg.execute(ctx(["editor"]), {
@@ -210,7 +279,7 @@ describe("execute_tool — re-auth, validation, idempotency, spill", () => {
       idempotencyKey: "k3",
       approval: { interactionId: "int-1" },
     });
-    expect(result).toMatchObject({ ok: false, error: { code: "approval_required" } });
+    expect(result).toMatchObject({ ok: false, error: { code: "capability_unavailable" } });
   });
 
   it("passes the one-time approval down to the tool, so a nested gate sees it too", async () => {

@@ -10,7 +10,7 @@
  */
 
 import type { Page, PageRequest, TenantScope } from "../core/context.js";
-import type { Message } from "../core/content-parts.js";
+import type { Message, QuestionAnswer } from "../core/content-parts.js";
 import type { AgentManifest } from "../agents/index.js";
 import type { PlatformError } from "../core/errors.js";
 import type {
@@ -212,6 +212,20 @@ export interface MessageStore {
   listByConversation(
     input: TenantScope & PageRequest & { conversationId: ConversationId },
   ): Promise<Page<Message>>;
+  /**
+   * Record a message — #157.
+   *
+   * The port was read-only, and both Postgres and memory adapters carried an `append` documented as a "test-only
+   * affordance". So there was no *supported* way for an application to record what the user said, and every host
+   * had to reach past the port with a cast or write raw SQL. The engine reads history from here, so something has
+   * to write to it.
+   *
+   * **Insert-only, and idempotent on the id.** A message is immutable once written: editing one would rewrite
+   * history a client has already streamed and a model has already been shown. So there is deliberately no update
+   * and no delete, and a repeat of the same id is a no-op rather than an error — a retried request must not fail
+   * and must not duplicate.
+   */
+  append(input: TenantScope & { message: Message }): Promise<void>;
 }
 
 export interface AgentStore {
@@ -236,9 +250,33 @@ export interface SkillStore {
 export interface InteractionStore {
   createQuestion(input: TenantScope & { question: PendingQuestion }): Promise<void>;
   findPendingQuestion(input: TenantScope & { runId: RunId }): Promise<PendingQuestion | null>;
+  /**
+   * Record answers.
+   *
+   * A value may be a **string or an array of strings** (#155): a multi-select question has several answers, and
+   * `QuestionSpec.multiple` exists to say so. Widened rather than encoded — comma-joining would make an answer
+   * containing a comma indistinguishable from two answers.
+   */
   answerQuestion(
-    input: TenantScope & { interactionId: InteractionId; answers: Readonly<Record<string, string>>; at: string },
+    input: TenantScope & {
+      interactionId: InteractionId;
+      answers: Readonly<Record<string, QuestionAnswer>>;
+      at: string;
+    },
   ): Promise<{ question: PendingQuestion; alreadyResolved: boolean }>;
+  /**
+   * The run's answered question — what a resumed run must tell the model — #163.
+   *
+   * The approval side has had `findDecidedApproval` from the start; questions had nothing, so a resumed run
+   * could not learn that its question had been answered. The observable result was a loop: the person picked
+   * an option, the run resumed, the model had no idea and asked the same question again.
+   *
+   * **No claim, unlike an approval.** A claim exists to make an external write happen exactly once; this
+   * produces a line of history, which is idempotent — and scoping to the run already bounds it, since the next
+   * turn is a different run. Adding a claim would mean a recovered run rebuilt its history *without* the answer,
+   * which is the bug again.
+   */
+  findAnsweredQuestion(input: TenantScope & { runId: RunId }): Promise<PendingQuestion | null>;
 
   createApproval(input: TenantScope & { approval: PendingApproval }): Promise<void>;
   findPendingApproval(input: TenantScope & { runId: RunId }): Promise<PendingApproval | null>;

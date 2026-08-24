@@ -22,6 +22,18 @@ export const ERROR_CODES = [
   "approval_required",
   "approval_denied",
   "approval_expired",
+  /**
+   * A tool put a question to a person and the run must park until they answer — #163.
+   *
+   * Not an error the model should work around, and deliberately not `approval_required`: an approval asks *may
+   * I do this* about a call the platform already holds, and this asks *which of these* about a call that has
+   * not been decided yet. The engine reads this code to emit `question.requested`, which is what suspends the
+   * run — before this, `question.requested` was in the event union and handled by the worker, and nothing in
+   * the platform could produce it.
+   *
+   * Carries `details.interactionId`.
+   */
+  "question_pending",
   "idempotency_conflict",
   "capability_unavailable",
   "internal",

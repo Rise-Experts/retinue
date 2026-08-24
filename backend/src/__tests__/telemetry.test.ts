@@ -104,7 +104,9 @@ describe("redaction — AC-5", () => {
   const SECRETS = {
     prompt: "Summarise the acquisition terms for Northwind before Friday",
     messages: [{ role: "user", content: "my password is hunter2" }],
-    apiKey: "sk-unsloth-a9ab17cd37ce9f4c4163f298577a94de",
+    // Obviously synthetic, and it has to stay that way: this file is a list of strings that look like
+    // credentials, which makes it the last place a real one should ever be pasted.
+    apiKey: "sk-test-NOT-A-REAL-KEY-0000000000000000",
     authorization: "Bearer eyJhbGciOiJIUzI1NiJ9.payload.signature",
     signedUrl: "https://storage.example/obj?token=abc123&sig=deadbeef",
     text: "the model's answer, verbatim",
@@ -131,7 +133,7 @@ describe("redaction — AC-5", () => {
       expect(output, `leaked: ${needle.slice(0, 40)}`).not.toContain(needle);
     }
     // And a distinctive substring, in case a value was mangled rather than dropped.
-    for (const needle of ["hunter2", "Northwind", "sk-unsloth", "eyJhbGci", "deadbeef", "salary", "service_role"])
+    for (const needle of ["hunter2", "Northwind", "sk-test", "eyJhbGci", "deadbeef", "salary", "service_role"])
       expect(output, `leaked fragment: ${needle}`).not.toContain(needle);
     // The safe field survived, or this test would pass on a logger that emitted nothing at all.
     expect(output).toContain("gpt-4o");

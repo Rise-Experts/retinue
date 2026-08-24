@@ -11,6 +11,7 @@
  * comes from.
  */
 import { createGraphQLError, createSchema, createYoga } from "graphql-yoga";
+import { createServerAdapter } from "@whatwg-node/server";
 import { createRunEventSseRoute, type SseRouteOptions } from "./sse-route.js";
 import type { HealthRoutes } from "./health.js";
 import { createResolvers, typeDefs, type GraphQLContext, type ResolverDeps } from "@agentkit/backend";
@@ -97,19 +98,39 @@ export const createAgentkitHost = (options: HostOptions) => {
    * One fetch handler for both surfaces. Composed rather than mounted on a router, because a router
    * would be a second framework decision this workspace has no need to make — and the whole point of
    * a fetch handler is that it composes.
-   *
-   * The returned object keeps Yoga's own shape (`fetch`, `graphqlEndpoint`) so callers and
-   * `createServer(host)` are unaffected by whether SSE is enabled.
    */
-  const fetch = async (
+  /**
+   * Whether this is already a request.
+   *
+   * Duck-typed on `url` and `headers`, because there can be more than one `Request` class in a process and a
+   * nominal check picks the wrong one silently.
+   */
+  const isRequestLike = (value: unknown): value is Request =>
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as { url?: unknown }).url === "string" &&
+    typeof (value as { headers?: unknown }).headers === "object";
+
+  const handle = async (
     input: Request | string | URL,
     init?: RequestInit,
     ...rest: readonly unknown[]
   ): Promise<Response> => {
-    // Yoga's `fetch` accepts a Request, a URL or a string, and callers use all three. Normalising here
-    // rather than assuming a Request: the first version of this read `request.url` off a string and
-    // failed with "Invalid URL" for every caller that passed one.
-    const request = input instanceof Request ? input : new Request(String(input), init);
+    /**
+     * Normalised **structurally**, not with `instanceof Request`.
+     *
+     * Yoga's `fetch` accepts a Request, a URL or a string, and callers use all three — the first version of this
+     * read `request.url` off a string and failed with "Invalid URL" for every caller that passed one.
+     *
+     * But `instanceof` was wrong too, and more subtly (#155). `@whatwg-node/server` — which Yoga itself is built
+     * on — constructs requests from its own ponyfilled class, so a genuine request arriving through the Node
+     * adapter is **not** `instanceof` the global `Request`. The check failed, the object fell through to
+     * `new Request(String(input))`, and every request died on `Failed to parse URL from [object Request]`.
+     *
+     * A request is a thing with a URL. Testing for that works across every implementation, which is the property
+     * that matters when two of them are in the same process.
+     */
+    const request = isRequestLike(input) ? input : new Request(String(input), init);
     const url = new URL(request.url);
     // Probes first and unauthenticated: a load balancer carries no credentials.
     const probe = await health?.handle(request);
@@ -118,7 +139,32 @@ export const createAgentkitHost = (options: HostOptions) => {
     return (yoga.fetch as (r: Request, ...a: readonly unknown[]) => Promise<Response>)(request, ...rest);
   };
 
-  return Object.assign(fetch, yoga, { fetch, ...(sse === null ? {} : { ssePath: sse.path }) });
+  /**
+   * A **server adapter**, so the returned object is both a fetch handler *and* a Node request listener.
+   *
+   * This was a real bug, found the first time anything actually served a request (#155). The previous version
+   * returned `Object.assign(fetch, yoga, …)` — a function whose callable body was the WHATWG `fetch`. Node's
+   * `http.createServer(listener)` calls its listener with `(IncomingMessage, ServerResponse)`, so
+   * `createServer(host)` reached `new Request(String(incomingMessage))` and threw
+   * `Failed to parse URL from [object Object]` on **every** request.
+   *
+   * The doc comment above it claimed "callers and `createServer(host)` are unaffected", and that claim had never
+   * been executed: the tests call `host.fetch(new Request(…))` directly, which is the one path that worked.
+   * `main.ts` — the documented way to run this — could not serve anything.
+   *
+   * `createServerAdapter` is what Yoga itself is built on, so this is the same conversion Yoga would have done,
+   * applied to the composed handler instead of to Yoga alone. Health probes and SSE now reach the Node path too;
+   * before, they were only reachable by a caller who already had a `Request`.
+   */
+  const adapter = createServerAdapter(handle as (request: Request) => Promise<Response>);
+
+  // Yoga's own shape is preserved on top (`graphqlEndpoint`, `getEnveloped`, …) for callers that read it, and
+  // `fetch` is pinned to the adapter so one object serves both styles.
+  return Object.assign(adapter, yoga, {
+    fetch: adapter as unknown as typeof yoga.fetch,
+    handle,
+    ...(sse === null ? {} : { ssePath: sse.path }),
+  });
 };
 
 export type AgentkitHost = ReturnType<typeof createAgentkitHost>;

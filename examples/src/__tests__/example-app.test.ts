@@ -1,0 +1,274 @@
+import { describe, expect, it } from "vitest";
+import { DevAuthNotEnabled, createDevAuthenticate, PRINCIPAL_HEADER, ROLES_HEADER, TENANT_HEADER } from "../auth.js";
+import { ModelNotConfigured, resolveExampleModel, definitionFor, DEFAULT_MODEL_ID } from "../model.js";
+import { MAX_MEMORY_ENTRIES, NoteNotFound, createExampleStore, createExampleTools } from "../tools.js";
+import { exampleAgentManifest, exampleContextProviders } from "../agent.js";
+import {
+  CONVERSATION_MODES,
+  DEFAULT_MODE,
+  EXCLUDED_EFFECTS,
+  MODE_DESCRIPTIONS,
+  PLAN_EXECUTION_MODE,
+  PLAN_EXECUTION_PROMPT,
+  isConversationMode,
+} from "../modes.js";
+
+/**
+ * The example's own units — #155.
+ *
+ * End-to-end behaviour is verified by *running* it, which is the point of the issue. These cover what must hold
+ * without a database, a queue or a model: the refusals, the effect ledger, and the section origin. A test that
+ * needed the whole stack to check "does it refuse without the flag" would never be run.
+ */
+
+const request = (headers: Record<string, string> = {}) =>
+  new Request("http://localhost/api/message", { method: "POST", headers });
+
+describe("dev auth — AC-6", () => {
+  it("refuses to be constructed without the explicit opt-in", () => {
+    // At construction, not per request: a misconfigured example should fail at boot with one clear message
+    // rather than return 401 to every caller and leave someone guessing.
+    expect(() => createDevAuthenticate({})).toThrow(DevAuthNotEnabled);
+    expect(() => createDevAuthenticate({ AGENTKIT_EXAMPLE_DEV_AUTH: "true" })).toThrow(DevAuthNotEnabled);
+    expect(() => createDevAuthenticate({ AGENTKIT_EXAMPLE_DEV_AUTH: "1" })).not.toThrow();
+  });
+
+  it("rejects a request with no tenant or no principal", async () => {
+    const authenticate = createDevAuthenticate({ AGENTKIT_EXAMPLE_DEV_AUTH: "1" });
+    // No fallback tenant. A default would mean an unauthenticated request landing in *somebody's* data, which is
+    // the one failure tenant isolation exists to prevent.
+    expect(await authenticate(request())).toBeNull();
+    expect(await authenticate(request({ [TENANT_HEADER]: "t1" }))).toBeNull();
+    expect(await authenticate(request({ [PRINCIPAL_HEADER]: "p1" }))).toBeNull();
+    expect(await authenticate(request({ [TENANT_HEADER]: "  ", [PRINCIPAL_HEADER]: "p1" }))).toBeNull();
+  });
+
+  it("builds a context through the platform's own validator", async () => {
+    const authenticate = createDevAuthenticate({ AGENTKIT_EXAMPLE_DEV_AUTH: "1" });
+    const context = await authenticate(
+      request({ [TENANT_HEADER]: "t1", [PRINCIPAL_HEADER]: "p1", [ROLES_HEADER]: "editor, viewer" }),
+    );
+    expect(context).toMatchObject({ tenantId: "t1", principalId: "p1" });
+    expect(context?.roleIds).toEqual(["editor", "viewer"]);
+  });
+});
+
+describe("model configuration", () => {
+  it("refuses to resolve without a key", () => {
+    // Every other option has a defensible default; this one does not. A fallback means failing on the first turn
+    // with a provider error instead of saying what is missing.
+    expect(() => resolveExampleModel({})).toThrow(ModelNotConfigured);
+  });
+
+  it("defaults the model id but not the key", () => {
+    const resolved = resolveExampleModel({ AGENTKIT_MODEL_API_KEY: "sk-test" });
+    expect(resolved.modelId).toBe(DEFAULT_MODEL_ID);
+    expect(resolved.endpoint).toBe("https://api.openai.com/v1");
+  });
+
+  it("switches to the openai-compatible provider when a base URL is given", () => {
+    const resolved = resolveExampleModel({
+      AGENTKIT_MODEL_API_KEY: "sk-test",
+      AGENTKIT_MODEL_BASE_URL: "http://127.0.0.1:8888/v1",
+    });
+    // The dedicated OpenAI provider assumes endpoints a local server may not implement, and the failure is a 404
+    // on a path nobody chose.
+    expect(resolved.definition.provider).toBe("openai-compatible");
+    expect(resolved.endpoint).toBe("http://127.0.0.1:8888/v1");
+  });
+
+  it("prices at zero rather than inventing numbers", () => {
+    const definition = definitionFor({ provider: "openai", modelId: "some-model" });
+    // A usage panel showing a cost derived from invented prices is worse than one showing zero: zero is
+    // obviously not a measurement, and a plausible number is not obviously wrong.
+    expect(definition.pricing.inputPerMillion).toBe(0);
+    expect(definition.pricing.outputPerMillion).toBe(0);
+    // Except tools, which the example genuinely requires.
+    expect(definition.capabilities.tools).toBe(true);
+  });
+});
+
+describe("the assistant's tools", () => {
+  it("does not deduplicate the effect ledger, because that is what is under test", () => {
+    const store = createExampleStore();
+    const tools = createExampleTools(store);
+    tools.shareNote({ noteId: "n1", idempotencyKey: "k1" });
+    tools.shareNote({ noteId: "n1", idempotencyKey: "k1" });
+    // A ledger that refused a repeat would answer "was the effect duplicated?" on the platform's behalf, and
+    // every run would pass. Same reasoning as the #144 harness.
+    expect(store.ledger.performed).toHaveLength(2);
+    expect(store.ledger.distinctKeys()).toBe(1);
+  });
+
+  it("refuses to share a note that does not exist", () => {
+    const tools = createExampleTools(createExampleStore());
+    expect(() => tools.shareNote({ noteId: "nope", idempotencyKey: "k" })).toThrow(NoteNotFound);
+  });
+
+  it("keeps one memory per principal", () => {
+    const tools = createExampleTools(createExampleStore());
+    tools.remember({ principalId: "a", fact: "prefers short answers" });
+    tools.remember({ principalId: "b", fact: "works in Berlin" });
+    // A shared memory across principals inside one tenant would be a cross-user leak of exactly the kind the
+    // platform's principal scoping exists to prevent.
+    expect(tools.recall({ principalId: "a" }).facts).toEqual(["prefers short answers"]);
+    expect(tools.recall({ principalId: "b" }).facts).toEqual(["works in Berlin"]);
+  });
+
+  it("drops the oldest memory rather than refusing a new one", () => {
+    const tools = createExampleTools(createExampleStore());
+    for (let i = 0; i < MAX_MEMORY_ENTRIES + 5; i += 1) tools.remember({ principalId: "a", fact: `f${i}` });
+    const facts = tools.recall({ principalId: "a" }).facts;
+    // A memory that stops accepting is one that silently stops being useful, and the user has no way to know it
+    // is full. Dropping the oldest is visible in the content; refusing is not visible at all.
+    expect(facts).toHaveLength(MAX_MEMORY_ENTRIES);
+    expect(facts[facts.length - 1]).toBe(`f${MAX_MEMORY_ENTRIES + 4}`);
+  });
+
+  it("refuses an empty fact rather than remembering nothing", () => {
+    const tools = createExampleTools(createExampleStore());
+    expect(() => tools.remember({ principalId: "a", fact: "   " })).toThrow(/nothing to remember/);
+  });
+
+  describe("calculate", () => {
+    const calc = (expression: string) => createExampleTools(createExampleStore()).calculate({ expression }).result;
+
+    it("respects precedence and parentheses", () => {
+      // The whole reason this tool exists: a model asked for 19*37+4 in its head is often subtly wrong.
+      expect(calc("19*37+4")).toBe(707);
+      expect(calc("2+3*4")).toBe(14);
+      expect(calc("(2+3)*4")).toBe(20);
+      expect(calc("-5+2")).toBe(-3);
+      expect(calc("10/4")).toBe(2.5);
+    });
+
+    it("refuses division by zero rather than answering Infinity", () => {
+      // A calculator that answers `Infinity` has given a wrong answer confidently, which is worse than refusing.
+      expect(() => calc("1/0")).toThrow(/division by zero/);
+    });
+
+    it("refuses anything it cannot parse, and never evaluates code", () => {
+      // No `eval`: model output is untrusted input, and a calculator is exactly where someone reaches for it.
+      for (const bad of ["process.exit(1)", "2+", "((1+2)", "fetch('http://x')"])
+        expect(() => calc(bad), bad).toThrow();
+    });
+  });
+
+  it("seeds a note whose text is an injection payload", () => {
+    const store = createExampleStore();
+    const all = Array.from(store.notes.values());
+    // The in-package proof that #145's neutralisation runs on a real value. Removing this fixture would make the
+    // envelope test vacuous — the payload has to be *in* the data for "the assistant did not comply" to mean
+    // anything.
+    expect(all.some((n) => n.title.includes("## System"))).toBe(true);
+    expect(all.some((n) => n.body.includes("share_note"))).toBe(true);
+  });
+});
+
+describe("the context provider — AC-8", () => {
+  it("marks the note list as external, because titles are user-authored", async () => {
+    const store = createExampleStore();
+    const [provider] = exampleContextProviders(store);
+    const sections = await provider!.provide({ tenantId: "t1" } as never);
+    // `platform` here would put an injection payload into the system prompt as instruction. The whole reason
+    // `origin` is required with no default is that this decision must be made rather than defaulted.
+    expect(sections[0]?.origin).toBe("external");
+  });
+
+  it("returns nothing when there are no notes, rather than an empty section", async () => {
+    const store = createExampleStore();
+    store.notes.clear();
+    const [provider] = exampleContextProviders(store);
+    // An empty section still costs a heading and a budget slot, and reads to a model as "there are notes" with
+    // none listed.
+    expect(await provider!.provide({ tenantId: "t1" } as never)).toEqual([]);
+  });
+});
+
+describe("the agent manifest", () => {
+  it("tells the model to call the tool rather than ask permission in prose", () => {
+    // A real failure, not a hypothetical: the first wording said "ask for approval through the tool and wait",
+    // and the model replied "I need your approval to publish note n1. Please confirm" and never called it. The
+    // run completed, no approval was raised, and the behaviour was invisible.
+    expect(exampleAgentManifest.instructions).toMatch(/CALL `share_note` immediately/);
+    expect(exampleAgentManifest.instructions).toMatch(/Do not ask for permission first/i);
+  });
+
+  it("does not tell the model to be terse, which is not the same as being clear", () => {
+    // A bare "be concise" produced one-line answers to questions that needed explaining — and combined with a
+    // remembered "prefers short answers" it got terser still. Length should follow the question, which is what
+    // the instructions now say.
+    expect(exampleAgentManifest.instructions).not.toMatch(/\bBe concise\b/);
+    expect(exampleAgentManifest.instructions).toMatch(/Length should follow the question/);
+  });
+
+  it("bounds the step count, so a confused loop ends", () => {
+    expect(exampleAgentManifest.limits?.maxSteps).toBeGreaterThan(0);
+    expect(exampleAgentManifest.limits?.maxSteps).toBeLessThan(20);
+  });
+});
+
+/**
+ * Modes, and the plan-execution path.
+ *
+ * These are the rules that are wrong in a way no amount of clicking reveals quickly: an effect list that goes
+ * stale, or a plan that executes with standing approval nobody granted.
+ */
+describe("conversation modes", () => {
+  it("keeps plan mode's exclusions keyed on effect, not on tool name", () => {
+    // A name list goes stale the moment a tool is added — and the new tool would be reachable in the one mode
+    // where it must not be. This asserts the *shape*, because that is the property that decays silently.
+    for (const excluded of Object.values(EXCLUDED_EFFECTS)) {
+      for (const entry of excluded) {
+        expect(["internal-write", "external-write", "destructive", "read"]).toContain(entry);
+      }
+    }
+  });
+
+  it("excludes every writing effect from plan mode and nothing from the others", () => {
+    expect([...EXCLUDED_EFFECTS.plan].sort()).toEqual(["destructive", "external-write", "internal-write"]);
+    expect(EXCLUDED_EFFECTS.ask).toEqual([]);
+    expect(EXCLUDED_EFFECTS.auto).toEqual([]);
+  });
+
+  it("defaults to asking, not acting", () => {
+    // The default is what most conversations run under, so it is the one place the safe choice matters most.
+    expect(DEFAULT_MODE).toBe("ask");
+  });
+
+  it("describes every mode, with an instruction for the model", () => {
+    for (const mode of CONVERSATION_MODES) {
+      const d = MODE_DESCRIPTIONS[mode];
+      expect(d.mode).toBe(mode);
+      expect(d.summary.length).toBeGreaterThan(10);
+      // The instruction is what the model actually reads. A mode described only to the person is a mode the
+      // model does not know it is in.
+      expect(d.instruction).toContain(`## Mode: ${d.label.toLowerCase()}`);
+    }
+  });
+
+  it("rejects an unrecognised mode rather than coercing it", () => {
+    expect(isConversationMode("plan")).toBe(true);
+    expect(isConversationMode("PLAN")).toBe(false);
+    expect(isConversationMode("yolo")).toBe(false);
+    expect(isConversationMode(undefined)).toBe(false);
+  });
+
+  /**
+   * The one that would be tempting to get wrong. Executing a plan is the person saying "do this"; it is not
+   * them granting standing approval for whatever the steps turn out to involve, with arguments they have not
+   * seen. So it lands in `ask` and the irreversible steps still pause one at a time.
+   */
+  it("executes a plan in ask mode, never auto", () => {
+    expect(PLAN_EXECUTION_MODE).toBe("ask");
+    expect(PLAN_EXECUTION_MODE).not.toBe("auto");
+    expect(EXCLUDED_EFFECTS[PLAN_EXECUTION_MODE]).toEqual([]);
+  });
+
+  it("tells the model in plan mode that its plan will be executed literally", () => {
+    // The plan is written for a moment the model cannot see: a later turn that follows it step by step. If the
+    // instruction does not say so, it writes a summary of intentions instead of steps.
+    expect(MODE_DESCRIPTIONS.plan.instruction).toContain("Execute plan");
+    expect(PLAN_EXECUTION_PROMPT.toLowerCase()).toContain("plan");
+  });
+});

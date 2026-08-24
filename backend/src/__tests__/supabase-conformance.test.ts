@@ -141,26 +141,6 @@ messageStoreConformance(
       },
     };
   },
-  async (store, { tenantId, conversationId, count }) => {
-    const s = store as ReturnType<typeof supabase.createSupabaseMessageStore>;
-    for (let n = 0; n < count; n += 1) {
-      await s.append(tenantId, {
-        id: asId<MessageId>(`m${n}`),
-        conversationId,
-        role: "user",
-        parts: [
-          {
-            id: asId<MessagePartId>(`p${n}`),
-            type: "text",
-            schemaVersion: 1,
-            createdAt: `2020-01-01T00:00:${String(n).padStart(2, "0")}.000Z`,
-            text: `message ${n}`,
-          },
-        ],
-        createdAt: `2020-01-01T00:00:${String(n).padStart(2, "0")}.000Z`,
-      });
-    }
-  },
 );
 
 agentStoreConformance(

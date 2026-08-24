@@ -15,8 +15,10 @@
  */
 
 import type { ExecutionContext } from "../core/context.js";
+import type { QuestionAnswer } from "../core/content-parts.js";
 import type { ConversationId, InteractionId, RunId, TenantId } from "../core/ids.js";
 import { asId } from "../core/ids.js";
+import { AgentPlatformError } from "../core/errors.js";
 import type { ApprovalGrantStore, InteractionStore, RunStore } from "../persistence/index.js";
 import type { JobDispatcher } from "../runtime/index.js";
 import type {
@@ -35,7 +37,26 @@ const defaults = (clock?: Clock, idFactory?: IdFactory) => ({
   newId: idFactory ?? (() => `int-${Math.round(Math.random() * 1e9)}`),
 });
 
-export type QuestionSpec = { readonly key: string; readonly prompt: string; readonly options?: readonly string[] };
+/**
+ * One question the agent asks a person.
+ *
+ * `options` + `multiple` + `allowOther` cover the three shapes a UI actually needs: pick one, pick several, or
+ * write your own — and any combination. Previously only `options` existed, so a client could not tell a choice
+ * from a hint and had to guess.
+ */
+export type QuestionSpec = {
+  readonly key: string;
+  readonly prompt: string;
+  /** Suggested answers. Absent means free text only. */
+  readonly options?: readonly string[];
+  /** More than one may be chosen. A multi-select answer is an array. */
+  readonly multiple?: boolean;
+  /** An answer not on the list is accepted. Defaults to true when there are no options, false when there are. */
+  readonly allowOther?: boolean;
+};
+
+/** Re-exported from `core`, where it lives so the port and this service can share it without a cycle. */
+export type { QuestionAnswer } from "../core/content-parts.js";
 
 export const createQuestionService = (deps: {
   readonly interactions: InteractionStore;
@@ -52,7 +73,13 @@ export const createQuestionService = (deps: {
 }) => {
   const { clock, newId } = defaults(deps.clock, deps.idFactory);
   return {
-    /** Persist a pending question. The run is paused into waiting-for-question by the worker. */
+    /**
+     * Persist a pending question. The run is paused into `waiting-for-question` by the worker.
+     *
+     * That last sentence was aspirational until #163: the worker does pause on a `question.requested` event,
+     * but nothing emitted one, so a tool that called `ask` had its question stored and the run ran on to
+     * completion. See `questionPending` below for the signal that closes the loop.
+     */
     async ask(context: ExecutionContext, runId: RunId, questions: readonly QuestionSpec[]): Promise<PendingQuestion> {
       const question: PendingQuestion = {
         id: asId<InteractionId>(newId()),
@@ -66,11 +93,37 @@ export const createQuestionService = (deps: {
     },
 
     /**
+     * The question a run is parked on, or null — the read side of `answer` (#163).
+     *
+     * The service had `ask` and `answer` and no way to *look at* what was asked, so the only client that could
+     * render a picker was one that had also raised the question and kept it in memory. A worker raises it and a
+     * browser renders it, which are different processes; the browser had the interaction id from the event and
+     * nothing else, and drew an empty text box.
+     */
+    async pending(input: { tenantId: TenantId; runId: RunId }): Promise<PendingQuestion | null> {
+      return deps.interactions.findPendingQuestion({ tenantId: input.tenantId, runId: input.runId });
+    },
+
+    /**
+     * The answer a resumed run has to tell the model about — #163.
+     *
+     * Returns null when nothing was asked, or when the answer was already part of an earlier turn's history:
+     * both mean "say nothing new". The engine calls this on resume, the way it calls `approvals.resume`.
+     */
+    async answered(input: { tenantId: TenantId; runId: RunId }): Promise<PendingQuestion | null> {
+      return deps.interactions.findAnsweredQuestion({ tenantId: input.tenantId, runId: input.runId });
+    },
+
+    /**
      * Record answers and queue the continuation — exactly once. A second answer to the same
      * interaction is a no-op and does NOT re-enqueue, so the run never resumes twice.
      */
     async answer(
-      input: TenantScopeInput & { interactionId: InteractionId; runId: RunId; answers: Readonly<Record<string, string>> },
+      input: TenantScopeInput & {
+        interactionId: InteractionId;
+        runId: RunId;
+        answers: Readonly<Record<string, QuestionAnswer>>;
+      },
     ): Promise<{ resumed: boolean }> {
       const { alreadyResolved } = await deps.interactions.answerQuestion({
         tenantId: input.tenantId,
@@ -169,6 +222,17 @@ export const createApprovalService = (deps: {
       };
       await deps.interactions.createApproval({ tenantId: context.tenantId, approval });
       return approval;
+    },
+
+    /**
+     * The approval a run is parked on, or null — the read side of `decide` (#163).
+     *
+     * Same reasoning as `pending` on the question service: the worker raises it, a browser renders it, and the
+     * browser had only the interaction id from the event. Without this the card could not name the tool it was
+     * asking about, and an approval prompt that says "run a tool?" is one people learn to click through.
+     */
+    async pending(input: { tenantId: TenantId; runId: RunId }): Promise<PendingApproval | null> {
+      return deps.interactions.findPendingApproval({ tenantId: input.tenantId, runId: input.runId });
     },
 
     /**
@@ -298,3 +362,28 @@ export const createApprovalGate = (deps: {
 };
 
 export type ApprovalGate = ReturnType<typeof createApprovalGate>;
+
+/**
+ * The signal a tool raises to park its run on a question — #163.
+ *
+ * A tool cannot pause a run by itself, and it must not block waiting for a person: a delegate that awaited a
+ * human reply would hold a worker slot for as long as someone takes to read, which is the entire thing the
+ * durable runtime exists to avoid. So the tool stores the question, throws this, and returns control.
+ *
+ * The engine recognises the `question_pending` code, tells the model the run is parked, and emits
+ * `question.requested` — the event the worker turns into `waiting-for-question`. Exactly the path an approval
+ * takes, which is the point: the two halves of "ask a human something" should not work differently.
+ *
+ * Thrown rather than returned because it has to survive the tool registry, which flattens a delegate's throw
+ * into a `ToolResult` error. A distinguishing code is what makes that flattening lossless.
+ */
+export const questionPending = (question: { readonly id: InteractionId }): AgentPlatformError =>
+  new AgentPlatformError({
+    code: "question_pending",
+    message: "A question has been put to the person. The run is paused; do not retry or guess an answer.",
+    retryable: false,
+    details: { interactionId: question.id },
+  });
+
+/** True when a refusal is a parked question rather than a failure. Used by the engine; exported for hosts. */
+export const isQuestionPending = (error: { readonly code: string }): boolean => error.code === "question_pending";

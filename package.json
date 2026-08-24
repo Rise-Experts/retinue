@@ -9,7 +9,8 @@
     "backend",
     "server",
     "frontend",
-    "shareflow"
+    "shareflow",
+    "examples"
   ],
   "engines": {
     "node": ">=20"

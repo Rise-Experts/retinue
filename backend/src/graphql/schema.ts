@@ -125,6 +125,52 @@ export const typeDefs = /* GraphQL */ `
     payload: JSON!
   }
 
+  """
+  One question put to a person, as it must be *rendered* — #163.
+
+  The event that suspends a run carries only an interactionId, deliberately: events are thin, and a payload
+  that duplicated the question would be a second copy to keep in step with the stored one. But nothing exposed
+  the stored one either, so a client could answer a question it had no way to display. The example's picker
+  rendered an empty text box next to "The assistant has a question", which is the whole gap in one screenshot.
+  """
+  type PendingQuestionSpec {
+    "Stable key the answer is filed under."
+    key: String!
+    prompt: String!
+    "A short closed list, when there is one. Empty means free text."
+    options: [String!]!
+    "Several choices are allowed, not one."
+    multiple: Boolean!
+    "Free text is accepted alongside the options."
+    allowOther: Boolean!
+  }
+
+  type PendingQuestion {
+    interactionId: ID!
+    runId: ID!
+    questions: [PendingQuestionSpec!]!
+    createdAt: DateTime!
+  }
+
+  """
+  The approval a run is parked on — the read side of decideApproval (#163).
+
+  The same gap as pendingQuestion and milder rather than absent: approval.requested also carries only an
+  interaction id, so a client had no summary to show and fell back to a generic "Run a tool?". Asking someone
+  to authorise an action the card cannot name is how approval becomes a reflex.
+  """
+  type PendingApprovalDetail {
+    interactionId: ID!
+    runId: ID!
+    toolName: String!
+    "One line a person can decide on, written by the host's summarizer."
+    summary: String!
+    riskCategory: String!
+    expiresAt: DateTime!
+    "The arguments the approval is for, so what runs is what was shown."
+    normalizedInput: JSON!
+  }
+
   input QuestionAnswerInput {
     interactionId: ID!
     runId: ID!
@@ -170,6 +216,16 @@ export const typeDefs = /* GraphQL */ `
     usageReport(period: String!, from: String!, to: String!, breakdownLimit: Int): UsageReport!
     "What context shaped a turn — attributes memory/tools/history that influenced the prompt."
     conversationContext(conversationId: ID!, runId: ID): ContextInspection
+    """
+    The question a run is parked on, or null — the read side of answerQuestion (#163).
+
+    Null covers both "this run was never asked anything" and "it has been answered already", because a client
+    has the same thing to do in either case: show no picker. A run that is waiting is the only state with a
+    question to render.
+    """
+    pendingQuestion(runId: ID!): PendingQuestion
+    "The approval a run is parked on, or null (#163)."
+    pendingApproval(runId: ID!): PendingApprovalDetail
   }
 
   type Mutation {

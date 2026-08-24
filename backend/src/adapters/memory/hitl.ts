@@ -33,6 +33,18 @@ export const createMemoryInteractionStore = (): InteractionStore => {
       for (const q of qMap(tenantId).values()) if (q.runId === runId && q.answeredAt === undefined) return q;
       return null;
     },
+    /**
+     * The newest answered question for the run — #163. Newest, because a run may ask more than once and only
+     * the latest answer is news; the earlier ones are already in the model's history from earlier turns.
+     */
+    async findAnsweredQuestion({ tenantId, runId }) {
+      let latest: PendingQuestion | null = null;
+      for (const q of qMap(tenantId).values()) {
+        if (q.runId !== runId || q.answeredAt === undefined) continue;
+        if (latest?.answeredAt === undefined || q.answeredAt > latest.answeredAt) latest = q;
+      }
+      return latest;
+    },
     async answerQuestion({ tenantId, interactionId, answers, at }) {
       const q = qMap(tenantId).get(interactionId);
       if (!q) throw notFound(interactionId);

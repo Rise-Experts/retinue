@@ -74,12 +74,46 @@ export type ToolResultPart = PartBase<"tool-result"> & {
   readonly truncated: boolean;
 };
 
+/**
+ * An answer to one question: a single value, several, or free text.
+ *
+ * Defined in `core` because both the persistence port and the HITL service need it, and either importing the
+ * other would be circular — `hitl` already imports `persistence`. `core` is self-contained by rule (R6), which
+ * makes it the only place a shared type like this can live.
+ *
+ * `string | string[]` rather than always an array: a single-select answer being `["a"]` forces every reader to
+ * unwrap it, and one of them will forget.
+ */
+export type QuestionAnswer = string | readonly string[];
+
 export type QuestionPart = PartBase<"question"> & {
   readonly interactionId: InteractionId;
   readonly questions: readonly {
     readonly key: string;
     readonly prompt: string;
+    /**
+     * Suggested answers. Absent means free text only.
+     *
+     * `options` alone has always been here, but a client had no way to know whether it was being offered a
+     * *choice* or a *hint* — so it had to guess, and two clients guessed differently. The two flags below make
+     * that explicit.
+     */
     readonly options?: readonly string[];
+    /**
+     * Whether more than one option may be chosen.
+     *
+     * Explicit rather than inferred, because "pick a model" and "pick the features you want" are the same shape
+     * on the wire and completely different in a UI. A client that guessed from the prompt text would guess wrong
+     * on the first ambiguous one.
+     */
+    readonly multiple?: boolean;
+    /**
+     * Whether the person may answer with something not on the list.
+     *
+     * Defaults to allowed **when there are no options**, and to *not* allowed when there are — a closed list is
+     * usually closed on purpose. A caller wanting "one of these, or describe your own" says so.
+     */
+    readonly allowOther?: boolean;
   }[];
   readonly answeredAt?: string;
 };

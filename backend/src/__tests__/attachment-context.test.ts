@@ -469,12 +469,15 @@ describe("AC-4: the reference part validates and round-trips", () => {
     // that validates in isolation but loses a field through `jsonb` would pass the schema test and fail here.
     const parsed = parseMessagePart(part());
     const messages = createMemoryMessageStore();
-    messages.append(T1, {
-      id: asId<MessageId>("msg-1"),
-      conversationId: C1,
-      role: "user",
-      parts: [parsed],
-      createdAt: "2026-08-23T10:00:00.000Z",
+    await messages.append({
+      tenantId: T1,
+      message: {
+        id: asId<MessageId>("msg-1"),
+        conversationId: C1,
+        role: "user",
+        parts: [parsed],
+        createdAt: "2026-08-23T10:00:00.000Z",
+      },
     });
     const page = await messages.listByConversation({ tenantId: T1, conversationId: C1, limit: 10 });
     const stored = page.items[0]?.parts[0];

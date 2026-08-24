@@ -19,7 +19,7 @@
  * notifications it emits. Retried *external* writes are made safe by idempotency keys.
  */
 
-import type { ErrorPart } from "../core/content-parts.js";
+import type { ErrorPart, Message } from "../core/content-parts.js";
 import type { ExecutionContext } from "../core/context.js";
 import { AgentPlatformError, type PlatformError } from "../core/errors.js";
 import {
@@ -31,10 +31,10 @@ import {
   type RunStreamState,
 } from "../core/events.js";
 import type { MessageId, MessagePartId, RunId } from "../core/ids.js";
-import type { CheckpointStore, RunStore } from "../persistence/index.js";
+import type { CheckpointStore, MessageStore, RunStore } from "../persistence/index.js";
 import type { UsageRecorder } from "../usage/index.js";
 import type { RunCheckpoint } from "./checkpoint.js";
-import { type DistributedLockStore, type Run } from "./index.js";
+import { isTerminal, type DistributedLockStore, type Run } from "./index.js";
 import { toPlatformError } from "./retry.js";
 
 /** Stable assistant-message id for a run, so a resumed/recovered run upserts one row, not many. */
@@ -93,6 +93,19 @@ export type DurableWorkerDeps = {
   readonly keepaliveEveryMs?: number;
   /** Realtime channel for a run's events. Defaults to `conversation:<id>`. */
   readonly channelFor?: (run: Run) => string;
+  /**
+   * Records the assistant's turn when a run reaches a terminal state — #157.
+   *
+   * Optional, because a host that reads history from the event log instead does not need it. Supply it and the
+   * next run's `loadHistory` sees what the assistant said; leave it out and the agent has amnesia between runs
+   * unless the host reconstructs the turn itself. That reconstruction was the gap: `MessageStore` was
+   * read-only, so the user's turn was persisted and the assistant's never was, and every host had to fold the
+   * event log to paper over the asymmetry.
+   *
+   * Writes are idempotent on a message id derived from the run id, so a resumed run that completes after a
+   * restart records one turn, not two.
+   */
+  readonly messages?: MessageStore;
 };
 
 export type ProcessOutcome = "completed" | "failed" | "cancelled" | "skipped" | "lost" | "paused";
@@ -169,6 +182,33 @@ export const createDurableWorker = (deps: DurableWorkerDeps) => {
       }
     };
     const persist = () => checkpoints.save({ tenantId, checkpoint: toCheckpoint() });
+
+    /**
+     * Record the assistant's turn — #157. Called on every terminal exit, and only there.
+     *
+     * `isTerminal` is the gate rather than a check for "completed", because a run that failed or was cancelled
+     * still streamed text the user read; dropping it would show them a reply that vanishes on reload. The
+     * paused states are excluded by construction: `waiting-for-approval` and `waiting-for-question` transition
+     * back to `queued`, so they are not terminal, and writing there would be worse than not writing at all —
+     * the id is derived from the run, so the partial turn would win and the completed one would be discarded
+     * as a duplicate.
+     */
+    const persistAssistantTurn = async (status: Run["status"]): Promise<void> => {
+      if (deps.messages === undefined || !isTerminal(status)) return;
+      if (state.parts.length === 0) return;
+      const message: Message = {
+        // The same id the client already saw on every `part.added`. A second convention here would mean the
+        // streamed message and the persisted row disagreed about their own identity, so a client that kept the
+        // streamed id could never match it to the row it later loads from history.
+        id: deriveRunMessageId(run.id) as MessageId,
+        conversationId: run.conversationId,
+        runId: run.id,
+        role: "assistant",
+        parts: state.parts,
+        createdAt: clock(),
+      };
+      await deps.messages.append({ tenantId, message });
+    };
 
     /** Finalize any tool calls started but never completed — as interrupted errors, never re-run. */
     const finalizePending = async (): Promise<void> => {
@@ -286,6 +326,7 @@ export const createDurableWorker = (deps: DurableWorkerDeps) => {
         const cancelled = await runs.transition({ tenantId, id: run.id, workerId, to: "cancelled", now: clock() });
         await emit({ type: "run.cancelled" });
         await persist();
+        await persistAssistantTurn("cancelled");
         return { run: cancelled, outcome: "cancelled" };
       }
 
@@ -301,6 +342,7 @@ export const createDurableWorker = (deps: DurableWorkerDeps) => {
       const completed = await runs.transition({ tenantId, id: run.id, workerId, to: "completed", now: clock() });
       await emit({ type: "run.completed" });
       await persist();
+      await persistAssistantTurn("completed");
       return { run: completed, outcome: "completed" };
     } catch (thrown) {
       if (thrown instanceof ClaimLostError) {
@@ -311,6 +353,7 @@ export const createDurableWorker = (deps: DurableWorkerDeps) => {
       const failed = await runs.transition({ tenantId, id: run.id, workerId, to: "failed", now: clock(), error });
       await emit({ type: "run.failed", error });
       await persist();
+      await persistAssistantTurn("failed");
       return { run: failed, outcome: "failed" };
     } finally {
       // Every exit path: completed, paused, failed, claim lost, or a throw from the engine. A timer

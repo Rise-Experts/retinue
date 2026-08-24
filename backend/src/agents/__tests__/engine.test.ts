@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ExecutionContext } from "../../core/context.js";
 import { asId } from "../../core/ids.js";
-import type { RunId } from "../../core/ids.js";
+import type { InteractionId, RunId } from "../../core/ids.js";
+import { AgentPlatformError } from "../../core/errors.js";
+import { questionPending } from "../../hitl/service.js";
+import type { PendingQuestion } from "../../hitl/index.js";
 import type { NeutralStreamChunk, ResolvedModel } from "../../models/index.js";
 import { reduceRunEvents, type RunEvent } from "../../core/events.js";
 import type { EngineEvent, Run } from "../../runtime/index.js";
@@ -114,5 +117,265 @@ describe("default engine — retry before first output", () => {
     const engine = createDefaultEngine(baseDeps(makeStream(), { sleep: async () => {}, now: () => 0 }));
     await expect(collect(engine)).rejects.toMatchObject({ code: "rate_limited" });
     expect(attempts).toBe(1); // not retried — would have duplicated the partial answer
+  });
+});
+
+/**
+ * Generation parameters actually reaching the provider — #160.
+ *
+ * They never did: `streamText` was called with model, system, messages, tools and `stopWhen` only, so
+ * `ModelDefinition.limits.maxOutputTokens` was decorative in the text path. Every test in this file overrides
+ * `streamTurn`, which is exactly why it survived — so these assert on the **request the engine builds**, which
+ * is the thing that was empty.
+ */
+describe("generation parameters — #160", () => {
+  const empty = async function* (): AsyncIterable<NeutralStreamChunk> {
+    yield { type: "finish", usage: { inputTokens: 1, outputTokens: 1, cachedInputTokens: 0 } };
+  };
+
+  /** Capture the request rather than the chunks: the bug was in what was *sent*. */
+  const captureRequest = async (over: Record<string, unknown>) => {
+    let seen: ModelTurnRequest | null = null;
+    const engine = createDefaultEngine(
+      baseDeps(
+        ((req: ModelTurnRequest) => {
+          seen = req;
+          return empty();
+        }) as never,
+        over,
+      ) as never,
+    );
+    await collect(engine);
+    return seen as ModelTurnRequest | null;
+  };
+
+  it("sends the model definition's declared output ceiling", async () => {
+    const req = await captureRequest({
+      resolveModel: () => ({
+        model,
+        modelId: "m",
+        definition: { limits: { maxOutputTokens: 1_024, contextTokens: 8_000 } },
+      }),
+    });
+    expect(req?.maxOutputTokens).toBe(1_024);
+  });
+
+  it("lets an agent ask for less, but never more than its model allows", async () => {
+    // The point of AC-2. Without the `min`, the definition's limit is a *default* an agent can raise — which
+    // means it is not a limit, which was the substance of the bug.
+    const lower = await captureRequest({
+      loadManifest: async () => ({ ...manifest, limits: { ...manifest.limits, maxOutputTokens: 256 } }),
+      resolveModel: () => ({ model, modelId: "m", definition: { limits: { maxOutputTokens: 1_024 } } }),
+    });
+    expect(lower?.maxOutputTokens).toBe(256);
+
+    const higher = await captureRequest({
+      loadManifest: async () => ({ ...manifest, limits: { ...manifest.limits, maxOutputTokens: 99_999 } }),
+      resolveModel: () => ({ model, modelId: "m", definition: { limits: { maxOutputTokens: 1_024 } } }),
+    });
+    expect(higher?.maxOutputTokens).toBe(1_024);
+  });
+
+  it("sends nothing when neither side declares a limit, leaving the provider's default alone", async () => {
+    // Absent, not zero. Pinning an invented number would be this layer overriding a provider default it knows
+    // nothing about — and `maxOutputTokens: 0` would truncate every reply to nothing.
+    const req = await captureRequest({
+      loadManifest: async () => ({ ...manifest, limits: { maxSteps: 4 } }),
+      resolveModel: () => ({ model, modelId: "m" }),
+    });
+    expect(req?.maxOutputTokens).toBeUndefined();
+  });
+
+  it("passes temperature through, including zero", async () => {
+    // `0` is meaningful and distinct from absent: a graded run needs to be able to ask for it, which is what
+    // #141's reproducibility argument partly rests on. A truthiness check here would silently drop it.
+    const req = await captureRequest({
+      loadManifest: async () => ({ ...manifest, limits: { ...manifest.limits, temperature: 0 } }),
+    });
+    expect(req?.temperature).toBe(0);
+  });
+});
+
+/**
+ * A tool that puts a question to a person parks the run — #163.
+ *
+ * `question.requested` was in the event union and the worker turned it into `waiting-for-question`, and no code
+ * path in the platform emitted one. So a tool could store a question durably, tell the model it had asked, and
+ * let the run finish: the picker never appeared, and an answer would have arrived for a run already over.
+ */
+describe("default engine — parking a run on a question (#163)", () => {
+  /** A stream that calls one tool and then keeps talking, so "did it stop?" is observable. */
+  const callsTool = (toolName: string) =>
+    async function* (input: { tools?: readonly { name: string; execute: (i: unknown) => Promise<unknown> }[] }) {
+      const tool = (input.tools ?? []).find((t) => t.name === toolName);
+      if (tool === undefined) throw new Error(`the engine did not declare ${toolName}`);
+      yield { type: "text-delta", id: "t", text: "asking" } as NeutralStreamChunk;
+      const result = await tool.execute({});
+      yield { type: "tool-result", toolCallId: "tc1", toolName, output: result } as NeutralStreamChunk;
+      // Would be emitted if the run were not parked — the assertion below is that it never is.
+      yield { type: "text-delta", id: "t2", text: "carrying on regardless" } as NeutralStreamChunk;
+    };
+
+  const askingTool = (raise: () => never) => ({
+    name: "ask_user",
+    description: "Ask the person",
+    inputSchema: {},
+    execute: async () => raise(),
+  });
+
+  it("emits question.requested and stops, with no gate configured at all", async () => {
+    // The case the old code could not reach: tools were only wrapped when `deps.approvals` was set, so a
+    // deployment with no approval gate had no interception point and no question could ever be noticed.
+    const engine = createDefaultEngine(
+      baseDeps(callsTool("ask_user") as never, {
+        buildTools: async () => [askingTool(() => { throw questionPending({ id: asId<InteractionId>("int-1") }); })],
+      }),
+    );
+    const events = await collect(engine);
+
+    const requested = events.filter((e) => e.type === "question.requested");
+    expect(requested).toHaveLength(1);
+    expect((requested[0] as { interactionId: string }).interactionId).toBe("int-1");
+    // Parked means parked: nothing after the question, and the run is not completed by the engine.
+    expect(events.at(-1)?.type).toBe("question.requested");
+    const texts = events.filter((e) => e.type === "part.added" || e.type === "part.updated");
+    expect(JSON.stringify(texts)).not.toContain("carrying on regardless");
+  });
+
+  it("tells the model the run is parked instead of surfacing a failure", async () => {
+    // A thrown error would teach the model to retry or apologise. It gets a marker naming the interaction.
+    let seen: unknown = null;
+    const engine = createDefaultEngine(
+      baseDeps(
+        (async function* (input: { tools?: readonly { name: string; execute: (i: unknown) => Promise<unknown> }[] }) {
+          const tool = (input.tools ?? []).find((t) => t.name === "ask_user");
+          seen = await tool?.execute({});
+          yield { type: "text-delta", id: "t", text: "ok" } as NeutralStreamChunk;
+        }) as never,
+        { buildTools: async () => [askingTool(() => { throw questionPending({ id: asId<InteractionId>("int-2") }); })] },
+      ),
+    );
+    await collect(engine);
+
+    expect(seen).toMatchObject({ status: "question_pending", interactionId: "int-2" });
+    expect(String((seen as { message: string }).message)).toContain("do not retry");
+  });
+
+  /**
+   * A signal with no interaction id would park a run nobody can ever un-park — a hang, not a pause. It is
+   * treated as an ordinary failure instead, which is loud and recoverable.
+   */
+  it("refuses to park on a question with no interaction id", async () => {
+    const engine = createDefaultEngine(
+      baseDeps(callsTool("ask_user") as never, {
+        buildTools: async () => [
+          askingTool(() => {
+            throw new AgentPlatformError({ code: "question_pending", message: "no id", retryable: false });
+          }),
+        ],
+      }),
+    );
+    await expect(collect(engine)).rejects.toThrow("no id");
+  });
+
+  /**
+   * The **code** is what marks a parked question, not the presence of an interaction id.
+   *
+   * This error carries an `interactionId` and is still a failure — an approval expiring names its interaction
+   * too. Written this way deliberately: the weaker version of this test (a `provider_error` with no details)
+   * passed even with the code check deleted, because the id guard happened to reject it. It proved nothing.
+   */
+  it("leaves every other tool failure a failure, even one naming an interaction", async () => {
+    const engine = createDefaultEngine(
+      baseDeps(callsTool("ask_user") as never, {
+        buildTools: async () => [
+          askingTool(() => {
+            throw new AgentPlatformError({
+              code: "approval_expired",
+              message: "kaboom",
+              retryable: false,
+              details: { interactionId: "int-9" },
+            });
+          }),
+        ],
+      }),
+    );
+    await expect(collect(engine)).rejects.toThrow("kaboom");
+  });
+});
+
+/**
+ * Resuming after an answer — the other half of #163.
+ *
+ * Parking the run was only half the loop. `approvals` has had a resume path from the start; questions had
+ * none, so the model resumed knowing nothing and asked the same question again. Verified live: picking two
+ * options from the picker resumed the run and produced the identical picker.
+ */
+describe("default engine — resuming after a question is answered (#163)", () => {
+  const answeredQuestion = (answers: Record<string, string | readonly string[]>): PendingQuestion => ({
+    id: asId<InteractionId>("int-1"),
+    tenantId: asId("t1"),
+    runId: RUN,
+    questions: [
+      { key: "keep", prompt: "Which notes?", options: ["a", "b", "c"], multiple: true },
+      { key: "why", prompt: "Why?" },
+    ],
+    createdAt: "t",
+    answeredAt: "t2",
+    answers,
+  });
+
+  /** Captures the messages the engine actually sends, which is where the answer has to appear. */
+  const capture = async (over: Record<string, unknown>) => {
+    let sent: readonly { role: string; text: string }[] = [];
+    async function* chunks(req: { messages: readonly { role: string; text: string }[] }) {
+      sent = req.messages;
+      yield { type: "text-delta", id: "t", text: "ok" } as NeutralStreamChunk;
+    }
+    await collect(createDefaultEngine(baseDeps(chunks as never, over)));
+    return sent;
+  };
+
+  it("puts the answer in the model's history so it stops asking", async () => {
+    const sent = await capture({
+      questions: { answered: async () => answeredQuestion({ keep: ["a", "c"], why: "tidier" }) },
+    });
+    const text = sent.map((m) => m.text).join("\n");
+    expect(text).toContain("[answer] Which notes?");
+    // A multi-select renders as a list, not a joined string: a value containing a comma would otherwise read
+    // as more choices than the person made.
+    expect(text).toContain("- a\n- c");
+    expect(text).toContain("[answer] Why?\ntidier");
+  });
+
+  it("emits question.answered for the durable record", async () => {
+    const engine = createDefaultEngine(
+      baseDeps((async function* () { yield { type: "text-delta", id: "t", text: "ok" } as NeutralStreamChunk; }) as never, {
+        questions: { answered: async () => answeredQuestion({ keep: "a" }) },
+      }),
+    );
+    const events = await collect(engine);
+    // A client that reconnects has to see that the question was resolved, or its picker stays on screen.
+    expect(events.filter((e) => e.type === "question.answered")).toHaveLength(1);
+  });
+
+  it("says nothing when the run was never asked anything", async () => {
+    const sent = await capture({ questions: { answered: async () => null } });
+    expect(sent.map((m) => m.text).join("\n")).not.toContain("[answer]");
+  });
+
+  it("skips a question key the person did not answer", async () => {
+    // Partial answers are possible — a client may send only what was filled in. An empty `[answer]` line
+    // would tell the model something false about what it was told.
+    const sent = await capture({ questions: { answered: async () => answeredQuestion({ keep: "a" }) } });
+    const text = sent.map((m) => m.text).join("\n");
+    expect(text).toContain("[answer] Which notes?");
+    expect(text).not.toContain("[answer] Why?");
+  });
+
+  it("needs no questions dependency to run", async () => {
+    // Optional, like `approvals`. A host that asks nothing should not have to wire the machinery for it.
+    const sent = await capture({});
+    expect(sent.length).toBeGreaterThan(0);
   });
 });

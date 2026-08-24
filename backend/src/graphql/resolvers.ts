@@ -166,6 +166,43 @@ export const createResolvers = (deps: ResolverDeps) => {
           currency: buckets.items.find((b) => b.currency !== "")?.currency ?? "",
         };
       },
+      /**
+       * #163. Shaped for rendering: the optional fields are filled in rather than passed through, because a
+       * client that has to treat `null` as "one choice" and `undefined` as "one choice" and `false` as "one
+       * choice" will eventually treat one of them as "several".
+       */
+      async pendingQuestion(_: unknown, args: { runId: string }, ctx: GraphQLContext) {
+        const question = await deps.questions.pending({ tenantId: tid(ctx), runId: asId<RunId>(args.runId) });
+        if (question === null) return null;
+        return {
+          interactionId: question.id,
+          runId: question.runId,
+          createdAt: question.createdAt,
+          questions: question.questions.map((q) => ({
+            key: q.key,
+            prompt: q.prompt,
+            options: q.options ?? [],
+            multiple: q.multiple === true,
+            // Free text with no options is the only sensible reading of a question that offers no choices, so
+            // it is implied there rather than left to each client to infer.
+            allowOther: q.allowOther === true || (q.options ?? []).length === 0,
+          })),
+        };
+      },
+      /** #163, the mirror of `pendingQuestion`. Wired the same way so the two cannot drift. */
+      async pendingApproval(_: unknown, args: { runId: string }, ctx: GraphQLContext) {
+        const approval = await deps.approvals.pending({ tenantId: tid(ctx), runId: asId<RunId>(args.runId) });
+        if (approval === null) return null;
+        return {
+          interactionId: approval.id,
+          runId: approval.runId,
+          toolName: approval.toolName,
+          summary: approval.summary,
+          riskCategory: approval.riskCategory,
+          expiresAt: approval.expiresAt,
+          normalizedInput: approval.normalizedInput,
+        };
+      },
       async conversationContext(_: unknown, args: { conversationId: string; runId?: string }, ctx: GraphQLContext) {
         if (!deps.inspectContext) return null;
         return deps.inspectContext(ctx.execution, {

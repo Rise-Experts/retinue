@@ -30,7 +30,7 @@ import { canonicalizeArgs, type IdempotencyKey, type IdempotencyStore } from "..
 import type { ApprovalGate } from "../hitl/service.js";
 import { toPlatformError } from "../runtime/retry.js";
 import { defineTool, type ToolSpec } from "./define.js";
-import { zodishValidator, type SchemaValidator } from "./registry.js";
+import { zodishValidator, type SchemaValidator, type ToolMisconfiguration } from "./registry.js";
 import type { ShadowRecorder, Tool, ToolEffect } from "./index.js";
 
 /** Effects that require an approval decision before the side effect happens. */
@@ -93,6 +93,14 @@ export type DelegatingToolDeps = {
    * side effect because a dependency was not wired.
    */
   readonly approvals?: ApprovalGate;
+  /**
+   * Where "this tool can never run" is reported — #162, the same sink and the same shape the registry uses.
+   *
+   * Deliberately not a separate type: the case that misled in #155 was wiring one layer and not the other, so
+   * a host that reports both through one function sees "registry" and "delegating-envelope" side by side
+   * instead of guessing which file to open.
+   */
+  readonly onMisconfiguration?: (report: ToolMisconfiguration) => void;
   /**
    * Where a first result is stored so a retry returns it. Absent means gated effects are refused for
    * the same reason: an external write with no replay protection is exactly the thing this envelope
@@ -175,6 +183,26 @@ export const defineDelegatingTool = <I = unknown, O = unknown>(
     },
   });
   const descriptor = { ...defaults.descriptor, delegatesTo: spec.delegatesTo };
+
+  /**
+   * Once per envelope, not once per call — #162 AC-2.
+   *
+   * An envelope wraps exactly one tool, so "once per tool" is one boolean here, where the registry needs a
+   * set. Reported on first execution rather than at construction because that is when the misconfiguration
+   * first has a consequence, and because a tool that is never called has no wiring bug worth reporting.
+   */
+  let reportedMisconfiguration = false;
+  const reportMisconfiguration = (toolName: string, approvalPolicy: string): void => {
+    if (deps.onMisconfiguration === undefined || reportedMisconfiguration) return;
+    reportedMisconfiguration = true;
+    deps.onMisconfiguration({
+      kind: "approval-check-missing",
+      layer: "delegating-envelope",
+      toolName,
+      approvalPolicy,
+      configField: "DelegatingToolDeps.approvals",
+    });
+  };
 
   return {
     descriptor,
@@ -267,9 +295,13 @@ export const defineDelegatingTool = <I = unknown, O = unknown>(
 
         if (gated) {
           if (!deps.approvals) {
+            // Already distinguishable from a real refusal — `capability_unavailable`, not
+            // `approval_required`. #162 adds only the once-per-tool report, so the two layers behave alike.
+            reportMisconfiguration(spec.name, descriptor.approvalPolicy);
             throw refuse(
               "capability_unavailable",
-              `${spec.name} performs a ${effect} and no approval gate is configured`,
+              `${spec.name} performs a ${effect} and no approval gate is configured ` +
+                `(DelegatingToolDeps.approvals), so it can never run. This is a wiring error, not a refusal.`,
             );
           }
           // The ticket, when the call carries one, is handed to the gate rather than interpreted here:

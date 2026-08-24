@@ -63,6 +63,8 @@ const capability = (options: {
     oneTime?: { readonly interactionId: string },
   ) => Promise<boolean>;
   readonly delegate?: (input: { draftId: string }) => unknown;
+  /** #162: collects the once-per-tool "this can never run" reports. */
+  readonly onMisconfiguration?: (report: unknown) => void;
 } = {}) => {
   const trace: string[] = [];
   const { authorization, asked } = policy(options.allow ?? true);
@@ -102,6 +104,7 @@ const capability = (options: {
     {
       authorization: traced,
       ...(options.withApprovals === false ? {} : { approvals: tracedApprovals as never }),
+      ...(options.onMisconfiguration ? { onMisconfiguration: options.onMisconfiguration as never } : {}),
       ...(options.withIdempotency === false ? {} : { idempotency: tracedIdempotency as never }),
     },
     {
@@ -230,6 +233,40 @@ describe("the approval gate", () => {
     if (!result.ok) expect(result.error.code).toBe("capability_unavailable");
     // An unwired dependency must not become permission to perform an unapproved side effect.
     expect(c.delegateCalls()).toBe(0);
+    // #162: and the message says which field to set, since a host with no report sink sees only this.
+    if (!result.ok) expect(result.error.message).toContain("DelegatingToolDeps.approvals");
+  });
+
+  /**
+   * #162 AC-2 and AC-4. The envelope already refused with its own code, so the missing half here was the
+   * report — and the report has to name the *layer*, because wiring one of the two fail-closed checks and not
+   * the other is exactly what sent #155 to the wrong file for two rounds.
+   */
+  it("reports an unwired gate once, naming the tool and the layer", async () => {
+    const reports: unknown[] = [];
+    const c = capability({ withApprovals: false, onMisconfiguration: (r) => reports.push(r) });
+    for (const draftId of ["d1", "d2", "d3"]) {
+      await c.tool.execute({ context: ctx(), input: { draftId } });
+    }
+    expect(reports).toEqual([
+      {
+        kind: "approval-check-missing",
+        layer: "delegating-envelope",
+        toolName: "publish_post",
+        approvalPolicy: "always",
+        configField: "DelegatingToolDeps.approvals",
+      },
+    ]);
+  });
+
+  it("reports nothing when the gate is wired and refuses on its own terms", async () => {
+    const reports: unknown[] = [];
+    const c = capability({ granted: false, onMisconfiguration: (r) => reports.push(r) });
+    const result = await c.tool.execute({ context: ctx(), input: { draftId: "d1" } });
+    expect(result.ok).toBe(false);
+    // The refusal a correctly wired system produces, and it is not a misconfiguration.
+    if (!result.ok) expect(result.error.code).toBe("approval_required");
+    expect(reports).toEqual([]);
   });
 });
 

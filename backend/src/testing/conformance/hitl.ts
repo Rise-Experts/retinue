@@ -75,6 +75,71 @@ export function interactionStoreConformance(
       expect(await store.findPendingQuestion({ tenantId: T1, runId: RUN })).toMatchObject({ id: "q1" });
     });
 
+    /**
+     * Every field of the spec survives, not just the ones the first version had — #163.
+     *
+     * `multiple` and `allowOther` are what let a client tell "pick one" from "pick several" from "or write your
+     * own". An adapter that silently dropped them would render a multi-select as a radio group, and the person
+     * would answer a different question from the one the agent asked. The fixture above deliberately does not
+     * set them, so this covers the case the shared fixture cannot.
+     */
+    it("round-trips every field of a question spec, including multiple and allowOther", async () => {
+      const store = await open();
+      await store.createQuestion({
+        tenantId: T1,
+        question: {
+          ...question("q-full"),
+          questions: [
+            { key: "keep", prompt: "Which notes?", options: ["a", "b", "c"], multiple: true, allowOther: true },
+            { key: "why", prompt: "Why?" },
+          ],
+        },
+      });
+      const found = await store.findPendingQuestion({ tenantId: T1, runId: RUN });
+      expect(found?.questions).toEqual([
+        { key: "keep", prompt: "Which notes?", options: ["a", "b", "c"], multiple: true, allowOther: true },
+        { key: "why", prompt: "Why?" },
+      ]);
+    });
+
+    /**
+     * The answered-question read a resumed run needs — #163.
+     *
+     * The approval side has had `findDecidedApproval` from the start; questions had no equivalent, so an
+     * answered question was invisible to the run that asked it and the model asked again. An adapter that
+     * returned pending questions here, or nothing, reproduces that loop.
+     */
+    it("finds the run's answered question, and does not confuse it with a pending one", async () => {
+      const store = await open();
+      await store.createQuestion({ tenantId: T1, question: question("q1") });
+      // Nothing answered yet: an answer that does not exist must not be invented.
+      expect(await store.findAnsweredQuestion({ tenantId: T1, runId: RUN })).toBeNull();
+
+      await store.answerQuestion({ tenantId: T1, interactionId: asId<InteractionId>("q1"), answers: { channel: "meta" }, at: LATER });
+      const found = await store.findAnsweredQuestion({ tenantId: T1, runId: RUN });
+      expect(found?.id).toBe("q1");
+      expect(found?.answers).toEqual({ channel: "meta" });
+      // And it is no longer pending, or a client would keep showing the picker.
+      expect(await store.findPendingQuestion({ tenantId: T1, runId: RUN })).toBeNull();
+    });
+
+    /** A run may ask twice. The latest answer is the news; the earlier one is already in the history. */
+    it("returns the most recently answered question when a run asked more than once", async () => {
+      const store = await open();
+      await store.createQuestion({ tenantId: T1, question: question("q1") });
+      await store.answerQuestion({ tenantId: T1, interactionId: asId<InteractionId>("q1"), answers: { channel: "first" }, at: NOW });
+      await store.createQuestion({ tenantId: T1, question: question("q2") });
+      await store.answerQuestion({ tenantId: T1, interactionId: asId<InteractionId>("q2"), answers: { channel: "second" }, at: LATER });
+      expect((await store.findAnsweredQuestion({ tenantId: T1, runId: RUN }))?.answers).toEqual({ channel: "second" });
+    });
+
+    it("does not serve one tenant's answered question to another", async () => {
+      const store = await open();
+      await store.createQuestion({ tenantId: T1, question: question("q1") });
+      await store.answerQuestion({ tenantId: T1, interactionId: asId<InteractionId>("q1"), answers: { channel: "meta" }, at: LATER });
+      expect(await store.findAnsweredQuestion({ tenantId: T2, runId: RUN })).toBeNull();
+    });
+
     it("answering reports alreadyResolved false the first time", async () => {
       const store = await open();
       await store.createQuestion({ tenantId: T1, question: question("q1") });
