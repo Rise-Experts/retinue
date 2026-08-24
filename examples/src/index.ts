@@ -44,6 +44,7 @@ import {
   reduceRunEvent,
 } from "@agentkit/backend";
 import type {
+  QuestionSpec,
   AgentManifest,
   ExecutionContext,
   ModelTurnTool,
@@ -58,6 +59,7 @@ import { Redis } from "ioredis";
 import type { AgentkitConfig } from "@agentkit/server";
 import { createDevAuthenticate } from "./auth.js";
 import { resolveExampleModel } from "./model.js";
+import { questionSpecsFrom } from "./questions.js";
 import { NoteNotFound, createExampleStore, createExampleTools, type ExampleStore } from "./tools.js";
 import { exampleAgentManifest, exampleContextProviders } from "./agent.js";
 import { EXCLUDED_EFFECTS, MODE_DESCRIPTIONS, type ConversationMode } from "./modes.js";
@@ -242,20 +244,47 @@ const buildTools = (sql: SqlExecutor): readonly Tool[] => {
     defineDelegatingTool(deps, {
       name: "ask_user",
       description:
-        "Ask the person a question and wait for their answer. Use when a choice is genuinely theirs to make " +
-        "rather than guessing. Provide options when there is a sensible short list.",
+        "Ask the person one or more questions and wait for their answers. Use when a choice is genuinely " +
+        "theirs to make rather than guessing. Provide options when there is a sensible short list. Ask " +
+        "everything you need in ONE call: the person answers them together and the run resumes once.",
       category: "assistant",
       effect: "read" as const,
       delegatesTo: "questions.ask",
+      /**
+       * A **batch** of questions, not one.
+       *
+       * `PendingQuestion.questions` has always been a list and `answers` has always been keyed by `key`, so one
+       * interaction can carry several questions and resume on one answer. The tool only ever created one, which
+       * meant a model needing two answers called it twice — and the second call landed while the run was already
+       * being parked for the first, leaving an orphaned pending question whose card reappeared after the first
+       * was answered. Watched exactly that happen.
+       *
+       * One call, several questions, one resume. `questions` is the field; `question` is still accepted because
+       * models trained on the older single-question shape will keep sending it.
+       */
       inputSchema: {
         type: "object",
         properties: {
-          question: { type: "string" },
+          questions: {
+            type: "array",
+            description: "Ask everything at once. The person answers them together.",
+            items: {
+              type: "object",
+              properties: {
+                key: { type: "string", description: "Short identifier for this answer, e.g. 'channel'." },
+                question: { type: "string" },
+                options: { type: "array", items: { type: "string" } },
+                multiple: { type: "boolean" },
+                allowOther: { type: "boolean" },
+              },
+              required: ["question"],
+            },
+          },
+          question: { type: "string", description: "Shorthand for a single question." },
           options: { type: "array", items: { type: "string" } },
           multiple: { type: "boolean" },
           allowOther: { type: "boolean" },
         },
-        required: ["question"],
       },
       /**
        * Raising the question is the *whole* effect, and it must suspend the run.
@@ -271,24 +300,10 @@ const buildTools = (sql: SqlExecutor): readonly Tool[] => {
        * answer, if anyone had given one, would have arrived for a run that was already over.
        */
       delegate: async (input: unknown, context: ExecutionContext) => {
-        const raw = input as {
-          question?: unknown;
-          options?: unknown;
-          multiple?: unknown;
-          allowOther?: unknown;
-        };
-        const options = Array.isArray(raw.options) ? raw.options.map((o) => String(o)).filter((o) => o !== "") : [];
-        const question = await questionServiceFor(sql).ask(context, context.runId as never, [
-          {
-            key: "answer",
-            prompt: String(raw.question ?? "").slice(0, 500),
-            ...(options.length > 0 ? { options } : {}),
-            ...(raw.multiple === true ? { multiple: true } : {}),
-            // Free text is allowed by default when there are no options, and only on request when there are —
-            // a short list is usually closed on purpose.
-            ...(raw.allowOther === true || options.length === 0 ? { allowOther: true } : {}),
-          },
-        ]);
+        const specs = questionSpecsFrom(input);
+        // An empty ask is a model mistake, not a question. Parking a run on nothing answerable would hang it.
+        if (specs.length === 0) throw new Error("ask_user needs at least one question with a prompt");
+        const question = await questionServiceFor(sql).ask(context, context.runId as never, specs);
         // Thrown, not returned. The engine reads the `question_pending` code, tells the model the run is
         // parked, and emits `question.requested` — which is what actually suspends it.
         throw questionPending(question);

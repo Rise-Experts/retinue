@@ -85,6 +85,25 @@ interface KnowledgeStore {}
 interface ArtifactStore {}
 ```
 
+### `MessageStore.append` (#157)
+
+Worth calling out because it was absent for a long time and its absence was not obvious. `MessageStore` was
+read-only, and both the Postgres and in-memory adapters carried an `append` documented as a "test-only
+affordance" — so there was no *supported* way for an application to record what a user said, and every host
+reached past the port with a cast or wrote raw SQL. The engine reads history from this store, so something has
+to write to it.
+
+It is **insert-only and idempotent on the id**. A message is immutable once written: editing one would rewrite
+history a client has already streamed and a model has already been shown. So there is deliberately no update and
+no delete, and a repeat of the same id is a no-op rather than an error — a retried request must not fail and must
+not duplicate.
+
+The assistant's turn is written by `createDurableWorker`, at every **terminal** transition and only there. A run
+that failed or was cancelled still streamed text the person read; dropping it would show them a reply that
+vanishes on reload. The paused states are excluded by construction — they transition back to `queued`, and
+writing there would take the id first, so the partial turn would win and the completed one would be silently
+discarded as a duplicate.
+
 Separate infrastructure ports:
 
 ```ts

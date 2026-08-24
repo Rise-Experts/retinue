@@ -64,6 +64,36 @@ tool absent from discovery is rejected, not silently run.
 - **RAG** (doc 05): `scope()` supplies the authorization filter applied before vector and
   keyword search.
 
+## Two fail-closed approval layers, and telling them apart (#162)
+
+A gated tool is guarded twice, independently:
+
+1. `DelegatingToolDeps.approvals` — the delegating envelope's gate.
+2. `ToolRegistryConfig.approval` — the registry's own check, which covers *every* tool including MCP-imported
+   ones that never pass through an envelope.
+
+Two layers is correct, and both defaults are correct: refusing when the dependency is absent is much better
+than performing an unapproved side effect. What was missing was any way to tell the two situations apart. Both
+refused with `approval_required`, and that was emitted both when a call was genuinely not approved — the correct,
+expected refusal — and when **no approval check was configured at all**, so nothing could ever be approved.
+
+Those are completely different facts. The second is a wiring bug that makes a whole class of tool permanently
+unusable, and it presented as the first. It cost two rounds of debugging and a platform issue filed against the
+wrong thing, because fixing one layer changed nothing observable while the other still refused identically.
+
+Now:
+
+- An absent check returns `capability_unavailable` with a message naming the tool **and the config field to
+  set**, because a host with no diagnostics sink sees only the message.
+- Both layers report once per tool through one `ToolMisconfiguration` sink — once, not per call, since a wiring
+  bug read a hundred times is a wiring bug nobody notices. A construction-time scan is not possible:
+  `ToolProvider.listTools` takes an `ExecutionContext`, so which gated tools exist is not knowable until a
+  request is being served.
+- The fail-closed behaviour is unchanged. Nothing here makes an unapproved side effect reachable.
+
+The general rule this is an instance of: **a fail-safe default that is indistinguishable from correct operation
+stops being a safety feature and becomes a debugging cost.**
+
 ## Auditing
 
 Every deny, every granted external write and every obligation is recorded as an audit event

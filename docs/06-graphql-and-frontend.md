@@ -17,6 +17,8 @@ Resolvers are thin: authenticate, validate, construct execution context and call
 - Knowledge collections and sources.
 - Files and processing state.
 - Artifacts and versions.
+- The pending question or approval a run is parked on (#163). Every mutation that resolves a human interaction
+  needs a query that describes it, or a client can decide something it cannot display — see below.
 
 ## Mutations
 
@@ -29,6 +31,23 @@ Resolvers are thin: authenticate, validate, construct execution context and call
 - Begin/complete attachment upload.
 - Create collection and ingest/remove source.
 - Create/update/export artifact.
+
+### Interactions need a read side (#163)
+
+`answerQuestion` and `decideApproval` shipped with no counterpart, and the suspending events carry only an
+`interactionId` — events are thin on purpose, and a payload duplicating the question would be a second copy to
+keep in step with the stored one. The consequence was that the worker raised an interaction, a browser was told
+its id, and had nothing else: a question rendered as an empty text box, and an approval card fell back to
+"Run a tool?".
+
+- `pendingQuestion(runId)` returns each spec's `prompt`, `options`, `multiple` and `allowOther`, with the
+  optional fields **resolved** — a client made to treat `null`, `undefined` and `false` as the same thing will
+  eventually treat one of them as `true`.
+- `pendingApproval(runId)` returns the tool name, summary, risk category and the normalized input, so what runs
+  is what was shown.
+
+Both return null once the interaction is resolved, so a stale card cannot be used to decide the same thing
+twice.
 
 ## Subscriptions
 

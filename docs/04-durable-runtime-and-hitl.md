@@ -70,6 +70,57 @@ fixed loop:
 
 `ask_questions` is used for consequential ambiguity that cannot be resolved from context or tools. Questions persist as typed message parts. The run moves to `WaitingForQuestion`; an answer mutation records the answer and queues a continuation.
 
+### How the loop closes (#163)
+
+The paragraph above described the intent, and for a long time it described only that. `question.requested` was
+in the event union and the worker turned it into `waiting-for-question` — and **nothing in the platform could
+emit one**. A tool that raised a question had it stored durably, the model was told it had asked, and the run ran
+on to completion. Then the mirror-image gap on the way back: `approvals` had a resume path from the start and
+questions had none, so an answered question was invisible to the run that asked it and the model asked again.
+
+The loop is now the same shape as the approval loop, deliberately, because the two halves of "ask a human
+something" should not work differently:
+
+| Step | Mechanism |
+|---|---|
+| A tool asks | `questions.ask(...)` stores a `PendingQuestion` with one or more `QuestionSpec`s, then throws `questionPending(question)`. |
+| The run parks | The engine recognises the `question_pending` code, hands the model a marker naming the interaction, and emits `question.requested`. The worker parks the run in `waiting-for-question`. |
+| A person answers | `answerQuestion` records the answers, transitions the run back to `queued` and enqueues the continuation — once. |
+| The model is told | On resume the engine reads `findAnsweredQuestion(runId)`, emits `question.answered`, and pushes the answers into the model's history as a `user`-role line. |
+
+Two design points worth stating, because both are asymmetries with approvals rather than oversights:
+
+- **A tool must not block waiting for a reply.** A delegate that awaited a human would hold a worker slot for as
+  long as someone takes to read, which is the whole thing the durable runtime exists to avoid. So it stores,
+  throws, and returns control.
+- **There is no claim step.** `findDecidedApproval` is paired with `claimApproval` because a claim makes an
+  external write happen exactly once. An answer produces a line of history, which is idempotent, and scoping the
+  read to the run already bounds it — the next turn is a different run. Adding a claim would mean a *recovered*
+  run rebuilt its history without the answer, which is the original bug again.
+
+**One interaction can carry several questions.** `PendingQuestion.questions` is a list and `answers` is keyed by
+each spec's `key`, so a caller needing three answers asks once and resumes once. A tool that asks three times
+instead gets three interactions, and the second and third are raised while the run is already being parked for
+the first — leaving orphaned questions whose prompts reappear after the first is answered.
+
+`QuestionSpec` carries `options`, `multiple` and `allowOther`: pick one, pick several, or write your own, and any
+combination. Without them a client cannot tell a choice from a hint and has to guess from the prompt.
+
+### Reading a pending interaction
+
+`question.requested` and `approval.requested` carry only an `interactionId`. That is deliberate — events are
+thin, and a payload duplicating the question would be a second copy to keep in step with the stored one. The
+read side is a query:
+
+- `pendingQuestion(runId)` — the specs to render, with the optional fields resolved to real values rather than
+  absence a client has to interpret.
+- `pendingApproval(runId)` — the tool name, summary, risk category and the **normalized input**, so what runs is
+  what was shown.
+
+Both return null once resolved, so a client cannot offer a decision twice. Before these existed a client could
+answer a question it had no way to display, and an approval card fell back to "Run a tool?" — asking someone to
+authorise an action it could not name is how approval becomes a reflex.
+
 ## Approvals
 
 `request_approval` is required before policy-classified actions such as publishing, scheduling, sending replies, deleting, external sharing and paid marketing changes.

@@ -63,13 +63,8 @@
   .seg button.on { background:var(--accent); color:#fff; }
   .modehint { font-size:11.5px; color:var(--faint); margin-top:6px; line-height:1.45; }
 
-  /* the option picker for ask_user */
-  .opts { display:grid; gap:6px; margin:9px 0 4px; }
-  .opt { display:flex; gap:9px; align-items:flex-start; border:1px solid var(--warn-line); border-radius:9px;
-         padding:8px 11px; cursor:pointer; background:var(--panel); font-size:13.5px; }
-  .opt:hover { border-color:var(--warn); }
-  .opt.on { border-color:var(--warn); background:var(--warn-bg); }
-  .opt input { margin:3px 0 0; accent-color:var(--warn); }
+  /* The picker's styles live with the question panel below — see `.ask`. These global `.opt` rules were the
+     in-transcript version's and are gone with it; two sets for one control is how they drift. */
   .who { border-top:1px solid var(--line); padding:12px 14px; display:grid; gap:7px; }
   .who label { font-size:11px; color:var(--faint); display:block; margin-bottom:2px; }
   .who input, .who select { width:100%; padding:6px 9px; font:inherit; font-size:13px; border:1px solid var(--line);
@@ -155,6 +150,37 @@
         color:#fff; font-size:17px; cursor:pointer; display:grid; place-items:center; }
   .go:disabled { opacity:.35; cursor:default; }
   .hint { font-size:11.5px; color:var(--faint); margin:7px auto 0; max-width:44rem; padding:0 24px; }
+
+  /* ---------------------------------------------------------------- the question panel */
+  .ask { max-width:44rem; margin:0 auto 12px; padding:14px 16px; border:1px solid var(--warn-line);
+         border-radius:var(--radius); background:var(--warn-bg); box-shadow:var(--shadow); }
+  .ask .tabs { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:11px; }
+  /* A tab per question, so the shape of what is being asked is visible before answering any of it. */
+  .ask .tab { font:inherit; font-size:12px; padding:5px 11px; border-radius:999px; cursor:pointer;
+              border:1px solid var(--warn-line); background:transparent; color:var(--muted); }
+  .ask .tab.on { background:var(--warn); border-color:var(--warn); color:#fff; }
+  /* Answered tabs stay legible rather than going quiet — reviewing before submitting is the point. */
+  .ask .tab.done { border-color:var(--ok); color:var(--ok); }
+  .ask .tab.done.on { background:var(--ok); border-color:var(--ok); color:#fff; }
+  .ask .q { font-size:14.5px; font-weight:550; margin:0 0 10px; }
+  .ask .opts { display:grid; gap:7px; margin-bottom:11px; }
+  .ask .opt { display:flex; align-items:center; gap:10px; padding:9px 12px; font-size:13.5px; cursor:pointer;
+              border:1px solid var(--warn-line); border-radius:10px; background:var(--panel); }
+  .ask .opt:hover { border-color:var(--warn); }
+  .ask .opt input { margin:0; flex:0 0 auto; accent-color:var(--warn); }
+  .ask .opt span { flex:1; }
+  .ask .other { width:100%; font:inherit; font-size:13.5px; padding:9px 12px; margin-bottom:11px;
+                border:1px solid var(--warn-line); border-radius:10px; background:var(--panel); color:inherit; }
+  .ask .other:focus { outline:none; border-color:var(--warn); }
+  .ask .row { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .ask .row .spacer { flex:1; }
+  .ask button.nav { font:inherit; font-size:13px; padding:7px 14px; border-radius:9px; cursor:pointer;
+                    border:1px solid var(--warn-line); background:var(--panel); color:inherit; }
+  .ask button.nav:disabled { opacity:.4; cursor:default; }
+  .ask button.submit { font:inherit; font-size:13px; padding:7px 16px; border-radius:9px; cursor:pointer;
+                       border:1px solid var(--warn); background:var(--warn); color:#fff; }
+  .ask button.submit:disabled { opacity:.5; cursor:default; }
+  .ask .count { font-size:12px; color:var(--muted); }
 </style>
 
 <aside>
@@ -179,6 +205,12 @@
 <main>
   <div id="log"></div>
   <div class="composer">
+    <!--
+      The question panel sits above the input, not in the message flow. A card that scrolls away with the
+      transcript is a card you lose while reading back through the answer you were given, and a run parked on a
+      question nobody can find is parked forever.
+    -->
+    <div class="ask" id="ask" hidden></div>
     <div class="wrap">
       <textarea id="text" rows="1" placeholder="Message the assistant…"></textarea>
       <button class="go" id="send" title="Send">↑</button>
@@ -401,7 +433,7 @@
     else if (type === "tool.completed") step(st, `✓ ${event.toolName ?? "tool"}`, "good");
     else if (type === "tool.failed") step(st, `✗ ${event.toolName ?? "tool"} — ${event.error?.message ?? "failed"}`, "bad");
     else if (type === "approval.requested") void approvalGate(runId, st, event);
-    else if (type === "question.requested") void askGate(event, runId, st);
+    else if (type === "question.requested") void askUser(event, runId, st);
     else if (type === "run.failed") note(`The run failed: ${event.error?.message ?? "unknown error"}`, true);
   };
 
@@ -472,7 +504,26 @@
    * EventSource connection could never be authenticated. Reading the body as a stream is the only shape that
    * carries headers.
    */
+  /**
+   * Runs with a reader already attached.
+   *
+   * The SSE connection survives a pause: the server keeps the stream open while the run waits for an approval
+   * or an answer, so when it resumes the *existing* reader receives the rest. Opening a second one after
+   * answering produced a reader whose every frame was deduped away by `seen` — silent, and its bubble stayed
+   * empty while the reply appeared somewhere else.
+   */
+  const live = new Set();
+
   const stream = async (runId, st = newTurnState()) => {
+    live.add(runId);
+    try {
+      return await readStream(runId, st);
+    } finally {
+      live.delete(runId);
+    }
+  };
+
+  const readStream = async (runId, st) => {
     const r = await fetch(
       `/runs/events?runId=${encodeURIComponent(runId)}&conversationId=${encodeURIComponent(conversationId)}`,
       { headers: { ...headers(), accept: "text/event-stream" } },
@@ -522,7 +573,22 @@
    * and no options — the picker looked built and was unusable. `pendingQuestion` is the platform query that
    * closes that gap.
    */
-  const askGate = async (event, runId, st) => {
+  /**
+   * The question panel — one question at a time, above the input, submitted together.
+   *
+   * Above the composer rather than in the transcript: a card in the message flow scrolls away while you read
+   * back through what you were told, and a run parked on a question nobody can find stays parked.
+   *
+   * One question shown at a time with a tab per question, because a wall of six pickers is a form, and a form
+   * is answered by skimming. Nothing is sent until Submit: the answers go in **one** `answerQuestion` call, so
+   * the run resumes once with everything, and moving between tabs costs nothing and commits nothing.
+   *
+   * `askUser` collects; `submitAnswers` sends. Answers live in a plain object keyed by the spec's `key`, which
+   * is the same shape the platform stores — so there is no mapping step to get wrong.
+   */
+  let asking = null;
+
+  const askUser = async (event, runId, st = null) => {
     let questions = [];
     let interactionId = event.interactionId;
     try {
@@ -536,11 +602,217 @@
     } catch (e) {
       note(`Could not read the question: ${e.message}`, true);
     }
-    if (!interactionId) return;
-    event = { ...event, interactionId };
-    // Drawn even if the fetch failed: a free-text box the person can answer beats a run parked with no card at
-    // all, and `allowOther` defaults to true when there are no options.
-    gate({ ...event, questions }, runId, "question", st);
+    // Nothing answerable: better to say so than to draw a panel that cannot resume the run.
+    if (!interactionId || questions.length === 0) {
+      note("The assistant asked something the page could not read. The run is waiting.", true);
+      return;
+    }
+    /**
+     * The live reader's state is kept, so submitting can end its bubble.
+     *
+     * A run that pauses and resumes is two stretches of assistant activity with the person's answer between
+     * them, and the transcript should read that way. The SSE connection survives the pause, so without this the
+     * reader keeps painting into the bubble it already had — and the answer bubble ended up below a reply it
+     * had caused. Clearing `st.bubble` on submit makes the next event open a fresh one underneath.
+     *
+     * Null on the reopen path: there is no live reader then.
+     */
+    asking = { interactionId, runId, questions, at: 0, answers: {}, other: {}, st: st ?? null };
+    paintAsk();
+  };
+
+  const closeAsk = () => {
+    asking = null;
+    const box = $("ask");
+    box.hidden = true;
+    box.innerHTML = "";
+  };
+
+  /** True when this question has something to send. Free text counts; an empty selection does not. */
+  const answeredAt = (i) => {
+    const q = asking.questions[i];
+    const picked = asking.answers[q.key];
+    if (Array.isArray(picked) && picked.length > 0) return true;
+    if (typeof picked === "string" && picked !== "") return true;
+    return String(asking.other[q.key] ?? "").trim() !== "";
+  };
+
+  const paintAsk = () => {
+    const box = $("ask");
+    if (asking === null) return closeAsk();
+    box.hidden = false;
+    box.innerHTML = "";
+    const q = asking.questions[asking.at];
+    const many = asking.questions.length > 1;
+
+    if (many) {
+      const tabs = document.createElement("div");
+      tabs.className = "tabs";
+      asking.questions.forEach((spec, i) => {
+        const t = document.createElement("button");
+        t.className = `tab${i === asking.at ? " on" : ""}${answeredAt(i) ? " done" : ""}`;
+        // Numbered, with the prompt as the tooltip: a tab wide enough for a whole question is not a tab.
+        t.textContent = `${i + 1}. ${spec.prompt.replace(/\?$/, "").slice(0, 22)}${spec.prompt.length > 23 ? "…" : ""}`;
+        t.title = spec.prompt;
+        t.onclick = () => { asking.at = i; paintAsk(); };
+        tabs.append(t);
+      });
+      box.append(tabs);
+    }
+
+    const prompt = document.createElement("p");
+    prompt.className = "q";
+    prompt.textContent = q.prompt;
+    box.append(prompt);
+
+    const options = Array.isArray(q.options) ? q.options : [];
+    if (options.length > 0) {
+      const opts = document.createElement("div");
+      opts.className = "opts";
+      for (const option of options) {
+        const row = document.createElement("label");
+        row.className = "opt";
+        const input = document.createElement("input");
+        input.type = q.multiple ? "checkbox" : "radio";
+        input.name = `ask-${asking.interactionId}-${q.key}`;
+        const current = asking.answers[q.key];
+        input.checked = q.multiple
+          ? Array.isArray(current) && current.includes(option)
+          : current === option;
+        input.onchange = () => {
+          if (q.multiple) {
+            const set = new Set(Array.isArray(asking.answers[q.key]) ? asking.answers[q.key] : []);
+            if (input.checked) set.add(option); else set.delete(option);
+            asking.answers[q.key] = [...set];
+          } else {
+            asking.answers[q.key] = input.checked ? option : undefined;
+          }
+          // Repainted so the tab's answered state and the Submit button follow the selection immediately.
+          paintAsk();
+        };
+        const label = document.createElement("span");
+        label.textContent = option;
+        row.append(input, label);
+        opts.append(row);
+      }
+      box.append(opts);
+    }
+
+    if (q.allowOther || options.length === 0) {
+      const other = document.createElement("input");
+      other.className = "other";
+      other.placeholder = options.length > 0 ? "Or write your own…" : "Your answer";
+      other.value = asking.other[q.key] ?? "";
+      other.oninput = () => { asking.other[q.key] = other.value; paintTabsOnly(); };
+      // Enter moves on rather than submitting: the last question's Enter would otherwise send a form the
+      // person had not finished looking at.
+      other.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); next(); } };
+      box.append(other);
+      if (asking.at === 0 || document.activeElement === document.body) setTimeout(() => other.focus(), 0);
+    }
+
+    const row = document.createElement("div");
+    row.className = "row";
+    const back = document.createElement("button");
+    back.className = "nav";
+    back.textContent = "Back";
+    back.disabled = asking.at === 0;
+    back.onclick = () => { asking.at -= 1; paintAsk(); };
+
+    const forward = document.createElement("button");
+    forward.className = "nav";
+    forward.textContent = "Next";
+    forward.disabled = asking.at >= asking.questions.length - 1;
+    forward.onclick = next;
+
+    const count = document.createElement("span");
+    count.className = "count";
+    const answered = asking.questions.filter((_, i) => answeredAt(i)).length;
+    count.textContent = many ? `${answered} of ${asking.questions.length} answered` : "";
+
+    const submit = document.createElement("button");
+    submit.className = "submit";
+    submit.textContent = "Submit";
+    // Every question, not just the one on screen. A partial submit resumes the run with holes in it, and the
+    // model then asks again for the parts it did not get.
+    submit.disabled = answered < asking.questions.length;
+    submit.title = submit.disabled ? "Answer every question first" : "Send all answers";
+    submit.onclick = () => void submitAnswers();
+
+    if (many) row.append(back, forward);
+    row.append(count);
+    const spacer = document.createElement("span");
+    spacer.className = "spacer";
+    row.append(spacer, submit);
+    box.append(row);
+  };
+
+  /** Repaint just the tabs and the footer, so typing in the free-text box does not steal its own focus. */
+  const paintTabsOnly = () => {
+    const box = $("ask");
+    if (asking === null) return;
+    const many = asking.questions.length > 1;
+    const answered = asking.questions.filter((_, i) => answeredAt(i)).length;
+    box.querySelectorAll(".tab").forEach((t, i) => t.classList.toggle("done", answeredAt(i)));
+    const count = box.querySelector(".count");
+    if (count) count.textContent = many ? `${answered} of ${asking.questions.length} answered` : "";
+    const submit = box.querySelector("button.submit");
+    if (submit) submit.disabled = answered < asking.questions.length;
+  };
+
+  const next = () => {
+    if (asking === null) return;
+    if (asking.at < asking.questions.length - 1) { asking.at += 1; paintAsk(); }
+  };
+
+  const submitAnswers = async () => {
+    if (asking === null) return;
+    const { interactionId, runId, questions } = asking;
+    const answers = {};
+    for (const q of questions) {
+      const free = String(asking.other[q.key] ?? "").trim();
+      const picked = asking.answers[q.key];
+      if (q.multiple) {
+        // Free text joins the chosen options rather than replacing them — with `multiple`, "these two and
+        // also this" is a coherent answer, and dropping either half would be answering something else.
+        const list = [...(Array.isArray(picked) ? picked : []), ...(free === "" ? [] : [free])];
+        answers[q.key] = list;
+      } else {
+        // Single-select: free text wins when both are given. The person typed it after clicking, and the
+        // typing is the more specific act.
+        answers[q.key] = free !== "" ? free : (typeof picked === "string" ? picked : "");
+      }
+    }
+    const box = $("ask");
+    box.querySelectorAll("button").forEach((b) => { b.disabled = true; });
+
+    try {
+      await gql(`mutation($i: QuestionAnswerInput!){ answerQuestion(input: $i) }`,
+        { i: { interactionId, runId, answers } });
+      // Shown in the transcript as what it is: the person's turn. Closing the panel without a trace would
+      // leave no record of what was chosen once the run moved on.
+      const summary = questions
+        .map((q) => `${q.prompt} — ${Array.isArray(answers[q.key]) ? answers[q.key].join(", ") : answers[q.key]}`)
+        .join("\n");
+      // The reply so far is finished: drop its caret and end the bubble, so what comes after the answer opens
+      // a new one below it rather than continuing the one that asked.
+      if (asking.st) {
+        asking.st.bubble?.querySelector(".caret")?.remove();
+        asking.st.bubble = null;
+        asking.st.trace = null;
+        asking.st.steps = null;
+        asking.st.text = "";
+      }
+      turn("me").textContent = summary;
+      closeAsk();
+      $("send").disabled = true;
+      // Only when nothing is already reading this run. The connection survives the pause, so a second reader
+      // would be deduped into silence by `seen` and its own bubble would never receive anything.
+      if (!live.has(runId)) void stream(runId);
+    } catch (e) {
+      note(`Could not send the answers: ${e.message}`, true);
+      paintAsk();
+    }
   };
 
   /**
@@ -566,24 +838,29 @@
     gate({ ...event, ...(detail ?? {}) }, runId, "approval", st);
   };
 
+  /**
+   * The approval card — **approvals only**.
+   *
+   * It used to render questions too, in the message flow. Questions moved to the panel above the composer,
+   * which is a different interaction: an approval is one decision about one act and belongs beside the act in
+   * the transcript, where a question is a form the person fills in before the conversation continues.
+   */
   const gate = (event, runId, kind, st) => {
     const id = event.interactionId;
     if (!id) return;
     const box = document.createElement("div");
     box.className = "gate";
     const h = document.createElement("h4");
-    h.textContent = kind === "approval" ? "Approval needed" : "The assistant has a question";
+    h.textContent = "Approval needed";
     const d = document.createElement("div");
     d.className = "d";
     // The summary comes from `pendingApproval` now, so this names the actual act rather than "a tool" (#163).
-    d.textContent = kind === "approval"
-      ? (event.summary ?? `Run ${event.toolName ?? "a tool"}?`) + " This cannot be undone."
-      : (event.questions ?? []).map((q) => q.prompt).join(" ");
+    d.textContent = (event.summary ?? `Run ${event.toolName ?? "a tool"}?`) + " This cannot be undone.";
     box.append(h, d);
     st.bubble.append(box);
     const done = (label) => { box.innerHTML = `<h4>${label}</h4>`; };
 
-    if (kind === "approval") {
+    {
       for (const [label, decision, primary] of [["Approve", "allow-once", true], ["Deny", "deny", false]]) {
         const b = document.createElement("button");
         if (primary) b.className = "primary";
@@ -596,73 +873,13 @@
               { i: { interactionId: id, runId, decision } });
             done(label === "Approve" ? "Approved" : "Denied");
             $("send").disabled = true;
-            void stream(runId, st);
+            // Same guard as the answer path: the reader that was open when the run parked is still open, and a
+            // second one would have every frame deduped away.
+            if (!live.has(runId)) void stream(runId, st);
           } catch (e) { note(`Could not record the decision: ${e.message}`, true); }
         };
         box.append(b);
       }
-    } else {
-      /**
-       * The option picker — single, multiple, or free text (#155).
-       *
-       * Driven entirely by the question's own `options` / `multiple` / `allowOther` fields, which is why those
-       * were added to the platform: without them this had to guess, and a guess is wrong the first time somebody
-       * asks a multi-select.
-       */
-      const q = (event.questions ?? [])[0] ?? { key: "answer" };
-      const options = Array.isArray(q.options) ? q.options : [];
-      const multiple = q.multiple === true;
-      const allowOther = q.allowOther === true || options.length === 0;
-      const chosen = new Set();
-
-      const opts = document.createElement("div");
-      opts.className = "opts";
-      for (const option of options) {
-        const row = document.createElement("label");
-        row.className = "opt";
-        const input = document.createElement("input");
-        input.type = multiple ? "checkbox" : "radio";
-        input.name = `q-${id}`;
-        input.onchange = () => {
-          if (multiple) {
-            if (input.checked) chosen.add(option); else chosen.delete(option);
-          } else {
-            chosen.clear();
-            chosen.add(option);
-            for (const other of opts.querySelectorAll(".opt")) other.classList.remove("on");
-          }
-          row.classList.toggle("on", input.checked);
-        };
-        row.append(input, document.createTextNode(option));
-        opts.append(row);
-      }
-      if (options.length > 0) box.append(opts);
-
-      const free = document.createElement("input");
-      free.placeholder = options.length > 0 ? "Or write your own…" : "Your answer";
-      if (!allowOther) free.style.display = "none";
-      const b = document.createElement("button");
-      b.className = "primary";
-      b.textContent = "Answer";
-
-      const submit = async () => {
-        const typed = free.value.trim();
-        // Free text wins when both are given: someone who typed after picking has changed their mind, and the
-        // typed value is the more specific of the two.
-        const value = typed !== "" ? typed : multiple ? [...chosen] : [...chosen][0];
-        if (value === undefined || (Array.isArray(value) && value.length === 0)) return;
-        try {
-          await gql(`mutation($i: QuestionAnswerInput!){ answerQuestion(input: $i) }`,
-            { i: { interactionId: id, runId, answers: { [q.key ?? "answer"]: value } } });
-          done(`Answered: ${Array.isArray(value) ? value.join(", ") : value}`);
-          $("send").disabled = true;
-          void stream(runId, st);
-        } catch (e) { note(`Could not send the answer: ${e.message}`, true); }
-      };
-      b.onclick = submit;
-      free.onkeydown = (e) => { if (e.key === "Enter") submit(); };
-      box.append(free, b);
-      (allowOther && options.length === 0 ? free : b).focus();
     }
   };
 
@@ -776,6 +993,9 @@
     conversationId = id;
     log.innerHTML = "";
     seen.clear();
+    // A panel belongs to one run. Left open across a switch it would answer the question of the conversation
+    // you just left, and resume a run you are no longer looking at.
+    closeAsk();
     void loadConversations();
     void loadMode();
     try {
@@ -803,7 +1023,7 @@
       if (h.parkedRunId) {
         const st = newTurnState();
         st.bubble = last?.classList.contains("bot") ? last : turn("bot");
-        if (h.parkedStatus === "waiting-for-question") await askGate({}, h.parkedRunId, st);
+        if (h.parkedStatus === "waiting-for-question") await askUser({}, h.parkedRunId);
         else await approvalGate(h.parkedRunId, st);
         $("send").disabled = true;
       }
@@ -845,7 +1065,7 @@
   };
 
   $("send").onclick = () => void send();
-  $("new").onclick = () => { conversationId = null; seen.clear(); showEmpty(); void loadConversations(); $("text").focus(); };
+  $("new").onclick = () => { conversationId = null; seen.clear(); closeAsk(); showEmpty(); void loadConversations(); $("text").focus(); };
   $("text").onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void send(); } };
   $("text").oninput = () => {
     // Grow with the content up to the CSS max-height, so a long message is visible while being written.
@@ -853,7 +1073,8 @@
     $("text").style.height = `${Math.min($("text").scrollHeight, 152)}px`;
   };
   for (const id of ["tenant", "principal", "role"]) {
-    $(id).onchange = () => { conversationId = null; seen.clear(); showEmpty(); void loadConversations(); };
+    // Identity changed: the parked run belongs to the previous person, and its panel with it.
+    $(id).onchange = () => { conversationId = null; seen.clear(); closeAsk(); showEmpty(); void loadConversations(); };
   }
 
   showEmpty();

@@ -3,6 +3,7 @@ import { DevAuthNotEnabled, createDevAuthenticate, PRINCIPAL_HEADER, ROLES_HEADE
 import { ModelNotConfigured, resolveExampleModel, definitionFor, DEFAULT_MODEL_ID } from "../model.js";
 import { MAX_MEMORY_ENTRIES, NoteNotFound, createExampleStore, createExampleTools } from "../tools.js";
 import { exampleAgentManifest, exampleContextProviders } from "../agent.js";
+import { questionSpecsFrom } from "../questions.js";
 import {
   CONVERSATION_MODES,
   DEFAULT_MODE,
@@ -270,5 +271,73 @@ describe("conversation modes", () => {
     // instruction does not say so, it writes a summary of intentions instead of steps.
     expect(MODE_DESCRIPTIONS.plan.instruction).toContain("Execute plan");
     expect(PLAN_EXECUTION_PROMPT.toLowerCase()).toContain("plan");
+  });
+});
+
+/**
+ * Batching what `ask_user` asks.
+ *
+ * `PendingQuestion.questions` has always been a list, but the tool only ever created one, so a model needing
+ * two answers called it twice — and the second call landed while the run was already being parked for the
+ * first, leaving an orphaned pending question whose card came back after the first was answered. Watched that
+ * happen in the browser, which is why these exist.
+ */
+describe("ask_user question batching", () => {
+  it("takes a batch and keeps its order", () => {
+    const specs = questionSpecsFrom({
+      questions: [
+        { key: "channel", question: "Which channel?", options: ["a", "b"] },
+        { key: "when", question: "When?" },
+      ],
+    });
+    expect(specs.map((q) => q.key)).toEqual(["channel", "when"]);
+    expect(specs[0]?.prompt).toBe("Which channel?");
+  });
+
+  it("still accepts the single-question shape", () => {
+    // A model trained on the older shape will keep sending it, and refusing would turn a working call into an
+    // error it has to guess its way out of.
+    const specs = questionSpecsFrom({ question: "Which one?", options: ["x"], multiple: true });
+    expect(specs).toEqual([{ key: "answer", prompt: "Which one?", options: ["x"], multiple: true }]);
+  });
+
+  /**
+   * Answers are filed under `key`. A duplicate would overwrite one answer with another — silently, and in a way
+   * that looks like the person only answered once.
+   */
+  it("never lets two questions share a key", () => {
+    const specs = questionSpecsFrom({
+      questions: [
+        { key: "same", question: "First?" },
+        { key: "same", question: "Second?" },
+        { question: "Third?" },
+      ],
+    });
+    expect(new Set(specs.map((q) => q.key)).size).toBe(3);
+  });
+
+  it("drops entries with no prompt rather than asking nothing", () => {
+    // An empty question renders as a blank card the person cannot answer, which parks the run for good.
+    const specs = questionSpecsFrom({ questions: [{ question: "  " }, { question: "Real?" }, {}] });
+    expect(specs).toHaveLength(1);
+    expect(specs[0]?.prompt).toBe("Real?");
+  });
+
+  it("returns nothing at all for an empty ask, so the caller can refuse", () => {
+    expect(questionSpecsFrom({})).toEqual([]);
+    expect(questionSpecsFrom({ questions: [] })).toEqual([]);
+  });
+
+  it("allows free text when there are no options, and not when there are", () => {
+    const [free] = questionSpecsFrom({ question: "Why?" });
+    const [closed] = questionSpecsFrom({ question: "Which?", options: ["a"] });
+    // A closed short list is closed on purpose; a question with no options can only be free text.
+    expect(free?.allowOther).toBe(true);
+    expect(closed?.allowOther).toBeUndefined();
+    expect(questionSpecsFrom({ question: "Which?", options: ["a"], allowOther: true })[0]?.allowOther).toBe(true);
+  });
+
+  it("caps a prompt rather than storing whatever the model produced", () => {
+    expect(questionSpecsFrom({ question: "x".repeat(900) })[0]?.prompt).toHaveLength(500);
   });
 });

@@ -38,7 +38,7 @@ Everything is in `.env` at the repository root; `.env.example` documents each va
 | Variable | Notes |
 |---|---|
 | `AGENTKIT_MODEL_API_KEY` | **Required, no default.** A key for whatever `AGENTKIT_MODEL_BASE_URL` points at. |
-| `AGENTKIT_MODEL_ID` | Defaults to `gpt-4o-mini`. |
+| `AGENTKIT_MODEL_ID` | Defaults to `gpt-4o`. Mini is enough to prove the plumbing works and not enough to show the agent behaving. |
 | `AGENTKIT_MODEL_BASE_URL` | Unset for `api.openai.com`; set for a local server. |
 | `AGENTKIT_DATABASE_URL` | Any Postgres. |
 | `AGENTKIT_EXAMPLE_SCHEMA` | A **dedicated schema**, default `agentkit_example`. |
@@ -64,29 +64,77 @@ schema.
 
 | | |
 |---|---|
-| `list_notes` | The ordinary read path; a tool result becoming a `tool-result` part. |
-| `publish_note` | The HITL approval gate — suspend, decide, resume, execute **exactly once**. |
-| `flaky_lookup` | The retry and `error` part paths, deterministically (fails once per key, then succeeds). |
-| role selector | `viewer` cannot *see* `publish_note` in the catalogue, rather than being refused after asking. |
-| note `n3` | Its title is a prompt-injection payload. Watch the model not comply. |
+| `list_notes`, `recall` | The ordinary read path; a tool result becoming a `tool-result` part. |
+| `share_note` | The HITL approval gate — suspend, decide, resume, execute **exactly once**. |
+| `write_note`, `remember` | Internal writes, and what plan mode excludes. |
+| `ask_user` | A batch of questions, the run parking on them, and the answers reaching the model. |
+| `calculate` | A recursive-descent parser behind a character whitelist. Not `eval`, deliberately. |
+| role selector | `viewer` cannot *see* `share_note` in the catalogue, rather than being refused after asking. |
+| note `n3` | Its body is a prompt-injection payload. Watch the model not comply. |
 
-That last one is the point of the `external`-origin context section: note titles are written by whoever created
+That last one is the point of the `external`-origin context section: note bodies are written by whoever created
 the note, so they are exactly the content the untrusted-content envelope (#145) exists for. A unit test can show
-the bytes are enclosed; only running it shows the model treating them as data.
+the bytes are enclosed; only running it shows the model treating them as data. It called `n3` "a misleading
+instruction not to follow".
+
+## Modes
+
+A selector in the sidebar, and each mode is a naming of a configuration the approval machinery already
+supported rather than a new mechanism:
+
+| Mode | Mechanically |
+|---|---|
+| **Plan** | Writing tools are excluded from the **catalogue**, keyed on *effect* rather than tool name. The model plans with an accurate picture of what it can do. |
+| **Ask first** | The default. Gated tools raise an approval and the run suspends. |
+| **Auto** | A real conversation-scoped `ApprovalGrant`. Leaving the mode revokes it. |
+
+Plan mode is deliberately *not* "ask and always deny": a model that can see a tool it may never call learns to
+keep trying, and writes plans that assume actions it will not be allowed to take.
+
+When a plan is ready, an **Execute plan** button appears under it. It lands in **Ask first**, never Auto —
+approving a plan is not granting standing approval for whatever the steps turn out to involve, with arguments
+you have not seen. It sends a real user turn, so the transcript records that you asked for it.
+
+## Questions
+
+`ask_user` takes a **batch**. They appear above the input as tabs: answer each, move between them freely, and
+nothing is sent until Submit — one `answerQuestion` call with everything, so the run resumes once.
+
+Above the composer rather than in the transcript, because a card in the message flow scrolls away while you read
+back through what you were told, and a run parked on a question nobody can find stays parked. The panel also
+comes back on reload: `/api/history` reports the parked run, and the platform's `pendingQuestion` query supplies
+the prompts and options.
 
 ## Things running this found
 
-The wiring being *correct* was where the surprises were, as the issue predicted. Four of them were in the
-platform, not here — see the issue for the detail:
+The wiring being *correct* was where the surprises were, as the issue predicted. Every one of these was in the
+platform rather than here, and every one is fixed — see the issues for detail.
 
-1. **`createServer(host)` could not serve a single request.** The composed handler's callable body was the WHATWG
-   `fetch`, and Node calls a listener with `(IncomingMessage, ServerResponse)`. Every request died on
-   `Failed to parse URL from [object Object]`. The tests call `host.fetch(new Request(…))` — the one path that
+1. **`createServer(host)` could not serve a single request** — the composed handler's callable body is the
+   WHATWG `fetch`, and Node calls a listener with `(IncomingMessage, ServerResponse)`. Every request died on
+   `Failed to parse URL from [object Object]`. The tests call `host.fetch(new Request(…))`: the one path that
    worked.
-2. **`instanceof Request` was the wrong check.** `@whatwg-node/server` ponyfills its own `Request`, so a genuine
-   request arriving through the Node adapter is not `instanceof` the global one.
-3. **No message-ingestion port.** `MessageStore` is read-only; the adapter's `append` is documented as a
-   test-only affordance. Every host must reach past the port to record what the user said.
-4. **No assistant message is ever persisted.** The worker emits parts into the event log but takes no message
-   store, so `loadHistory` — which reads messages — never sees the assistant's side. This example projects it
-   from the event log with the platform's own `reduceRunEvent`.
+2. **`instanceof Request` was the wrong check** — `@whatwg-node/server` ponyfills its own `Request`, so a
+   genuine request arriving through the Node adapter is not `instanceof` the global one.
+3. **#157 — `MessageStore` was read-only, and the assistant's turn was never persisted.** Both adapters carried
+   an `append` documented as a test-only affordance, so no host could record what the user said without casting
+   past the port; and nothing wrote the assistant's side at all, so on turn two the model saw only the user's
+   half of turn one. This app compensated by folding the run event log. It no longer needs to.
+4. **#159 — every tool reached the model undocumented.** `streamModelTurn` discarded JSON schemas and
+   substituted a permissive one, so the model called tools with `{}`. `tool-error` chunks vanished into a
+   `default: break`.
+5. **#160 — a model definition's `maxOutputTokens` bounded nothing.** Generation parameters never reached
+   `streamText`, and the engine treated the declared limit as a default an agent could raise.
+6. **#161 — the documented worker command threw every run event away.** `publisher: { async publish() {} }`,
+   hard-coded, so no client ever saw a token mid-run. It looks exactly like a working system with no streaming.
+7. **#156 — a resumed run was silently dropped.** `runJobId` is deterministic and BullMQ retains completed
+   jobs, so re-enqueueing after an approval was a no-op.
+8. **#162 — a missing approval check refused identically to an unapproved call.** Both fail-closed layers said
+   `approval_required`, so a wiring bug presented as the system working correctly. It cost two debugging rounds
+   and a wrongly-filed platform issue (#158, closed as my own error).
+9. **#163 — questions could be asked but never answered.** `question.requested` was in the event union and the
+   worker turned it into `waiting-for-question`, and nothing could emit one: the question was stored, the model
+   was told it had asked, and the run completed. Then the other half — `approvals` had a resume path and
+   questions had none, so an answered question was invisible to the run that asked it and the model asked
+   again. Both were watched happening in the browser: an empty text box where the picker should be, then the
+   identical picker returning after answering it.
