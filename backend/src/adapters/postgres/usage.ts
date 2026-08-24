@@ -184,6 +184,65 @@ export const createPostgresUsageStore = (sql: SqlExecutor): UsageStore => ({
     }));
   },
 
+  async totalsBetween({ tenantId, from, to, principalId, modelId }) {
+    /**
+     * One query for the totals **and** the earliest timestamp — #181.
+     *
+     * Two queries could disagree: a record arriving between them would be in one and not the other, and the
+     * refusal message would then name a reset time derived from a set of records different to the total it
+     * refused on.
+     *
+     * Aggregated in the database, like `totals`, because this runs at admission on every message.
+     *
+     * The optional filters are `($n IS NULL OR col = $n)` rather than a built-up WHERE clause: the parameter
+     * list stays fixed, so there is one query plan and no string assembly anywhere near user input. Note the
+     * asymmetry that matters — an absent `principalId` means **every** principal, not the rows whose principal
+     * is NULL, which is why this is a guard on the parameter and not `col IS NULL`.
+     */
+    const rows = await sql.query<{
+      input_tokens: unknown;
+      output_tokens: unknown;
+      cached_input_tokens: unknown;
+      reasoning_tokens: unknown;
+      cost_minor_units: unknown;
+      event_count: unknown;
+      earliest_at: string | null;
+    }>(
+      `SELECT COALESCE(SUM(input_tokens), 0)                  AS input_tokens,
+              COALESCE(SUM(output_tokens), 0)                 AS output_tokens,
+              COALESCE(SUM(cached_input_tokens), 0)           AS cached_input_tokens,
+              COALESCE(SUM(COALESCE(reasoning_tokens, 0)), 0) AS reasoning_tokens,
+              COALESCE(SUM(cost_minor_units), 0)              AS cost_minor_units,
+              COUNT(*)                                        AS event_count,
+              -- Not COALESCEd: null is the answer when the window is empty, and a substituted date would be a
+              -- reset time for a window nothing was spent in.
+              MIN(occurred_at)                                AS earliest_at
+         FROM usage_records
+        WHERE tenant_id = $1
+          -- Half-open, so adjacent windows tile without a boundary event counting twice.
+          AND occurred_at >= $2::timestamptz AND occurred_at < $3::timestamptz
+          AND ($4::text IS NULL OR principal_id = $4::text)
+          AND ($5::text IS NULL OR model_id = $5::text)`,
+      [tenantId, from, to, principalId ?? null, modelId ?? null],
+    );
+    const row = rows[0];
+    const totals = {
+      inputTokens: int(row?.input_tokens),
+      outputTokens: int(row?.output_tokens),
+      cachedInputTokens: int(row?.cached_input_tokens),
+      reasoningTokens: int(row?.reasoning_tokens),
+      costMinorUnits: int(row?.cost_minor_units),
+      eventCount: int(row?.event_count),
+    };
+    const earliest = row?.earliest_at ?? null;
+    return {
+      totals,
+      // Normalised to the same ISO form every other timestamp in this codebase uses. `pg` hands back a `Date`
+      // for `timestamptz`, and a `Date` compared against an ISO string is a comparison that silently fails.
+      earliestAt: earliest === null ? null : new Date(earliest).toISOString(),
+    };
+  },
+
   async totals({ tenantId, runId, conversationId }) {
     // Aggregated in the database rather than by fetching every row: totals feed `reserve()`, which
     // runs before each provider call, and a run can accumulate thousands of usage records.

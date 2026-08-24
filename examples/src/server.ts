@@ -30,6 +30,7 @@ import {
   createPostgresUsageLimitStore,
   createPostgresUsageRollupStore,
   ROLLUP_PERIODS,
+  parseWindowKey,
 } from "@agentkit/backend";
 import { citationViewModel, formatCost, formatTokens, shapeUsagePanel } from "@agentkit/frontend";
 import { COMPACT_AT_FRACTION, compactConversation, createExampleSummarizer } from "./compaction.js";
@@ -597,7 +598,7 @@ export const startExampleServer = async (options: ExampleServerOptions) => {
           limit: await options.stores.limits.resolve({
             tenantId: context.tenantId,
             principalId: context.principalId,
-            period: p,
+            window: { kind: "calendar", period: p },
           }),
         })),
       );
@@ -756,7 +757,12 @@ export const startExampleServer = async (options: ExampleServerOptions) => {
         const own = await limits.resolve({
           tenantId: context.tenantId,
           principalId: context.principalId,
-          period: (url.searchParams.get("period") as never) ?? "month",
+          // `window` accepts either spelling — "month" or "rolling:300" — through the platform's own codec, so
+          // this route cannot disagree with the store about what a key means (#181).
+          window: parseWindowKey(url.searchParams.get("window") ?? url.searchParams.get("period") ?? "month") ?? {
+            kind: "calendar",
+            period: "month",
+          },
         });
         return Response.json({ limits: own === null ? [] : [own], resolved: true });
       }
@@ -766,14 +772,35 @@ export const startExampleServer = async (options: ExampleServerOptions) => {
         if (!isAdmin) return Response.json({ error: "Only an admin may set limits" }, { status: 403 });
         const body = (await request.json()) as {
           principalId?: string;
+          /** Either a calendar period or `rolling:<minutes>` — #181. */
+          window?: string;
           period?: string;
           costMinorUnits?: number;
           inputTokens?: number;
           outputTokens?: number;
           warnAt?: number;
         };
-        if (!ROLLUP_PERIODS.includes(body.period as never))
-          return Response.json({ error: `period must be one of ${ROLLUP_PERIODS.join(", ")}` }, { status: 400 });
+        /**
+          * Parsed, not validated against a list — #181.
+          *
+          * `parseWindowKey` is the platform's own codec and the table's CHECK constraint pins the same spellings,
+          * so a value this accepts is a value the database accepts. Validating here against a locally written
+          * list is how the two drift: the route would reject a window the store supports, or accept one it
+          * rejects and fail at the insert with a constraint error.
+          *
+          * `period` still works, because it was the field name before this and an example's own API breaking is
+          * a distraction from what the example is for.
+          */
+        const window = parseWindowKey(body.window ?? body.period ?? "");
+        if (window === null)
+          return Response.json(
+            {
+              error:
+                `window must be one of ${ROLLUP_PERIODS.join(", ")} or rolling:<minutes> — ` +
+                `for example rolling:300 for a five-hour window`,
+            },
+            { status: 400 },
+          );
 
         const stored = await limits.put({
           tenantId: context.tenantId,
@@ -783,7 +810,7 @@ export const startExampleServer = async (options: ExampleServerOptions) => {
             ...(body.principalId === undefined || body.principalId === ""
               ? {}
               : { principalId: asId<PrincipalId>(body.principalId) }),
-            period: body.period as never,
+            window,
             // Every field optional, and omitted means **unbounded** rather than zero — the direction that fails
             // towards a bill rather than towards an outage. `?? undefined` and never `?? 0`.
             ...(body.costMinorUnits === undefined ? {} : { costMinorUnits: body.costMinorUnits }),
@@ -801,11 +828,12 @@ export const startExampleServer = async (options: ExampleServerOptions) => {
       if (request.method === "DELETE") {
         if (!isAdmin) return Response.json({ error: "Only an admin may remove limits" }, { status: 403 });
         const principalId = url.searchParams.get("principalId");
-        const period = url.searchParams.get("period") ?? "month";
+        const window = parseWindowKey(url.searchParams.get("window") ?? url.searchParams.get("period") ?? "month");
+        if (window === null) return Response.json({ error: "window is not a recognised window key" }, { status: 400 });
         await limits.remove({
           tenantId: context.tenantId,
           ...(principalId === null || principalId === "" ? {} : { principalId: asId<PrincipalId>(principalId) }),
-          period: period as never,
+          window,
         });
         // Removed means "inherit the tenant default", not "zero" — said in the response so a caller does not
         // have to infer it.

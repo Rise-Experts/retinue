@@ -24,6 +24,7 @@ import type {
   ApprovalGrantId,
   ConversationId,
   InteractionId,
+  PrincipalId,
   RunId,
   TenantId,
 } from "../../core/ids.js";
@@ -457,6 +458,99 @@ export function usageStoreConformance(
       await store.append({ tenantId: T1, event: event("u1") });
       const page = await store.listByRun({ tenantId: T1, runId: RUN, limit: 10 });
       expect(page.items).toHaveLength(1);
+    });
+
+    /**
+     * `totalsBetween` — #181. A rolling window's total comes from here, so every one of these is a number that
+     * decides whether somebody is refused.
+     */
+    it("totals an exact interval, half-open at both ends", async () => {
+      const store = await open();
+      // 00:00, 01:00, 02:00. A window of [01:00, 02:00) must contain exactly the middle one: the lower bound is
+      // inclusive and the upper exclusive, so two adjacent windows tile without a record being counted twice.
+      await store.append({ tenantId: T1, event: event("u1", { occurredAt: "2020-01-01T00:00:00.000Z" }) });
+      await store.append({ tenantId: T1, event: event("u2", { stepId: "s2", occurredAt: "2020-01-01T01:00:00.000Z" }) });
+      await store.append({ tenantId: T1, event: event("u3", { stepId: "s3", occurredAt: "2020-01-01T02:00:00.000Z" }) });
+
+      const middle = await store.totalsBetween({
+        tenantId: T1,
+        from: "2020-01-01T01:00:00.000Z",
+        to: "2020-01-01T02:00:00.000Z",
+      });
+      expect(middle.totals.eventCount).toBe(1);
+      expect(middle.totals.costMinorUnits).toBe(250);
+      expect(middle.earliestAt).toBe("2020-01-01T01:00:00.000Z");
+    });
+
+    it("reports the earliest record in the window, and null for an empty one", async () => {
+      const store = await open();
+      await store.append({ tenantId: T1, event: event("u1", { occurredAt: "2020-01-01T05:00:00.000Z" }) });
+      await store.append({ tenantId: T1, event: event("u2", { stepId: "s2", occurredAt: "2020-01-01T03:00:00.000Z" }) });
+
+      const window = await store.totalsBetween({
+        tenantId: T1,
+        from: "2020-01-01T00:00:00.000Z",
+        to: "2020-01-01T06:00:00.000Z",
+      });
+      // The earliest, not the first appended — a rolling window's headroom returns when the *oldest* record
+      // leaves it, so an insertion-ordered answer would name the wrong time.
+      expect(window.earliestAt).toBe("2020-01-01T03:00:00.000Z");
+      expect(window.totals.eventCount).toBe(2);
+
+      // Null rather than a substituted date: a window nothing was spent in has no reset time, and inventing one
+      // would put a false promise in a refusal message.
+      const empty = await store.totalsBetween({
+        tenantId: T1,
+        from: "2020-01-02T00:00:00.000Z",
+        to: "2020-01-02T06:00:00.000Z",
+      });
+      expect(empty.earliestAt).toBeNull();
+      expect(empty.totals.eventCount).toBe(0);
+      expect(empty.totals.costMinorUnits).toBe(0);
+    });
+
+    it("treats an absent principal as every principal, not as a null principal", async () => {
+      const store = await open();
+      const alice = asId<PrincipalId>("alice");
+      const bob = asId<PrincipalId>("bob");
+      await store.append({ tenantId: T1, event: event("u1", { principalId: alice }) });
+      await store.append({ tenantId: T1, event: event("u2", { stepId: "s2", principalId: bob }) });
+      // No principal at all — a background job's record. It is part of the tenant's spend.
+      await store.append({ tenantId: T1, event: event("u3", { stepId: "s3" }) });
+
+      const range = { tenantId: T1, from: "2019-12-31T00:00:00.000Z", to: "2020-01-02T00:00:00.000Z" };
+      // The trap this exists to catch: implemented as `principal_id = $n` with a null parameter, or as
+      // `principalId === event.principalId` with both undefined, "no principal given" selects only the rows
+      // that *have* no principal — so a tenant-wide rolling limit would see one record out of three and refuse
+      // nobody.
+      const everyone = await store.totalsBetween(range);
+      expect(everyone.totals.eventCount).toBe(3);
+
+      const justAlice = await store.totalsBetween({ ...range, principalId: alice });
+      expect(justAlice.totals.eventCount).toBe(1);
+      expect(justAlice.totals.costMinorUnits).toBe(250);
+    });
+
+    it("scopes a window to one model, leaving the others untouched", async () => {
+      const store = await open();
+      await store.append({ tenantId: T1, event: event("u1", { modelId: "claude-opus-5" }) });
+      await store.append({ tenantId: T1, event: event("u2", { stepId: "s2", modelId: "claude-opus-5" }) });
+      await store.append({ tenantId: T1, event: event("u3", { stepId: "s3", modelId: "claude-haiku-4-5" }) });
+
+      const range = { tenantId: T1, from: "2019-12-31T00:00:00.000Z", to: "2020-01-02T00:00:00.000Z" };
+      // #182 depends on this: an expensive model's allowance must not be consumed by a cheap model's traffic.
+      expect((await store.totalsBetween({ ...range, modelId: "claude-opus-5" })).totals.eventCount).toBe(2);
+      expect((await store.totalsBetween({ ...range, modelId: "claude-haiku-4-5" })).totals.eventCount).toBe(1);
+      expect((await store.totalsBetween(range)).totals.eventCount).toBe(3);
+    });
+
+    it("does not total another tenant's records", async () => {
+      const store = await open();
+      await store.append({ tenantId: T1, event: event("u1") });
+      const range = { from: "2019-12-31T00:00:00.000Z", to: "2020-01-02T00:00:00.000Z" };
+      const other = await store.totalsBetween({ tenantId: asId<TenantId>("conf-tenant-other"), ...range });
+      expect(other.totals.eventCount).toBe(0);
+      expect(other.earliestAt).toBeNull();
     });
 
     it("totals sum exactly, with integer minor units", async () => {

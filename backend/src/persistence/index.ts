@@ -380,6 +380,32 @@ export const ROLLUP_PERIODS = ["hour", "day", "week", "month"] as const;
 export type RollupPeriod = (typeof ROLLUP_PERIODS)[number];
 
 /**
+ * The span a limit is measured over — #181.
+ *
+ * A union, not an optional field beside `period`, because the two kinds are read differently and confusing them
+ * produces a wrong number rather than an error. A calendar window is a bucket the rollups already hold; a
+ * rolling window has no bucket and has to be summed from the ledger. An optional `minutes` next to a required
+ * `period` would let a caller set both, and something would have to decide which one meant it.
+ *
+ * **A rolling window slides; it does not reset.** "No more than X in any five hours" — the window is always the
+ * last `minutes` up to now. That is a deliberate choice over the other reading, an *anchored session* that
+ * starts on first use and hard-resets after five hours, and the reason is that an anchored window's boundary is
+ * state: to know which session a spend belongs to you must know when the current one began, which cannot be
+ * derived from the records without walking history forward from the first one ever. Storing the anchor would
+ * make the boundary a row that can be wrong, stale or missing, and the refusal message quotes it to people.
+ *
+ * The sliding reading needs no state, cannot drift, and is strictly harder to game — you cannot wait out a
+ * boundary and spend twice the allowance across it. What it gives up is a single clean "resets at": headroom
+ * returns gradually as records age out, so the honest statement is *when the oldest one leaves*, which is what
+ * `earliestAt` is for.
+ */
+export type QuotaWindow =
+  | { readonly kind: "calendar"; readonly period: RollupPeriod }
+  /** `minutes` so an admin can express 5 hours, 90 minutes or 2 days without a new type. */
+  | { readonly kind: "rolling"; readonly minutes: number };
+
+
+/**
  * One tenant's consumption in one bucket.
  *
  * `bucketStart` is the ISO instant the bucket opens, truncated to the period — so a bucket is identified by
@@ -504,10 +530,42 @@ export interface UsageRollupStore {
  * reason stated there: a misconfigured quota that blocks everything is an outage, and one that blocks nothing is
  * a bill that the rollups make visible.
  */
+/**
+ * A window as one storable string, and back — #181.
+ *
+ * `usage_limits` keys its unique indexes on this single column, so the two kinds of window have to share one
+ * value space. A calendar window is its own period; a rolling one is `rolling:<minutes>`. Both spellings are
+ * pinned by the table's CHECK constraint, so a value that would not round-trip cannot be stored in the first
+ * place.
+ *
+ * The codec lives here, beside the type, rather than in each adapter: two adapters spelling a key differently is
+ * two stores that cannot read each other's rows, and conformance would pass because each is self-consistent.
+ */
+export const windowKey = (window: QuotaWindow): string =>
+  window.kind === "calendar" ? window.period : `rolling:${window.minutes}`;
+
+/**
+ * `null` for anything this does not recognise — a row written by a newer version, or by hand.
+ *
+ * Null rather than a thrown error or a calendar fallback. A fallback would silently enforce the wrong window,
+ * which for a spend limit means either refusing people wrongly or charging them wrongly; null makes the caller
+ * decide, and every caller here treats it as "no limit I can honour", which fails towards *not* pretending.
+ */
+export const parseWindowKey = (key: string): QuotaWindow | null => {
+  if ((ROLLUP_PERIODS as readonly string[]).includes(key)) return { kind: "calendar", period: key as RollupPeriod };
+  const match = /^rolling:([1-9][0-9]{0,5})$/.exec(key);
+  if (match === null) return null;
+  return { kind: "rolling", minutes: Number(match[1]) };
+};
+
 export type UsageLimitRecord = {
   readonly tenantId: TenantId;
   readonly principalId?: PrincipalId;
-  readonly period: RollupPeriod;
+  /**
+   * The span this allowance covers — widened from `period: RollupPeriod` by #181, so an admin can set a rolling
+   * window as easily as a calendar one.
+   */
+  readonly window: QuotaWindow;
   readonly costMinorUnits?: number;
   readonly inputTokens?: number;
   readonly outputTokens?: number;
@@ -519,7 +577,7 @@ export type UsageLimitRecord = {
 
 export interface UsageLimitStore {
   /**
-   * Set or replace one limit. Keyed on `(tenant, principal, period)`, so an admin editing a limit updates it
+   * Set or replace one limit. Keyed on `(tenant, principal, window)`, so an admin editing a limit updates it
    * rather than accumulating rows that a resolver would then have to disambiguate.
    */
   put(input: TenantScope & { limit: UsageLimitRecord }): Promise<UsageLimitRecord>;
@@ -532,14 +590,14 @@ export interface UsageLimitStore {
    * sites is a rule with two behaviours.
    */
   resolve(
-    input: TenantScope & { principalId?: PrincipalId; period: RollupPeriod },
+    input: TenantScope & { principalId?: PrincipalId; window: QuotaWindow },
   ): Promise<UsageLimitRecord | null>;
 
   /** Every configured limit for a tenant, for an admin screen. */
   list(input: TenantScope): Promise<readonly UsageLimitRecord[]>;
 
   /** Remove one. Absent afterwards means "inherit the tenant default", not "zero". */
-  remove(input: TenantScope & { principalId?: PrincipalId; period: RollupPeriod }): Promise<void>;
+  remove(input: TenantScope & { principalId?: PrincipalId; window: QuotaWindow }): Promise<void>;
 }
 
 /**
@@ -576,6 +634,36 @@ export interface UsageStore {
       limit: number;
     },
   ): Promise<readonly { readonly key: string; readonly totals: UsageTotals }[]>;
+
+  /**
+   * Totals over an exact half-open interval `[from, to)`, and the earliest record inside it — #181.
+   *
+   * The rollups cannot answer this. They are keyed on `(tenant, period, bucket)`, and a rolling window has no
+   * bucket: a five-hour allowance that began at 09:37 spans parts of six hourly buckets, and summing those
+   * over-counts at both edges by whatever fell outside the window. An approximate spend limit is worse than
+   * none, because the number is used to refuse people.
+   *
+   * So this reads the **ledger**, over the same `(tenant_id, occurred_at)` index `breakdown` uses, and the scan
+   * is bounded by the window rather than by history. `breakdown` was not reused because its `limit` truncates —
+   * fine for a panel, wrong for a total that decides admission.
+   *
+   * `earliestAt` is `null` when nothing was spent in the window, and otherwise the `occurredAt` of the oldest
+   * record in it. A sliding window never "resets", so this is what makes a *true* statement possible about when
+   * headroom returns: at `earliestAt + length` that record leaves the window. Deriving it here rather than in
+   * the caller keeps it consistent with the totals it came from — computed from two queries, they could disagree
+   * about a record that arrived between them.
+   *
+   * `modelId` scopes it to one model (#182). `principalId` scopes it to one person; **absent means the whole
+   * tenant**, not "unknown principal" — a rolling tenant limit has to see everyone's spend.
+   */
+  totalsBetween(
+    input: TenantScope & {
+      readonly from: string;
+      readonly to: string;
+      readonly principalId?: PrincipalId;
+      readonly modelId?: string;
+    },
+  ): Promise<{ readonly totals: UsageTotals; readonly earliestAt: string | null }>;
 
   /** Running totals, optionally scoped to a run or conversation — used by `reserve()` and rollups. */
   totals(

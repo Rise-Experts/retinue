@@ -186,6 +186,40 @@ Tiptap, in `src/composer/` — the one built file. What it does, and why each pa
 Commands from the menu and commands typed as text both go through `runCommand`, so the two entry points cannot
 diverge.
 
+## Limits an admin can set
+
+`POST /api/limits`, admin role only. A limit is `(principal, window)` — omit the principal for a workspace
+default — and every field is optional, where omitted means **unbounded** rather than zero: a misconfigured limit
+that blocks nothing is a bill, and one that blocks everything is an outage.
+
+```bash
+# 500 minor units in any five hours, for one person (#181)
+curl -X POST localhost:4000/api/limits -H 'content-type: application/json' \
+  -H 'x-agentkit-tenant: demo' -H 'x-agentkit-principal: you' -H 'x-agentkit-roles: admin' \
+  -d '{"principalId":"you","window":"rolling:300","costMinorUnits":500}'
+```
+
+`window` is either a calendar period — `hour`, `day`, `week`, `month` — or `rolling:<minutes>`. Several can apply
+at once; the **shortest span** binds, so being stopped by the five-hour limit tells you sooner than being stopped
+by the month.
+
+A **rolling** window slides: "no more than X in any five hours", always the last five hours up to now. It is not
+an anchored session that resets on a boundary, and the refusal says so — `The oldest of it falls outside the
+window at …` rather than `It resets at …`, because a sliding window frees up gradually and claiming a reset would
+promise back an allowance you do not get.
+
+| | Calendar | Rolling |
+|---|---|---|
+| Read from | The rollup for the bucket | The ledger, over `[now − length, now)` |
+| Exactness | As fresh as the last rollup rebuild | Always exact |
+| The message says | "It resets at T" — a true boundary | "The oldest of it falls outside the window at T" |
+
+That first row is worth knowing, and running the two side by side is what made it visible: with the same spend, a
+five-hour rolling limit reported 4 and a daily limit reported 2. The rolling figure was right. Rollups here are
+rebuilt on demand by `/api/usage` rather than by a scheduled job — fine for a chart, and it means **a calendar
+limit in this app can under-count** until something rebuilds the bucket. A deployment runs `createRollupJob` on a
+schedule; the example does not, and that is a property of the example's wiring rather than of the platform.
+
 ## Things running this found
 
 The wiring being *correct* was where the surprises were, as the issue predicted. Every one of these was in the

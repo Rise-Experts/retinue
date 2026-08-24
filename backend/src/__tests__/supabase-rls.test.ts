@@ -107,7 +107,8 @@ const SEEDS: Readonly<Record<string, (tenant: string, principal: string) => stri
   // #175. A tenant default rather than a per-principal override, so the row exercises the common case — and the
   // tenant predicate is the whole policy here, unlike `principal_memory` next door.
   usage_limits: (t) =>
-    `INSERT INTO usage_limits (tenant_id, principal_id, period, cost_minor_units, updated_at)
+    // `window_key`, not `period` — #181 widened the column so a rolling window shares the same unique index.
+    `INSERT INTO usage_limits (tenant_id, principal_id, window_key, cost_minor_units, updated_at)
      VALUES ('${t}', NULL, 'month', 5000, now())`,
   evaluation_runs: (t) =>
     `INSERT INTO evaluation_runs

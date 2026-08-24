@@ -1118,6 +1118,41 @@ export const MIGRATIONS: readonly Migration[] = [
       `ALTER TABLE usage_records DROP COLUMN IF EXISTS principal_id`,
     ],
   },
+  {
+    /**
+     * A limit's span becomes a **window key** — #181.
+     *
+     * `period` held one of four calendar periods and was already the key both unique indexes are built on. A
+     * rolling window ("no more than X in any 5 hours") is another span, so it belongs in the same slot rather
+     * than in a parallel nullable column — which would have made the unique indexes NULL-keyed, and Postgres
+     * treats NULLs as distinct, so the upsert `put` relies on would have stopped deduplicating.
+     *
+     * Renamed rather than reused under the old name: `period = 'rolling:300'` is not a period, and a column whose
+     * name is a lie is how the next person writes a wrong query. The indexes follow the rename automatically.
+     *
+     * The CHECK is widened, not dropped. `rolling:<minutes>` with 1 to 6 digits — an upper bound so a typo
+     * cannot store a window of ten million minutes, and no leading zero so one value has one spelling and the
+     * key stays unique in the way the index assumes.
+     */
+    id: "0024_usage_limit_window",
+    up: [
+      `ALTER TABLE usage_limits RENAME COLUMN period TO window_key`,
+      // Postgres named the anonymous single-column CHECK after the column, and a rename does not rename the
+      // constraint — so it is still `usage_limits_period_check` here.
+      `ALTER TABLE usage_limits DROP CONSTRAINT IF EXISTS usage_limits_period_check`,
+      `ALTER TABLE usage_limits ADD CONSTRAINT usage_limits_window_key_check
+        CHECK (window_key IN ('hour','day','week','month') OR window_key ~ '^rolling:[1-9][0-9]{0,5}$')`,
+    ],
+    down: [
+      // Rolling rows cannot survive a rollback: the old CHECK has no room for them. Deleted rather than left to
+      // fail the constraint, because a migration that cannot go back is a migration nobody dares run forward.
+      `DELETE FROM usage_limits WHERE window_key LIKE 'rolling:%'`,
+      `ALTER TABLE usage_limits DROP CONSTRAINT IF EXISTS usage_limits_window_key_check`,
+      `ALTER TABLE usage_limits RENAME COLUMN window_key TO period`,
+      `ALTER TABLE usage_limits ADD CONSTRAINT usage_limits_period_check
+        CHECK (period IN ('hour','day','week','month'))`,
+    ],
+  },
 ];
 
 /**

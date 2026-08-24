@@ -24,7 +24,15 @@
 
 import { AgentPlatformError } from "../core/errors.js";
 import type { ExecutionContext } from "../core/context.js";
-import type { RollupPeriod, UsageLimitStore, UsageRollupStore, UsageTotals } from "../persistence/index.js";
+import { windowKey } from "../persistence/index.js";
+import type {
+  QuotaWindow,
+  RollupPeriod,
+  UsageLimitStore,
+  UsageRollupStore,
+  UsageStore,
+  UsageTotals,
+} from "../persistence/index.js";
 import type { PrincipalId } from "../core/ids.js";
 
 /** Zero, as a total. Named because "no usage" appears in several places and an object literal invites drift. */
@@ -123,8 +131,22 @@ export const bucketsBetween = (period: RollupPeriod, from: string, to: string): 
  * bill — and the bill is visible in the rollups this module also provides, whereas the outage is only visible
  * to the customer it is happening to.
  */
+/** How the window reads in a sentence: "your 5,000 spend limit for **the day** / **any 5 hours**". */
+export const describeWindow = (window: QuotaWindow): string =>
+  window.kind === "calendar"
+    ? `the ${window.period}`
+    : window.minutes % 60 === 0
+      ? `any ${window.minutes / 60} hour${window.minutes === 60 ? "" : "s"}`
+      : `any ${window.minutes} minutes`;
+
 export type QuotaLimits = {
-  readonly period: RollupPeriod;
+  /**
+   * The span this allowance covers.
+   *
+   * Was `period: RollupPeriod` until #181. Widened rather than supplemented, so there is exactly one place a
+   * window is described and no combination of fields that means two things at once.
+   */
+  readonly window: QuotaWindow;
   /**
    * Whose allowance this is — absent means the whole tenant's (#175).
    *
@@ -202,6 +224,15 @@ export type QuotaGuardDeps = {
    * at construction would be the limits of whoever booted the process.
    */
   readonly resolveLimits: (context: ExecutionContext) => Promise<QuotaLimits | undefined> | QuotaLimits | undefined;
+  /**
+   * The ledger, needed **only** for a rolling window (#181) — rollups are calendar buckets and cannot answer an
+   * arbitrary interval.
+   *
+   * Optional, so a deployment with only calendar limits wires nothing new. A rolling limit configured without it
+   * throws at admission with a message naming the missing piece, rather than admitting the run: a spend guard
+   * that cannot read spend must not be the thing that says yes.
+   */
+  readonly usage?: Pick<UsageStore, "totalsBetween">;
   readonly observer?: QuotaObserver;
   readonly clock?: () => string;
   readonly log?: (message: string, detail?: Readonly<Record<string, unknown>>) => void;
@@ -229,6 +260,73 @@ export const createQuotaGuard = (deps: QuotaGuardDeps) => {
   const verb = (limits: QuotaLimits): string => (limits.principalId === undefined ? "has" : "have");
   const possessive = (limits: QuotaLimits): string => (limits.principalId === undefined ? "its" : "your");
 
+  /**
+   * Usage for the window, and when there will be room again — #181.
+   *
+   * One function for both kinds, because everything downstream (the checks, the refusal, the warnings) must not
+   * care which it got. The two arms differ in exactly the way the two windows differ:
+   *
+   * - **Calendar** reads the rollup. Admission is on the hot path of every message, and a check that scanned raw
+   *   events would make the platform slower in proportion to how much it had been used. The reset is arithmetic:
+   *   the next bucket boundary.
+   * - **Rolling** reads the ledger over `[at - minutes, at)`, because there is no bucket to read. The scan is
+   *   bounded by the window, not by history. Nothing "resets", so the sentence says when the oldest record in
+   *   the window ages out — the soonest anything changes — and never promises a clean slate.
+   *
+   * A rolling window with nothing in it still has to answer: `earliestAt` is null then, and the sentence is
+   * omitted rather than invented. That case is reachable — a limit of zero refuses on an empty window.
+   */
+  const read = async (
+    context: ExecutionContext,
+    limits: QuotaLimits,
+    at: string,
+  ): Promise<{ usage: UsageTotals; relief: { sentence: string; at: string } }> => {
+    if (limits.window.kind === "calendar") {
+      const bucketStart = bucketStartFor(limits.window.period, at);
+      const rollup = await deps.rollups.get({
+        tenantId: context.tenantId,
+        period: limits.window.period,
+        bucketStart,
+        // The grain the limit is expressed at — #175. A per-person limit must read that person's bucket, or the
+        // first busy colleague exhausts an allowance the refused person has not touched.
+        ...(limits.principalId === undefined ? {} : { principalId: limits.principalId }),
+      });
+      const resetsAt = nextBucket(limits.window.period, bucketStart);
+      return { usage: rollup ?? NO_USAGE, relief: { sentence: `It resets at ${resetsAt}.`, at: resetsAt } };
+    }
+
+    // A rolling window needs the ledger, which the rollup store cannot give — hence this dependency, and hence
+    // it being required only once a rolling limit is actually configured.
+    if (deps.usage === undefined)
+      throw new Error(
+        "a rolling quota window needs a UsageStore: rollups are keyed on calendar buckets and cannot answer " +
+          "an arbitrary interval. Pass `usage` to createQuotaGuard, or configure a calendar window.",
+      );
+
+    const from = new Date(new Date(at).getTime() - limits.window.minutes * 60_000).toISOString();
+    const { totals, earliestAt } = await deps.usage.totalsBetween({
+      tenantId: context.tenantId,
+      from,
+      to: at,
+      ...(limits.principalId === undefined ? {} : { principalId: limits.principalId }),
+    });
+    if (earliestAt === null)
+      // No relief time to give, and none invented. `at` as the retry target is the honest answer: there is
+      // nothing to wait for, so anything that changes must be the limit itself.
+      return { usage: totals, relief: { sentence: "", at } };
+
+    const relievesAt = new Date(new Date(earliestAt).getTime() + limits.window.minutes * 60_000).toISOString();
+    return {
+      usage: totals,
+      relief: {
+        // Deliberately not "it resets": a sliding window frees up gradually, and the oldest record leaving is
+        // the first moment any of it does. Saying "resets" would promise the whole allowance back.
+        sentence: `The oldest of it falls outside the window at ${relievesAt}.`,
+        at: relievesAt,
+      },
+    };
+  };
+
   return {
     /**
      * Decide whether a run may start — AC-2.
@@ -242,16 +340,7 @@ export const createQuotaGuard = (deps: QuotaGuardDeps) => {
       // outage; one that blocks nothing is a bill, and the bill is visible in these very rollups.
       if (limits === undefined) return { admitted: true, usage: NO_USAGE, warnings: [] };
 
-      const bucketStart = bucketStartFor(limits.period, at);
-      const rollup = await deps.rollups.get({
-        tenantId: context.tenantId,
-        period: limits.period,
-        bucketStart,
-        // The grain the limit is expressed at — #175. A per-person limit must read that person's bucket, or the
-        // first busy colleague exhausts an allowance the refused person has not touched.
-        ...(limits.principalId === undefined ? {} : { principalId: limits.principalId }),
-      });
-      const usage: UsageTotals = rollup ?? NO_USAGE;
+      const { usage, relief } = await read(context, limits, at);
       const warnAt = limits.warnAt ?? DEFAULT_WARN_AT;
 
       const checks: readonly { dimension: QuotaDimension; limit?: number; used: number }[] = [
@@ -270,13 +359,12 @@ export const createQuotaGuard = (deps: QuotaGuardDeps) => {
             dimension: check.dimension,
             limit: check.limit,
             used: check.used,
-            // Actionable: names the dimension, the figure, the limit and when it resets. "Quota exceeded"
-            // leaves a user with nothing to do.
+            // Actionable: names the dimension, the figure, the limit and when there will be room again.
+            // "Quota exceeded" leaves a user with nothing to do.
             message:
               `${subject(limits)} ${verb(limits)} used ${check.used} of ${possessive(limits)} ${check.limit} ` +
-              `${DIMENSION_LABEL[check.dimension]} limit for the ${limits.period}. ` +
-              `It resets at ${nextBucket(limits.period, bucketStart)}.`,
-            retryAfter: nextBucket(limits.period, bucketStart),
+              `${DIMENSION_LABEL[check.dimension]} limit for ${describeWindow(limits.window)}. ${relief.sentence}`,
+            retryAfter: relief.at,
           };
           try {
             await deps.observer?.onRefusal?.(context, refusal);
@@ -301,7 +389,7 @@ export const createQuotaGuard = (deps: QuotaGuardDeps) => {
           fraction,
           message:
             `${subject(limits)} ${verb(limits)} used ${Math.round(fraction * 100)}% of ${possessive(limits)} ` +
-            `${DIMENSION_LABEL[check.dimension]} limit for the ${limits.period}.`,
+            `${DIMENSION_LABEL[check.dimension]} limit for ${describeWindow(limits.window)}.`,
         });
       }
       for (const warning of warnings) {
@@ -381,26 +469,44 @@ export type QuotaGuard = ReturnType<typeof createQuotaGuard>;
 export const createStoredLimitResolver = (deps: {
   readonly limits: UsageLimitStore;
   /**
-   * Which periods to consider, most specific first.
+   * Which windows to consider, and in what order.
    *
-   * A person can have a weekly *and* a monthly allowance, and both should bind. `admit` checks one period per
-   * call, so a caller wanting both checks twice — this returns the first configured one, in the given order, and
-   * `PERIOD_PRECEDENCE` documents why that order is what it is.
+   * Default: every window the tenant has actually configured, shortest span first. Supply this to pin the order
+   * or to restrict it.
    */
-  readonly periods?: readonly RollupPeriod[];
+  readonly windows?: readonly QuotaWindow[];
 }) => {
-  const periods = deps.periods ?? PERIOD_PRECEDENCE;
-
   return async (context: ExecutionContext): Promise<QuotaLimits | undefined> => {
-    for (const period of periods) {
+    /**
+     * The windows come from the store, not from a hardcoded list — #181.
+     *
+     * This walked `PERIOD_PRECEDENCE` and asked `resolve` for each calendar period. A rolling window has no
+     * period, so an admin could store `rolling:300` through `/api/limits`, see it come back from `GET`, and never
+     * have it enforced: the resolver never asked for it. Built, stored, visible and unreachable — which is the
+     * failure this codebase keeps finding, so it does not get to happen to the feature that exists to stop
+     * people spending money.
+     *
+     * `list` is one query where the old loop was up to four, and it cannot miss a window it has never heard of.
+     */
+    const configured =
+      deps.windows ??
+      (await deps.limits.list({ tenantId: context.tenantId }))
+        .map((record) => record.window)
+        // Deduplicated by key, because a tenant row and a principal row for the same window are one window to
+        // consider, not two — `resolve` then picks between them.
+        .filter((window, index, all) => all.findIndex((w) => windowKey(w) === windowKey(window)) === index)
+        .sort((a, b) => spanMinutes(a) - spanMinutes(b));
+
+    for (const window of configured) {
       const record = await deps.limits.resolve({
         tenantId: context.tenantId,
         principalId: context.principalId,
-        period,
+        window,
       });
       if (record === null) continue;
       return {
-        period,
+        // The window as stored, so a rolling row configured by an admin is enforced as rolling.
+        window: record.window,
         // The grain the limit was configured at, so the guard reads the matching rollup rather than the tenant's.
         ...(record.principalId === undefined ? {} : { principalId: record.principalId }),
         ...(record.costMinorUnits === undefined ? {} : { costMinorUnits: record.costMinorUnits }),
@@ -409,11 +515,29 @@ export const createStoredLimitResolver = (deps: {
         ...(record.warnAt === undefined ? {} : { warnAt: record.warnAt }),
       };
     }
-    // Nothing configured at any period: unbounded, which is the direction that fails towards a bill rather than
+    // Nothing configured at any window: unbounded, which is the direction that fails towards a bill rather than
     // towards an outage.
     return undefined;
   };
 };
+
+/**
+ * A window's length in minutes, for **ordering only**.
+ *
+ * A month is 28 to 31 days, so this is approximate by construction — and that is fine for deciding which of two
+ * limits to check first, and would not be fine for deciding whether someone is over one. Nothing computes usage
+ * from this; `bucketStartFor` and `nextBucket` do the real calendar arithmetic.
+ */
+const spanMinutes = (window: QuotaWindow): number =>
+  window.kind === "rolling"
+    ? window.minutes
+    : window.period === "hour"
+      ? 60
+      : window.period === "day"
+        ? 1_440
+        : window.period === "week"
+          ? 10_080
+          : 43_200;
 
 /**
  * The order periods are considered in, shortest first.

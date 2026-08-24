@@ -730,6 +730,15 @@ const app = {
        */
       quota: createQuotaGuard({
         rollups: createPostgresUsageRollupStore(sql),
+        /**
+         * The ledger, for a rolling window — #181.
+         *
+         * Optional on the guard, and omitting it is not benign: a rolling limit then refuses every run with "a
+         * rolling quota window needs a UsageStore". Which is the correct direction — a spend guard that cannot
+         * read spend must not be the thing that says yes — but it means the wiring has to be here, not left for
+         * whoever first configures `rolling:300`.
+         */
+        usage: createPostgresUsageStore(sql),
         resolveLimits: createStoredLimitResolver({ limits: createPostgresUsageLimitStore(sql) }),
         // Refusals and warnings to stderr, so driving the example by hand shows them. A deployment would use the
         // platform's telemetry (#143).

@@ -224,21 +224,31 @@
    * The bar has to shrink somewhere, and this is where.
    *
    * Nothing in it shrank at first, so a narrow window pushed the send button past the edge — the one control in
-   * there you cannot do without. Both labels now ellipsis, and below 620px the model label goes entirely, since
-   * it is the only thing in the row you can find out elsewhere (it stays in the element's `title`).
-   * `min-width:0` is the part that does the work: a flex item will not shrink below its content width without
-   * it, whatever `overflow` says.
+   * there you cannot do without. The two labels are now out of the flow entirely: they live in a popover that is
+   * `position:absolute`, so the row's width no longer depends on how long a model's name is. What is left in the
+   * bar is an 18px ring.
    *
-   * Measured: at 700px with a full meter — `~124,500 / 128k context` — and the model label shown, the bar's
-   * scroll width equals its client width and the send button is inside the viewport. The bar's min-content is
-   * 561px, so this is a fix within the range where *the page* still lays out. Below roughly 660px the whole page
-   * overflows on the sidebar, which it did long before this composer and is not addressed here.
+   * The measurement that motivated it: with both labels inline, the bar's min-content width was 561px, and at
+   * 375px the send button sat outside the viewport. (Below roughly 660px the whole page overflows on the sidebar
+   * anyway, which it did long before this composer and is not addressed here.)
    */
-  .meta { font-size:11.5px; color:var(--faint); white-space:nowrap; min-width:0; overflow:hidden;
-          text-overflow:ellipsis; }
-  #ctxtext { white-space:nowrap; min-width:0; overflow:hidden; text-overflow:ellipsis; }
-
-  @media (max-width:620px) { .meta { display:none; } }
+  .metaz { position:relative; display:inline-flex; align-items:center; justify-content:center; outline:none;
+           /* A hit area: an 18px ring is small to aim at, and on a fresh conversation the ring is hidden
+              altogether, which would leave nothing to hover at all. */
+           min-width:22px; min-height:22px; border-radius:7px; }
+  /* `:focus`, not `:focus-visible`. This element exists only to be focused — it has no other behaviour — so
+     there is nothing about a mouse click worth suppressing, and `:focus` is the weaker precondition of the two.
+     `:focus-visible` depends on a browser heuristic about how focus arrived; when the thing it gates is the only
+     way a keyboard user can read a fact, the weaker selector is the right trade. */
+  .metaz:hover, .metaz:focus { background:var(--accent-soft); }
+  .metapop { position:absolute; bottom:calc(100% + 8px); right:0; display:flex; flex-direction:column; gap:2px;
+             align-items:flex-end; padding:7px 9px; border:1px solid var(--line); border-radius:10px;
+             background:var(--panel); box-shadow:0 10px 30px rgba(20,22,28,.13); white-space:nowrap;
+             /* `visibility` as well as `opacity`: an opacity-0 popover is still a target sitting over the
+                transcript. Both transition, so it fades rather than blinking. */
+             opacity:0; visibility:hidden; transition:opacity .12s ease, visibility .12s ease; }
+  .metaz:hover .metapop, .metaz:focus .metapop { opacity:1; visibility:visible; }
+  .meta, #ctxtext { font-size:11.5px; color:var(--muted); }
   /* ---- the popovers, both anchored to the card */
   .ctl-menu, .cmd-menu { position:absolute; z-index:20; background:var(--panel); border:1px solid var(--line);
           border-radius:12px; box-shadow:0 10px 30px rgba(20,22,28,.13); padding:5px; min-width:15rem; }
@@ -280,7 +290,10 @@
   /* Warn only when it means something. A meter that is orange from the first turn is a meter people stop
      reading, so the colour changes at the threshold the server actually compacts at. */
   .ctx.warn .ctx-ring-fill { stroke:var(--warn); }
-  .ctx.warn #ctxtext { color:var(--warn); }
+  /* `#ctxtext` moved out of `.ctx` into the popover, so this descendant selector no longer reaches it — the
+     class goes on the wrapper too, and `loadContext` sets both. A rule that quietly stops matching is worse than
+     one that errors: the ring would turn amber and the figure beside it would not. */
+  .metaz.warn #ctxtext { color:var(--warn); }
 
   /* ---------------------------------------------------------------- the question panel */
   .ask { max-width:44rem; margin:0 auto 12px; padding:14px 16px; border:1px solid var(--warn-line);
@@ -384,19 +397,32 @@
           -->
           <button class="ctl icon" id="mic" title="Dictate" aria-label="Dictate" hidden>🎤</button>
           <span class="bar-gap"></span>
-          <!-- What is about to run, and how full its window is: the two facts that change what you type. -->
-          <span class="meta" id="modelmeta" title="The model this app resolved"></span>
           <!--
-            A ring, not a bar. How full the window is has a natural whole — the window — and a circle shows a
-            proportion of a whole without needing its ends labelled; a 52px bar had to sit next to "~2k / 128k"
-            to mean anything. `r=7` with a 2px stroke fits the 28px control height the rest of the bar uses.
+            What is about to run, and how full its window is — **on hover**, not spelled out in the bar.
+
+            Both are facts you want occasionally and never while typing, and written out they were the widest
+            things in the row: `gpt-4o · api.openai.com` beside `~109k / 128k context` left no room for the send
+            button on a narrow window. The ring stays, because a shape is read at a glance without being read;
+            the words are one hover away.
+
+            `tabindex="0"` so it is reachable without a mouse — a hover-only fact is a fact some people cannot
+            get to. The popover is `position:absolute`, so revealing it moves nothing.
+
+            A ring rather than a bar, while we are here: how full the window is has a natural whole, and a circle
+            shows a proportion of one without needing its ends labelled. `r=7` with a 2px stroke fits the 28px
+            control height the rest of the bar uses.
           -->
-          <span id="ctxmeter" class="ctx" hidden role="img">
-            <svg class="ctx-ring" viewBox="0 0 18 18" aria-hidden="true">
-              <circle class="ctx-ring-track" cx="9" cy="9" r="7" />
-              <circle class="ctx-ring-fill" id="ctxfill" cx="9" cy="9" r="7" />
-            </svg>
-            <span id="ctxtext"></span>
+          <span class="metaz" id="metaz" tabindex="0" role="group" aria-label="Model and context window">
+            <span class="metapop">
+              <span class="meta" id="modelmeta"></span>
+              <span id="ctxtext"></span>
+            </span>
+            <span id="ctxmeter" class="ctx" hidden role="img">
+              <svg class="ctx-ring" viewBox="0 0 18 18" aria-hidden="true">
+                <circle class="ctx-ring-track" cx="9" cy="9" r="7" />
+                <circle class="ctx-ring-fill" id="ctxfill" cx="9" cy="9" r="7" />
+              </svg>
+            </span>
           </span>
           <button class="go" id="send" title="Send" aria-label="Send">↑</button>
         </div>
@@ -1166,6 +1192,8 @@
       const meter = $("ctxmeter");
       meter.hidden = false;
       meter.classList.toggle("warn", c.fraction >= c.compactAt);
+      // Both, because the ring and the figure are no longer in the same element — see `.metaz.warn #ctxtext`.
+      $("metaz").classList.toggle("warn", c.fraction >= c.compactAt);
       /**
        * The ring's arc, as a dash.
        *

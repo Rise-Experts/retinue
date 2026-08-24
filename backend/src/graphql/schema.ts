@@ -87,7 +87,16 @@ export const typeDefs = /* GraphQL */ `
   rather than a full bar.
   """
   type UsageQuota {
-    period: String!
+    """
+    The window in words — "the day", "any 5 hours" (#181).
+
+    period stayed for the calendar case and is **null** for a rolling window, because no RollupPeriod describes
+    one and returning "hour" for a five-hour window would be a wrong answer rather than a missing one. A client
+    rendering the window reads this field; one keying a chart by bucket reads period and correctly finds nothing
+    to key by.
+    """
+    window: String!
+    period: String
     costLimitMinorUnits: Int
     inputTokenLimit: Int
     outputTokenLimit: Int

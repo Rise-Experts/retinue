@@ -116,6 +116,37 @@ export const createMemoryUsageBackend = (options: { readonly clock?: () => strin
         .slice(0, limit);
     },
 
+    async totalsBetween({ tenantId, from, to, principalId, modelId }) {
+      const scoped = [...tenant(tenantId).values()].filter(
+        (e) =>
+          // Half-open, like every other range here, so adjacent windows tile without a boundary event counting
+          // twice.
+          e.occurredAt >= from &&
+          e.occurredAt < to &&
+          // Absent means the whole tenant. Matching `principalId === undefined` against `e.principalId` would
+          // instead select only the records with *no* principal, which is the opposite of "everyone".
+          (principalId === undefined || e.principalId === principalId) &&
+          (modelId === undefined || e.modelId === modelId),
+      );
+      const totals = scoped.reduce<UsageTotals>(
+        (acc, e) => ({
+          inputTokens: acc.inputTokens + e.inputTokens,
+          outputTokens: acc.outputTokens + e.outputTokens,
+          cachedInputTokens: acc.cachedInputTokens + e.cachedInputTokens,
+          reasoningTokens: acc.reasoningTokens + (e.reasoningTokens ?? 0),
+          costMinorUnits: acc.costMinorUnits + e.costMinorUnits,
+          eventCount: acc.eventCount + 1,
+        }),
+        ZERO_TOTALS,
+      );
+      // From the same filtered set as the totals, so the two cannot describe different sets of records.
+      const earliestAt = scoped.reduce<string | null>(
+        (min, e) => (min === null || e.occurredAt < min ? e.occurredAt : min),
+        null,
+      );
+      return { totals, earliestAt };
+    },
+
     async totals({ tenantId, runId, conversationId }) {
       const scoped = [...tenant(tenantId).values()].filter(
         (e) =>

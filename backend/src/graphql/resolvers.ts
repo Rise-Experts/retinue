@@ -6,7 +6,7 @@
  */
 
 import type { ExecutionContext } from "../core/context.js";
-import { DEFAULT_WARN_AT } from "../usage/index.js";
+import { DEFAULT_WARN_AT, describeWindow } from "../usage/index.js";
 import type { QuotaGuard } from "../usage/index.js";
 import type { UsageRollupStore } from "../persistence/index.js";
 import type { ConversationId, RunId } from "../core/ids.js";
@@ -83,7 +83,10 @@ export const createResolvers = (deps: ResolverDeps) => {
     const limits = await guard.limits(execution);
     if (limits === undefined) return null;
     return {
-      period: limits.period,
+      window: describeWindow(limits.window),
+      // Null for a rolling window: no calendar period describes one, and naming the closest would be wrong
+      // rather than approximate.
+      period: limits.window.kind === "calendar" ? limits.window.period : null,
       costLimitMinorUnits: limits.costMinorUnits ?? null,
       inputTokenLimit: limits.inputTokens ?? null,
       outputTokenLimit: limits.outputTokens ?? null,

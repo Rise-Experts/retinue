@@ -8,10 +8,18 @@
  */
 
 import type { PrincipalId, TenantId } from "../../core/ids.js";
-import type { RollupPeriod, UsageLimitRecord, UsageLimitStore } from "../../persistence/index.js";
+import { windowKey } from "../../persistence/index.js";
+import type { QuotaWindow, UsageLimitRecord, UsageLimitStore } from "../../persistence/index.js";
 
-/** Keyed by grain, with the tenant default under an empty principal segment — same shape as the SQL indexes. */
-const keyOf = (principalId: PrincipalId | undefined, period: RollupPeriod) => `${principalId ?? ""} ${period}`;
+/**
+ * Keyed by grain, with the tenant default under an empty principal segment — same shape as the SQL indexes.
+ *
+ * The window half goes through `windowKey`, the same function the SQL adapter stores, so the two adapters cannot
+ * key a rolling window differently. Spelling it `${minutes}` here and `rolling:${minutes}` there would leave both
+ * stores self-consistent and mutually unreadable, which conformance would not catch.
+ */
+const keyOf = (principalId: PrincipalId | undefined, window: QuotaWindow) =>
+  `${principalId ?? ""} ${windowKey(window)}`;
 
 export const createMemoryUsageLimitStore = (config: { readonly clock?: () => string } = {}): UsageLimitStore => {
   const clock = config.clock ?? (() => new Date().toISOString());
@@ -25,26 +33,27 @@ export const createMemoryUsageLimitStore = (config: { readonly clock?: () => str
   return {
     async put({ tenantId, limit }) {
       const stored: UsageLimitRecord = { ...limit, tenantId: tenantId as TenantId, updatedAt: clock() };
-      tenant(tenantId).set(keyOf(limit.principalId, limit.period), stored);
+      tenant(tenantId).set(keyOf(limit.principalId, limit.window), stored);
       return stored;
     },
 
-    async resolve({ tenantId, principalId, period }) {
+    async resolve({ tenantId, principalId, window }) {
       const rows = tenant(tenantId);
       // The principal's own row, else the tenant default, else unbounded. A fallback, never a merge: a partial
       // override that inherited the rest would be a third set of limits nobody configured.
-      return rows.get(keyOf(principalId, period)) ?? rows.get(keyOf(undefined, period)) ?? null;
+      return rows.get(keyOf(principalId, window)) ?? rows.get(keyOf(undefined, window)) ?? null;
     },
 
     async list({ tenantId }) {
       return [...tenant(tenantId).values()].sort(
         (a, b) =>
-          (a.principalId ?? "").localeCompare(b.principalId ?? "") || a.period.localeCompare(b.period),
+          (a.principalId ?? "").localeCompare(b.principalId ?? "") ||
+          windowKey(a.window).localeCompare(windowKey(b.window)),
       );
     },
 
-    async remove({ tenantId, principalId, period }) {
-      tenant(tenantId).delete(keyOf(principalId, period));
+    async remove({ tenantId, principalId, window }) {
+      tenant(tenantId).delete(keyOf(principalId, window));
     },
   };
 };

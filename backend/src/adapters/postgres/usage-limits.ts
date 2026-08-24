@@ -11,13 +11,14 @@
  */
 
 import type { PrincipalId, TenantId } from "../../core/ids.js";
-import type { RollupPeriod, UsageLimitRecord, UsageLimitStore } from "../../persistence/index.js";
+import { parseWindowKey, windowKey } from "../../persistence/index.js";
+import type { UsageLimitRecord, UsageLimitStore } from "../../persistence/index.js";
 import type { SqlExecutor } from "./sql.js";
 
 type Row = {
   tenant_id: string;
   principal_id: string | null;
-  period: string;
+  window_key: string;
   cost_minor_units: number | string | null;
   input_tokens: number | string | null;
   output_tokens: number | string | null;
@@ -32,7 +33,17 @@ const num = (v: number | string | null): number | undefined => (v === null ? und
 const toLimit = (r: Row): UsageLimitRecord => ({
   tenantId: r.tenant_id as TenantId,
   ...(r.principal_id === null ? {} : { principalId: r.principal_id as PrincipalId }),
-  period: r.period as RollupPeriod,
+  /**
+    * A row whose key this version cannot parse is **not** silently treated as some default window — it throws,
+    * naming the value. The alternative is enforcing an allowance over a span nobody configured, in whichever
+    * direction the fallback happened to point.
+    */
+   window: (() => {
+     const parsed = parseWindowKey(r.window_key);
+     if (parsed === null)
+       throw new Error(`usage_limits row has an unrecognised window key ${JSON.stringify(r.window_key)}`);
+     return parsed;
+   })(),
   // Spread conditionally rather than assigning `undefined`, so an absent limit is absent from the object and
   // `"costMinorUnits" in limit` answers "is this bounded" without a second convention.
   ...(num(r.cost_minor_units) === undefined ? {} : { costMinorUnits: num(r.cost_minor_units)! }),
@@ -43,7 +54,7 @@ const toLimit = (r: Row): UsageLimitRecord => ({
   ...(r.updated_by === null ? {} : { updatedBy: r.updated_by }),
 });
 
-const COLUMNS = `tenant_id, principal_id, period, cost_minor_units, input_tokens, output_tokens,
+const COLUMNS = `tenant_id, principal_id, window_key, cost_minor_units, input_tokens, output_tokens,
                  warn_at, updated_at, updated_by`;
 
 export const createPostgresUsageLimitStore = (sql: SqlExecutor): UsageLimitStore => ({
@@ -58,11 +69,11 @@ export const createPostgresUsageLimitStore = (sql: SqlExecutor): UsageLimitStore
      */
     const isTenantDefault = limit.principalId === undefined;
     const conflict = isTenantDefault
-      ? `(tenant_id, period) WHERE principal_id IS NULL`
-      : `(tenant_id, principal_id, period) WHERE principal_id IS NOT NULL`;
+      ? `(tenant_id, window_key) WHERE principal_id IS NULL`
+      : `(tenant_id, principal_id, window_key) WHERE principal_id IS NOT NULL`;
     const rows = await sql.query<Row>(
       `INSERT INTO usage_limits
-         (tenant_id, principal_id, period, cost_minor_units, input_tokens, output_tokens, warn_at,
+         (tenant_id, principal_id, window_key, cost_minor_units, input_tokens, output_tokens, warn_at,
           updated_at, updated_by)
        VALUES ($1, $2, $3, $4, $5, $6, $7, now(), $8)
        ON CONFLICT ${conflict} DO UPDATE SET
@@ -76,7 +87,7 @@ export const createPostgresUsageLimitStore = (sql: SqlExecutor): UsageLimitStore
       [
         tenantId,
         limit.principalId ?? null,
-        limit.period,
+        windowKey(limit.window),
         // `?? null` and not `?? 0`: an omitted limit is unbounded. Writing 0 would refuse every run, which is
         // the outage direction.
         limit.costMinorUnits ?? null,
@@ -89,7 +100,7 @@ export const createPostgresUsageLimitStore = (sql: SqlExecutor): UsageLimitStore
     return toLimit(rows[0]!);
   },
 
-  async resolve({ tenantId, principalId, period }) {
+  async resolve({ tenantId, principalId, window }) {
     /**
      * Most specific wins, decided by the database rather than by the caller.
      *
@@ -99,11 +110,11 @@ export const createPostgresUsageLimitStore = (sql: SqlExecutor): UsageLimitStore
      */
     const rows = await sql.query<Row>(
       `SELECT ${COLUMNS} FROM usage_limits
-        WHERE tenant_id = $1 AND period = $2
+        WHERE tenant_id = $1 AND window_key = $2
           AND (principal_id IS NULL OR principal_id = $3::text)
         ORDER BY principal_id NULLS LAST
         LIMIT 1`,
-      [tenantId, period, principalId ?? null],
+      [tenantId, windowKey(window), principalId ?? null],
     );
     return rows[0] === undefined ? null : toLimit(rows[0]);
   },
@@ -113,18 +124,18 @@ export const createPostgresUsageLimitStore = (sql: SqlExecutor): UsageLimitStore
       // The tenant default first, then principals alphabetically — a stable order, so an admin screen does not
       // reshuffle between refreshes.
       `SELECT ${COLUMNS} FROM usage_limits WHERE tenant_id = $1
-        ORDER BY principal_id NULLS FIRST, period`,
+        ORDER BY principal_id NULLS FIRST, window_key`,
       [tenantId],
     );
     return rows.map(toLimit);
   },
 
-  async remove({ tenantId, principalId, period }) {
+  async remove({ tenantId, principalId, window }) {
     // `IS NOT DISTINCT FROM`, so a NULL parameter removes the tenant default rather than matching nothing.
     await sql.query(
       `DELETE FROM usage_limits
-        WHERE tenant_id = $1 AND period = $2 AND principal_id IS NOT DISTINCT FROM $3::text`,
-      [tenantId, period, principalId ?? null],
+        WHERE tenant_id = $1 AND window_key = $2 AND principal_id IS NOT DISTINCT FROM $3::text`,
+      [tenantId, windowKey(window), principalId ?? null],
     );
   },
 });
