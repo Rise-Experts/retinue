@@ -88,6 +88,18 @@
   .usage-bar.on { background:var(--accent); }
   .usage-model { display:flex; justify-content:space-between; font-size:11.5px; color:var(--muted); margin-top:3px; }
   /* The quota track. `aria-valuenow` rather than a title, so the number is announced, not hovered. */
+  /* ---- limits (#183) */
+  .usage-h { margin:10px 0 5px; font-size:10.5px; text-transform:uppercase; letter-spacing:.07em;
+             color:var(--faint); }
+  .limit { margin-bottom:7px; }
+  .limit-label { font-size:11px; color:var(--muted); margin-bottom:3px; }
+  .limit-track { height:5px; border-radius:3px; background:var(--line); overflow:hidden; }
+  .limit-track > span { display:block; height:100%; background:var(--accent); }
+  /* Colour only where it means something: a bar that is orange from the first turn is a bar people stop
+     reading. `over` is a limit already reached, which is a different fact from nearly reached. */
+  .limit-track.warn > span { background:var(--warn); }
+  .limit-track.over > span { background:#dc2626; }
+  .limit-figures { font-size:10.5px; color:var(--faint); margin-top:2px; }
   .usage-quota { height:5px; border-radius:3px; background:var(--line); overflow:hidden; margin-top:9px; }
   .usage-quota > span { display:block; height:100%; background:var(--ok); }
   .usage-quota.warning > span { background:var(--warn); }
@@ -1272,11 +1284,83 @@
       const j = await r.json();
       if (!r.ok) throw new Error(j.error ?? r.statusText);
       paintUsage(j.panel, j.formatted);
+      // Limits after the spend, in the same panel: "what has this cost" and "what is left" are one question
+      // asked in two halves, and answering them in different places is how people find one and not the other.
+      await paintLimits();
     } catch (e) {
       body.innerHTML = "";
       const d = document.createElement("div");
       d.className = "usage-err";
       d.textContent = `Could not load usage: ${e.message}`;
+      body.append(d);
+    }
+  };
+
+  /**
+   * Every limit in force, most constraining first — #183.
+   *
+   * From `GET /api/limits`, which asks the quota guard rather than reading rows: the figures a person sees are
+   * the same ones enforcement used, computed by the same code. A panel with its own idea of "how full is it"
+   * eventually shows somebody a comfortable number while they are being refused.
+   *
+   * Server order is preserved deliberately — it is shortest-span-first, so the limit that will stop you soonest
+   * is at the top. Re-sorting here would be a second opinion about which limit matters.
+   */
+  const paintLimits = async () => {
+    const body = $("usage-body");
+    try {
+      const r = await fetch("/api/limits", { headers: headers() });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error ?? r.statusText);
+
+      const head = document.createElement("div");
+      head.className = "usage-h";
+      head.textContent = "Limits";
+      body.append(head);
+
+      if (j.unbounded) {
+        const d = document.createElement("div");
+        d.className = "usage-empty";
+        // Said, not left blank. An empty area also means "the request failed", and the difference matters when
+        // the question is whether you are about to be cut off.
+        d.textContent = "No limits configured — unbounded.";
+        body.append(d);
+        return;
+      }
+
+      for (const limit of j.applying) {
+        for (const dim of limit.dimensions) {
+          const row = document.createElement("div");
+          row.className = "limit";
+          const label = document.createElement("div");
+          label.className = "limit-label";
+          // Whose it is, then what it covers. "You" versus "Workspace" is the same distinction the refusal
+          // messages make, so the panel and the refusal describe a limit the same way.
+          label.textContent =
+            `${limit.scope === "personal" ? "You" : "Workspace"} · ${dim.dimension} · ${limit.window}` +
+            (limit.modelId ? ` · ${limit.modelId}` : "");
+          const track = document.createElement("div");
+          track.className = "limit-track";
+          const fill = document.createElement("span");
+          // Clamped: a fraction over one would otherwise render as a bar wider than its track.
+          fill.style.width = `${Math.min(100, Math.round(dim.fraction * 100))}%`;
+          if (dim.fraction >= 1) track.classList.add("over");
+          else if (dim.fraction >= 0.8) track.classList.add("warn");
+          track.append(fill);
+          const figures = document.createElement("div");
+          figures.className = "limit-figures";
+          figures.textContent = `${dim.used.toLocaleString()} / ${dim.limit.toLocaleString()}`;
+          // The reset in the tooltip rather than the row: it is the thing you want once, after you have seen
+          // that the bar is full.
+          row.title = limit.resetNote || `Resets at ${limit.resetsAt}`;
+          row.append(label, track, figures);
+          body.append(row);
+        }
+      }
+    } catch (e) {
+      const d = document.createElement("div");
+      d.className = "usage-err";
+      d.textContent = `Could not load limits: ${e.message}`;
       body.append(d);
     }
   };

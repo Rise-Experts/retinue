@@ -81,16 +81,25 @@ export const createResolvers = (deps: ResolverDeps) => {
   const quotaViewFor = async (guard: QuotaGuard, execution: ExecutionContext) => {
     const decision = await guard.admit(execution);
     const limits = await guard.limits(execution);
-    if (limits === undefined) return null;
+    if (limits.length === 0) return null;
+    /**
+     * The **binding** limit, which is the first — shortest span (#182).
+     *
+     * Several limits can apply at once and this view describes one, because that is the shape the schema has and
+     * a client rendering "you have used X of Y" wants the Y that will stop them soonest. `usageReport` is the
+     * wrong place to widen: a caller that wants all of them should ask for all of them.
+     */
+    const binding = limits[0]!;
     return {
-      window: describeWindow(limits.window),
+      window: describeWindow(binding.window),
       // Null for a rolling window: no calendar period describes one, and naming the closest would be wrong
       // rather than approximate.
-      period: limits.window.kind === "calendar" ? limits.window.period : null,
-      costLimitMinorUnits: limits.costMinorUnits ?? null,
-      inputTokenLimit: limits.inputTokens ?? null,
-      outputTokenLimit: limits.outputTokens ?? null,
-      warnAt: limits.warnAt ?? DEFAULT_WARN_AT,
+      period: binding.window.kind === "calendar" ? binding.window.period : null,
+      modelId: binding.modelId ?? null,
+      costLimitMinorUnits: binding.costMinorUnits ?? null,
+      inputTokenLimit: binding.inputTokens ?? null,
+      outputTokenLimit: binding.outputTokens ?? null,
+      warnAt: binding.warnAt ?? DEFAULT_WARN_AT,
       warning: decision.admitted && decision.warnings.length > 0,
       exceeded: !decision.admitted,
     };

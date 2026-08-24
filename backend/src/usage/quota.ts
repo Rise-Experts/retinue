@@ -157,6 +157,14 @@ export type QuotaLimits = {
    * tenant-wide usage.
    */
   readonly principalId?: PrincipalId;
+  /**
+   * The model this allowance covers, or absent for any model — #182.
+   *
+   * Load-bearing in the same way `principalId` is: it decides **which records the usage is read from**. A limit
+   * on an expensive model checked against all traffic is not a per-model limit — a busy hour on a cheap model
+   * exhausts it, and the person refused has not touched the model they are being refused for.
+   */
+  readonly modelId?: string;
   readonly costMinorUnits?: number;
   readonly inputTokens?: number;
   readonly outputTokens?: number;
@@ -188,15 +196,40 @@ export type QuotaDecision =
       readonly dimension: QuotaDimension;
       readonly limit: number;
       readonly used: number;
+      /** Present when the limit that refused is scoped to one model — #182. */
+      readonly modelId?: string;
       readonly message: string;
       readonly retryAfter: string;
     };
+
+/**
+ * One limit, with what it allows, what has been used, and when that changes — #183.
+ *
+ * Shaped for rendering: the window as words rather than a union to switch on, the scope as a word rather than an
+ * optional id to test for presence, and the fraction computed once here rather than in every client.
+ */
+export type QuotaExplanation = {
+  readonly window: string;
+  readonly modelId?: string;
+  readonly scope: "workspace" | "personal";
+  readonly resetsAt: string;
+  /** The sentence a refusal would use — "It resets at T", or the sliding-window wording. Empty when neither. */
+  readonly resetNote: string;
+  readonly dimensions: readonly {
+    readonly dimension: QuotaDimension;
+    readonly limit: number;
+    readonly used: number;
+    readonly fraction: number;
+  }[];
+};
 
 export type QuotaWarning = {
   readonly dimension: QuotaDimension;
   readonly limit: number;
   readonly used: number;
   readonly fraction: number;
+  /** Present when the limit is scoped to one model — #182. */
+  readonly modelId?: string;
   readonly message: string;
 };
 
@@ -215,6 +248,21 @@ export interface QuotaObserver {
   ): Promise<void> | void;
 }
 
+/**
+ * What is being admitted, beyond who is asking — #182.
+ *
+ * The model belongs here rather than on `ExecutionContext`: the context is who and where, and a per-model limit
+ * is about *what this run will use*. Two runs by the same person in the same workspace can be subject to
+ * different limits, which is not something an identity can express.
+ *
+ * Absent `modelId` means model-scoped limits do not apply. That is the safe direction for a *check* — it cannot
+ * refuse the wrong work — and the caller that knows the model is the one that must say so.
+ */
+export type QuotaSubject = {
+  readonly at?: string;
+  readonly modelId?: string;
+};
+
 export type QuotaGuardDeps = {
   readonly rollups: UsageRollupStore;
   /**
@@ -223,7 +271,17 @@ export type QuotaGuardDeps = {
    * A function rather than a value: limits are per tenant and change without a redeploy, and a value captured
    * at construction would be the limits of whoever booted the process.
    */
-  readonly resolveLimits: (context: ExecutionContext) => Promise<QuotaLimits | undefined> | QuotaLimits | undefined;
+  /**
+   * **Every** limit that applies, shortest span first — widened from a single limit by #182.
+   *
+   * A list rather than one, because a person is subject to several at once and all of them bind: a five-hour
+   * cap, a monthly cap, a per-model cap. Returning the most specific one meant the others were configured,
+   * visible and unenforced. An empty list is unbounded.
+   */
+  readonly resolveLimits: (
+    context: ExecutionContext,
+    about: QuotaSubject,
+  ) => Promise<readonly QuotaLimits[]> | readonly QuotaLimits[];
   /**
    * The ledger, needed **only** for a rolling window (#181) — rollups are calendar buckets and cannot answer an
    * arbitrary interval.
@@ -259,6 +317,15 @@ export const createQuotaGuard = (deps: QuotaGuardDeps) => {
   const subject = (limits: QuotaLimits): string => (limits.principalId === undefined ? "This workspace" : "You");
   const verb = (limits: QuotaLimits): string => (limits.principalId === undefined ? "has" : "have");
   const possessive = (limits: QuotaLimits): string => (limits.principalId === undefined ? "its" : "your");
+  /**
+   * " on claude-opus-5", or nothing at all — #182.
+   *
+   * Part of the sentence rather than appended after it, so the limit reads as being *for that model* instead of
+   * as a general limit with a note. Somebody whose Opus allowance is spent can still work on a cheaper model,
+   * and a message that does not say which model turns a narrow limit into an apparent outage.
+   */
+  const scopeOf = (limits: QuotaLimits): string =>
+    limits.modelId === undefined ? "" : ` on ${limits.modelId}`;
 
   /**
    * Usage for the window, and when there will be room again — #181.
@@ -281,7 +348,15 @@ export const createQuotaGuard = (deps: QuotaGuardDeps) => {
     limits: QuotaLimits,
     at: string,
   ): Promise<{ usage: UsageTotals; relief: { sentence: string; at: string } }> => {
-    if (limits.window.kind === "calendar") {
+    /**
+     * A **model-scoped** limit always reads the ledger, whichever kind of window it has — #182.
+     *
+     * The rollups have no model dimension, and adding one would multiply their row count by the number of models
+     * a tenant uses to serve a check that a bounded index scan already answers — the same trade `breakdown`
+     * documents. For a calendar window the interval is exactly `[bucketStart, nextBucket)`, so the number is
+     * exact either way; only the source differs.
+     */
+    if (limits.window.kind === "calendar" && limits.modelId === undefined) {
       const bucketStart = bucketStartFor(limits.window.period, at);
       const rollup = await deps.rollups.get({
         tenantId: context.tenantId,
@@ -295,27 +370,53 @@ export const createQuotaGuard = (deps: QuotaGuardDeps) => {
       return { usage: rollup ?? NO_USAGE, relief: { sentence: `It resets at ${resetsAt}.`, at: resetsAt } };
     }
 
-    // A rolling window needs the ledger, which the rollup store cannot give — hence this dependency, and hence
-    // it being required only once a rolling limit is actually configured.
+    // Everything else needs the ledger, which the rollup store cannot give — hence this dependency, and hence
+    // it being required only once such a limit is actually configured.
     if (deps.usage === undefined)
       throw new Error(
-        "a rolling quota window needs a UsageStore: rollups are keyed on calendar buckets and cannot answer " +
-          "an arbitrary interval. Pass `usage` to createQuotaGuard, or configure a calendar window.",
+        "this quota window needs a UsageStore: rollups are keyed on calendar buckets with no model dimension, " +
+          "so a rolling window or a per-model limit cannot be answered from them. Pass `usage` to " +
+          "createQuotaGuard, or configure an unscoped calendar limit.",
       );
 
-    const from = new Date(new Date(at).getTime() - limits.window.minutes * 60_000).toISOString();
+    // A calendar window scoped to a model still has calendar bounds; only a rolling one is measured back from
+    // now. Computing the bounds here keeps the two cases one code path with one set of filters.
+    const bounds =
+      limits.window.kind === "calendar"
+        ? (() => {
+            const bucketStart = bucketStartFor(limits.window.period, at);
+            const resetsAt = nextBucket(limits.window.period, bucketStart);
+            return { from: bucketStart, to: at, calendarResetsAt: resetsAt };
+          })()
+        : {
+            from: new Date(new Date(at).getTime() - limits.window.minutes * 60_000).toISOString(),
+            to: at,
+            calendarResetsAt: undefined,
+          };
+
     const { totals, earliestAt } = await deps.usage.totalsBetween({
       tenantId: context.tenantId,
-      from,
-      to: at,
+      from: bounds.from,
+      to: bounds.to,
       ...(limits.principalId === undefined ? {} : { principalId: limits.principalId }),
+      ...(limits.modelId === undefined ? {} : { modelId: limits.modelId }),
     });
+
+    // A calendar window does reset, even when its usage came from the ledger — so it says so, and says the true
+    // boundary rather than the sliding-window sentence.
+    if (bounds.calendarResetsAt !== undefined)
+      return {
+        usage: totals,
+        relief: { sentence: `It resets at ${bounds.calendarResetsAt}.`, at: bounds.calendarResetsAt },
+      };
     if (earliestAt === null)
       // No relief time to give, and none invented. `at` as the retry target is the honest answer: there is
       // nothing to wait for, so anything that changes must be the limit itself.
       return { usage: totals, relief: { sentence: "", at } };
 
-    const relievesAt = new Date(new Date(earliestAt).getTime() + limits.window.minutes * 60_000).toISOString();
+    const relievesAt = new Date(
+      new Date(earliestAt).getTime() + (limits.window.kind === "rolling" ? limits.window.minutes : 0) * 60_000,
+    ).toISOString();
     return {
       usage: totals,
       relief: {
@@ -334,63 +435,99 @@ export const createQuotaGuard = (deps: QuotaGuardDeps) => {
      * Reads the current period's rollup, not the ledger: admission is on the hot path of every message, and a
      * check that scanned raw events would make the platform slower in proportion to how much it had been used.
      */
-    async admit(context: ExecutionContext, at: string = clock()): Promise<QuotaDecision> {
-      const limits = await deps.resolveLimits(context);
-      // No limits configured is unbounded, not zero. A misconfigured quota that blocks everything is an
-      // outage; one that blocks nothing is a bill, and the bill is visible in these very rollups.
-      if (limits === undefined) return { admitted: true, usage: NO_USAGE, warnings: [] };
+    // `about`, not `subject` — `subject()` below is the helper that decides "You" versus "This workspace",
+    // and shadowing it here made every refusal message try to call a plain object.
+    async admit(context: ExecutionContext, about: QuotaSubject = {}): Promise<QuotaDecision> {
+      const at = about.at ?? clock();
+      const applicable = await deps.resolveLimits(context, about);
+      // Nothing configured is unbounded, not zero. A misconfigured quota that blocks everything is an outage;
+      // one that blocks nothing is a bill, and the bill is visible in these very rollups.
+      if (applicable.length === 0) return { admitted: true, usage: NO_USAGE, warnings: [] };
 
-      const { usage, relief } = await read(context, limits, at);
-      const warnAt = limits.warnAt ?? DEFAULT_WARN_AT;
+      /**
+       * **Every** applicable limit is checked, not the most specific one — #182.
+       *
+       * This resolved a single limit, which meant a workspace-wide cap on an expensive model was silently
+       * ignored for anybody who also had a personal overall limit: the personal one was "more specific", so the
+       * model cap was never read. But they are not competing answers to one question — they are two allowances,
+       * and both bind. That is what a limit means everywhere it is used in practice.
+       *
+       * Ordered shortest-span first by the resolver, so the limit a person is refused by is the one that stops
+       * them soonest, which is also the one whose reset time is nearest and therefore most useful to hear.
+       */
+      const evaluated = [] as {
+        limits: QuotaLimits;
+        usage: UsageTotals;
+        relief: { sentence: string; at: string };
+        checks: readonly { dimension: QuotaDimension; limit?: number; used: number }[];
+      }[];
+      for (const limits of applicable) {
+        const { usage, relief } = await read(context, limits, at);
+        evaluated.push({
+          limits,
+          usage,
+          relief,
+          checks: [
+            { dimension: "cost", ...(limits.costMinorUnits === undefined ? {} : { limit: limits.costMinorUnits }), used: usage.costMinorUnits },
+            { dimension: "input-tokens", ...(limits.inputTokens === undefined ? {} : { limit: limits.inputTokens }), used: usage.inputTokens },
+            { dimension: "output-tokens", ...(limits.outputTokens === undefined ? {} : { limit: limits.outputTokens }), used: usage.outputTokens },
+          ],
+        });
+      }
 
-      const checks: readonly { dimension: QuotaDimension; limit?: number; used: number }[] = [
-        { dimension: "cost", ...(limits.costMinorUnits === undefined ? {} : { limit: limits.costMinorUnits }), used: usage.costMinorUnits },
-        { dimension: "input-tokens", ...(limits.inputTokens === undefined ? {} : { limit: limits.inputTokens }), used: usage.inputTokens },
-        { dimension: "output-tokens", ...(limits.outputTokens === undefined ? {} : { limit: limits.outputTokens }), used: usage.outputTokens },
-      ];
-
-      // Refusals first, across every dimension, before any warning is emitted. Emitting a warning and then
-      // refusing would tell a customer they are approaching a limit they have already passed.
-      for (const check of checks) {
-        if (check.limit === undefined) continue;
-        if (check.used >= check.limit) {
-          const refusal = {
-            admitted: false as const,
-            dimension: check.dimension,
-            limit: check.limit,
-            used: check.used,
-            // Actionable: names the dimension, the figure, the limit and when there will be room again.
-            // "Quota exceeded" leaves a user with nothing to do.
-            message:
-              `${subject(limits)} ${verb(limits)} used ${check.used} of ${possessive(limits)} ${check.limit} ` +
-              `${DIMENSION_LABEL[check.dimension]} limit for ${describeWindow(limits.window)}. ${relief.sentence}`,
-            retryAfter: relief.at,
-          };
-          try {
-            await deps.observer?.onRefusal?.(context, refusal);
-          } catch (error) {
-            // A refusal must not depend on an observer succeeding: the point is to stop work, and a broken
-            // notification is not a reason to let it through.
-            log("quota refusal observer failed", { error });
+      // Refusals first, across every limit and every dimension, before any warning is emitted. Warning and then
+      // refusing would tell somebody they are approaching a limit they have already passed.
+      for (const { limits, relief, checks } of evaluated) {
+        for (const check of checks) {
+          if (check.limit === undefined) continue;
+          if (check.used >= check.limit) {
+            const refusal = {
+              admitted: false as const,
+              dimension: check.dimension,
+              limit: check.limit,
+              used: check.used,
+              // The model, when the limit has one. "You have run out" reads as an account-wide stop, and
+              // somebody whose Opus allowance is spent can still work on a cheaper model — so not saying which
+              // model turns a small limit into an apparent outage.
+              ...(limits.modelId === undefined ? {} : { modelId: limits.modelId }),
+              // Actionable: names the dimension, the figure, the limit and when there will be room again.
+              // "Quota exceeded" leaves a user with nothing to do.
+              message:
+                `${subject(limits)} ${verb(limits)} used ${check.used} of ${possessive(limits)} ${check.limit} ` +
+                `${DIMENSION_LABEL[check.dimension]} limit${scopeOf(limits)} for ${describeWindow(limits.window)}. ` +
+                `${relief.sentence}`,
+              retryAfter: relief.at,
+            };
+            try {
+              await deps.observer?.onRefusal?.(context, refusal);
+            } catch (error) {
+              // A refusal must not depend on an observer succeeding: the point is to stop work, and a broken
+              // notification is not a reason to let it through.
+              log("quota refusal observer failed", { error });
+            }
+            return refusal;
           }
-          return refusal;
         }
       }
 
       const warnings: QuotaWarning[] = [];
-      for (const check of checks) {
-        if (check.limit === undefined || check.limit === 0) continue;
-        const fraction = check.used / check.limit;
-        if (fraction < warnAt) continue;
-        warnings.push({
-          dimension: check.dimension,
-          limit: check.limit,
-          used: check.used,
-          fraction,
-          message:
-            `${subject(limits)} ${verb(limits)} used ${Math.round(fraction * 100)}% of ${possessive(limits)} ` +
-            `${DIMENSION_LABEL[check.dimension]} limit for ${describeWindow(limits.window)}.`,
-        });
+      for (const { limits, checks } of evaluated) {
+        const warnAt = limits.warnAt ?? DEFAULT_WARN_AT;
+        for (const check of checks) {
+          if (check.limit === undefined || check.limit === 0) continue;
+          const fraction = check.used / check.limit;
+          if (fraction < warnAt) continue;
+          warnings.push({
+            dimension: check.dimension,
+            limit: check.limit,
+            used: check.used,
+            fraction,
+            ...(limits.modelId === undefined ? {} : { modelId: limits.modelId }),
+            message:
+              `${subject(limits)} ${verb(limits)} used ${Math.round(fraction * 100)}% of ${possessive(limits)} ` +
+              `${DIMENSION_LABEL[check.dimension]} limit${scopeOf(limits)} for ${describeWindow(limits.window)}.`,
+          });
+        }
       }
       for (const warning of warnings) {
         try {
@@ -401,23 +538,78 @@ export const createQuotaGuard = (deps: QuotaGuardDeps) => {
           log("quota warning observer failed", { error });
         }
       }
-      return { admitted: true, usage, warnings };
+      /**
+       * The usage reported alongside an admission is the **first** limit's, which is the shortest span.
+       *
+       * There is no single "usage" once several limits apply, and inventing a sum across windows would be a
+       * number that means nothing. The shortest span is the one a caller rendering a single figure wants, and
+       * `explain` gives all of them to a caller that wants more.
+       */
+      return { admitted: true, usage: evaluated[0]?.usage ?? NO_USAGE, warnings };
     },
 
     /**
-     * The limits in force for this context, or undefined for unlimited.
+     * The limits in force for this context — an empty list for unlimited.
      *
      * Exposed so a UI can render "you have used X of Y" without a second source for Y — a panel that took its
-     * limit from configuration while enforcement took it from here would eventually disagree, and the version
-     * a user sees would be the wrong one.
+     * limit from configuration while enforcement took it from here would eventually disagree, and the version a
+     * user sees would be the wrong one.
      */
-    async limits(context: ExecutionContext): Promise<QuotaLimits | undefined> {
-      return deps.resolveLimits(context);
+    async limits(context: ExecutionContext, about: QuotaSubject = {}): Promise<readonly QuotaLimits[]> {
+      return deps.resolveLimits(context, about);
+    },
+
+    /**
+     * Every limit with its usage and its reset — #183.
+     *
+     * A limit nobody can see is a limit that surprises people, and once several apply at once "how much have I
+     * got left" stops being answerable by reading one number. This is the same `read` the refusal path uses, so
+     * a panel cannot disagree with enforcement about either the figure or the reset time — the failure that a
+     * second implementation of "how full is it" always eventually produces.
+     *
+     * Ordered as the resolver ordered them, shortest span first, which puts the limit most likely to stop you at
+     * the top without the caller having to sort by anything.
+     */
+    async explain(context: ExecutionContext, about: QuotaSubject = {}): Promise<readonly QuotaExplanation[]> {
+      const at = about.at ?? clock();
+      const applicable = await deps.resolveLimits(context, about);
+      const explained: QuotaExplanation[] = [];
+      for (const limits of applicable) {
+        const { usage, relief } = await read(context, limits, at);
+        explained.push({
+          window: describeWindow(limits.window),
+          ...(limits.modelId === undefined ? {} : { modelId: limits.modelId }),
+          // Whose allowance it is, so a personal limit is distinguishable from the workspace's without the
+          // caller re-deriving it from the presence of a field.
+          scope: limits.principalId === undefined ? "workspace" : "personal",
+          resetsAt: relief.at,
+          resetNote: relief.sentence,
+          dimensions: (
+            [
+              ["cost", limits.costMinorUnits, usage.costMinorUnits],
+              ["input-tokens", limits.inputTokens, usage.inputTokens],
+              ["output-tokens", limits.outputTokens, usage.outputTokens],
+            ] as const
+          )
+            // Only the bounded dimensions. An unbounded one has nothing to report, and rendering it as
+            // "0 of null" is how a panel starts looking broken.
+            .filter(([, limit]) => limit !== undefined)
+            .map(([dimension, limit, used]) => ({
+              dimension,
+              limit: limit!,
+              used,
+              // Computed here, not by the caller: two implementations of a fraction eventually round differently
+              // and the bar disagrees with the number beside it.
+              fraction: limit! === 0 ? 1 : used / limit!,
+            })),
+        });
+      }
+      return explained;
     },
 
     /** Throws the refusal, for a caller that would rather not branch. Same decision, different ergonomics. */
-    async assertAdmitted(context: ExecutionContext, at?: string): Promise<QuotaDecision> {
-      const decision = await this.admit(context, at);
+    async assertAdmitted(context: ExecutionContext, about: QuotaSubject = {}): Promise<QuotaDecision> {
+      const decision = await this.admit(context, about);
       if (!decision.admitted)
         throw new AgentPlatformError({
           code: "budget_exceeded",
@@ -468,56 +660,39 @@ export type QuotaGuard = ReturnType<typeof createQuotaGuard>;
  */
 export const createStoredLimitResolver = (deps: {
   readonly limits: UsageLimitStore;
-  /**
-   * Which windows to consider, and in what order.
-   *
-   * Default: every window the tenant has actually configured, shortest span first. Supply this to pin the order
-   * or to restrict it.
-   */
-  readonly windows?: readonly QuotaWindow[];
 }) => {
-  return async (context: ExecutionContext): Promise<QuotaLimits | undefined> => {
+  return async (context: ExecutionContext, about: QuotaSubject = {}): Promise<readonly QuotaLimits[]> => {
     /**
-     * The windows come from the store, not from a hardcoded list — #181.
+     * Every applicable limit, from the store, shortest span first — #181, #182.
      *
-     * This walked `PERIOD_PRECEDENCE` and asked `resolve` for each calendar period. A rolling window has no
-     * period, so an admin could store `rolling:300` through `/api/limits`, see it come back from `GET`, and never
-     * have it enforced: the resolver never asked for it. Built, stored, visible and unreachable — which is the
-     * failure this codebase keeps finding, so it does not get to happen to the feature that exists to stop
-     * people spending money.
+     * Two things this deliberately does not do. It does not walk a hardcoded list of periods: that was how a
+     * stored `rolling:300` could be read back from the API and never enforced, because the resolver never asked
+     * for it. And it does not pick one: a person subject to a five-hour cap, a monthly cap and an Opus cap is
+     * subject to all three, and choosing the "most specific" left the others configured and unenforced.
      *
-     * `list` is one query where the old loop was up to four, and it cannot miss a window it has never heard of.
+     * `applicable` does the override-within-a-scope selection in the store, where the rule has one
+     * implementation per adapter and conformance holds them to the same behaviour.
      */
-    const configured =
-      deps.windows ??
-      (await deps.limits.list({ tenantId: context.tenantId }))
-        .map((record) => record.window)
-        // Deduplicated by key, because a tenant row and a principal row for the same window are one window to
-        // consider, not two — `resolve` then picks between them.
-        .filter((window, index, all) => all.findIndex((w) => windowKey(w) === windowKey(window)) === index)
-        .sort((a, b) => spanMinutes(a) - spanMinutes(b));
+    const records = await deps.limits.applicable({
+      tenantId: context.tenantId,
+      ...(context.principalId === undefined ? {} : { principalId: context.principalId }),
+      // The model of the run being admitted. Absent means model-scoped limits cannot apply — see `applicable`.
+      ...(about.modelId === undefined ? {} : { modelId: about.modelId }),
+    });
 
-    for (const window of configured) {
-      const record = await deps.limits.resolve({
-        tenantId: context.tenantId,
-        principalId: context.principalId,
-        window,
-      });
-      if (record === null) continue;
-      return {
-        // The window as stored, so a rolling row configured by an admin is enforced as rolling.
+    return records
+      .map((record) => ({
         window: record.window,
-        // The grain the limit was configured at, so the guard reads the matching rollup rather than the tenant's.
         ...(record.principalId === undefined ? {} : { principalId: record.principalId }),
+        ...(record.modelId === undefined ? {} : { modelId: record.modelId }),
         ...(record.costMinorUnits === undefined ? {} : { costMinorUnits: record.costMinorUnits }),
         ...(record.inputTokens === undefined ? {} : { inputTokens: record.inputTokens }),
         ...(record.outputTokens === undefined ? {} : { outputTokens: record.outputTokens }),
         ...(record.warnAt === undefined ? {} : { warnAt: record.warnAt }),
-      };
-    }
-    // Nothing configured at any window: unbounded, which is the direction that fails towards a bill rather than
-    // towards an outage.
-    return undefined;
+      }))
+      // Shortest span first, so the limit that stops someone soonest is the one they are told about, and its
+      // reset — the nearest one — is the one they can act on.
+      .sort((a, b) => spanMinutes(a.window) - spanMinutes(b.window));
   };
 };
 

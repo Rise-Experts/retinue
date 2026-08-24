@@ -248,7 +248,8 @@ describe("AC-2: a limit is enforced before work starts", () => {
       });
     return createQuotaGuard({
       rollups: backend.rollups,
-      resolveLimits: () => limits,
+      // A list, since #182 — several limits apply at once. `undefined` here means the test wants none.
+      resolveLimits: () => (limits === undefined ? [] : [limits]),
       ...(observer === undefined
         ? {}
         : { observer: { onWarning: (_c, w) => void observer.warnings.push(w) } }),
@@ -260,7 +261,7 @@ describe("AC-2: a limit is enforced before work starts", () => {
     // Actionable: "quota exceeded" leaves a user with nothing to do. The dimension, the number, the limit and
     // when it resets are all in the message.
     const guard = await guardFor({ window: calendar("hour"), costMinorUnits: 20 }, [event(1), event(2)]);
-    const decision = await guard.admit(ctx(), NOW);
+    const decision = await guard.admit(ctx(), { at: NOW });
     expect(decision.admitted).toBe(false);
     if (decision.admitted) throw new Error("expected a refusal");
     expect(decision).toMatchObject({ dimension: "cost", limit: 20, used: 20 });
@@ -271,7 +272,7 @@ describe("AC-2: a limit is enforced before work starts", () => {
 
   it("admits when inside the limit", async () => {
     const guard = await guardFor({ window: calendar("hour"), costMinorUnits: 100 }, [event(1)]);
-    const decision = await guard.admit(ctx(), NOW);
+    const decision = await guard.admit(ctx(), { at: NOW });
     expect(decision.admitted).toBe(true);
     expect(decision.admitted && decision.usage.costMinorUnits).toBe(10);
   });
@@ -280,14 +281,14 @@ describe("AC-2: a limit is enforced before work starts", () => {
     // A misconfigured quota that blocks everything is an outage; one that blocks nothing is a bill, and the
     // bill is visible in these very rollups. So the safe default is the permissive one.
     const guard = await guardFor(undefined, [event(1)]);
-    expect(await guard.admit(ctx(), NOW)).toEqual({ admitted: true, usage: NO_USAGE, warnings: [] });
+    expect(await guard.admit(ctx(), { at: NOW })).toEqual({ admitted: true, usage: NO_USAGE, warnings: [] });
   });
 
   it("enforces a token limit independently of cost", async () => {
     // A model with no pricing costs zero, so a cost limit alone bounds nothing for it. That is exactly why
     // there are token dimensions.
     const guard = await guardFor({ window: calendar("hour"), inputTokens: 150 }, [event(1), event(2)]);
-    const decision = await guard.admit(ctx(), NOW);
+    const decision = await guard.admit(ctx(), { at: NOW });
     expect(decision.admitted).toBe(false);
     expect(!decision.admitted && decision.dimension).toBe("input-tokens");
   });
@@ -296,7 +297,7 @@ describe("AC-2: a limit is enforced before work starts", () => {
     // Retryable because the limit *resets*. A caller treating this as permanent would give up on a workspace
     // that is fine again in an hour.
     const guard = await guardFor({ window: calendar("hour"), costMinorUnits: 5 }, [event(1)]);
-    const error = await guard.assertAdmitted(ctx(), NOW).catch((e: AgentPlatformError) => e);
+    const error = await guard.assertAdmitted(ctx(), { at: NOW }).catch((e: AgentPlatformError) => e);
     expect(error).toBeInstanceOf(AgentPlatformError);
     expect(error).toMatchObject({ code: "budget_exceeded", retryable: true });
   });
@@ -305,7 +306,7 @@ describe("AC-2: a limit is enforced before work starts", () => {
     // A limit checked against yesterday's rollup is not a limit. The bucket comes from the moment of the check.
     const guard = await guardFor({ window: calendar("hour"), costMinorUnits: 5 }, [event(1)]);
     // An hour later, the bucket is empty again and the run is admitted.
-    const later = await guard.admit(ctx(), "2026-08-23T11:30:00.000Z");
+    const later = await guard.admit(ctx(), { at: "2026-08-23T11:30:00.000Z" });
     expect(later.admitted).toBe(true);
   });
 
@@ -315,11 +316,11 @@ describe("AC-2: a limit is enforced before work starts", () => {
     await backend.rollups.rebuild({ tenantId: T2, period: "hour", bucketStart: HOUR, computedAt: NOW });
     const guard = createQuotaGuard({
       rollups: backend.rollups,
-      resolveLimits: () => ({ window: calendar("hour"), costMinorUnits: 100 }),
+      resolveLimits: () => [{ window: calendar("hour"), costMinorUnits: 100 }],
       clock: () => NOW,
     });
-    expect((await guard.admit(ctx(T1), NOW)).admitted).toBe(true);
-    expect((await guard.admit(ctx(T2), NOW)).admitted).toBe(false);
+    expect((await guard.admit(ctx(T1), { at: NOW })).admitted).toBe(true);
+    expect((await guard.admit(ctx(T2), { at: NOW })).admitted).toBe(false);
   });
 });
 
@@ -336,7 +337,8 @@ describe("AC-3: a warning fires before the hard limit", () => {
     const refusals: unknown[] = [];
     const guard = createQuotaGuard({
       rollups: backend.rollups,
-      resolveLimits: () => limits,
+      // A list, since #182 — several limits apply at once. `undefined` here means the test wants none.
+      resolveLimits: () => (limits === undefined ? [] : [limits]),
       observer: {
         onWarning: (_c, w) => void warnings.push(w),
         onRefusal: (_c, r) => void refusals.push(r),
@@ -348,7 +350,7 @@ describe("AC-3: a warning fires before the hard limit", () => {
 
   it("warns above the threshold and stays quiet below it", async () => {
     const quiet = await observed({ window: calendar("hour"), costMinorUnits: 100 }, [event(1)]);
-    await quiet.guard.admit(ctx(), NOW);
+    await quiet.guard.admit(ctx(), { at: NOW });
     expect(quiet.warnings).toEqual([]);
 
     // 90 of 100 — past the 0.8 default.
@@ -356,7 +358,7 @@ describe("AC-3: a warning fires before the hard limit", () => {
       { window: calendar("hour"), costMinorUnits: 100 },
       [event(1, { costMinorUnits: 90 })],
     );
-    const decision = await loud.guard.admit(ctx(), NOW);
+    const decision = await loud.guard.admit(ctx(), { at: NOW });
     expect(decision.admitted).toBe(true);
     expect(loud.warnings).toHaveLength(1);
     expect(loud.warnings[0]).toMatchObject({ dimension: "cost", limit: 100, used: 90 });
@@ -369,7 +371,7 @@ describe("AC-3: a warning fires before the hard limit", () => {
       { window: calendar("hour"), costMinorUnits: 100 },
       [event(1, { costMinorUnits: 85 })],
     );
-    const decision = await guard.admit(ctx(), NOW);
+    const decision = await guard.admit(ctx(), { at: NOW });
     expect(decision.admitted).toBe(true);
     expect(warnings).toHaveLength(1);
   });
@@ -381,7 +383,7 @@ describe("AC-3: a warning fires before the hard limit", () => {
       { window: calendar("hour"), costMinorUnits: 100 },
       [event(1, { costMinorUnits: 120 })],
     );
-    const decision = await guard.admit(ctx(), NOW);
+    const decision = await guard.admit(ctx(), { at: NOW });
     expect(decision.admitted).toBe(false);
     expect(warnings).toEqual([]);
     expect(refusals).toHaveLength(1);
@@ -392,11 +394,11 @@ describe("AC-3: a warning fires before the hard limit", () => {
     // small one. 80 of 100 warns; 80 of 10,000 does not.
     expect(DEFAULT_WARN_AT).toBe(0.8);
     const small = await observed({ window: calendar("hour"), costMinorUnits: 100 }, [event(1, { costMinorUnits: 80 })]);
-    await small.guard.admit(ctx(), NOW);
+    await small.guard.admit(ctx(), { at: NOW });
     expect(small.warnings).toHaveLength(1);
 
     const large = await observed({ window: calendar("hour"), costMinorUnits: 10_000 }, [event(1, { costMinorUnits: 80 })]);
-    await large.guard.admit(ctx(), NOW);
+    await large.guard.admit(ctx(), { at: NOW });
     expect(large.warnings).toEqual([]);
   });
 
@@ -405,7 +407,7 @@ describe("AC-3: a warning fires before the hard limit", () => {
       { window: calendar("hour"), costMinorUnits: 100, warnAt: 0.5 },
       [event(1, { costMinorUnits: 60 })],
     );
-    await guard.admit(ctx(), NOW);
+    await guard.admit(ctx(), { at: NOW });
     expect(warnings).toHaveLength(1);
   });
 
@@ -415,7 +417,7 @@ describe("AC-3: a warning fires before the hard limit", () => {
     await backend.rollups.rebuild({ tenantId: T1, period: "hour", bucketStart: HOUR, computedAt: NOW });
     const guard = createQuotaGuard({
       rollups: backend.rollups,
-      resolveLimits: () => ({ window: calendar("hour"), costMinorUnits: 100 }),
+      resolveLimits: () => [{ window: calendar("hour"), costMinorUnits: 100 }],
       observer: {
         onWarning() {
           throw new Error("pager unreachable");
@@ -423,7 +425,7 @@ describe("AC-3: a warning fires before the hard limit", () => {
       },
       clock: () => NOW,
     });
-    expect((await guard.admit(ctx(), NOW)).admitted).toBe(true);
+    expect((await guard.admit(ctx(), { at: NOW })).admitted).toBe(true);
   });
 
   it("still refuses when a refusal observer fails", async () => {
@@ -433,7 +435,7 @@ describe("AC-3: a warning fires before the hard limit", () => {
     await backend.rollups.rebuild({ tenantId: T1, period: "hour", bucketStart: HOUR, computedAt: NOW });
     const guard = createQuotaGuard({
       rollups: backend.rollups,
-      resolveLimits: () => ({ window: calendar("hour"), costMinorUnits: 100 }),
+      resolveLimits: () => [{ window: calendar("hour"), costMinorUnits: 100 }],
       observer: {
         onWarning() {},
         onRefusal() {
@@ -442,7 +444,7 @@ describe("AC-3: a warning fires before the hard limit", () => {
       },
       clock: () => NOW,
     });
-    expect((await guard.admit(ctx(), NOW)).admitted).toBe(false);
+    expect((await guard.admit(ctx(), { at: NOW })).admitted).toBe(false);
   });
 });
 
@@ -606,17 +608,17 @@ describe("quota enforcement per principal", () => {
 
     const guard = createQuotaGuard({
       rollups: backend.rollups,
-      resolveLimits: (context) => ({
+      resolveLimits: (context) => [{
         window: calendar("month"),
         principalId: context.principalId,
         costMinorUnits: 500,
-      }),
+      }],
     });
 
     // Alice is admitted: her own spend is zero, even though the tenant is over.
-    expect((await guard.admit(withPrincipal(P1), AT)).admitted).toBe(true);
+    expect((await guard.admit(withPrincipal(P1), { at: AT })).admitted).toBe(true);
     // Bob is refused: it is his spend that passed the limit.
-    const bob = await guard.admit(withPrincipal(P2), AT);
+    const bob = await guard.admit(withPrincipal(P2), { at: AT });
     expect(bob.admitted).toBe(false);
     if (bob.admitted) throw new Error("expected a refusal");
     expect(bob.used).toBe(900);
@@ -631,9 +633,9 @@ describe("quota enforcement per principal", () => {
 
     const guard = createQuotaGuard({
       rollups: backend.rollups,
-      resolveLimits: () => ({ window: calendar("month"), costMinorUnits: 500 }),
+      resolveLimits: () => [{ window: calendar("month"), costMinorUnits: 500 }],
     });
-    const alice = await guard.admit(withPrincipal(P1), AT);
+    const alice = await guard.admit(withPrincipal(P1), { at: AT });
     expect(alice.admitted).toBe(false);
     if (alice.admitted) throw new Error("expected a refusal");
     expect(alice.used).toBe(900);
@@ -645,9 +647,9 @@ describe("quota enforcement per principal", () => {
     const backend = createMemoryUsageBackend();
     const guard = createQuotaGuard({
       rollups: backend.rollups,
-      resolveLimits: (context) => ({ window: calendar("month"), principalId: context.principalId, costMinorUnits: 500 }),
+      resolveLimits: (context) => [{ window: calendar("month"), principalId: context.principalId, costMinorUnits: 500 }],
     });
-    const decision = await guard.admit(withPrincipal(P1), AT);
+    const decision = await guard.admit(withPrincipal(P1), { at: AT });
     expect(decision.admitted).toBe(true);
     if (!decision.admitted) throw new Error("expected admission");
     expect(decision.usage).toEqual(NO_USAGE);
@@ -660,23 +662,27 @@ describe("quota enforcement per principal", () => {
       tenantId: T1,
       limit: { tenantId: T1, principalId: P1, window: calendar("month"), costMinorUnits: 100, updatedAt: "t" },
     });
-    const resolve = createStoredLimitResolver({ limits, periods: ["month"] });
+    const resolve = createStoredLimitResolver({ limits });
 
-    const alice = await resolve(withPrincipal(P1));
-    expect(alice?.costMinorUnits).toBe(100);
+    // One row per scope: Alice's own month row replaces the tenant's for that scope rather than joining it.
+    const alice = await resolve(withPrincipal(P1), {});
+    expect(alice).toHaveLength(1);
+    expect(alice[0]?.costMinorUnits).toBe(100);
     // The grain travels with the limit: without it the guard would compare her allowance to the tenant's spend.
-    expect(alice?.principalId).toBe(P1);
+    expect(alice[0]?.principalId).toBe(P1);
 
-    const bob = await resolve(withPrincipal(P2));
-    expect(bob?.costMinorUnits).toBe(10_000);
+    const bob = await resolve(withPrincipal(P2), {});
+    expect(bob).toHaveLength(1);
+    expect(bob[0]?.costMinorUnits).toBe(10_000);
     // The tenant default carries no principal, so the guard reads the tenant bucket — a shared budget stays
     // shared rather than becoming a 10,000 allowance each.
-    expect(bob?.principalId).toBeUndefined();
+    expect(bob[0]?.principalId).toBeUndefined();
   });
 
-  it("is unbounded when nothing is configured at any period", async () => {
+  it("is unbounded when nothing is configured at any window", async () => {
     const resolve = createStoredLimitResolver({ limits: createMemoryUsageLimitStore() });
-    expect(await resolve(withPrincipal(P1))).toBeUndefined();
+    // An empty list, not undefined — "no limits configured" and "unlimited" are one thing with one spelling.
+    expect(await resolve(withPrincipal(P1), {})).toEqual([]);
   });
 
   it("prefers the shortest configured period", async () => {
@@ -687,11 +693,15 @@ describe("quota enforcement per principal", () => {
     const limits = createMemoryUsageLimitStore();
     await limits.put({ tenantId: T1, limit: { tenantId: T1, principalId: P1, window: calendar("month"), costMinorUnits: 10_000, updatedAt: "t" } });
     await limits.put({ tenantId: T1, limit: { tenantId: T1, principalId: P1, window: calendar("day"), costMinorUnits: 400, updatedAt: "t" } });
-    const resolved = await createStoredLimitResolver({ limits })(withPrincipal(P1));
-    // The resolver reads `usage_limits`, whose rows are calendar periods, so a resolved limit is a calendar
-    // window — asserted as the union it now is rather than a bare string.
-    expect(resolved?.window).toEqual({ kind: "calendar", period: "day" });
-    expect(resolved?.costMinorUnits).toBe(400);
+    const resolved = await createStoredLimitResolver({ limits })(withPrincipal(P1), {});
+    // Both are returned, since #182 — a monthly allowance and a daily one both bind, and returning only the
+    // "most specific" was how a configured limit went unenforced. The *order* is what this test is about: the
+    // shorter window first, so the limit that stops someone soonest is the one they hear about.
+    expect(resolved.map((r) => r.window)).toEqual([
+      { kind: "calendar", period: "day" },
+      { kind: "calendar", period: "month" },
+    ]);
+    expect(resolved[0]?.costMinorUnits).toBe(400);
   });
 });
 
@@ -811,9 +821,9 @@ describe("quota refusal messages", () => {
      */
     const guard = createQuotaGuard({
       rollups: (await overspent()).rollups,
-      resolveLimits: () => ({ window: calendar("month"), principalId: P1, inputTokens: 1000 }),
+      resolveLimits: () => [{ window: calendar("month"), principalId: P1, inputTokens: 1000 }],
     });
-    const decision = await guard.admit(context(), AT);
+    const decision = await guard.admit(context(), { at: AT });
     expect(decision.admitted).toBe(false);
     if (decision.admitted) throw new Error("expected a refusal");
     expect(decision.message).toContain("You have used");
@@ -825,9 +835,9 @@ describe("quota refusal messages", () => {
     // them to change a setting that is not theirs.
     const guard = createQuotaGuard({
       rollups: (await overspent()).rollups,
-      resolveLimits: () => ({ window: calendar("month"), inputTokens: 1000 }),
+      resolveLimits: () => [{ window: calendar("month"), inputTokens: 1000 }],
     });
-    const decision = await guard.admit(context(), AT);
+    const decision = await guard.admit(context(), { at: AT });
     if (decision.admitted) throw new Error("expected a refusal");
     expect(decision.message).toContain("This workspace has used");
   });
@@ -839,9 +849,9 @@ describe("quota refusal messages", () => {
      */
     const guard = createQuotaGuard({
       rollups: (await overspent()).rollups,
-      resolveLimits: () => ({ window: calendar("month"), principalId: P1, inputTokens: 1000 }),
+      resolveLimits: () => [{ window: calendar("month"), principalId: P1, inputTokens: 1000 }],
     });
-    await expect(guard.assertAdmitted(context(), AT)).rejects.toMatchObject({
+    await expect(guard.assertAdmitted(context(), { at: AT })).rejects.toMatchObject({
       code: "budget_exceeded",
       retryable: true,
       details: {
@@ -870,7 +880,7 @@ describe("a rolling window", () => {
     return createQuotaGuard({
       rollups: backend.rollups,
       usage: backend.usage,
-      resolveLimits: () => ({ window, costMinorUnits: 25 }),
+      resolveLimits: () => [{ window, costMinorUnits: 25 }],
       clock: () => now,
     });
   };
@@ -885,7 +895,7 @@ describe("a rolling window", () => {
       event(3, { occurredAt: at("09:00") }),
     ];
     const guard = await guardFor({ kind: "rolling", minutes: 300 }, events, at("10:00"));
-    const decision = await guard.admit(ctx(), at("10:00"));
+    const decision = await guard.admit(ctx(), { at: at("10:00") });
     expect(decision.admitted).toBe(true);
     if (decision.admitted) expect(decision.usage.costMinorUnits).toBe(20);
   });
@@ -899,7 +909,7 @@ describe("a rolling window", () => {
       event(3, { occurredAt: at("07:00") }),
     ];
     const guard = await guardFor({ kind: "rolling", minutes: 300 }, events, at("08:00"));
-    const decision = await guard.admit(ctx(), at("08:00"));
+    const decision = await guard.admit(ctx(), { at: at("08:00") });
     expect(decision.admitted).toBe(false);
     if (!decision.admitted) {
       expect(decision.used).toBe(30);
@@ -914,7 +924,7 @@ describe("a rolling window", () => {
     // "it resets at" would promise the whole allowance back.
     const events = [event(1, { occurredAt: at("04:00") }), event(2, { occurredAt: at("06:00") }), event(3, { occurredAt: at("07:00") })];
     const guard = await guardFor({ kind: "rolling", minutes: 300 }, events, at("08:00"));
-    const decision = await guard.admit(ctx(), at("08:00"));
+    const decision = await guard.admit(ctx(), { at: at("08:00") });
     expect(decision.admitted).toBe(false);
     if (!decision.admitted) {
       expect(decision.retryAfter).toBe(at("09:00"));
@@ -926,15 +936,15 @@ describe("a rolling window", () => {
 
   it("describes itself in hours when it divides into them, and minutes when it does not", async () => {
     const events = [event(1, { occurredAt: at("07:00") }), event(2, { occurredAt: at("07:30") }), event(3, { occurredAt: at("07:45") })];
-    const five = await (await guardFor({ kind: "rolling", minutes: 300 }, events, at("08:00"))).admit(ctx(), at("08:00"));
+    const five = await (await guardFor({ kind: "rolling", minutes: 300 }, events, at("08:00"))).admit(ctx(), { at: at("08:00") });
     expect(five.admitted).toBe(false);
     // "any 5 hours", not "any 300 minutes" — the admin set five hours and that is the sentence they expect back.
     if (!five.admitted) expect(five.message).toContain("for any 5 hours");
 
-    const ninety = await (await guardFor({ kind: "rolling", minutes: 90 }, events, at("08:00"))).admit(ctx(), at("08:00"));
+    const ninety = await (await guardFor({ kind: "rolling", minutes: 90 }, events, at("08:00"))).admit(ctx(), { at: at("08:00") });
     if (!ninety.admitted) expect(ninety.message).toContain("for any 90 minutes");
 
-    const one = await (await guardFor({ kind: "rolling", minutes: 60 }, events, at("08:00"))).admit(ctx(), at("08:00"));
+    const one = await (await guardFor({ kind: "rolling", minutes: 60 }, events, at("08:00"))).admit(ctx(), { at: at("08:00") });
     // Singular. "any 1 hours" is the kind of detail that makes a product feel unfinished.
     if (!one.admitted) expect(one.message).toContain("for any 1 hour");
   });
@@ -951,15 +961,13 @@ describe("a rolling window", () => {
     const guard = createQuotaGuard({
       rollups: backend.rollups,
       usage: backend.usage,
-      resolveLimits: (context) => ({
-        window: { kind: "rolling", minutes: 300 },
-        principalId: context.principalId,
-        costMinorUnits: 25,
-      }),
+      resolveLimits: (context) => [
+        { window: { kind: "rolling", minutes: 300 }, principalId: context.principalId, costMinorUnits: 25 },
+      ],
       clock: () => at("08:00"),
     });
-    expect((await guard.admit({ ...ctx(), principalId: alice }, at("08:00"))).admitted).toBe(true);
-    expect((await guard.admit({ ...ctx(), principalId: bob }, at("08:00"))).admitted).toBe(false);
+    expect((await guard.admit({ ...ctx(), principalId: alice }, { at: at("08:00") })).admitted).toBe(true);
+    expect((await guard.admit({ ...ctx(), principalId: bob }, { at: at("08:00") })).admitted).toBe(false);
   });
 
   it("refuses on an empty window when the limit is zero, without inventing a relief time", async () => {
@@ -970,10 +978,10 @@ describe("a rolling window", () => {
     const guard = createQuotaGuard({
       rollups: backend.rollups,
       usage: backend.usage,
-      resolveLimits: () => ({ window: { kind: "rolling", minutes: 300 }, costMinorUnits: 0 }),
+      resolveLimits: () => [{ window: { kind: "rolling", minutes: 300 }, costMinorUnits: 0 }],
       clock: () => at("08:00"),
     });
-    const decision = await guard.admit(ctx(), at("08:00"));
+    const decision = await guard.admit(ctx(), { at: at("08:00") });
     expect(decision.admitted).toBe(false);
     if (!decision.admitted) {
       expect(decision.retryAfter).toBe(at("08:00"));
@@ -990,10 +998,10 @@ describe("a rolling window", () => {
     const backend = await seeded([event(1)]);
     const guard = createQuotaGuard({
       rollups: backend.rollups,
-      resolveLimits: () => ({ window: { kind: "rolling", minutes: 300 }, costMinorUnits: 25 }),
+      resolveLimits: () => [{ window: { kind: "rolling", minutes: 300 }, costMinorUnits: 25 }],
       clock: () => at("08:00"),
     });
-    await expect(guard.admit(ctx(), at("08:00"))).rejects.toThrow(/UsageStore/);
+    await expect(guard.admit(ctx(), { at: at("08:00") })).rejects.toThrow(/UsageStore/);
   });
 
   it("leaves the calendar arm reading rollups, not the ledger", async () => {
@@ -1003,11 +1011,159 @@ describe("a rolling window", () => {
     const guard = createQuotaGuard({
       rollups: backend.rollups,
       usage: backend.usage,
-      resolveLimits: () => ({ window: { kind: "calendar", period: "hour" }, costMinorUnits: 25 }),
+      resolveLimits: () => [{ window: { kind: "calendar", period: "hour" }, costMinorUnits: 25 }],
       clock: () => NOW,
     });
-    const decision = await guard.admit(ctx(), NOW);
+    const decision = await guard.admit(ctx(), { at: NOW });
     expect(decision.admitted).toBe(true);
     if (decision.admitted) expect(decision.usage.costMinorUnits).toBe(0);
+  });
+});
+
+/**
+ * Per-model limits, and several limits binding at once — #182, #183.
+ *
+ * The guard used to check one limit. Everything here is about what changes when it checks all of them.
+ */
+describe("per-model limits", () => {
+  const OPUS = "claude-opus-5";
+  const HAIKU = "claude-haiku-4-5";
+  const at = (hhmm: string) => `2026-08-23T${hhmm}:00.000Z`;
+
+  const spent = async (rows: readonly { model: string; cost: number; when: string }[]) => {
+    const backend = createMemoryUsageBackend();
+    let n = 0;
+    for (const row of rows)
+      await backend.usage.append({
+        tenantId: T1,
+        event: {
+          id: `m${(n += 1)}`,
+          tenantId: T1,
+          runId: asId<RunId>(`run-${n}`),
+          modelId: row.model,
+          inputTokens: 10,
+          outputTokens: 5,
+          cachedInputTokens: 0,
+          costMinorUnits: row.cost,
+          currency: "EUR",
+          occurredAt: row.when,
+        } satisfies UsageEvent,
+      });
+    return backend;
+  };
+
+  it("counts only the limited model's spend", async () => {
+    // 100 on Haiku, 10 on Opus. An Opus limit of 50 must not notice the Haiku traffic — a limit on an expensive
+    // model that a cheap model can exhaust is the opposite of a per-model limit.
+    const backend = await spent([
+      { model: HAIKU, cost: 100, when: at("07:00") },
+      { model: OPUS, cost: 10, when: at("07:30") },
+    ]);
+    const guard = createQuotaGuard({
+      rollups: backend.rollups,
+      usage: backend.usage,
+      resolveLimits: () => [{ window: { kind: "rolling", minutes: 300 }, modelId: OPUS, costMinorUnits: 50 }],
+      clock: () => at("08:00"),
+    });
+    const decision = await guard.admit(ctx(), { at: at("08:00"), modelId: OPUS });
+    expect(decision.admitted).toBe(true);
+    if (decision.admitted) expect(decision.usage.costMinorUnits).toBe(10);
+  });
+
+  it("names the model in the refusal", async () => {
+    const backend = await spent([{ model: OPUS, cost: 60, when: at("07:00") }]);
+    const guard = createQuotaGuard({
+      rollups: backend.rollups,
+      usage: backend.usage,
+      resolveLimits: () => [{ window: { kind: "rolling", minutes: 300 }, modelId: OPUS, costMinorUnits: 50 }],
+      clock: () => at("08:00"),
+    });
+    const decision = await guard.admit(ctx(), { at: at("08:00"), modelId: OPUS });
+    expect(decision.admitted).toBe(false);
+    if (!decision.admitted) {
+      // Without the model, "you have run out" reads as an account-wide stop — and somebody whose Opus allowance
+      // is gone can still work on a cheaper model.
+      expect(decision.message).toContain(`limit on ${OPUS}`);
+      expect(decision.modelId).toBe(OPUS);
+    }
+  });
+
+  it("refuses on the model limit while the overall limit is fine", async () => {
+    // 60 spent, all of it on Opus. The overall allowance is 10,000 and untouched; the Opus one is 50 and gone.
+    // Checking only the "most specific" limit — which the personal overall one would have been — let this
+    // through, and that is the defect #182 exists for.
+    const backend = await spent([{ model: OPUS, cost: 60, when: at("07:00") }]);
+    const guard = createQuotaGuard({
+      rollups: backend.rollups,
+      usage: backend.usage,
+      resolveLimits: () => [
+        { window: { kind: "rolling", minutes: 300 }, modelId: OPUS, costMinorUnits: 50 },
+        { window: calendar("month"), costMinorUnits: 10_000 },
+      ],
+      clock: () => at("08:00"),
+    });
+    const decision = await guard.admit(ctx(), { at: at("08:00"), modelId: OPUS });
+    expect(decision.admitted).toBe(false);
+    if (!decision.admitted) expect(decision.modelId).toBe(OPUS);
+  });
+
+  it("admits the same work on a model the limit does not cover", async () => {
+    const backend = await spent([{ model: OPUS, cost: 60, when: at("07:00") }]);
+    const guard = createQuotaGuard({
+      rollups: backend.rollups,
+      usage: backend.usage,
+      // The resolver would not return the Opus limit for a Haiku run at all; passing it here anyway is the
+      // stricter test — the guard must count only Haiku's spend against it, which is zero.
+      resolveLimits: () => [{ window: { kind: "rolling", minutes: 300 }, modelId: HAIKU, costMinorUnits: 50 }],
+      clock: () => at("08:00"),
+    });
+    expect((await guard.admit(ctx(), { at: at("08:00"), modelId: HAIKU })).admitted).toBe(true);
+  });
+
+  it("explains every limit with its usage and its reset", async () => {
+    // #183. One call, so a panel cannot show a total from one moment and a limit from another.
+    const backend = await spent([
+      { model: OPUS, cost: 30, when: at("07:00") },
+      { model: HAIKU, cost: 5, when: at("07:30") },
+    ]);
+    const guard = createQuotaGuard({
+      rollups: backend.rollups,
+      usage: backend.usage,
+      resolveLimits: () => [
+        { window: { kind: "rolling", minutes: 300 }, modelId: OPUS, costMinorUnits: 100 },
+        { window: calendar("month"), principalId: asId<PrincipalId>("alice"), costMinorUnits: 1_000 },
+      ],
+      clock: () => at("08:00"),
+    });
+    const explained = await guard.explain(ctx(), { at: at("08:00"), modelId: OPUS });
+    expect(explained).toHaveLength(2);
+
+    const [rolling, month] = explained;
+    expect(rolling?.window).toBe("any 5 hours");
+    expect(rolling?.modelId).toBe(OPUS);
+    expect(rolling?.scope).toBe("workspace");
+    // Only Opus's 30, and the fraction computed once here rather than in every client.
+    expect(rolling?.dimensions).toEqual([{ dimension: "cost", limit: 100, used: 30, fraction: 0.3 }]);
+    // A sliding window's note never claims a reset.
+    expect(rolling?.resetNote).toContain("falls outside the window");
+
+    expect(month?.window).toBe("the month");
+    expect(month?.scope).toBe("personal");
+    expect(month?.resetNote).toContain("It resets at");
+    // Unbounded dimensions are omitted rather than rendered as "0 of null".
+    expect(month?.dimensions.map((d) => d.dimension)).toEqual(["cost"]);
+  });
+
+  it("explains a limit that is spent as full rather than dividing by zero", async () => {
+    // A limit of zero is how an admin suspends someone. `used / 0` is Infinity, which renders as a broken bar.
+    const backend = await spent([]);
+    const guard = createQuotaGuard({
+      rollups: backend.rollups,
+      usage: backend.usage,
+      resolveLimits: () => [{ window: { kind: "rolling", minutes: 300 }, costMinorUnits: 0 }],
+      clock: () => at("08:00"),
+    });
+    const [only] = await guard.explain(ctx(), { at: at("08:00") });
+    expect(only?.dimensions[0]?.fraction).toBe(1);
   });
 });

@@ -1104,10 +1104,29 @@ export const MIGRATIONS: readonly Migration[] = [
         -- A warn threshold outside (0, 1] is a fraction that can never fire, or one that fires always.
         CHECK (warn_at IS NULL OR (warn_at > 0 AND warn_at <= 1))
       )`,
-      `CREATE UNIQUE INDEX IF NOT EXISTS usage_limits_tenant_idx
-        ON usage_limits (tenant_id, period) WHERE principal_id IS NULL`,
-      `CREATE UNIQUE INDEX IF NOT EXISTS usage_limits_principal_idx
-        ON usage_limits (tenant_id, principal_id, period) WHERE principal_id IS NOT NULL`,
+      /**
+       * Guarded on the column still existing, because a later migration takes it away.
+       *
+       * `migrate` has no ledger and re-runs every statement, so a statement here has to be idempotent *and*
+       * tolerant of what later migrations do. #181 renamed `period` to `window_key` and #182 replaced both of
+       * these partial indexes with one expression index — so on a second pass `IF NOT EXISTS` did not skip
+       * these (the indexes really were gone) and they failed on `column "period" does not exist`.
+       *
+       * That is the whole failure mode: an early migration re-creating something a later one deliberately
+       * removed. Left unguarded it would also *restore* indexes that are now wrong — they enforce uniqueness
+       * without the model dimension, so a model-scoped limit would collide with the unscoped one for the same
+       * principal and window.
+       */
+      `DO $$ BEGIN
+         IF EXISTS (SELECT 1 FROM information_schema.columns
+                     WHERE table_schema = current_schema() AND table_name = 'usage_limits'
+                       AND column_name = 'period') THEN
+           CREATE UNIQUE INDEX IF NOT EXISTS usage_limits_tenant_idx
+             ON usage_limits (tenant_id, period) WHERE principal_id IS NULL;
+           CREATE UNIQUE INDEX IF NOT EXISTS usage_limits_principal_idx
+             ON usage_limits (tenant_id, principal_id, period) WHERE principal_id IS NOT NULL;
+         END IF;
+       END $$`,
     ],
     down: [
       `DROP TABLE IF EXISTS usage_limits`,
@@ -1136,21 +1155,102 @@ export const MIGRATIONS: readonly Migration[] = [
      */
     id: "0024_usage_limit_window",
     up: [
-      `ALTER TABLE usage_limits RENAME COLUMN period TO window_key`,
+      /**
+       * Guarded, because `migrate` re-runs **every** statement every time.
+       *
+       * There is no applied-migrations ledger: `migrate` walks the whole list, which works because every other
+       * statement in this file is `IF NOT EXISTS`. `RENAME COLUMN` and `ADD CONSTRAINT` have no such form, so the
+       * first version of this migration succeeded once and then failed on every subsequent run with
+       * `column "period" does not exist` — which is how the example's `npm run migrate` broke.
+       *
+       * `current_schema()` rather than a literal: this schema is created under whatever `search_path` the caller
+       * set, and the example deliberately runs in its own.
+       */
+      `DO $$ BEGIN
+         IF EXISTS (SELECT 1 FROM information_schema.columns
+                     WHERE table_schema = current_schema() AND table_name = 'usage_limits'
+                       AND column_name = 'period') THEN
+           ALTER TABLE usage_limits RENAME COLUMN period TO window_key;
+         END IF;
+       END $$`,
       // Postgres named the anonymous single-column CHECK after the column, and a rename does not rename the
       // constraint — so it is still `usage_limits_period_check` here.
       `ALTER TABLE usage_limits DROP CONSTRAINT IF EXISTS usage_limits_period_check`,
-      `ALTER TABLE usage_limits ADD CONSTRAINT usage_limits_window_key_check
-        CHECK (window_key IN ('hour','day','week','month') OR window_key ~ '^rolling:[1-9][0-9]{0,5}$')`,
+      `DO $$ BEGIN
+         IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'usage_limits_window_key_check') THEN
+           ALTER TABLE usage_limits ADD CONSTRAINT usage_limits_window_key_check
+             CHECK (window_key IN ('hour','day','week','month') OR window_key ~ '^rolling:[1-9][0-9]{0,5}$');
+         END IF;
+       END $$`,
     ],
     down: [
       // Rolling rows cannot survive a rollback: the old CHECK has no room for them. Deleted rather than left to
       // fail the constraint, because a migration that cannot go back is a migration nobody dares run forward.
       `DELETE FROM usage_limits WHERE window_key LIKE 'rolling:%'`,
       `ALTER TABLE usage_limits DROP CONSTRAINT IF EXISTS usage_limits_window_key_check`,
-      `ALTER TABLE usage_limits RENAME COLUMN window_key TO period`,
-      `ALTER TABLE usage_limits ADD CONSTRAINT usage_limits_period_check
-        CHECK (period IN ('hour','day','week','month'))`,
+      `DO $$ BEGIN
+         IF EXISTS (SELECT 1 FROM information_schema.columns
+                     WHERE table_schema = current_schema() AND table_name = 'usage_limits'
+                       AND column_name = 'window_key') THEN
+           ALTER TABLE usage_limits RENAME COLUMN window_key TO period;
+         END IF;
+       END $$`,
+      `DO $$ BEGIN
+         IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'usage_limits_period_check') THEN
+           ALTER TABLE usage_limits ADD CONSTRAINT usage_limits_period_check
+             CHECK (period IN ('hour','day','week','month'));
+         END IF;
+       END $$`,
+    ],
+  },
+  {
+    /**
+     * A limit can be scoped to a model — #182.
+     *
+     * An expensive model and a cheap one sharing one allowance is the opposite of what a per-model limit is for.
+     * `usage_records.model_id` is required on every row, so the counting side needs nothing new; this is the
+     * *limit* learning the dimension.
+     *
+     * **The two partial unique indexes collapse into one expression index.** They existed because a NULL cannot
+     * participate in a normal unique constraint, so `principal_id IS NULL` needed its own — and `put` branched on
+     * grain to name the right `ON CONFLICT` target. A second nullable dimension would have made that four
+     * indexes and a 2x2 branch, which is four chances to name the wrong one; naming the wrong one is how #177's
+     * `error: dup` reached a user. `COALESCE(col, '')` normalises both dimensions into one key instead, so there
+     * is one index, one conflict target and no branch.
+     *
+     * The empty string is safe as the "absent" marker here because neither a principal id nor a model id can be
+     * empty: both come from `asId`, and an empty one would already be a bug upstream. Existing rows have
+     * `model_id NULL`, so their keys are unchanged by this.
+     */
+    id: "0025_usage_limit_model",
+    up: [
+      `ALTER TABLE usage_limits ADD COLUMN IF NOT EXISTS model_id text`,
+      // A model id that is present but empty would collide with the "no model" marker, so it is refused at the
+      // boundary rather than silently becoming a tenant-wide limit.
+      // Guarded for the same reason as 0024: `ADD CONSTRAINT` has no `IF NOT EXISTS`, and every statement here
+      // runs on every `migrate`.
+      `DO $$ BEGIN
+         IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'usage_limits_model_id_check') THEN
+           ALTER TABLE usage_limits ADD CONSTRAINT usage_limits_model_id_check
+             CHECK (model_id IS NULL OR length(model_id) > 0);
+         END IF;
+       END $$`,
+      `DROP INDEX IF EXISTS usage_limits_tenant_idx`,
+      `DROP INDEX IF EXISTS usage_limits_principal_idx`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS usage_limits_scope_idx ON usage_limits
+        (tenant_id, COALESCE(principal_id, ''), COALESCE(model_id, ''), window_key)`,
+    ],
+    down: [
+      // Model-scoped rows cannot survive the rollback: the old indexes cannot tell them apart from the
+      // unscoped row for the same principal and window, so they would collide on re-creation.
+      `DELETE FROM usage_limits WHERE model_id IS NOT NULL`,
+      `DROP INDEX IF EXISTS usage_limits_scope_idx`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS usage_limits_tenant_idx
+        ON usage_limits (tenant_id, window_key) WHERE principal_id IS NULL`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS usage_limits_principal_idx
+        ON usage_limits (tenant_id, principal_id, window_key) WHERE principal_id IS NOT NULL`,
+      `ALTER TABLE usage_limits DROP CONSTRAINT IF EXISTS usage_limits_model_id_check`,
+      `ALTER TABLE usage_limits DROP COLUMN IF EXISTS model_id`,
     ],
   },
 ];

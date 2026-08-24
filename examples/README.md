@@ -199,9 +199,33 @@ curl -X POST localhost:4000/api/limits -H 'content-type: application/json' \
   -d '{"principalId":"you","window":"rolling:300","costMinorUnits":500}'
 ```
 
-`window` is either a calendar period — `hour`, `day`, `week`, `month` — or `rolling:<minutes>`. Several can apply
-at once; the **shortest span** binds, so being stopped by the five-hour limit tells you sooner than being stopped
-by the month.
+`window` is either a calendar period — `hour`, `day`, `week`, `month` — or `rolling:<minutes>`. Add `modelId` to
+cover one model only:
+
+```bash
+# 20,000 minor units of gpt-4o a month, across the whole workspace (#182)
+curl -X POST localhost:4000/api/limits -H 'content-type: application/json' \
+  -H 'x-agentkit-tenant: demo' -H 'x-agentkit-principal: you' -H 'x-agentkit-roles: admin' \
+  -d '{"window":"month","modelId":"gpt-4o","costMinorUnits":20000}'
+```
+
+**Every applicable limit binds — not the most specific one.** A person can be under a personal five-hour cap, a
+workspace monthly cap and a workspace cap on one model at the same time, and all three are checked. The rule is
+*override within a scope, coexist across scopes*: your own row replaces the workspace's for the same window and
+model, and does not touch a different window or model. The first refusal wins, and limits are ordered
+shortest-span-first so the one you hear about is the one stopping you soonest — whose reset is also the nearest.
+
+This mattered: resolving a single "most specific" limit meant a workspace-wide cap on an expensive model was
+silently ignored for anybody who also had a personal overall limit. Configured, visible in the API, never read.
+
+A model-scoped limit counts **only that model's** spend, and only applies to a run on that model. A refusal names
+it — `your 1 spend limit on gpt-4o for any 5 hours` — because "you have run out" reads as an account-wide stop
+when a cheaper model is still available.
+
+`GET /api/limits` answers what applies to you, with what is left and when it changes, from the guard's own
+`explain` — so the panel cannot disagree with enforcement about either figure. `unbounded: true` is explicit,
+because an empty list also means "the request failed". Admins additionally get `configured`, the raw rows; nobody
+else does, since every colleague's allowance is not an answer to "what are my limits".
 
 A **rolling** window slides: "no more than X in any five hours", always the last five hours up to now. It is not
 an anchored session that resets on a boundary, and the refusal says so — `The oldest of it falls outside the
@@ -214,11 +238,20 @@ promise back an allowance you do not get.
 | Exactness | As fresh as the last rollup rebuild | Always exact |
 | The message says | "It resets at T" — a true boundary | "The oldest of it falls outside the window at T" |
 
-That first row is worth knowing, and running the two side by side is what made it visible: with the same spend, a
-five-hour rolling limit reported 4 and a daily limit reported 2. The rolling figure was right. Rollups here are
-rebuilt on demand by `/api/usage` rather than by a scheduled job — fine for a chart, and it means **a calendar
-limit in this app can under-count** until something rebuilds the bucket. A deployment runs `createRollupJob` on a
-schedule; the example does not, and that is a property of the example's wiring rather than of the platform.
+A **model-scoped** limit always reads the ledger too, whichever window it has: the rollups have no model
+dimension, and adding one would multiply their row count by the number of models a tenant uses to answer what a
+bounded index scan already answers.
+
+That first row is worth knowing, and running the arms side by side is what made it visible. Twice. First: with
+the same spend, a five-hour rolling limit reported 4 and a daily limit reported 2 — the rolling figure was right,
+because rollups here are rebuilt on request rather than by a scheduled job. Then, once per-model limits existed,
+two *overlapping* monthly limits reported 19 and 23 in the same panel, for the same reason: the model-scoped one
+read the ledger and the unscoped one read a stale bucket. Both were right about their own source, which is not
+something anyone should have to work out from a panel.
+
+So `/api/limits` and `/api/usage` both refresh the buckets before answering (a rollup is a recomputation, so
+running it twice cannot double count). It remains true that **a calendar limit is enforced from whatever the
+buckets last said** — a deployment runs `createRollupJob` on a schedule and this app does not.
 
 ## Things running this found
 

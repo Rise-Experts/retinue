@@ -97,6 +97,8 @@ export const typeDefs = /* GraphQL */ `
     """
     window: String!
     period: String
+    "The model this limit covers, or null for any model (#182)."
+    modelId: String
     costLimitMinorUnits: Int
     inputTokenLimit: Int
     outputTokenLimit: Int

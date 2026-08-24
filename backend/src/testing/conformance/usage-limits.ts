@@ -19,6 +19,9 @@ import type { QuotaWindow, UsageLimitStore } from "../../persistence/index.js";
 const MONTH: QuotaWindow = { kind: "calendar", period: "month" };
 /** Five hours, the case a workspace admin actually asked for. */
 const FIVE_HOURS: QuotaWindow = { kind: "rolling", minutes: 300 };
+/** Two models, so a per-model limit can be shown *not* to bind on the other one — #182. */
+const OPUS = "claude-opus-5";
+const HAIKU = "claude-haiku-4-5";
 
 const T1 = asId<TenantId>("conf-tenant-1");
 const T2 = asId<TenantId>("conf-tenant-2");
@@ -224,6 +227,98 @@ export function usageLimitStoreConformance(makeStore: () => UsageLimitStore): vo
       await store.remove({ tenantId: T1, principalId: P1, window: FIVE_HOURS });
       expect(await store.resolve({ tenantId: T1, principalId: P1, window: FIVE_HOURS })).toBeNull();
       expect((await store.resolve({ tenantId: T1, principalId: P1, window: MONTH }))?.costMinorUnits).toBe(10_000);
+    });
+
+    /**
+     * Per-model limits, and the rule that makes several limits coexist — #182.
+     *
+     * `applicable` is the surface the guard actually uses, so these are the cases that decide whether a
+     * configured limit is enforced at all.
+     */
+    it("returns every limit in force, not the most specific one", async () => {
+      const store = makeStore();
+      // A personal five-hour cap, a workspace monthly cap, and a workspace cap on one model.
+      await store.put({ tenantId: T1, limit: { tenantId: T1, principalId: P1, window: FIVE_HOURS, costMinorUnits: 500, updatedAt: "t" } });
+      await store.put({ tenantId: T1, limit: { tenantId: T1, window: MONTH, costMinorUnits: 100_000, updatedAt: "t" } });
+      await store.put({ tenantId: T1, limit: { tenantId: T1, window: MONTH, modelId: OPUS, costMinorUnits: 2_000, updatedAt: "t" } });
+
+      const applicable = await store.applicable({ tenantId: T1, principalId: P1, modelId: OPUS });
+      // All three. Returning only the "most specific" was how a workspace-wide Opus cap went unenforced for
+      // anybody who also had a personal limit — configured, visible, and never read.
+      expect(applicable).toHaveLength(3);
+      expect(applicable.map((r) => r.costMinorUnits).sort((a, b) => a! - b!)).toEqual([500, 2_000, 100_000]);
+    });
+
+    it("lets a principal's row override the tenant's within a scope, and only within it", async () => {
+      const store = makeStore();
+      await store.put({ tenantId: T1, limit: { tenantId: T1, window: MONTH, costMinorUnits: 100_000, updatedAt: "t" } });
+      await store.put({ tenantId: T1, limit: { tenantId: T1, principalId: P1, window: MONTH, costMinorUnits: 5_000, updatedAt: "t" } });
+      await store.put({ tenantId: T1, limit: { tenantId: T1, window: FIVE_HOURS, costMinorUnits: 900, updatedAt: "t" } });
+
+      const applicable = await store.applicable({ tenantId: T1, principalId: P1 });
+      // Two scopes, two rows: the month is Alice's 5,000 (hers replaces the workspace's), and the five-hour is
+      // still the workspace's 900 — an override in one scope must not silence a different scope.
+      expect(applicable).toHaveLength(2);
+      const month = applicable.find((r) => windowKey(r.window) === "month");
+      const rolling = applicable.find((r) => windowKey(r.window) === "rolling:300");
+      expect(month?.costMinorUnits).toBe(5_000);
+      expect(month?.principalId).toBe(P1);
+      expect(rolling?.costMinorUnits).toBe(900);
+      expect(rolling?.principalId).toBeUndefined();
+    });
+
+    it("applies a model-scoped limit only to that model", async () => {
+      const store = makeStore();
+      await store.put({ tenantId: T1, limit: { tenantId: T1, window: MONTH, modelId: OPUS, costMinorUnits: 2_000, updatedAt: "t" } });
+
+      expect(await store.applicable({ tenantId: T1, principalId: P1, modelId: OPUS })).toHaveLength(1);
+      // A cheap model is not subject to the expensive model's allowance, which is the entire point of scoping.
+      expect(await store.applicable({ tenantId: T1, principalId: P1, modelId: HAIKU })).toHaveLength(0);
+    });
+
+    it("does not apply a model-scoped limit when no model is given", async () => {
+      const store = makeStore();
+      await store.put({ tenantId: T1, limit: { tenantId: T1, window: MONTH, modelId: OPUS, costMinorUnits: 2_000, updatedAt: "t" } });
+      await store.put({ tenantId: T1, limit: { tenantId: T1, window: MONTH, costMinorUnits: 100_000, updatedAt: "t" } });
+
+      const applicable = await store.applicable({ tenantId: T1, principalId: P1 });
+      // Only the unscoped one. An unknown model cannot be checked against a per-model allowance, and applying it
+      // anyway would refuse work on a model the limit was never about.
+      expect(applicable).toHaveLength(1);
+      expect(applicable[0]?.modelId).toBeUndefined();
+    });
+
+    it("keeps a model-scoped limit and an unscoped one as separate rows", async () => {
+      const store = makeStore();
+      await store.put({ tenantId: T1, limit: { tenantId: T1, principalId: P1, window: MONTH, costMinorUnits: 100_000, updatedAt: "t" } });
+      await store.put({ tenantId: T1, limit: { tenantId: T1, principalId: P1, window: MONTH, modelId: OPUS, costMinorUnits: 2_000, updatedAt: "t" } });
+      // If the model were not part of the key, the second `put` would have overwritten the first — the person's
+      // overall monthly allowance would silently become 2,000.
+      expect((await store.resolve({ tenantId: T1, principalId: P1, window: MONTH }))?.costMinorUnits).toBe(100_000);
+      expect((await store.resolve({ tenantId: T1, principalId: P1, window: MONTH, modelId: OPUS }))?.costMinorUnits).toBe(2_000);
+      expect(await store.list({ tenantId: T1 })).toHaveLength(2);
+    });
+
+    it("removes a model-scoped limit without touching the unscoped one", async () => {
+      const store = makeStore();
+      await store.put({ tenantId: T1, limit: { tenantId: T1, principalId: P1, window: MONTH, costMinorUnits: 100_000, updatedAt: "t" } });
+      await store.put({ tenantId: T1, limit: { tenantId: T1, principalId: P1, window: MONTH, modelId: OPUS, costMinorUnits: 2_000, updatedAt: "t" } });
+      await store.remove({ tenantId: T1, principalId: P1, window: MONTH, modelId: OPUS });
+      expect(await store.resolve({ tenantId: T1, principalId: P1, window: MONTH, modelId: OPUS })).toBeNull();
+      expect((await store.resolve({ tenantId: T1, principalId: P1, window: MONTH }))?.costMinorUnits).toBe(100_000);
+    });
+
+    it("does not return another principal's limit", async () => {
+      const store = makeStore();
+      await store.put({ tenantId: T1, limit: { tenantId: T1, principalId: P2, window: MONTH, costMinorUnits: 1, updatedAt: "t" } });
+      // P2's row is not P1's business, and a guard that saw it would refuse the wrong person.
+      expect(await store.applicable({ tenantId: T1, principalId: P1 })).toHaveLength(0);
+    });
+
+    it("does not return another tenant's limits", async () => {
+      const store = makeStore();
+      await store.put({ tenantId: T1, limit: { tenantId: T1, window: MONTH, costMinorUnits: 5, updatedAt: "t" } });
+      expect(await store.applicable({ tenantId: T2, principalId: P1 })).toHaveLength(0);
     });
 
     it("keys a window the same way in every adapter", () => {

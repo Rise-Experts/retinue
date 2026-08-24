@@ -153,6 +153,43 @@ export const startExampleServer = async (options: ExampleServerOptions) => {
     }
   };
 
+  /**
+   * The model id for the quota check, or nothing if it cannot be resolved — #182.
+   *
+   * Nothing rather than a guess: with no model id, model-scoped limits do not apply, which cannot refuse the
+   * wrong work. A guessed id could match a real limit and refuse work that limit was never about.
+   */
+  const modelForQuota = (): { modelId?: string } => {
+    try {
+      return { modelId: resolveExampleModel().modelId };
+    } catch {
+      return {};
+    }
+  };
+
+  /**
+   * Bring the rollup buckets up to date — #183.
+   *
+   * Extracted so `/api/limits` refreshes the same buckets `/api/usage` does. Without it the panel showed two
+   * overlapping monthly limits with different numbers: a model-scoped limit reads the ledger (exact), an
+   * unscoped calendar one reads the rollup (as fresh as the last rebuild), and side by side they read as one of
+   * them being wrong. Both are right about their own source, which is exactly the kind of thing nobody should
+   * have to work out from a panel.
+   *
+   * A rollup is a *recomputation*, so running it twice cannot double count — which is what makes doing it on a
+   * request safe rather than merely convenient. Bounded per period: an unbounded loop over stale buckets turns
+   * one page load into a backfill. A deployment runs this on a schedule instead.
+   */
+  const refreshRollups = async (tenantId: TenantId, since: string): Promise<void> => {
+    const job = createRollupJob({ rollups: options.stores.rollups });
+    for (const period of ["day", "week", "month"] as const) {
+      for (let page = 0; page < 8; page += 1) {
+        const { remaining } = await job.run({ tenantId }, { period, since, limit: 50 });
+        if (remaining === 0) break;
+      }
+    }
+  };
+
   /** One factory for the three routes that need the mode: the selector, the plan button, and history. */
   const modeStore = () =>
     createModeStore({ sessions: options.stores.sessions, grants: options.stores.grants });
@@ -211,7 +248,19 @@ export const startExampleServer = async (options: ExampleServerOptions) => {
      * than zero. `assertAdmitted` throws a typed, non-retryable refusal naming the figure and the reset, which
      * the handler turns into a 429.
      */
-    if (options.deps.quota !== undefined) await options.deps.quota.assertAdmitted(context);
+    if (options.deps.quota !== undefined)
+      /**
+       * The model travels with the check — #182.
+       *
+       * A per-model limit cannot be applied to a run whose model is unknown, and the guard's safe default when it
+       * is absent is to ignore model-scoped limits entirely. So passing it is not optional detail: leaving it out
+       * would make every `rolling:300 on claude-opus-5` limit silently unenforced, which is the same
+       * configured-but-unreachable failure the resolver had.
+       *
+       * Resolved rather than assumed, and tolerantly: a misconfigured model is the first turn's problem, not the
+       * quota check's, and throwing here would turn "no API key" into a quota error.
+       */
+      await options.deps.quota.assertAdmitted(context, { ...modelForQuota() });
 
     const conversationId = asId<ConversationId>(input.conversationId ?? `conv-${Date.now().toString(36)}`);
     // Idempotent: re-sending the same first message to an existing conversation does not create a second.
@@ -746,25 +795,43 @@ export const startExampleServer = async (options: ExampleServerOptions) => {
       const isAdmin = context.roleIds.some((role) => String(role) === "admin");
 
       if (request.method === "GET") {
-        if (isAdmin) return Response.json({ limits: await limits.list({ tenantId: context.tenantId }) });
         /**
-         * Not an admin: the limit that applies to *you*, resolved.
+         * What applies to *you*, with what is left and when it changes — #183.
          *
-         * The resolved one rather than the raw rows, because "your limit" is the answer — whether it came from
-         * your own override or the tenant default is administrative detail, and listing every colleague's
-         * allowance to anyone who asks would be a leak dressed up as transparency.
+         * From the guard's own `explain`, which uses the same reads the refusal path does, so a panel cannot
+         * disagree with enforcement about either the figure or the reset. A second implementation of "how full is
+         * it" is the thing that eventually shows somebody a comfortable number while they are being refused.
+         *
+         * The model matters: a per-model limit only applies to a run on that model, so the panel has to ask about
+         * the same model the next turn will use, or it would list limits that will not bind and omit ones that
+         * will.
+         *
+         * `unbounded: true` is explicit rather than implied by an empty list, because an empty list also means
+         * "the request failed and I am rendering nothing".
          */
-        const own = await limits.resolve({
-          tenantId: context.tenantId,
-          principalId: context.principalId,
-          // `window` accepts either spelling — "month" or "rolling:300" — through the platform's own codec, so
-          // this route cannot disagree with the store about what a key means (#181).
-          window: parseWindowKey(url.searchParams.get("window") ?? url.searchParams.get("period") ?? "month") ?? {
-            kind: "calendar",
-            period: "month",
-          },
+        // Refreshed first, so a calendar limit's figure is as exact as a model-scoped one's — see
+        // `refreshRollups`. Thirty-one days back covers the longest window this app can express.
+        await refreshRollups(
+          context.tenantId,
+          new Date(Date.now() - 31 * 24 * 60 * 60 * 1000).toISOString(),
+        );
+        const applying =
+          options.deps.quota === undefined
+            ? []
+            : await options.deps.quota.explain(context, { ...modelForQuota() });
+
+        return Response.json({
+          applying,
+          unbounded: applying.length === 0,
+          /**
+           * The raw rows, **admins only**.
+           *
+           * Every colleague's allowance is not an answer to "what are my limits", and listing them to anyone who
+           * asks would be a leak dressed as transparency. An admin screen needs them to edit them, which is a
+           * different question asked by a different person.
+           */
+          ...(isAdmin ? { configured: await limits.list({ tenantId: context.tenantId }) } : {}),
         });
-        return Response.json({ limits: own === null ? [] : [own], resolved: true });
       }
 
       if (request.method === "POST") {
@@ -775,6 +842,8 @@ export const startExampleServer = async (options: ExampleServerOptions) => {
           /** Either a calendar period or `rolling:<minutes>` — #181. */
           window?: string;
           period?: string;
+          /** Absent for a limit covering every model — #182. */
+          modelId?: string;
           costMinorUnits?: number;
           inputTokens?: number;
           outputTokens?: number;
@@ -810,6 +879,10 @@ export const startExampleServer = async (options: ExampleServerOptions) => {
             ...(body.principalId === undefined || body.principalId === ""
               ? {}
               : { principalId: asId<PrincipalId>(body.principalId) }),
+            // Same rule for the model, and the table has a CHECK that refuses an empty one — an empty model id
+            // would collide with the "no model" marker in the unique index and silently become a tenant-wide
+            // limit.
+            ...(body.modelId === undefined || body.modelId === "" ? {} : { modelId: body.modelId }),
             window,
             // Every field optional, and omitted means **unbounded** rather than zero — the direction that fails
             // towards a bill rather than towards an outage. `?? undefined` and never `?? 0`.
@@ -830,9 +903,11 @@ export const startExampleServer = async (options: ExampleServerOptions) => {
         const principalId = url.searchParams.get("principalId");
         const window = parseWindowKey(url.searchParams.get("window") ?? url.searchParams.get("period") ?? "month");
         if (window === null) return Response.json({ error: "window is not a recognised window key" }, { status: 400 });
+        const modelId = url.searchParams.get("modelId");
         await limits.remove({
           tenantId: context.tenantId,
           ...(principalId === null || principalId === "" ? {} : { principalId: asId<PrincipalId>(principalId) }),
+          ...(modelId === null || modelId === "" ? {} : { modelId }),
           window,
         });
         // Removed means "inherit the tenant default", not "zero" — said in the response so a caller does not

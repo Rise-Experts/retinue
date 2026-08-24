@@ -566,6 +566,13 @@ export type UsageLimitRecord = {
    * window as easily as a calendar one.
    */
   readonly window: QuotaWindow;
+  /**
+   * The model this allowance covers, or absent for **any** model — #182.
+   *
+   * A separate limit rather than a component of one: "500 of Opus in any five hours" and "10,000 a month
+   * overall" are two allowances that both bind, not one allowance with two fields.
+   */
+  readonly modelId?: string;
   readonly costMinorUnits?: number;
   readonly inputTokens?: number;
   readonly outputTokens?: number;
@@ -590,14 +597,39 @@ export interface UsageLimitStore {
    * sites is a rule with two behaviours.
    */
   resolve(
-    input: TenantScope & { principalId?: PrincipalId; window: QuotaWindow },
+    input: TenantScope & { principalId?: PrincipalId; modelId?: string; window: QuotaWindow },
   ): Promise<UsageLimitRecord | null>;
+
+  /**
+   * **Every** limit that applies to this principal on this model — #182.
+   *
+   * Not one limit. A person can be subject to a five-hour cap, a monthly cap and a per-model cap at once, and
+   * all three bind: that is what "limits" means everywhere they are used in practice. Returning the single
+   * most-specific one, as `resolve` does, meant a workspace-wide Opus cap was silently ignored for anybody who
+   * also had a personal overall limit.
+   *
+   * The rule is **override within a scope, coexist across scopes**. One row per `(window, model)`, preferring
+   * the principal's own row over the tenant default for that same scope — so a personal limit replaces the
+   * workspace's for the same window and model, and does not replace one for a *different* window or model.
+   *
+   * A model-scoped row applies only when `modelId` matches. With no `modelId` given, model-scoped rows do not
+   * apply at all: an unknown model cannot be checked against a per-model allowance, and guessing would either
+   * refuse the wrong work or let it through.
+   *
+   * Implemented in the store, like `resolve`, because it is a rule — and a rule implemented at two call sites is
+   * a rule with two behaviours. Conformance holds the adapters to the same one.
+   */
+  applicable(
+    input: TenantScope & { principalId?: PrincipalId; modelId?: string },
+  ): Promise<readonly UsageLimitRecord[]>;
 
   /** Every configured limit for a tenant, for an admin screen. */
   list(input: TenantScope): Promise<readonly UsageLimitRecord[]>;
 
   /** Remove one. Absent afterwards means "inherit the tenant default", not "zero". */
-  remove(input: TenantScope & { principalId?: PrincipalId; window: QuotaWindow }): Promise<void>;
+  remove(
+    input: TenantScope & { principalId?: PrincipalId; modelId?: string; window: QuotaWindow },
+  ): Promise<void>;
 }
 
 /**
