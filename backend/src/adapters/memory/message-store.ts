@@ -27,11 +27,25 @@ export const createMemoryMessageStore = (): MessageStore => {
     async findById({ tenantId, id }) {
       return list(tenantId).find((m) => m.id === id) ?? null;
     },
-    async listByConversation({ tenantId, conversationId, limit, cursor }) {
-      const all = list(tenantId).filter((m) => m.conversationId === conversationId);
-      const start = cursor ? all.findIndex((m) => m.id === cursor) + 1 : 0;
-      const items = all.slice(start, start + limit);
-      const nextCursor = start + limit < all.length ? items[items.length - 1]?.id : undefined;
+    async listByConversation({ tenantId, conversationId, limit, cursor, newestFirst }) {
+      /**
+       * Ordered by `(createdAt, id)`, like the SQL adapter — not by insertion order.
+       *
+       * It used to page the array as stored, which agreed with the SQL adapter only because every seed happened
+       * to insert in timestamp order. A host that appended an older message — a backfill, a replayed event —
+       * would have got a different order from each adapter, and the conformance suite could not see it because
+       * its own fixtures were ordered too.
+       */
+      const all = list(tenantId)
+        .filter((m) => m.conversationId === conversationId)
+        .sort((a, b) =>
+          a.createdAt === b.createdAt ? a.id.localeCompare(b.id) : a.createdAt.localeCompare(b.createdAt),
+        );
+      // #167: the same page read from the other end.
+      const ordered = newestFirst === true ? [...all].reverse() : all;
+      const start = cursor ? ordered.findIndex((m) => m.id === cursor) + 1 : 0;
+      const items = ordered.slice(start, start + limit);
+      const nextCursor = start + limit < ordered.length ? items[items.length - 1]?.id : undefined;
       const page: Page<Message> = nextCursor === undefined ? { items } : { items, nextCursor };
       return page;
     },

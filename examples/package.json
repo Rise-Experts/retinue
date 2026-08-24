@@ -20,7 +20,8 @@
     "api": "node --env-file=../.env ./scripts/run-api.mjs",
     "worker": "node --env-file=../.env ./scripts/run-worker.mjs",
     "migrate": "node --env-file=../.env ./scripts/migrate.mjs",
-    "app": "node --env-file=../.env ./scripts/run-app.mjs"
+    "app": "node --env-file=../.env ./scripts/run-app.mjs",
+    "loadtest": "node --env-file=../.env ./scripts/loadtest.mjs"
   },
   "dependencies": {
     "@agentkit/backend": "*",

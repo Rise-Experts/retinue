@@ -185,6 +185,16 @@
         color:#fff; font-size:17px; cursor:pointer; display:grid; place-items:center; }
   .go:disabled { opacity:.35; cursor:default; }
   .hint { font-size:11.5px; color:var(--faint); margin:7px auto 0; max-width:44rem; padding:0 24px; }
+  .hint code { font:inherit; font-family:ui-monospace, monospace; }
+  /* ---------------------------------------------------------------- context meter */
+  /* Beside the send hint, not in a panel: how full the window is matters while you are typing into it. */
+  .ctx { display:inline-flex; align-items:center; gap:6px; margin-right:8px; }
+  .ctx-track { width:52px; height:4px; border-radius:2px; background:var(--line); overflow:hidden; }
+  .ctx-fill { display:block; height:100%; background:var(--accent); transition:width .3s ease; }
+  /* Warn only when it means something. A meter that is orange from the first turn is a meter people stop
+     reading, so the colour changes at the threshold the server actually compacts at. */
+  .ctx.warn .ctx-fill { background:var(--warn); }
+  .ctx.warn #ctxtext { color:var(--warn); }
 
   /* ---------------------------------------------------------------- the question panel */
   .ask { max-width:44rem; margin:0 auto 12px; padding:14px 16px; border:1px solid var(--warn-line);
@@ -258,7 +268,13 @@
       <textarea id="text" rows="1" placeholder="Message the assistant…"></textarea>
       <button class="go" id="send" title="Send">↑</button>
     </div>
-    <div class="hint">Enter to send · Shift+Enter for a new line</div>
+    <div class="hint">
+      <span id="ctxmeter" class="ctx" hidden>
+        <span class="ctx-track"><span class="ctx-fill" id="ctxfill"></span></span>
+        <span id="ctxtext"></span>
+      </span>
+      Enter to send · Shift+Enter for a new line · <code>/compact</code> to condense the history
+    </div>
   </div>
 </main>
 
@@ -541,6 +557,8 @@
     st.bubble?.querySelector(".caret")?.remove();
     $("send").disabled = false;
     $("text").focus();
+    // The window only changes when the conversation does, so this is where to refresh rather than on a timer.
+    void loadContext();
     /**
      * A reply that settles in plan mode *is* a plan, so this is where the button belongs.
      *
@@ -983,6 +1001,67 @@
     }
   };
 
+  /* ------------------------------------------------------- context window */
+
+  /**
+   * How full the window is — #167.
+   *
+   * Refreshed after each turn rather than polled, because it only changes when the conversation does. The server
+   * supplies the threshold as well as the fraction, so the meter cannot say "fine" while the server compacts.
+   *
+   * Tokens shown as an estimate, and labelled as one: the platform's counter is ~4 characters per token, not the
+   * provider's tokenizer. Rounding to thousands is deliberate — a figure like "12,431 tokens" claims a precision
+   * this does not have.
+   */
+  const loadContext = async () => {
+    if (!conversationId) { $("ctxmeter").hidden = true; return; }
+    try {
+      const r = await fetch(`/api/context?conversationId=${encodeURIComponent(conversationId)}`, { headers: headers() });
+      if (!r.ok) return;
+      const c = await r.json();
+      const meter = $("ctxmeter");
+      meter.hidden = false;
+      meter.classList.toggle("warn", c.fraction >= c.compactAt);
+      $("ctxfill").style.width = `${Math.max(2, Math.round(c.fraction * 100))}%`;
+      const k = (n) => (n >= 1000 ? `${Math.round(n / 1000)}k` : String(n));
+      $("ctxtext").textContent = `~${k(c.usedTokens)} / ${k(c.limit)} context`;
+      meter.title =
+        `Estimated ${c.usedTokens} of ${c.limit} tokens: ${c.promptTokens} prompt, ${c.historyTokens} history ` +
+        `over ${c.turns} turns. Compacts automatically at ${Math.round(c.compactAt * 100)}%.`;
+    } catch { /* the meter is not worth an error message */ }
+  };
+
+  /**
+   * `/compact` — condense the history now.
+   *
+   * A person compacts when they have finished with a topic, which is a better moment than any threshold can
+   * see. The automatic trigger still exists for the conversation nobody is watching.
+   */
+  const compactNow = async () => {
+    note("Condensing the earlier history…");
+    try {
+      const r = await fetch("/api/compact", {
+        method: "POST", headers: headers(),
+        body: JSON.stringify({ conversationId }),
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error ?? r.statusText);
+      // Reported as what happened, including "nothing to do". A person who pressed it on a short conversation
+      // has not done anything wrong, and an error would suggest they had.
+      note(
+        j.compacted
+          ? `Condensed ${j.droppedParts} parts into a summary — about ${j.tokensReclaimed} tokens reclaimed, ` +
+            `${j.keptTurns} recent turns kept as they are.`
+          : j.reason === "too-short"
+            ? "Nothing to condense yet — the conversation is still short."
+            : "Nothing to condense: the earlier turns are all tool activity still in use.",
+      );
+      void loadContext();
+    } catch (e) {
+      note(`Could not condense the history: ${e.message}`, true);
+    }
+  };
+
   /* ------------------------------------------------------- usage panel */
 
   /**
@@ -1198,6 +1277,7 @@
     closeAsk();
     void loadConversations();
     void loadMode();
+    void loadContext();
     try {
       const r = await fetch(`/api/history?conversationId=${encodeURIComponent(id)}`, { headers: headers() });
       const h = await r.json();
@@ -1244,6 +1324,19 @@
   const send = async () => {
     const text = $("text").value.trim();
     if (!text) return;
+    /**
+     * Slash commands, handled before the message is sent.
+     *
+     * `/compact` is an instruction to the *application*, not a message to the model — sending it as a turn would
+     * have the assistant explain what compaction is while the history keeps growing.
+     */
+    if (text === "/compact") {
+      $("text").value = "";
+      $("text").style.height = "auto";
+      if (!conversationId) { note("Nothing to condense yet — this conversation has not started."); return; }
+      await compactNow();
+      return;
+    }
     $("send").disabled = true;
     $("text").value = "";
     $("text").style.height = "auto";

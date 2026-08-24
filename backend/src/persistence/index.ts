@@ -222,8 +222,21 @@ export interface RunStore {
 
 export interface MessageStore {
   findById(input: TenantScope & { id: MessageId }): Promise<Message | null>;
+  /**
+   * A page of a conversation's messages.
+   *
+   * `newestFirst` exists because the port could only answer "the oldest N" — #167. That is the wrong question for
+   * a chat application, whose two real queries are "show me the start" (oldest) and "what does the model need to
+   * see" (newest). Without it, a host asking for 100 messages of a 2000-message conversation gets turns 1–100
+   * and none of the recent ones: the assistant forgets everything that just happened, and the longer the
+   * conversation the worse it gets. Reaching the tail by paging is O(n) round trips for the query made on every
+   * single turn.
+   *
+   * Items come back in the requested order, so a caller rendering oldest-first reverses a newest-first page. The
+   * keyset cursor flips with it, so paging is still stable under concurrent inserts in both directions.
+   */
   listByConversation(
-    input: TenantScope & PageRequest & { conversationId: ConversationId },
+    input: TenantScope & PageRequest & { conversationId: ConversationId; newestFirst?: boolean },
   ): Promise<Page<Message>>;
   /**
    * Record a message — #157.

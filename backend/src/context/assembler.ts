@@ -47,6 +47,15 @@ export type AssembledPrompt = {
   readonly sections: readonly ContextSection[];
   readonly preview: PromptPreview;
   readonly totalTokens: number;
+  /**
+   * The model's hard input limit this prompt was assembled against — #168.
+   *
+   * Echoed back rather than left to the caller to remember. It is the denominator of every useful question about
+   * a prompt — how full is the window, how much is left, is this turn near the edge — and a caller holding the
+   * numerator while the limit lives somewhere else is a caller computing utilization against the wrong model the
+   * first time a policy resolves a different one.
+   */
+  readonly modelContextTokens: number;
   /** Sections dropped, with why — for observability and the context inspector. */
   readonly pruned: readonly { readonly section: ContextSection; readonly reason: "bucket-overflow" | PromptPruneStage }[];
 };
@@ -129,7 +138,7 @@ export const assemblePrompt = (input: {
     budget,
   };
 
-  return { sections: included, preview, totalTokens: total, pruned };
+  return { sections: included, preview, totalTokens: total, pruned, modelContextTokens };
 };
 
 /** A section's inspector view — enough for the Context panel to explain what shaped a turn. */
@@ -149,6 +158,16 @@ export type ContextInspection = {
   readonly sections: readonly InspectedSection[];
   readonly totalTokens: number;
   readonly budget: ContextBudget;
+  /** The model's hard input limit — the denominator for utilization (#168). */
+  readonly modelContextTokens: number;
+  /**
+   * What is left for history and the model's reply.
+   *
+   * Derived here rather than by each client, because `max(0, limit - used)` is the kind of arithmetic that gets
+   * written twice and clamped once. Never negative: the assembler refuses to overflow, so a negative remainder
+   * would be a bug reported as a number.
+   */
+  readonly remainingTokens: number;
 };
 
 /**
@@ -175,5 +194,9 @@ export const inspectAssembledPrompt = (assembled: AssembledPrompt): ContextInspe
     ],
     totalTokens: assembled.totalTokens,
     budget: assembled.preview.budget,
+    modelContextTokens: assembled.modelContextTokens,
+    // Clamped at zero. The assembler refuses to overflow, so a negative remainder would be a bug reported as a
+    // number — and a UI drawing a negative bar is a UI nobody believes again.
+    remainingTokens: Math.max(0, assembled.modelContextTokens - assembled.totalTokens),
   };
 };

@@ -122,6 +122,51 @@ export function messageStoreConformance(makeFixture: () => FixtureOrStore<Messag
     });
 
     /**
+     * The most recent messages, which is the query a chat application actually makes — #167.
+     *
+     * The port could only answer "the oldest N", so a host wanting the tail of a long conversation either paged
+     * through the whole thing or, much more likely, asked for 100 and silently got turns 1–100. In a
+     * 2000-message conversation that hands a model the beginning and none of the present.
+     */
+    it("reads the newest messages first when asked", async () => {
+      const store = await open();
+      await seed(store, { tenantId: T1, conversationId: C1, count: 5 });
+      const page = await store.listByConversation({ tenantId: T1, conversationId: C1, limit: 2, newestFirst: true });
+      expect(page.items.map((m) => m.id)).toEqual(["m4", "m3"]);
+    });
+
+    it("pages backwards without overlap or gaps", async () => {
+      const store = await open();
+      await seed(store, { tenantId: T1, conversationId: C1, count: 5 });
+      const first = await store.listByConversation({ tenantId: T1, conversationId: C1, limit: 2, newestFirst: true });
+      const second = await store.listByConversation({
+        tenantId: T1,
+        conversationId: C1,
+        limit: 2,
+        newestFirst: true,
+        cursor: first.nextCursor,
+      });
+      // The cursor has to flip with the sort. Split apart they produce a page that scans one way and pages the
+      // other, which returns rows already seen and looks like duplication.
+      expect(second.items.map((m) => m.id)).toEqual(["m2", "m1"]);
+    });
+
+    /**
+     * Ordered by timestamp, not by insertion.
+     *
+     * The two agree for anything appended in order, which is why this went unnoticed: every fixture seeded in
+     * timestamp order, so the in-memory adapter's array order happened to match the SQL adapter's `ORDER BY`.
+     * A backfilled or replayed message is where they diverge.
+     */
+    it("orders by created_at even when messages arrive out of order", async () => {
+      const store = await open();
+      await store.append({ tenantId: T1, message: message(C1, 5, "later") });
+      await store.append({ tenantId: T1, message: message(C1, 1, "earlier") });
+      const page = await store.listByConversation({ tenantId: T1, conversationId: C1, limit: 10 });
+      expect(page.items.map((m) => m.id)).toEqual(["earlier", "later"]);
+    });
+
+    /**
      * A retried request must neither fail nor duplicate. #157 put `append` on the port, and a caller that
      * retries — the same user turn re-submitted after a dropped connection — carries the same message id;
      * a second row would show the user their own message twice and feed the model a doubled turn.

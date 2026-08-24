@@ -29,6 +29,11 @@ import {
   createPostgresUsageRollupStore,
 } from "@agentkit/backend";
 import { citationViewModel, formatCost, formatTokens, shapeUsagePanel } from "@agentkit/frontend";
+import { COMPACT_AT_FRACTION, compactConversation, createExampleSummarizer } from "./compaction.js";
+import { HISTORY_READ_LIMIT } from "./history.js";
+import { contextUsage } from "./context-usage.js";
+import { exampleProviders } from "./providers.js";
+import { resolveExampleModel } from "./model.js";
 import type { ConversationMode } from "./modes.js";
 import type {
   ConversationId,
@@ -95,6 +100,35 @@ export const startExampleServer = async (options: ExampleServerOptions) => {
       sessions: createPostgresSessionStateStore(options.sql),
       grants: createPostgresApprovalGrantStore(options.sql),
     });
+
+  /**
+   * Compact a conversation — #169.
+   *
+   * The summariser is a model call through the app's own resolved model, which is why this lives here rather
+   * than in `compaction.ts`: that module is the deterministic part and takes the summariser as a dependency, so
+   * it is testable without a model.
+   */
+  const compactNow = async (context: ExecutionContext, conversationId: string) => {
+    const messages = await createPostgresMessageStore(options.sql).listByConversation({
+      tenantId: context.tenantId,
+      conversationId: asId<ConversationId>(conversationId),
+      limit: 500,
+    });
+    return compactConversation({
+      sql: options.sql,
+      context,
+      conversationId,
+      messages: messages.items,
+      summarizer: createExampleSummarizer({
+        generate: async (prompt) => {
+          const { generateText } = await import("ai");
+          const resolved = resolveExampleModel();
+          const result = await generateText({ model: resolved.model, prompt });
+          return result.text;
+        },
+      }),
+    });
+  };
 
   /**
    * Starting a turn: persist the message, create the run, admit it.
@@ -165,6 +199,40 @@ export const startExampleServer = async (options: ExampleServerOptions) => {
         createdAt: new Date().toISOString(),
       },
     });
+
+    /**
+     * Compact before admitting, if the window is nearly full — #169.
+     *
+     * **Before**, not after: the run about to start is the one that would fail, and compacting after it has been
+     * admitted fixes the turn after the one that broke. This is also why the threshold is 0.7 rather than 0.9 —
+     * compaction is itself a model call over the whole prefix, so at 0.9 the summarisation prompt may not fit.
+     *
+     * Failure here is logged and swallowed. A conversation that cannot be compacted should still get its turn:
+     * it may well fit, and refusing to answer because an optimisation failed is worse than a long prompt.
+     */
+    const effectiveMode = await modeStore().get({
+      tenantId: String(context.tenantId),
+      conversationId: String(conversationId),
+    });
+    try {
+      const usage = await contextUsage({
+        sql: options.sql,
+        context: { ...context, conversationId },
+        mode: effectiveMode,
+        providers: exampleProviders(options.sql),
+      });
+      if (usage.fraction >= COMPACT_AT_FRACTION || usage.totalMessages > HISTORY_READ_LIMIT) {
+        const outcome = await compactNow(context, String(conversationId));
+        if (outcome.compacted) {
+          console.log(
+            `[compact] ${conversationId}: ${outcome.droppedParts} parts condensed, ` +
+              `~${outcome.tokensReclaimed} tokens reclaimed, ${outcome.keptTurns} turns kept verbatim`,
+          );
+        }
+      }
+    } catch (thrown) {
+      console.error(`[compact] skipped for ${conversationId}: ${(thrown as Error).message}`);
+    }
 
     /**
      * The run row first, then admission.
@@ -363,6 +431,67 @@ export const startExampleServer = async (options: ExampleServerOptions) => {
           byModel: panel.byModel.map((e) => ({ key: e.key, cost: formatCost(e.totals.costMinorUnits, panel.currency) })),
         },
       });
+    }
+
+    /**
+     * How full the window is — #168.
+     *
+     * Both halves: the budgeted context sections and the conversation history. A utilization figure that counts
+     * only one of them reassures you right up to the failure, and history is usually the larger half and the one
+     * that grows without bound.
+     */
+    if (url.pathname === "/api/context" && request.method === "GET") {
+      const context = await options.authenticate(request);
+      if (context === null) return Response.json({ error: "Unauthenticated" }, { status: 401 });
+      const conversationId = url.searchParams.get("conversationId");
+      const scoped =
+        conversationId === null ? context : { ...context, conversationId: asId<ConversationId>(conversationId) };
+      const mode =
+        conversationId === null
+          ? DEFAULT_MODE
+          : await modeStore().get({ tenantId: String(context.tenantId), conversationId });
+
+      const usage = await contextUsage({
+        sql: options.sql,
+        context: scoped,
+        mode,
+        // The same list the app module assembles from — see `./providers.ts`.
+        providers: exampleProviders(options.sql),
+      });
+      return Response.json({
+        ...usage,
+        // Advertised so the page does not hardcode the same number. A threshold the UI and the server disagree
+        // about is a UI that says "fine" while the server compacts, or the reverse.
+        compactAt: COMPACT_AT_FRACTION,
+        /**
+         * Two triggers, either of which is enough.
+         *
+         * The fraction catches a conversation whose turns are long. The message count catches one whose turns are
+         * short but numerous — where a *capped* history read makes the window look roomy while turns fall off the
+         * end unsummarised. Only checking the fraction is how a 2000-message conversation reports "3% full" and
+         * never compacts.
+         */
+        totalMessages: usage.totalMessages,
+        overflowing: usage.totalMessages > HISTORY_READ_LIMIT,
+        shouldCompact: usage.fraction >= COMPACT_AT_FRACTION || usage.totalMessages > HISTORY_READ_LIMIT,
+      });
+    }
+
+    /**
+     * Compact this conversation now — #169.
+     *
+     * Explicit as well as automatic, because a threshold picks its moment from a number and a person picks
+     * theirs when they have finished with a topic. That is the better moment and no threshold can see it.
+     */
+    if (url.pathname === "/api/compact" && request.method === "POST") {
+      const context = await options.authenticate(request);
+      if (context === null) return Response.json({ error: "Unauthenticated" }, { status: 401 });
+      const body = (await request.json()) as { conversationId?: string };
+      if (body.conversationId === undefined || body.conversationId === "")
+        return Response.json({ error: "conversationId is required" }, { status: 400 });
+
+      const outcome = await compactNow(context, body.conversationId);
+      return Response.json(outcome);
     }
 
     if (url.pathname === "/api/history" && request.method === "GET") {

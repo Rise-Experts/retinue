@@ -109,18 +109,25 @@ export const createPostgresMessageStore = (
     return row ? toMessage(row) : null;
   },
 
-  async listByConversation({ tenantId, conversationId, limit, cursor }) {
+  async listByConversation({ tenantId, conversationId, limit, cursor, newestFirst }) {
     const params: unknown[] = [tenantId, conversationId, limit + 1];
     let where = `tenant_id = $1 AND conversation_id = $2`;
+    // The comparator and the sort flip together — #167. Split apart they produce a page that scans one way and
+    // pages the other, which returns rows before the cursor and looks like duplicates.
+    const descending = newestFirst === true;
     if (cursor) {
       const { c, i } = decodeCursor(cursor);
-      // Keyset, not OFFSET: strictly after (created_at, id), so an insert landing earlier in the
-      // ordering cannot shift this page or duplicate a row into the next one.
-      where += ` AND (created_at, id) > ($4::timestamptz, $5)`;
+      // Keyset, not OFFSET: strictly past (created_at, id) in the direction being read, so an insert landing
+      // earlier in the ordering cannot shift this page or duplicate a row into the next one.
+      where += descending
+        ? ` AND (created_at, id) < ($4::timestamptz, $5)`
+        : ` AND (created_at, id) > ($4::timestamptz, $5)`;
       params.push(c, i);
     }
     const rows = await sql.query<MessageRow>(
-      `SELECT * FROM messages WHERE ${where} ORDER BY created_at, id LIMIT $3`,
+      `SELECT * FROM messages WHERE ${where}
+       ORDER BY created_at ${descending ? "DESC" : "ASC"}, id ${descending ? "DESC" : "ASC"}
+       LIMIT $3`,
       params,
     );
     const hasMore = rows.length > limit;

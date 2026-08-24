@@ -40,6 +40,7 @@ import {
   createApprovalService,
   computeModelCostMinorUnits,
   commitExtractedMemories,
+  assemblePrompt,
   createCitationEmitter,
   createPrincipalMemoryProvider,
   createQuestionService,
@@ -50,6 +51,8 @@ import {
   reduceRunEvent,
 } from "@agentkit/backend";
 import type {
+  ContextBudget,
+  ContextInspection,
   QuestionSpec,
   AgentManifest,
   ExecutionContext,
@@ -66,15 +69,19 @@ import type { AgentkitConfig } from "@agentkit/server";
 import { createDevAuthenticate } from "./auth.js";
 import { examplePricing, resolveExampleModel } from "./model.js";
 import { questionSpecsFrom } from "./questions.js";
+import { EXAMPLE_CONTEXT_BUDGET, contextLimitFor } from "./context-usage.js";
 import { buildWorkerContext } from "./worker-context.js";
-import { MAX_MEMORY_ENTRIES, NoteNotFound, createExampleStore, createExampleTools, type ExampleStore } from "./tools.js";
+import { MAX_MEMORY_ENTRIES, NoteNotFound, createExampleTools } from "./tools.js";
+import { exampleStore } from "./store.js";
+import { exampleProviders } from "./providers.js";
 import { exampleAgentManifest, exampleContextProviders } from "./agent.js";
 import { EXCLUDED_EFFECTS, MODE_DESCRIPTIONS, type ConversationMode } from "./modes.js";
 import { createModeStore } from "./mode-store.js";
 import { conversationTurns, historyForModel } from "./history.js";
 
 /** One store per process. The tools are a test surface; see the note in `tools.ts`. */
-const store: ExampleStore = createExampleStore();
+// The notebook lives in `./store.ts`, so the server shares this one instance rather than a second.
+const store = exampleStore;
 const impl = createExampleTools(store);
 
 /** Exposed so a test can assert the ledger without reaching through the app module. */
@@ -615,6 +622,8 @@ const app = {
             sql,
             tenantId: String(context.tenantId),
             conversationId: String(context.conversationId),
+            // The compacted form, which is what compaction is for. The page reads the full transcript.
+            compacted: true,
           }),
         );
       },
@@ -720,13 +729,9 @@ const exampleSystemPrompt = async (
    * is durable and tenant-scoped, and `createPrincipalMemoryProvider` budgets retrieval by salience so memories
    * never crowd out recent turns.
    */
-  const sections = await gatherSections(context, [
-    ...exampleContextProviders(store),
-    createPrincipalMemoryProvider({
-      store: createPostgresPrincipalMemoryStore(sql),
-      maxEntries: 8,
-    }),
-  ]);
+  // The one shared list — see `./providers.ts`. A second list here would make `/api/context` a report about a
+  // prompt the model never saw.
+  const sections = await gatherSections(context, exampleProviders(sql));
   /**
    * The mode instruction goes in the **prompt as well as** the catalogue.
    *
@@ -737,8 +742,26 @@ const exampleSystemPrompt = async (
   const modeBlock = MODE_DESCRIPTIONS[mode].instruction;
   const base = `${manifest.instructions}\n\n${modeBlock}`;
   if (sections.length === 0) return base;
-  const block = renderContextBlock(sections, makeNonce((n) => randomBytes(n).toString("hex")));
+  /**
+   * Budgeted through `assemblePrompt`, not merely gathered — #168.
+   *
+   * This used to render every gathered section straight into the prompt. It worked because the example's context
+   * is small, and it meant the app had no idea how full the window was: `gatherSections` returns everything a
+   * provider offers, and nothing decided what fits. So a notebook that grew would have pushed the prompt past
+   * the model's limit and the failure would have arrived from the provider, as a 400.
+   *
+   * `assemblePrompt` budgets per bucket, prunes in a defined order, and reports what it dropped and why — which
+   * is also what makes `/api/context` able to say anything true about utilization.
+   */
+  const assembled = assemblePrompt({
+    sections,
+    budget: EXAMPLE_CONTEXT_BUDGET,
+    modelContextTokens: contextLimitFor(),
+  });
+  const block = renderContextBlock(assembled.sections, makeNonce((n) => randomBytes(n).toString("hex")));
   return `${base}\n\n# Context\n${block}`;
 };
+
+
 
 export default app;
