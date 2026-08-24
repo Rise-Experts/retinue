@@ -65,11 +65,33 @@ export const validateEndpoint = (policy: EgressPolicy, transport: McpTransport, 
     if (!allowed.includes(command)) throw forbidden(`stdio command "${command}" is not on the egress allow-list`);
     return;
   }
+  validateHttpEgress(policy, endpoint);
+};
+
+/**
+ * The HTTP half of the policy, on its own — #176.
+ *
+ * Extracted because the check is about **HTTP egress**, not about MCP: an agent tool that fetches a URL needs
+ * exactly these rules, and the alternatives were both bad. Calling `validateEndpoint(policy, "streamable-http",
+ * url)` would be passing a transport the caller does not have, and writing the checks again in the tool would be
+ * a second SSRF defence that drifts from the first — and the one that drifts is the one nobody re-reads.
+ *
+ * Everything here was already load-bearing for MCP. Stated again because it is now reachable from a tool the
+ * *model* chooses the argument for, which is a materially more hostile position than an operator-configured
+ * endpoint:
+ *
+ * - Credentials in userinfo are **refused**, not stripped.
+ * - Every IPv6 literal is denied by default, because `::ffff:169.254.169.254` slips a cloud metadata address
+ *   past any v4-only check.
+ * - An explicit host allow-list is authoritative, so an operator can permit something they trust.
+ * - Absent an allow-list, private, loopback, link-local and `.internal`/`.local` targets are blocked.
+ */
+export const validateHttpEgress = (policy: EgressPolicy, endpoint: string): URL => {
   let url: URL;
   try {
     url = new URL(endpoint);
   } catch {
-    throw forbidden(`Invalid MCP endpoint URL`);
+    throw forbidden(`Invalid URL`);
   }
   /**
    * A URL carrying userinfo is a **credential**, and it is refused (#145).
@@ -97,8 +119,9 @@ export const validateEndpoint = (policy: EgressPolicy, transport: McpTransport, 
   if (policy.allowedHttpHosts) {
     if (!policy.allowedHttpHosts.map(normalizeHost).includes(host))
       throw forbidden(`host "${url.hostname}" is not on the egress allow-list`);
-    return;
+    return url;
   }
   if (!policy.allowPrivateNetworks && isPrivateHost(url.hostname))
     throw forbidden(`endpoint host "${url.hostname}" resolves to a private/loopback address`);
+  return url;
 };

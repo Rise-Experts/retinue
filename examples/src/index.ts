@@ -83,6 +83,7 @@ import { exampleStore } from "./store.js";
 import { exampleProviders } from "./providers.js";
 import { ASSIGNED_SKILLS, EXAMPLE_SKILLS, renderSkillCatalogue } from "./skills.js";
 import { DOCS_MCP_SERVER_ID, DOCS_MCP_TOOLS, createDocsMcpClient, createDocsMcpProvider } from "./mcp.js";
+import { createFetchUrl } from "./fetch-url.js";
 import { fileURLToPath } from "node:url";
 import { exampleAgentManifest, exampleContextProviders } from "./agent.js";
 import { EXCLUDED_EFFECTS, MODE_DESCRIPTIONS, type ConversationMode } from "./modes.js";
@@ -110,7 +111,7 @@ export const exampleState = { store, impl };
  * They used to be two hand-maintained arrays, and adding a tool meant remembering both. `viewer` silently
  * missing a new read-only tool is the failure that shape invites, and it looks like the tool being broken.
  */
-const FIRST_PARTY_TOOLS = ["remember", "recall", "list_notes", "search_notes", "calculate", "now", "ask_user", "load_skill"] as const;
+const FIRST_PARTY_TOOLS = ["remember", "recall", "list_notes", "search_notes", "calculate", "now", "ask_user", "load_skill", "fetch_url"] as const;
 
 /** Only `editor` gets these: they change or share something. */
 const WRITE_TOOLS = ["write_note", "share_note"] as const;
@@ -246,6 +247,14 @@ const questionServiceFor = (sql: SqlExecutor) =>
     dispatcher: createBullMqJobDispatcher(createBullMqRunQueue({ url: process.env["AGENTKIT_REDIS_URL"] ?? "" })),
     runs: createPostgresRunStore(sql),
   });
+
+/**
+ * One fetcher for the process, so the egress policy is decided in exactly one place.
+ *
+ * A per-call factory would be harmless today and would be the seam through which a second, looser policy
+ * eventually appears — and a second SSRF defence is one that drifts from the first.
+ */
+const fetchUrl = createFetchUrl({});
 
 const buildTools = (sql: SqlExecutor): readonly Tool[] => {
   const idempotency = createPostgresIdempotencyStore(sql);
@@ -552,6 +561,33 @@ const buildTools = (sql: SqlExecutor): readonly Tool[] => {
         });
         return { loaded: true, name: body.name, version: body.version, instructions: body.instructions };
       },
+    }),
+    defineDelegatingTool(deps, {
+      name: "fetch_url",
+      description:
+        "Read a public web page and return its text. Use it when the answer is on a page the person names, or " +
+        "one you found in a note. https only; private and internal addresses are refused.",
+      category: "assistant",
+      /**
+       * `read`, and that is a real decision rather than a default.
+       *
+       * It reads; it changes nothing. But it *leaves the workspace*, which is the property the effect taxonomy
+       * usually cares about — so the argument for `external-write` is that an outbound request is observable to
+       * a third party, and someone might not want the agent visiting arbitrary URLs on their behalf.
+       *
+       * `read` wins because the effect classification drives **approval**, and an approval prompt on every page
+       * load is a prompt people learn to click through — which would weaken the approval on `share_note`, where
+       * it genuinely matters. The exposure is bounded by the egress policy instead, which is a control that
+       * cannot be clicked through. A deployment that disagrees changes this line and gets approvals.
+       */
+      effect: "read" as const,
+      delegatesTo: "fetchUrl",
+      inputSchema: {
+        type: "object",
+        properties: { url: { type: "string", description: "An absolute https:// URL." } },
+        required: ["url"],
+      },
+      delegate: (input: unknown) => fetchUrl(str((input as { url?: unknown }).url)),
     }),
     defineDelegatingTool(deps, {
       name: "now",

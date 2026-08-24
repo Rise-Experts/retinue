@@ -234,6 +234,16 @@ const CAPABILITIES = [
     why: "#175 — limits must come from a store an admin can change, not from a hardcoded value.",
   },
   {
+    name: "HTTP egress policy",
+    symbol: "validateHttpEgress",
+    scope: "host",
+    /**
+     * The policy was reachable only from MCP endpoint registration, which an operator configures once. A tool
+     * whose URL the *model* chooses is the case it matters most for, and nothing exercised it there.
+     */
+    why: "#176 — an outbound tool must apply the egress policy, not reimplement it.",
+  },
+  {
     name: "context inspection",
     symbol: "inspectAssembledPrompt",
     scope: "host",
