@@ -74,6 +74,21 @@ const SCOPES = {
 };
 
 /**
+ * A capability naming a scope that does not exist is a mistake in the ledger, not a finding about the code.
+ *
+ * Without this the lookup yields an empty path list and the capability reports as unreachable — which is the
+ * safe direction, but the message reads "nothing in  references X" with a blank where the directory should be,
+ * and sends the reader looking for a wiring bug that is not there. Cost me a detour on #185.
+ */
+const assertScopesExist = (capabilities, scopes) => {
+  const unknown = capabilities.filter((c) => scopes[c.scope] === undefined);
+  if (unknown.length === 0) return;
+  console.error("✗ capabilities naming a scope that does not exist:");
+  for (const c of unknown) console.error(`  - ${c.name}: scope "${c.scope}" (known: ${Object.keys(scopes).join(", ")})`);
+  process.exit(1);
+};
+
+/**
  * Every capability whose whole value is being connected to something.
  *
  * Deliberately not "every export". A type, a validator or a pure helper is complete on its own; these are the
@@ -249,6 +264,21 @@ const CAPABILITIES = [
     scope: "host",
     why: "#168 — context utilization is unanswerable if nothing inspects the assembled prompt.",
   },
+  {
+    name: "turn modality gating",
+    symbol: "modelModalities",
+    scope: "platform",
+    /**
+     * The exact shape this guard exists for. `ImagePart`, `FilePart` and `InputModality` were all present and
+     * tested, and the bridge to the provider took a string — so an attachment was stored, authorized, rendered
+     * and billed for, then never mentioned to the model. Correct, tested and unreachable, in the core turn loop.
+     *
+     * Tracked on the engine→bridge wiring rather than on the mapper: the mapper is called from inside the same
+     * file and would count as reached even if nothing upstream ever passed it a part. What actually breaks is
+     * the engine forgetting to say what the model accepts.
+     */
+    why: "#185 — an attachment the platform accepted must reach the model, and a model that cannot take one must refuse rather than be sent it silently.",
+  },
 ];
 
 /**
@@ -404,6 +434,8 @@ if (process.argv[1] !== undefined && import.meta.url.endsWith(process.argv[1].sp
     code: readFileSync(resolve(ROOT, path), "utf8"),
   }));
   const eventTypes = parseEventTypes(readFileSync(resolve(ROOT, "backend/src/core/events.ts"), "utf8"));
+  // Before the analysis, so a typo in the ledger is reported as a typo rather than as a wiring failure.
+  assertScopesExist(CAPABILITIES, SCOPES);
   const failures = analyse({
     files,
     capabilities: CAPABILITIES,

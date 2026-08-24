@@ -9,7 +9,7 @@
  * Providers are passed in rather than reached for, so this file knows nothing about notebooks or memory.
  */
 
-import { assemblePrompt, estimateTokens, gatherSections, inspectAssembledPrompt } from "@agentkit/backend";
+import { assemblePrompt, estimateTokens, gatherSections, inspectAssembledPrompt, turnText } from "@agentkit/backend";
 import type { ExampleStores } from "./stores.js";
 import type {
   ContextBudget,
@@ -121,7 +121,7 @@ export const contextUsage = async (input: {
            */
           compacted: true,
         });
-  const historyTokens = turns.reduce((sum, t) => sum + estimateTokens(t.text), 0);
+  const historyTokens = turns.reduce((sum, t) => sum + estimateTokens(turnText(t)), 0);
 
   // The instructions and the mode block are part of the prompt too, and small but not zero — omitting them
   // would make the figure quietly optimistic in exactly the direction that matters.

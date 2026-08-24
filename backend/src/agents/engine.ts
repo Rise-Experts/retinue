@@ -308,6 +308,20 @@ export const createDefaultEngine = (deps: DefaultEngineDeps): AgentEngine => {
             model: resolved.model,
             ...(system ? { system } : {}),
             messages,
+            /**
+             * What the resolved model accepts — #185.
+             *
+             * Passed only when the definition says. `ResolvedModel.definition` is optional, and a caller that
+             * did not supply one has not told us the model is text-only — so the check is skipped rather than
+             * refusing every attachment from every host that has not been updated.
+             *
+             * `resolveModel` already refuses to hand out a model missing a *required* modality. This catches the
+             * case that one cannot see: a model resolved for a text conversation, and an image arriving later in
+             * it.
+             */
+            ...(resolved.definition === undefined
+              ? {}
+              : { modelModalities: resolved.definition.inputModalities }),
             tools,
             maxSteps,
             abortSignal: controller.signal,
@@ -409,7 +423,7 @@ function* questionEvents(
     const rendered = Array.isArray(value) ? value.map((v) => `- ${v}`).join("\n") : String(value);
     messages.push({
       role: "user",
-      text: `[answer] ${spec.prompt}\n${rendered}`,
+      content: `[answer] ${spec.prompt}\n${rendered}`,
     });
   }
 }
@@ -436,13 +450,13 @@ function* approvalEvents(
   yield { type: "approval.decided", interactionId: approval.id };
 
   if (resumed.outcome === "denied") {
-    messages.push({ role: "user", text: `[approval] ${approval.toolName} was denied. Do not attempt it again.` });
+    messages.push({ role: "user", content: `[approval] ${approval.toolName} was denied. Do not attempt it again.` });
     return;
   }
   if (resumed.outcome === "expired") {
     messages.push({
       role: "user",
-      text: `[approval] the approval for ${approval.toolName} expired before it could run. Ask again if it is still wanted.`,
+      content: `[approval] the approval for ${approval.toolName} expired before it could run. Ask again if it is still wanted.`,
     });
     return;
   }
@@ -479,7 +493,7 @@ function* approvalEvents(
   yield { type: "part.added", messageId, part: result as MessagePart };
   messages.push({
     role: "user",
-    text: `[approval] ${approval.toolName} was approved and has now run. Result: ${JSON.stringify(outcome)}`,
+    content: `[approval] ${approval.toolName} was approved and has now run. Result: ${JSON.stringify(outcome)}`,
   });
 }
 

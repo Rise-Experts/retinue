@@ -18,6 +18,7 @@ import { readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { resolve } from "node:path";
 import {
+  turnText,
   asId,
   createPostgresApprovalGrantStore,
   createPostgresConversationStore,
@@ -975,7 +976,7 @@ export const startExampleServer = async (options: ExampleServerOptions) => {
          */
         turns: turns.map((turn) => ({
           role: turn.role,
-          text: turn.text,
+          text: turnText(turn),
           citations:
             turn.role === "assistant"
               ? citationViewModel({ id: "", role: "assistant", parts: turn.parts } as never).panels.map(

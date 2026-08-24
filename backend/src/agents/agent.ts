@@ -194,7 +194,10 @@ export const createAgent = (config: CreateAgentConfig) => {
       const page = await messages.listByConversation({ tenantId: context.tenantId, conversationId: context.conversationId!, limit: 1_000 });
       return page.items.map((m) => ({
         role: m.role === "assistant" ? ("assistant" as const) : ("user" as const),
-        text: textOf(m.parts),
+        // Text only here, deliberately: the embedded facade has no file store to resolve an attachment
+        // through, and inventing one would be the modality bridge going around file authorization — the
+        // failure #185 exists to avoid, reintroduced by the convenience path.
+        content: textOf(m.parts),
       }));
     },
     ...(config.tools && config.tools.length > 0

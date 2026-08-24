@@ -7,6 +7,7 @@
  * guarantee — what matters is that a gated call cannot get through and an approved call does.
  */
 
+import { turnText } from "../../models/streaming.js";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import type { ExecutionContext } from "../../core/context.js";
@@ -224,7 +225,7 @@ describe("a resumed run executes the approved call", () => {
     await collect(engine, null);
 
     const messages = seen[0]?.messages ?? [];
-    expect(messages.at(-1)?.text).toContain("publish_post");
+    expect(turnText(messages.at(-1)!)).toContain("publish_post");
   });
 
   it("publishes exactly once even if the model asks again in the same resumed turn", async () => {
@@ -256,7 +257,7 @@ describe("a resumed run executes the approved call", () => {
     expect(h.published).toEqual([]);
     expect(events.find((e) => e.type === "approval.decided")).toMatchObject({ interactionId: approval.id });
     expect(events.some((e) => e.type === "tool.started")).toBe(false);
-    expect(seen[0]?.messages.at(-1)?.text).toMatch(/denied/i);
+    expect(turnText(seen[0]!.messages.at(-1)!)).toMatch(/denied/i);
   });
 
   it("runs the turn untouched when there is nothing to resume", async () => {

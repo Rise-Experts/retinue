@@ -39,7 +39,7 @@ import type { ExampleStores } from "./stores.js";
 export const HISTORY_READ_LIMIT = 400;
 
 export type ConversationTurn = TurnMessage & {
-  /** The stored parts. The page derives citation markers from these; the model is given only `text`. */
+  /** The stored parts. The page derives citation markers from these; the model is given only the content. */
   readonly parts: readonly Message["parts"][number][];
 };
 
@@ -109,7 +109,7 @@ export const conversationTurns = async (input: {
      */
     turns.push({
       role: "user",
-      text: `[earlier in this conversation, condensed]\n${summary.summary}`,
+      content: `[earlier in this conversation, condensed]\n${summary.summary}`,
       parts: [],
     });
   }
@@ -124,7 +124,7 @@ export const conversationTurns = async (input: {
       .map((part) => String((part as { text?: unknown }).text ?? ""))
       .join("");
     if (text.trim() === "") continue;
-    turns.push({ role: message.role === "assistant" ? "assistant" : "user", text, parts: message.parts });
+    turns.push({ role: message.role === "assistant" ? "assistant" : "user", content: text, parts: message.parts });
   }
   return turns;
 };
@@ -137,4 +137,6 @@ export const conversationTurns = async (input: {
  * back invites the model to paraphrase provenance in prose.
  */
 export const historyForModel = (turns: readonly ConversationTurn[]): readonly TurnMessage[] =>
-  turns.map(({ role, text }) => ({ role, text }));
+  // `content`, since #185 — a turn carries parts now, and a text turn carries a string. This app sends text
+  // only; an attachment would be resolved through the mediated file path and added here as an image part.
+  turns.map(({ role, content }) => ({ role, content }));

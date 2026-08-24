@@ -1,3 +1,4 @@
+import { turnText } from "../../models/streaming.js";
 import { describe, expect, it, vi } from "vitest";
 import type { ExecutionContext } from "../../core/context.js";
 import { asId } from "../../core/ids.js";
@@ -42,7 +43,7 @@ const stamp = (events: EngineEvent[]): RunEvent[] =>
 const baseDeps = (streamTurn: () => AsyncIterable<NeutralStreamChunk>, over = {}) => ({
   loadManifest: async () => manifest,
   resolveModel: () => ({ model, modelId: "claude-sonnet-5", currency: "USD", price: () => 42 }),
-  loadHistory: async () => [{ role: "user" as const, text: "hi" }],
+  loadHistory: async () => [{ role: "user" as const, content: "hi" }],
   streamTurn,
   ...over,
 });
@@ -340,7 +341,7 @@ describe("default engine — resuming after a question is answered (#163)", () =
     const sent = await capture({
       questions: { answered: async () => answeredQuestion({ keep: ["a", "c"], why: "tidier" }) },
     });
-    const text = sent.map((m) => m.text).join("\n");
+    const text = sent.map((m) => turnText(m)).join("\n");
     expect(text).toContain("[answer] Which notes?");
     // A multi-select renders as a list, not a joined string: a value containing a comma would otherwise read
     // as more choices than the person made.
@@ -361,14 +362,14 @@ describe("default engine — resuming after a question is answered (#163)", () =
 
   it("says nothing when the run was never asked anything", async () => {
     const sent = await capture({ questions: { answered: async () => null } });
-    expect(sent.map((m) => m.text).join("\n")).not.toContain("[answer]");
+    expect(sent.map((m) => turnText(m)).join("\n")).not.toContain("[answer]");
   });
 
   it("skips a question key the person did not answer", async () => {
     // Partial answers are possible — a client may send only what was filled in. An empty `[answer]` line
     // would tell the model something false about what it was told.
     const sent = await capture({ questions: { answered: async () => answeredQuestion({ keep: "a" }) } });
-    const text = sent.map((m) => m.text).join("\n");
+    const text = sent.map((m) => turnText(m)).join("\n");
     expect(text).toContain("[answer] Which notes?");
     expect(text).not.toContain("[answer] Why?");
   });

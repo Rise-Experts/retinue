@@ -8,12 +8,70 @@
  */
 
 import { jsonSchema, stepCountIs, streamText, tool as aiTool, type LanguageModel, type ModelMessage, type ToolSet } from "ai";
+import { AgentPlatformError } from "../core/errors.js";
+import type { InputModality } from "./index.js";
 
 /** Opaque handle to a provider model. Aliased here so layers above `models/` never import the SDK. */
 export type ResolvedModel = LanguageModel;
 
 /** A conversation turn message the engine hands down (text-only for v1; multimodal is additive). */
-export type TurnMessage = { readonly role: "system" | "user" | "assistant"; readonly text: string };
+/**
+ * One piece of a turn's content — #185.
+ *
+ * `image` and `file` exist because the platform has always accepted them: `ImagePart` and `FilePart` are in the
+ * message contract, `InputModality` covers image, audio, video and pdf, and `resolveModel` filters on
+ * `requiredModalities`. What was missing was the last hop — the bridge to the provider took a string, so an
+ * attachment was stored, authorized, rendered and billed for, and then not mentioned to the model.
+ *
+ * A URL or a data payload rather than a platform file id, deliberately: this layer is the SDK boundary and knows
+ * nothing about the file store. The caller resolves a `FilePart` into bytes or a URL **through the mediated read
+ * path**, which is what keeps the modality bridge from becoming a way around file authorization.
+ */
+export type TurnContentPart =
+  | { readonly kind: "text"; readonly text: string }
+  | { readonly kind: "image"; readonly image: string | URL; readonly mediaType?: string }
+  | { readonly kind: "file"; readonly data: string | URL; readonly mediaType: string; readonly filename?: string };
+
+export type TurnMessage = {
+  readonly role: "system" | "user" | "assistant";
+  /**
+   * A string for a text turn, parts when the turn carries an attachment.
+   *
+   * A union rather than `text` plus an optional `parts`, which was the other option and is worse: two fields
+   * that can both carry text leave the relationship between them undefined, and somebody eventually sets one and
+   * reads the other.
+   */
+  readonly content: string | readonly TurnContentPart[];
+};
+
+/** The text of a turn, for callers that count tokens or log. Non-text parts contribute nothing. */
+export const turnText = (message: TurnMessage): string =>
+  typeof message.content === "string"
+    ? message.content
+    : message.content
+        .filter((part): part is Extract<TurnContentPart, { kind: "text" }> => part.kind === "text")
+        .map((part) => part.text)
+        .join("\n");
+
+/** The modalities a turn actually needs, so a model can be checked against it rather than assumed. */
+export const modalitiesOf = (messages: readonly TurnMessage[]): readonly InputModality[] => {
+  const found = new Set<InputModality>();
+  for (const message of messages) {
+    if (typeof message.content === "string") continue;
+    for (const part of message.content) {
+      if (part.kind === "image") found.add("image");
+      // A file's modality is its media type: a PDF needs `pdf`, an audio file needs `audio`. Anything else is
+      // sent as a file and left to the provider — guessing a modality we cannot name would defeat the check.
+      if (part.kind === "file") {
+        if (part.mediaType === "application/pdf") found.add("pdf");
+        else if (part.mediaType.startsWith("audio/")) found.add("audio");
+        else if (part.mediaType.startsWith("video/")) found.add("video");
+        else if (part.mediaType.startsWith("image/")) found.add("image");
+      }
+    }
+  }
+  return [...found];
+};
 
 /** A tool the model may call this turn. `execute` is the platform's guarded execution path. */
 export type ModelTurnTool = {
@@ -28,6 +86,14 @@ export type ModelTurnRequest = {
   readonly model: ResolvedModel;
   readonly system?: string;
   readonly messages: readonly TurnMessage[];
+  /**
+   * What the resolved model accepts — #185. Optional, and its absence means "do not check".
+   *
+   * Absent rather than defaulting to `["text"]`, because a caller that has not said what the model takes has not
+   * said the model takes text only. Defaulting would refuse every image turn from every caller that has not been
+   * updated, which is an outage dressed as a safety check.
+   */
+  readonly modelModalities?: readonly InputModality[];
   readonly tools?: readonly ModelTurnTool[];
   readonly maxSteps?: number;
   readonly abortSignal?: AbortSignal;
@@ -134,8 +200,59 @@ const errorMessageOf = (error: unknown): string => {
   return message.slice(0, 200);
 };
 
+/**
+ * A turn's parts, in the SDK's shape.
+ *
+ * A message whose content is a plain string stays a plain string rather than being wrapped in a single text
+ * part. Providers treat the two identically, but the wire form differs, and a change that rewrites every
+ * existing text turn is a change whose blast radius is every conversation rather than the ones with an
+ * attachment in them.
+ */
+const toModelContent = (content: TurnMessage["content"]): ModelMessage["content"] => {
+  if (typeof content === "string") return content;
+  return content.map((part) =>
+    part.kind === "text"
+      ? { type: "text" as const, text: part.text }
+      : part.kind === "image"
+        ? { type: "image" as const, image: part.image, ...(part.mediaType === undefined ? {} : { mediaType: part.mediaType }) }
+        : {
+            type: "file" as const,
+            data: part.data,
+            mediaType: part.mediaType,
+            ...(part.filename === undefined ? {} : { filename: part.filename }),
+          },
+  ) as ModelMessage["content"];
+};
+
 export async function* streamModelTurn(req: ModelTurnRequest): AsyncIterable<NeutralStreamChunk> {
-  const messages: ModelMessage[] = req.messages.map((m) => ({ role: m.role, content: m.text }) as ModelMessage);
+  /**
+   * Refuse a modality the model cannot take — #185.
+   *
+   * Fail closed, and loudly. The alternatives are both worse: dropping the attachment sends the model a turn
+   * that reads as if the user attached nothing, and it answers confidently about a message it never saw; and
+   * substituting a text description silently makes the transcript a record of something that did not happen.
+   *
+   * `resolveModel` already refuses to *hand out* a model that lacks a required modality, so in the normal path
+   * this never fires. It fires when a caller resolved a model for a text turn and an attachment arrived later in
+   * the conversation — which is exactly the case the resolution-time check cannot see.
+   */
+  if (req.modelModalities !== undefined) {
+    const needed = modalitiesOf(req.messages);
+    const missing = needed.filter((m) => !req.modelModalities!.includes(m));
+    if (missing.length > 0)
+      throw new AgentPlatformError({
+        code: "capability_unavailable",
+        message:
+          `this turn carries ${missing.join(", ")} and the resolved model accepts only ` +
+          `${req.modelModalities.join(", ")}. Resolve a model with the required modalities, or remove the ` +
+          `attachment from the turn.`,
+        retryable: false,
+      });
+  }
+
+  const messages: ModelMessage[] = req.messages.map(
+    (m) => ({ role: m.role, content: toModelContent(m.content) }) as ModelMessage,
+  );
   const result = streamText({
     model: req.model,
     ...(req.system ? { system: req.system } : {}),
