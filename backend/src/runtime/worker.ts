@@ -134,7 +134,39 @@ export const createDurableWorker = (deps: DurableWorkerDeps) => {
   /** Drive one already-claimed run to a terminal state. */
   const drive = async (run: Run): Promise<ProcessResult> => {
     const tenantId = run.tenantId;
-    const context = await deps.buildContext(run);
+    /**
+     * A run whose context cannot be built is **failed**, not retried — #172.
+     *
+     * `buildContext` throwing escaped `drive` entirely: the try that marks a run failed starts after the engine
+     * begins, so the run stayed `running`, its lease expired, the reaper re-claimed it, and it threw again.
+     * Forever. Seen in the wild the moment `buildContext` started refusing runs with no recorded principal
+     * (#164): every pre-#164 run became an unkillable reap loop, reported once per sweep and never resolved.
+     *
+     * Failed rather than retried because this class of error is **deterministic by construction**. The host is
+     * saying it cannot construct an identity for this run; the next attempt has exactly the same run row and will
+     * say the same thing. A transient failure fetching a checkpoint is different, and stays inside the retry
+     * path below — this covers only the host's own refusal.
+     *
+     * A failed run is visible: it has a status, an error, and a place in the UI. An eternally-reaped one is a log
+     * line nobody reads.
+     */
+    let context: ExecutionContext;
+    try {
+      context = await deps.buildContext(run);
+    } catch (thrown) {
+      const error = toPlatformError(thrown);
+      const failed = await runs.transition({ tenantId, id: run.id, workerId, to: "failed", now: clock(), error });
+      // The event too, so a client watching this run learns why rather than waiting on a stream that never ends.
+      if (deps.eventLog) {
+        await deps.eventLog
+          .append({
+            tenantId,
+            event: { type: "run.failed", runId: run.id, sequence: 1, occurredAt: clock(), error },
+          })
+          .catch(() => undefined);
+      }
+      return { run: failed, outcome: "failed" };
+    }
     const channel = channelFor(run);
     const initial = await checkpoints.latest({ tenantId, runId: run.id });
     let state: RunStreamState = initial

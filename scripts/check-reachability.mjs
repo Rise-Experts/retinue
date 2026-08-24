@@ -183,6 +183,24 @@ const CAPABILITIES = [
     why: "#162 — a tool that can never run should say so once, not refuse identically per call.",
   },
   {
+    name: "skill resolution",
+    symbol: "createSkillResolver",
+    scope: "host",
+    why: "#171 — the resolver, tracker, limits and store adapters all existed with nothing using them.",
+  },
+  {
+    name: "per-run skill tracking",
+    symbol: "createRunSkillTracker",
+    scope: "host",
+    /**
+     * The tracker specifically, not just the resolver.
+     *
+     * The resolver loads a body; the tracker is what bounds how many a run may load and records which versions
+     * it followed. Wiring only the resolver would leave both guarantees off while looking wired.
+     */
+    why: "#171 — without it maxLoadedPerRun never binds and no run records which skill versions it used.",
+  },
+  {
     name: "context inspection",
     symbol: "inspectAssembledPrompt",
     scope: "host",

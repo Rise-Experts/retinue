@@ -579,3 +579,63 @@ describe("durable worker — assistant turn persistence (#157)", () => {
     expect((await createDurableWorker(deps).process({ tenantId: TENANT, runId: RUN })).outcome).toBe("completed");
   });
 });
+
+/**
+ * A run the host cannot build a context for — #172.
+ *
+ * `buildContext` throwing escaped `drive` before the try that marks a run failed, so the run stayed `running`,
+ * its lease expired, the reaper re-claimed it, and it threw again. Forever. Found in the wild the moment
+ * `buildContext` began refusing runs with no recorded principal (#164): every older run became an unkillable
+ * reap loop, reported once per sweep and never resolved.
+ */
+describe("durable worker — a context that cannot be built (#172)", () => {
+  const refuses = (): never => {
+    throw new Error("this run carries no principal");
+  };
+
+  it("fails the run instead of leaving it to be reaped forever", async () => {
+    const clock = fakeClock();
+    const runs = createMemoryRunStore();
+    await runs.create({ tenantId: TENANT, id: RUN, conversationId: CONVO, agentId: asId("a1"), agentVersion: 1 });
+    const { deps } = baseDeps(runs, createMemoryCheckpointStore(), toolEngine({ count: 0 }), clock);
+
+    const result = await createDurableWorker({ ...deps, buildContext: refuses }).process({
+      tenantId: TENANT,
+      runId: RUN,
+    });
+
+    expect(result.outcome).toBe("failed");
+    // Terminal, so `claim` will never match it again — which is what ends the loop.
+    const stored = await runs.findById({ tenantId: TENANT, id: RUN });
+    expect(stored?.status).toBe("failed");
+    // And the reason is recorded, not just the status: "failed" with no error is a run nobody can diagnose.
+    expect(stored?.error?.message).toContain("no principal");
+  });
+
+  it("tells a watching client why, rather than leaving the stream open forever", async () => {
+    const clock = fakeClock();
+    const runs = createMemoryRunStore();
+    const eventLog = createMemoryRunEventLog();
+    await runs.create({ tenantId: TENANT, id: RUN, conversationId: CONVO, agentId: asId("a1"), agentVersion: 1 });
+    const { deps } = baseDeps(runs, createMemoryCheckpointStore(), toolEngine({ count: 0 }), clock);
+
+    await createDurableWorker({ ...deps, eventLog, buildContext: refuses }).process({ tenantId: TENANT, runId: RUN });
+
+    const events = await eventLog.listAfter({ tenantId: TENANT, runId: RUN, after: 0 });
+    expect(events.map((e) => e.type)).toContain("run.failed");
+  });
+
+  it("does not touch the engine", async () => {
+    // The whole point: nothing ran, so nothing has to be undone. A side effect fired before the context was
+    // rejected would be a side effect performed under no identity at all.
+    const clock = fakeClock();
+    const runs = createMemoryRunStore();
+    const external = { count: 0 };
+    await runs.create({ tenantId: TENANT, id: RUN, conversationId: CONVO, agentId: asId("a1"), agentVersion: 1 });
+    const { deps } = baseDeps(runs, createMemoryCheckpointStore(), toolEngine(external), clock);
+
+    await createDurableWorker({ ...deps, buildContext: refuses }).process({ tenantId: TENANT, runId: RUN });
+
+    expect(external.count).toBe(0);
+  });
+});

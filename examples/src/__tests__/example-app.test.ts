@@ -5,6 +5,8 @@ import { MAX_MEMORY_ENTRIES, NoteNotFound, createExampleStore, createExampleTool
 import { exampleAgentManifest, exampleContextProviders } from "../agent.js";
 import { questionSpecsFrom } from "../questions.js";
 import { buildWorkerContext } from "../worker-context.js";
+import { ASSIGNED_SKILLS, EXAMPLE_SKILLS, renderSkillCatalogue } from "../skills.js";
+import { SKILL_LIMITS } from "@agentkit/backend";
 import {
   CONVERSATION_MODES,
   DEFAULT_MODE,
@@ -391,5 +393,76 @@ describe("the worker's execution context", () => {
     expect(context.runId).toBe("run-1");
     expect(context.conversationId).toBe("c1");
     expect(context.tenantId).toBe("t1");
+  });
+});
+
+/**
+ * Skills — #171.
+ *
+ * The platform had the resolver, the per-run tracker, the load limits, catalog shadowing and store adapters on
+ * all three backends, and nothing used any of it. These cover what must hold without a database or a model: the
+ * bodies satisfy the same rules a tenant skill must, and the catalogue costs what a catalogue should.
+ */
+describe("skills", () => {
+  it("holds every built-in to the rules a tenant skill must satisfy", () => {
+    // `validateSkillInput` runs at module load, so a malformed built-in fails the import rather than a request.
+    // A built-in exempt from the rules it enforces on others is how the rules stop meaning anything — #122 was
+    // exactly that, `status` load-bearing for a tenant skill and inert for a built-in.
+    for (const skill of EXAMPLE_SKILLS) {
+      expect(skill.name).toMatch(SKILL_LIMITS.namePattern);
+      expect(skill.name.length).toBeLessThanOrEqual(SKILL_LIMITS.nameMaxLength);
+      expect(skill.description.length).toBeGreaterThanOrEqual(SKILL_LIMITS.descriptionMinLength);
+      expect(skill.instructions.length).toBeLessThanOrEqual(SKILL_LIMITS.instructionsMaxLength);
+      expect(skill.status).toBe("active");
+    }
+  });
+
+  it("gives every skill a distinct name, since a name is how one is loaded", () => {
+    // Two skills sharing a name means one is unreachable and which one is an accident of ordering.
+    expect(new Set(EXAMPLE_SKILLS.map((s) => s.name)).size).toBe(EXAMPLE_SKILLS.length);
+  });
+
+  it("keeps the catalogue far cheaper than the bodies it describes", () => {
+    /**
+     * The economics, asserted rather than assumed.
+     *
+     * A skill is only worth the mechanism if the catalogue is cheap and the bodies are not. If they were
+     * comparable, the honest thing would be to put the instructions in the prompt and delete all of this.
+     */
+    const catalogue = renderSkillCatalogue(EXAMPLE_SKILLS);
+    const bodies = EXAMPLE_SKILLS.map((s) => s.instructions).join("\n");
+    expect(catalogue.length).toBeLessThan(bodies.length / 3);
+  });
+
+  it("names every skill in the catalogue, with its version", () => {
+    const catalogue = renderSkillCatalogue(EXAMPLE_SKILLS);
+    for (const skill of EXAMPLE_SKILLS) {
+      expect(catalogue).toContain(skill.name);
+      expect(catalogue).toContain(skill.description);
+    }
+    // The version matters: `load_skill` pins to it, so a catalogue without one cannot be acted on.
+    expect(catalogue).toContain("v1");
+  });
+
+  it("tells the model the load limit, since exceeding it is a refusal it cannot see coming", () => {
+    expect(renderSkillCatalogue(EXAMPLE_SKILLS)).toContain(String(SKILL_LIMITS.maxLoadedPerRun));
+  });
+
+  it("renders nothing at all when no skill is assigned", () => {
+    // An empty "## Skills you can load" heading would be an invitation to call a tool that can only fail.
+    expect(renderSkillCatalogue([])).toBe("");
+  });
+
+  it("assigns every built-in, so the catalogue and the built-ins cannot drift", () => {
+    expect([...ASSIGNED_SKILLS].sort()).toEqual(EXAMPLE_SKILLS.map((s) => s.name).sort());
+  });
+
+  it("writes instructions that are procedures, not facts", () => {
+    // The distinction that decides whether something should be a skill at all: a fact belongs in memory or a
+    // note. Checked crudely — every body has to give an instruction — because the real check is review.
+    for (const skill of EXAMPLE_SKILLS) {
+      expect(skill.instructions).toMatch(/^#\s/);
+      expect(skill.instructions.length).toBeGreaterThan(200);
+    }
   });
 });

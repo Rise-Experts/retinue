@@ -31,6 +31,7 @@ import {
   createPostgresInteractionStore,
   createPostgresPrincipalMemoryStore,
   createPostgresRunEventLog,
+  createPostgresSkillStore,
   createPostgresRunStore,
   createPostgresSessionStateStore,
   createPostgresUsageRollupStore,
@@ -43,6 +44,8 @@ import {
   assemblePrompt,
   createCitationEmitter,
   createPrincipalMemoryProvider,
+  createRunSkillTracker,
+  createSkillResolver,
   createQuestionService,
   questionPending,
   createRunApprovals,
@@ -74,6 +77,7 @@ import { buildWorkerContext } from "./worker-context.js";
 import { MAX_MEMORY_ENTRIES, NoteNotFound, createExampleTools } from "./tools.js";
 import { exampleStore } from "./store.js";
 import { exampleProviders } from "./providers.js";
+import { ASSIGNED_SKILLS, EXAMPLE_SKILLS, renderSkillCatalogue } from "./skills.js";
 import { exampleAgentManifest, exampleContextProviders } from "./agent.js";
 import { EXCLUDED_EFFECTS, MODE_DESCRIPTIONS, type ConversationMode } from "./modes.js";
 import { createModeStore } from "./mode-store.js";
@@ -103,7 +107,7 @@ const ROLES = [
       { action: "execute", resourceType: "tool" },
       { action: "publish", resourceType: "note", requiresApproval: true },
     ],
-    tools: ["remember", "recall", "list_notes", "search_notes", "write_note", "share_note", "calculate", "now", "ask_user"],
+    tools: ["remember", "recall", "list_notes", "search_notes", "write_note", "share_note", "calculate", "now", "ask_user", "load_skill"],
   },
   {
     roleId: "viewer",
@@ -113,7 +117,7 @@ const ROLES = [
     ],
     // No `write_note`, no `share_note`. `viewer` cannot *see* them in the catalogue, so the model never offers
     // something the person cannot do — which is a better experience than a refusal after asking.
-    tools: ["remember", "recall", "list_notes", "search_notes", "calculate", "now", "ask_user"],
+    tools: ["remember", "recall", "list_notes", "search_notes", "calculate", "now", "ask_user", "load_skill"],
   },
 ] as const;
 
@@ -150,6 +154,26 @@ const approvalGateFor = (sql: SqlExecutor) =>
     // approval would still never authorise its execution.
     interactions: createPostgresInteractionStore(sql),
   });
+
+/**
+ * The skill resolver, and the per-run tracker — #171.
+ *
+ * The resolver is built per call, like every other store here, so it shares the caller's executor. The **tracker
+ * is not**: it holds the per-run load log in memory, and a fresh one per call would forget what the run had
+ * already loaded — so `maxLoadedPerRun` would never bind and the audit record would always be empty. One instance
+ * per process, keyed by run internally.
+ *
+ * That the tracker is stateful and the resolver is not is worth stating rather than discovering: it is the one
+ * place in this app where a factory must not be called twice.
+ */
+const skillResolver = (sql: SqlExecutor) =>
+  createSkillResolver({ builtIn: EXAMPLE_SKILLS, store: createPostgresSkillStore(sql) });
+
+let trackerSingleton: ReturnType<typeof createRunSkillTracker> | undefined;
+const skillTracker = (sql: SqlExecutor) => {
+  trackerSingleton ??= createRunSkillTracker({ resolver: skillResolver(sql) });
+  return trackerSingleton;
+};
 
 /** The question service, for the `ask_user` tool. Built per call so it shares the caller's executor. */
 const questionServiceFor = (sql: SqlExecutor) =>
@@ -411,6 +435,58 @@ const buildTools = (sql: SqlExecutor): readonly Tool[] => {
         // Thrown, not returned. The engine reads the `question_pending` code, tells the model the run is
         // parked, and emits `question.requested` — which is what actually suspends it.
         throw questionPending(question);
+      },
+    }),
+    defineDelegatingTool(deps, {
+      name: "load_skill",
+      description:
+        "Load the full instructions for one of your skills. Use it when the task matches a skill's description " +
+        "— the catalogue in your context lists only names, not the instructions themselves.",
+      category: "assistant",
+      effect: "read" as const,
+      delegatesTo: "skills.loadBody",
+      inputSchema: {
+        type: "object",
+        properties: { name: { type: "string" } },
+        required: ["name"],
+      },
+      /**
+       * The skill body, pinned to a version — #171.
+       *
+       * The version comes from the **catalogue**, not from the model. Letting the model name a version would let
+       * it pin to an archived one, or to a number that never existed, and the error would arrive as a tool
+       * failure mid-task. The catalogue is resolved from the store on every turn, so "the latest active version"
+       * is a fact the platform establishes and the model simply gets.
+       *
+       * Through `createRunSkillTracker` rather than the resolver directly, because the tracker is what enforces
+       * `maxLoadedPerRun` and records the load. Without it a model could pull every skill into context on every
+       * turn, which is the cost this whole mechanism exists to avoid — and there would be no record of which
+       * instructions a run actually followed.
+       */
+      delegate: async (input: unknown, context: ExecutionContext) => {
+        const name = str((input as { name?: unknown }).name);
+        const catalogue = await skillResolver(sql).listCatalog({
+          tenantId: context.tenantId,
+          assigned: ASSIGNED_SKILLS,
+          allowTenantSkills: true,
+        });
+        const entry = catalogue.find((e) => e.name === name);
+        // Named rather than silent: a model that asked for a skill it cannot have should learn which ones it can,
+        // not receive an empty result it will interpret as "the skill said nothing".
+        if (entry === undefined) {
+          return {
+            loaded: false,
+            reason: `No skill named "${name}".`,
+            available: catalogue.map((e) => e.name),
+          };
+        }
+        const body = await skillTracker(sql).load({
+          tenantId: String(context.tenantId),
+          runId: String(context.runId ?? ""),
+          name: entry.name,
+          version: entry.version,
+        });
+        return { loaded: true, name: body.name, version: body.version, instructions: body.instructions };
       },
     }),
     defineDelegatingTool(deps, {
@@ -740,7 +816,24 @@ const exampleSystemPrompt = async (
    * permission, which is not what the person chose.
    */
   const modeBlock = MODE_DESCRIPTIONS[mode].instruction;
-  const base = `${manifest.instructions}\n\n${modeBlock}`;
+  /**
+   * The skill **catalogue** in the prompt, not the skill bodies — #171.
+   *
+   * This is the whole economics of skills. Names and one-line descriptions cost tens of tokens and are paid for
+   * every turn; the bodies cost hundreds each and are paid for only when a turn needs them. Putting the bodies
+   * here would be a longer system prompt with extra steps, and would dilute the one skill that matters with the
+   * two that do not.
+   *
+   * Resolved from the store on every turn rather than cached, so a skill added or archived takes effect on the
+   * next turn. The version in the catalogue is what `load_skill` pins to.
+   */
+  const catalogue = await skillResolver(sql).listCatalog({
+    tenantId: context.tenantId,
+    assigned: ASSIGNED_SKILLS,
+    allowTenantSkills: true,
+  });
+  const skillBlock = renderSkillCatalogue(catalogue);
+  const base = [manifest.instructions, modeBlock, skillBlock].filter((part) => part !== "").join("\n\n");
   if (sections.length === 0) return base;
   /**
    * Budgeted through `assemblePrompt`, not merely gathered — #168.
