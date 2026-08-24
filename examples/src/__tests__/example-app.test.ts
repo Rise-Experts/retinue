@@ -12,7 +12,10 @@ import { createFetchUrl, htmlToText } from "../fetch-url.js";
 import { createMcpToolProvider } from "@agentkit/backend";
 import { createInProcessBus, createMemoryBackend } from "../memory-app.js";
 import { asExampleBackend } from "../memory-composition.js";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { exampleProviders } from "../providers.js";
+import { COMPOSER_COMMANDS, commandQueryAt, filterCommands } from "../composer/commands.js";
 import { postgresBackend } from "../stores.js";
 import {
   CONVERSATION_MODES,
@@ -836,5 +839,80 @@ describe("the memory composition", () => {
     const raced = await Promise.race([other.next(), Promise.resolve("nothing")]);
     expect(raced).toBe("nothing");
     await other.return?.();
+  });
+});
+
+/**
+ * The composer's rules — #179.
+ *
+ * The editor itself needs a DOM and is not tested here; these are the decisions that have answers, and they are
+ * in a separate module for that reason.
+ */
+describe("the composer's command menu", () => {
+  it("opens only when the slash opens the message", () => {
+    expect(commandQueryAt("/comp")).toBe("comp");
+    expect(commandQueryAt("/")).toBe("");
+    // A slash mid-sentence is a date, a path or a fraction. A menu that appears while someone types `and/or` is
+    // a menu that interrupts four times a day.
+    expect(commandQueryAt("and/or")).toBeNull();
+    expect(commandQueryAt("what about 3/4")).toBeNull();
+    // A space ends the command: no command here takes arguments, so the menu closes rather than filtering on
+    // words that are no longer part of the name.
+    expect(commandQueryAt("/compact now")).toBeNull();
+    expect(commandQueryAt("hello")).toBeNull();
+  });
+
+  it("ranks a name match above an alias match", () => {
+    // `a` is the first letter of `auto` and `ask`, and appears in `/compact`'s `summarise`-family aliases. The
+    // commands whose *names* match have to come first, or the highlighted row is one the person did not mean.
+    const names = filterCommands("a").map((c) => c.name);
+    expect(names.slice(0, 2)).toEqual(["auto", "ask"]);
+    expect(names).toContain("compact");
+    expect(names.indexOf("compact")).toBeGreaterThan(names.indexOf("ask"));
+  });
+
+  it("finds a command by the word someone reaches for before learning yours", () => {
+    // Nobody's first guess for "condense the history" is `/compact`.
+    for (const q of ["summarise", "summarize", "condense", "shrink"]) {
+      expect(filterCommands(q).map((c) => c.name), q).toContain("compact");
+    }
+  });
+
+  it("lists everything for an empty query, in declared order", () => {
+    expect(filterCommands("")).toEqual(COMPOSER_COMMANDS);
+    expect(filterCommands("   ")).toEqual(COMPOSER_COMMANDS);
+  });
+
+  it("matches a summary only at a word boundary", () => {
+    // `hist` starts a word in "Condense the history", so it finds `/compact`. `ist` sits mid-word, and pulling a
+    // command in on a letter sequence from the middle of its prose is how a menu starts feeling random.
+    expect(filterCommands("hist").map((c) => c.name)).toContain("compact");
+    expect(filterCommands("ist")).toEqual([]);
+  });
+
+  it("returns nothing rather than everything when a query matches no command", () => {
+    // The menu closes on an empty result. Falling back to the full list would put a highlighted `/auto` under
+    // the caret of someone typing `/deploy`, one Enter away from changing the mode they did not ask about.
+    expect(filterCommands("deploy")).toEqual([]);
+  });
+
+  it("names only commands the page actually implements", () => {
+    /**
+     * A menu listing something unimplemented is worse than no menu: the person now believes the app can do it.
+     *
+     * Read out of the page rather than restated here, because a list written twice is a list that will disagree.
+     * `runCommand` in `public/index.html` is the implementation; the catalogue is what the menu offers, and the
+     * only useful assertion is that the second is a subset of the first.
+     *
+     * Resolved from `import.meta.dirname`, not the working directory — a path relative to `process.cwd()` passes
+     * from the package and fails from the repo root, which is a test about where it was run from.
+     */
+    const page = readFileSync(resolve(import.meta.dirname, "../../public/index.html"), "utf8");
+    const body = page.slice(page.indexOf("const runCommand = async (name)"));
+    const implementation = body.slice(0, body.indexOf("const send = async ()"));
+    expect(implementation).not.toBe("");
+    for (const command of COMPOSER_COMMANDS) {
+      expect(implementation.includes(`"${command.name}"`), `/${command.name} must be handled`).toBe(true);
+    }
   });
 });

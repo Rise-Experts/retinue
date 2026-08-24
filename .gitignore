@@ -22,3 +22,7 @@ backend/.conformance/
 .env
 .env.*
 !.env.example
+
+# Built by `npm run build -w @agentkit/example-app` — source is examples/src/composer (#179).
+examples/public/composer.js
+examples/public/composer.js.map

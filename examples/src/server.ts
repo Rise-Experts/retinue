@@ -120,6 +120,38 @@ export const startExampleServer = async (options: ExampleServerOptions) => {
    */
   const page = (): string => readFileSync(pagePath, "utf8");
 
+  /**
+   * The composer bundle — #179.
+   *
+   * The one built asset on the page. Missing means `npm run build -w @agentkit/example-app` has not run, and the
+   * response says so **as JavaScript that reports it**: a 404 here would leave the page with a dead input and no
+   * explanation, which is the failure mode this codebase keeps finding. Served from disk per request for the same
+   * reason the page is — a stale bundle after an edit costs more than a file read.
+   */
+  const composerPath = resolve(import.meta.dirname, "../public/composer.js");
+  const composerAsset = (path: string): Response => {
+    try {
+      return new Response(readFileSync(path), {
+        headers: {
+          "content-type": path.endsWith(".map") ? "application/json" : "text/javascript; charset=utf-8",
+          // No caching: the file is rebuilt while the page is open.
+          "cache-control": "no-store",
+        },
+      });
+    } catch {
+      const message =
+        "the composer bundle is missing — run `npm run build -w @agentkit/example-app`. " +
+        `Looked in ${path}.`;
+      return new Response(
+        `console.error(${JSON.stringify(`agentkit: ${message}`)});\n` +
+          `document.dispatchEvent(new CustomEvent("agentkit:composer-missing",{detail:${JSON.stringify(message)}}));\n`,
+        // 200 deliberately, for a file that is not there: a module script fetched with any non-2xx status is a
+        // network error and its body is never executed, so a 503 would take the explanation down with it.
+        { status: 200, headers: { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" } },
+      );
+    }
+  };
+
   /** One factory for the three routes that need the mode: the selector, the plan button, and history. */
   const modeStore = () =>
     createModeStore({ sessions: options.stores.sessions, grants: options.stores.grants });
@@ -356,6 +388,9 @@ export const startExampleServer = async (options: ExampleServerOptions) => {
     if (url.pathname === "/" || url.pathname === "/index.html") {
       return new Response(page(), { headers: { "content-type": "text/html; charset=utf-8" } });
     }
+
+    if (url.pathname === "/composer.js") return composerAsset(composerPath);
+    if (url.pathname === "/composer.js.map") return composerAsset(`${composerPath}.map`);
 
     if (url.pathname === "/api/message" && request.method === "POST") {
       const context = await options.authenticate(request);
@@ -603,6 +638,35 @@ export const startExampleServer = async (options: ExampleServerOptions) => {
      * only one of them reassures you right up to the failure, and history is usually the larger half and the one
      * that grows without bound.
      */
+    /**
+     * What model is about to answer — #179.
+     *
+     * The composer shows this beside the input, and it has to come from the server: the model is resolved from
+     * configuration the page cannot see, and a label naming a different model than the one answering is worse
+     * than no label at all.
+     *
+     * **Host only, never the key, and never the full endpoint URL** — a base URL can carry credentials in its
+     * userinfo or query, and #145 SEC-001 is about exactly this. Authenticated, so an unauthenticated caller
+     * cannot fingerprint the deployment's provider.
+     */
+    if (url.pathname === "/api/model" && request.method === "GET") {
+      const context = await options.authenticate(request);
+      if (context === null) return Response.json({ error: "Unauthenticated" }, { status: 401 });
+      try {
+        const resolved = resolveExampleModel();
+        return Response.json({
+          id: resolved.modelId,
+          label: resolved.modelId,
+          host: new URL(resolved.endpoint).host,
+          contextTokens: resolved.definition.limits.contextTokens,
+        });
+      } catch {
+        // A model that is not configured is not an error here: the page shows no label and stays usable, and the
+        // first turn fails with the real message. Two reports of the same misconfiguration is one too many.
+        return Response.json({ id: null, label: null, host: null, contextTokens: null });
+      }
+    }
+
     if (url.pathname === "/api/context" && request.method === "GET") {
       const context = await options.authenticate(request);
       if (context === null) return Response.json({ error: "Unauthenticated" }, { status: 401 });

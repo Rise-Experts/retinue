@@ -5,10 +5,15 @@
 <!--
   A chat assistant over @agentkit (#155).
 
-  No framework and no build step, so what you see is the platform's behaviour rather than a bundler's. It is also
-  the first place the runtime's streaming, approval and question paths are driven by a person at all — the
-  frontend components' tests use `renderToStaticMarkup`, so there is no DOM and no clicks, and a handler wired to
-  the wrong prop is otherwise undetectable.
+  No framework, and one bundled file: the composer (#179). Everything about the *platform* — streaming, approvals,
+  questions, modes, citations, compaction — is still plain readable script in here, so what you see is the
+  runtime's behaviour rather than a bundler's. The exception is the text input, which is Tiptap, because a
+  suggestion menu and a real placeholder over `contenteditable` is a few hundred lines of caret arithmetic that
+  would tell you nothing about @agentkit. Its source is `src/composer/`, built by `npm run build`.
+
+  This is also the first place the runtime's streaming, approval and question paths are driven by a person at all
+  — the frontend components' tests use `renderToStaticMarkup`, so there is no DOM and no clicks, and a handler
+  wired to the wrong prop is otherwise undetectable.
 
   An earlier version of this page was deliberately unstyled, on the theory that a test surface which looks
   designed gets argued about instead of used. That was the wrong call: something you are meant to *use* while
@@ -176,19 +181,85 @@
 
   /* ---------------------------------------------------------------- composer */
   .composer { border-top:1px solid var(--line); background:var(--bg); padding:14px 0 18px; }
-  .composer .wrap { display:flex; gap:10px; align-items:flex-end; }
-  textarea { flex:1; resize:none; font:inherit; padding:11px 14px; border:1px solid var(--line);
-             border-radius:var(--radius); background:var(--panel); color:inherit; max-height:9.5rem;
-             box-shadow:var(--shadow); }
-  textarea:focus { outline:none; border-color:var(--accent); }
-  .go { width:40px; height:40px; flex:0 0 40px; border:0; border-radius:12px; background:var(--accent);
-        color:#fff; font-size:17px; cursor:pointer; display:grid; place-items:center; }
+  .composer .wrap { display:flex; }
+  /* The card. `focus-within` rather than `:focus` — the focus ring has to survive the caret being in the editor
+     inside it, and it should also light up while the mode menu is open. */
+  .box { flex:1; border:1px solid var(--line); border-radius:16px; background:var(--panel);
+         box-shadow:var(--shadow); position:relative; transition:border-color .15s ease; }
+  .box:focus-within { border-color:var(--accent); }
+  /* ---- the editor */
+  .tt-host { padding:12px 14px 2px; }
+  /* ProseMirror's own node. `outline:none` because the card draws the focus ring for it. */
+  .tt { outline:none; min-height:1.5em; max-height:11rem; overflow-y:auto; font:inherit; line-height:1.55;
+        white-space:pre-wrap; word-break:break-word; }
+  .tt p { margin:0; }
+  .tt p + p { margin-top:.5em; }
+  /* Tiptap's placeholder is a decoration on the empty first paragraph, not a `placeholder` attribute — which is
+     the whole reason a contenteditable needs help here. */
+  .tt p.is-editor-empty:first-child::before { content:attr(data-placeholder); color:var(--faint); float:left;
+        height:0; pointer-events:none; }
+  /* ---- the control bar */
+  .bar { display:flex; align-items:center; gap:6px; padding:6px 8px 7px 10px; }
+  .bar-gap { flex:1; }
+  /* `.ctl`, not `.chip`: `.chip` is already the empty-state prompt pill above, and a second definition here
+     quietly won on source order — 28px-tall pills where full sentences used to be. */
+  .ctl { display:inline-flex; align-items:center; gap:5px; height:28px; padding:0 9px; border:1px solid var(--line);
+          border-radius:9px; background:transparent; color:var(--muted); font:inherit; font-size:12.5px;
+          cursor:pointer; }
+  .ctl:hover { background:var(--accent-soft); border-color:#d3ddf7; color:var(--fg); }
+  .ctl.icon { width:28px; padding:0; justify-content:center; font-size:15px; line-height:1; }
+  /* Not `.caret`: that is the streaming cursor, styled by a bare class selector that would paint this as a
+     7px black block. Two meanings for one class name in one file is a collision waiting for a coincidence. */
+  .ctl .chev { font-size:10px; color:var(--faint); }
+  .ctl .dot { width:6px; height:6px; border-radius:50%; background:var(--muted); }
+  /* The mode's colour is the mode's meaning: plan changes nothing, auto asks nothing. Stated in the dot so the
+     chip is readable at a glance without reading the word. */
+  /* Prefixed, because these come from *data*: the mode keys are `auto|ask|plan`, and `.ask` is already the
+     question panel's class — so `className = \`dot ${mode}\`` gave the 6px dot a panel's padding and shadow,
+     34px wide. A class name derived from a value will eventually collide with a hand-written one; the prefix is
+     what keeps the two namespaces apart. */
+  .ctl .dot.m-plan { background:#8b5cf6; } .ctl .dot.m-auto { background:#f59e0b; } .ctl .dot.m-ask { background:#16a34a; }
+  .ctl.mic-on { background:#fdecec; border-color:#f5c2c2; color:#b42318; }
+  /**
+   * The bar has to shrink somewhere, and this is where.
+   *
+   * Nothing in it shrank at first, so a narrow window pushed the send button past the edge — the one control in
+   * there you cannot do without. Both labels now ellipsis, and below 620px the model label goes entirely, since
+   * it is the only thing in the row you can find out elsewhere (it stays in the element's `title`).
+   * `min-width:0` is the part that does the work: a flex item will not shrink below its content width without
+   * it, whatever `overflow` says.
+   *
+   * Measured: at 700px with a full meter — `~124,500 / 128k context` — and the model label shown, the bar's
+   * scroll width equals its client width and the send button is inside the viewport. The bar's min-content is
+   * 561px, so this is a fix within the range where *the page* still lays out. Below roughly 660px the whole page
+   * overflows on the sidebar, which it did long before this composer and is not addressed here.
+   */
+  .meta { font-size:11.5px; color:var(--faint); white-space:nowrap; min-width:0; overflow:hidden;
+          text-overflow:ellipsis; }
+  #ctxtext { white-space:nowrap; min-width:0; overflow:hidden; text-overflow:ellipsis; }
+
+  @media (max-width:620px) { .meta { display:none; } }
+  /* ---- the popovers, both anchored to the card */
+  .ctl-menu, .cmd-menu { position:absolute; z-index:20; background:var(--panel); border:1px solid var(--line);
+          border-radius:12px; box-shadow:0 10px 30px rgba(20,22,28,.13); padding:5px; min-width:15rem; }
+  .ctl-menu { bottom:calc(100% - 34px); left:44px; }
+  /* Above the card, because the card sits at the bottom of the window and a menu below it would be off-screen. */
+  .cmd-menu { bottom:calc(100% + 7px); left:0; right:0; max-height:15rem; overflow-y:auto; }
+  .cmd-row, .ctl-menu button { display:flex; width:100%; gap:9px; align-items:baseline; text-align:left;
+          padding:7px 9px; border:0; border-radius:8px; background:transparent; font:inherit; color:inherit;
+          cursor:pointer; }
+  .cmd-row.on, .ctl-menu button:hover, .ctl-menu button.on { background:var(--accent-soft); }
+  .cmd-name { font-family:ui-monospace, monospace; font-size:12.5px; color:var(--accent); }
+  .cmd-summary { font-size:12px; color:var(--muted); }
+  .ctl-menu button span:last-child { font-size:12px; color:var(--faint); }
+  .go { width:30px; height:30px; flex:0 0 30px; border:0; border-radius:9px; background:var(--accent);
+        color:#fff; font-size:15px; cursor:pointer; display:grid; place-items:center; margin-left:2px; }
   .go:disabled { opacity:.35; cursor:default; }
   .hint { font-size:11.5px; color:var(--faint); margin:7px auto 0; max-width:44rem; padding:0 24px; }
   .hint code { font:inherit; font-family:ui-monospace, monospace; }
   /* ---------------------------------------------------------------- context meter */
   /* Beside the send hint, not in a panel: how full the window is matters while you are typing into it. */
-  .ctx { display:inline-flex; align-items:center; gap:6px; margin-right:8px; }
+  .ctx { display:inline-flex; align-items:center; gap:6px; }
   /**
    * `hidden` has to be restored explicitly — #178.
    *
@@ -200,11 +271,15 @@
    * screen said otherwise.
    */
   .ctx[hidden] { display:none; }
-  .ctx-track { width:52px; height:4px; border-radius:2px; background:var(--line); overflow:hidden; }
-  .ctx-fill { display:block; height:100%; background:var(--accent); transition:width .3s ease; }
+  .ctx-ring { width:18px; height:18px; flex:0 0 auto; transform:rotate(-90deg); }
+  .ctx-ring-track, .ctx-ring-fill { fill:none; stroke-width:2; }
+  .ctx-ring-track { stroke:var(--line); }
+  /* The arc is drawn by dash: one dash of `fraction × circumference`, then a gap longer than the circle. Rotated
+     -90° above so it starts at twelve o'clock, which is where a gauge is read from. */
+  .ctx-ring-fill { stroke:var(--accent); stroke-linecap:round; transition:stroke-dasharray .3s ease; }
   /* Warn only when it means something. A meter that is orange from the first turn is a meter people stop
      reading, so the colour changes at the threshold the server actually compacts at. */
-  .ctx.warn .ctx-fill { background:var(--warn); }
+  .ctx.warn .ctx-ring-fill { stroke:var(--warn); }
   .ctx.warn #ctxtext { color:var(--warn); }
 
   /* ---------------------------------------------------------------- the question panel */
@@ -275,24 +350,79 @@
       question nobody can find is parked forever.
     -->
     <div class="ask" id="ask" hidden></div>
+    <!--
+      One card: the editor on top, its controls beneath. They are inside the same bordered box because they act
+      on the same thing — a mode chip in a separate strip reads as a page setting, and the mode belongs to the
+      message you are about to send.
+    -->
     <div class="wrap">
-      <textarea id="text" rows="1" placeholder="Message the assistant…"></textarea>
-      <button class="go" id="send" title="Send">↑</button>
+      <div class="box" id="box">
+        <!-- The menu is a sibling of the editor, not a child: inside it, the input's own overflow clips it. -->
+        <div class="cmd-menu" id="cmdmenu" role="listbox" aria-label="Commands" hidden></div>
+        <div class="tt-host" id="text"></div>
+        <div class="bar">
+          <!--
+            `+` opens the command menu. It exists because the menu is otherwise only reachable by knowing to
+            type `/`, and a button whose only job is to teach a keystroke is a fair use of a button. It is not
+            an attachment control: the example has no file path to attach to, and a `+` that opened a file
+            picker leading nowhere would be worse than no `+` at all.
+          -->
+          <button class="ctl icon" id="cmdopen" title="Commands (/)" aria-label="Commands">+</button>
+          <!--
+            The mode, on the composer rather than only in the sidebar. Modes decide whether this message can
+            change anything, so it belongs next to the message. The sidebar selector stays and the two stay in
+            step because both call `setMode` — there is one implementation and two ways to reach it.
+          -->
+          <button class="ctl mode" id="modechip" aria-haspopup="true" aria-expanded="false">
+            <span class="dot" id="modedot"></span><span id="modechiptext">Ask</span><span class="chev">⌄</span>
+          </button>
+          <div class="ctl-menu" id="modemenu" role="listbox" aria-label="Mode" hidden></div>
+          <!--
+            Dictation, and hidden outright where the browser has no speech recognition rather than shown
+            disabled. A control that is present but never works is a bug report; an absent one is a browser
+            difference. Chrome has it behind `webkitSpeechRecognition`; Firefox has nothing.
+          -->
+          <button class="ctl icon" id="mic" title="Dictate" aria-label="Dictate" hidden>🎤</button>
+          <span class="bar-gap"></span>
+          <!-- What is about to run, and how full its window is: the two facts that change what you type. -->
+          <span class="meta" id="modelmeta" title="The model this app resolved"></span>
+          <!--
+            A ring, not a bar. How full the window is has a natural whole — the window — and a circle shows a
+            proportion of a whole without needing its ends labelled; a 52px bar had to sit next to "~2k / 128k"
+            to mean anything. `r=7` with a 2px stroke fits the 28px control height the rest of the bar uses.
+          -->
+          <span id="ctxmeter" class="ctx" hidden role="img">
+            <svg class="ctx-ring" viewBox="0 0 18 18" aria-hidden="true">
+              <circle class="ctx-ring-track" cx="9" cy="9" r="7" />
+              <circle class="ctx-ring-fill" id="ctxfill" cx="9" cy="9" r="7" />
+            </svg>
+            <span id="ctxtext"></span>
+          </span>
+          <button class="go" id="send" title="Send" aria-label="Send">↑</button>
+        </div>
+      </div>
     </div>
     <div class="hint">
-      <span id="ctxmeter" class="ctx" hidden>
-        <span class="ctx-track"><span class="ctx-fill" id="ctxfill"></span></span>
-        <span id="ctxtext"></span>
-      </span>
-      Enter to send · Shift+Enter for a new line · <code>/compact</code> to condense the history
+      Enter to send · Shift+Enter for a new line · <code>/</code> for commands
     </div>
   </div>
 </main>
 
+<!--
+  The composer bundle, first. A classic script rather than a module, and deliberately: it runs during parsing,
+  which is before any deferred module script, so the global is there by the time the page's own module executes.
+  A global rather than an `import` — see the composer section for why a missing bundle must not be a link error.
+-->
+<script src="/composer.js"></script>
 <script type="module">
   const $ = (id) => document.getElementById(id);
   const log = $("log");
   let conversationId = null;
+  /**
+   * True from sending until the run settles. The send button's state is `empty || sending`, evaluated in one
+   * place — before this, `settle` re-enabled the button unconditionally, so it was live over an empty box.
+   */
+  let sending = false;
   const seen = new Set();
 
   const headers = () => ({
@@ -348,6 +478,8 @@
     w.append(d);
     log.append(w);
     follow(was);
+    // Returned so a caller can mark it — a mode note replaces the previous one, and needs a handle to find it by.
+    return d;
   };
 
   /**
@@ -566,8 +698,9 @@
 
   const settle = (st) => {
     st.bubble?.querySelector(".caret")?.remove();
-    $("send").disabled = false;
-    $("text").focus();
+    sending = false;
+    $("send").disabled = composer.text() === "";
+    composer.focus();
     // The window only changes when the conversation does, so this is where to refresh rather than on a timer.
     void loadContext();
     /**
@@ -1033,12 +1166,25 @@
       const meter = $("ctxmeter");
       meter.hidden = false;
       meter.classList.toggle("warn", c.fraction >= c.compactAt);
-      $("ctxfill").style.width = `${Math.max(2, Math.round(c.fraction * 100))}%`;
+      /**
+       * The ring's arc, as a dash.
+       *
+       * `r=7`, so the circumference is 2π·7 ≈ 43.98. The dash is that times the fraction and the gap is the rest,
+       * which is why a full window closes the circle exactly rather than approximately.
+       *
+       * `Math.min(1, …)` because the fraction can exceed one: the estimate is ~4 characters per token, and a
+       * conversation over its window would otherwise draw a second lap over the first.
+       */
+      const circumference = 2 * Math.PI * 7;
+      const filled = Math.min(1, Math.max(0, c.fraction)) * circumference;
+      $("ctxfill").setAttribute("stroke-dasharray", `${filled.toFixed(2)} ${(circumference - filled).toFixed(2)}`);
       const k = (n) => (n >= 1000 ? `${Math.round(n / 1000)}k` : String(n));
       $("ctxtext").textContent = `~${k(c.usedTokens)} / ${k(c.limit)} context`;
       meter.title =
         `Estimated ${c.usedTokens} of ${c.limit} tokens: ${c.promptTokens} prompt, ${c.historyTokens} history ` +
         `over ${c.turns} turns. Compacts automatically at ${Math.round(c.compactAt * 100)}%.`;
+      // The ring carries no text, so the percentage has to be said somewhere a screen reader will reach.
+      meter.setAttribute("aria-label", `Context window ${Math.round(c.fraction * 100)}% full`);
     } catch { /* the meter is not worth an error message */ }
   };
 
@@ -1059,10 +1205,14 @@
       if (!r.ok) throw new Error(j.error ?? r.statusText);
       // Reported as what happened, including "nothing to do". A person who pressed it on a short conversation
       // has not done anything wrong, and an error would suggest they had.
+      // `plural` because the real numbers are often 1: "Condensed 1 parts ... 12 recent turns" was on screen
+      // the first time this ran through the command menu.
+      const plural = (n, one, many) => `${n.toLocaleString()} ${n === 1 ? one : many}`;
       note(
         j.compacted
-          ? `Condensed ${j.droppedParts} parts into a summary — about ${j.tokensReclaimed} tokens reclaimed, ` +
-            `${j.keptTurns} recent turns kept as they are.`
+          ? `Condensed ${plural(j.droppedParts, "part", "parts")} into a summary — about ` +
+            `${plural(j.tokensReclaimed, "token", "tokens")} reclaimed, ` +
+            `${plural(j.keptTurns, "recent turn", "recent turns")} kept as they are.`
           : j.reason === "too-short"
             ? "Nothing to condense yet — the conversation is still short."
             : "Nothing to condense: the earlier turns are all tool activity still in use.",
@@ -1190,7 +1340,37 @@
       box.append(b);
     }
     $("modehint").textContent = modeInfo[mode]?.summary ?? "";
+    paintModeChip();
   };
+
+  /**
+   * The same state, on the composer — #179.
+   *
+   * Painted from `mode` and `modeInfo` like the sidebar, in the same function call, so there is no second source
+   * of truth to fall out of step. Both controls call `setMode`; neither owns the mode.
+   */
+  const paintModeChip = () => {
+    const info = modeInfo[mode];
+    $("modechiptext").textContent = info?.label ?? mode;
+    $("modedot").className = `dot m-${mode}`;
+    $("modechip").title = info?.summary ?? "";
+    const menu = $("modemenu");
+    menu.replaceChildren();
+    for (const [key, i] of Object.entries(modeInfo)) {
+      const b = document.createElement("button");
+      b.type = "button";
+      if (key === mode) b.className = "on";
+      const label = document.createElement("span");
+      label.textContent = i.label;
+      const summary = document.createElement("span");
+      summary.textContent = i.summary;
+      b.append(label, summary);
+      b.onmousedown = (e) => { e.preventDefault(); closeModeMenu(); void setMode(key); };
+      menu.append(b);
+    }
+  };
+
+  const closeModeMenu = () => { $("modemenu").hidden = true; $("modechip").setAttribute("aria-expanded", "false"); };
 
   const loadMode = async () => {
     try {
@@ -1218,10 +1398,19 @@
       // A plan bar belongs to plan mode. Leaving it by the selector rather than the button means the person
       // chose something else, and a button still offering to execute would run a plan they had moved on from.
       if (next !== "plan") for (const bar of log.querySelectorAll(".planbar")) bar.remove();
+      /**
+       * One mode note at a time — #179.
+       *
+       * Each switch used to append a permanent line, so flipping between modes while trying something left a
+       * column of seven stale notices in the transcript, every one of them describing a mode that was no longer
+       * the mode. The current mode is a fact, not an event: the previous note is replaced.
+       */
+      // The wrapper goes too, not just the note inside it: an emptied wrapper still occupies its own row.
+      for (const stale of log.querySelectorAll(".note.mode-note")) (stale.closest(".wrap") ?? stale).remove();
       note(next === "auto"
         ? "Auto mode — irreversible actions will no longer pause for approval."
         : next === "plan" ? "Plan mode — the assistant can read and think, but not change anything."
-        : "Ask mode — the assistant will pause before anything irreversible.");
+        : "Ask mode — the assistant will pause before anything irreversible.").classList.add("mode-note");
     } catch (e) {
       mode = previous;
       paintModes();
@@ -1249,7 +1438,9 @@
       const b = document.createElement("button");
       b.className = "chip";
       b.textContent = p;
-      b.onclick = () => { $("text").value = p; void send(); };
+      // Through the composer, not `.value` — the input is no longer a textarea, and assigning `.value` to a
+      // div is a silent no-op that left these buttons doing nothing at all.
+      b.onclick = () => { composer.clear(); composer.insert(p); void send(); };
       w.querySelector(".chips").append(b);
     }
   };
@@ -1330,27 +1521,173 @@
     } catch (e) { note(`Could not open that conversation: ${e.message}`, true); }
   };
 
+  /* ------------------------------------------------------- the composer */
+
+  /**
+   * The input — #179.
+   *
+   * The one bundled thing on this page, and the only import it has. Everything about the *platform* is still
+   * plain script you can read in this file; the editor is a widget, and a widget with a suggestion menu, a real
+   * placeholder and paste handling is 200 lines of caret arithmetic if hand-rolled over `contenteditable`.
+   *
+   * Reached through a global rather than an `import` deliberately. A missing bundle — someone ran the app without
+   * building — makes `import { mount }` a *link* error, which fails this entire module: no chat at all, and a
+   * console message about an export. Through a global, the failure is one absent object and this page can say
+   * what to run. The server helps by answering `/composer.js` with a script that reports itself missing.
+   */
+  const composerApi = window.AgentkitComposer;
+  const composer = composerApi
+    ? composerApi.mount({
+        element: $("text"),
+        menuElement: $("cmdmenu"),
+        placeholder: "Message the assistant, or / for commands…",
+        onSubmit: () => void send(),
+        // A command chosen from the menu goes through the same function as one typed as text.
+        onCommand: (name) => void runCommand(name).then((handled) => {
+          if (!handled) note(`No such command: /${name}`, true);
+        }),
+        onChange: (text) => { $("send").disabled = text === "" || sending; },
+      })
+    : {
+        // Enough of the handle to keep the rest of the page working, so the failure is a dead input with an
+        // explanation rather than a blank screen.
+        text: () => "", clear() {}, focus() {}, insert() {}, destroy() {},
+      };
+
+  // The initial state, which `onChange` cannot give: it fires on a change, and an untouched box has had none —
+  // so the button sat enabled over an empty editor until the first keystroke, offering to send nothing.
+  $("send").disabled = composer.text() === "";
+
+  /** `+` is a way to reach the menu without knowing to type `/`. It types the slash rather than duplicating the
+   *  menu's logic, so there is one path into it. */
+  $("cmdopen").onmousedown = (e) => {
+    e.preventDefault();
+    // Already open: leave it alone. A second slash would make the text `//`, which matches no command, so the
+    // button would have closed the menu it is meant to open.
+    if (!$("cmdmenu").hidden) { composer.focus(); return; }
+    // Types the slash rather than opening the menu itself: the menu opens *because* the text starts with one,
+    // which is the same path a keystroke takes. One way for the menu to open, not two.
+    composer.insert("/");
+  };
+
+  $("modechip").onclick = () => {
+    const menu = $("modemenu");
+    menu.hidden = !menu.hidden;
+    $("modechip").setAttribute("aria-expanded", String(!menu.hidden));
+  };
+  // Anywhere else closes it. `pointerdown` on the document rather than a blur handler, because the chip's own
+  // menu buttons are inside it and a blur would fire before their handlers.
+  document.addEventListener("pointerdown", (e) => {
+    if (!$("modemenu").hidden && !$("modemenu").contains(e.target) && e.target !== $("modechip")
+        && !$("modechip").contains(e.target)) closeModeMenu();
+  });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeModeMenu(); });
+
+  /**
+   * Dictation, through the browser's own speech recognition.
+   *
+   * Hidden where there is none rather than shown disabled — a control that is present and never works reads as a
+   * broken app, while an absent one reads as a browser difference, which is what it is. Chrome exposes this as
+   * `webkitSpeechRecognition`; Firefox has nothing.
+   *
+   * Interim results are deliberately not inserted. They rewrite themselves as the recogniser changes its mind,
+   * and watching your own sentence churn while you speak is worse than waiting for the final one.
+   */
+  const Recognition = window.SpeechRecognition ?? window.webkitSpeechRecognition;
+  if (Recognition && composerApi) {
+    const mic = $("mic");
+    mic.hidden = false;
+    let listening = null;
+    mic.onclick = () => {
+      if (listening) { listening.stop(); return; }
+      const r = new Recognition();
+      r.lang = navigator.language || "en-US";
+      r.interimResults = false;
+      r.continuous = false;
+      r.onresult = (event) => {
+        const said = [...event.results].map((x) => x[0].transcript).join(" ").trim();
+        if (said === "") return;
+        // Inserted at the caret through the editor, so it joins whatever was already typed instead of replacing
+        // it — dictating a clause into a half-written message is the normal case.
+        composer.insert(composer.text() === "" ? said : ` ${said}`);
+      };
+      r.onerror = (event) => {
+        // `no-speech` and `aborted` are ordinary — someone pressed the button and said nothing, or pressed it
+        // again. Only report the rest.
+        if (event.error !== "no-speech" && event.error !== "aborted") note(`Dictation failed: ${event.error}`, true);
+      };
+      r.onend = () => { listening = null; mic.classList.remove("mic-on"); };
+      listening = r;
+      mic.classList.add("mic-on");
+      r.start();
+    };
+  }
+
+  /**
+   * What is about to run, beside the input.
+   *
+   * Read from the server rather than guessed: the model is resolved from configuration the page cannot see, and a
+   * label naming a different model than the one answering is worse than no label.
+   *
+   * The second fact is the **endpoint host**, not a reasoning-effort setting. This app has no effort control and
+   * `definitionFor` reports `reasoning: false` unconditionally, so an effort indicator here would have been a
+   * label with nothing behind it. Which endpoint answered is real, and it is the thing you actually want to know
+   * when a local model and a hosted one are both configured.
+   */
+  const loadModelMeta = async () => {
+    try {
+      const r = await fetch("/api/model", { headers: headers() });
+      if (!r.ok) return;
+      const j = await r.json();
+      // Nothing at all when no model is configured, rather than the word "null". The first turn will say so
+      // properly; a label is not the place to report a misconfiguration.
+      if (!j.id) return;
+      $("modelmeta").textContent = j.host ? `${j.id} · ${j.host}` : j.id;
+      $("modelmeta").title = j.contextTokens
+        ? `${j.id} at ${j.host}, ${j.contextTokens.toLocaleString()}-token window`
+        : j.id;
+    } catch { /* the label simply stays empty */ }
+  };
+
   /* ------------------------------------------------------- sending */
 
-  const send = async () => {
-    const text = $("text").value.trim();
-    if (!text) return;
-    /**
-     * Slash commands, handled before the message is sent.
-     *
-     * `/compact` is an instruction to the *application*, not a message to the model — sending it as a turn would
-     * have the assistant explain what compaction is while the history keeps growing.
-     */
-    if (text === "/compact") {
-      $("text").value = "";
-      $("text").style.height = "auto";
-      if (!conversationId) { note("Nothing to condense yet — this conversation has not started."); return; }
+  /**
+   * A slash command, from either way of reaching it — #179.
+   *
+   * Typed as text and sent, or chosen from the menu: both land here, so the two entry points cannot diverge.
+   * These are instructions to the *application*, not messages to the model — sending `/compact` as a turn would
+   * have the assistant explain what compaction is while the history kept growing.
+   *
+   * Returns true when it handled the text, which is how `send` knows not to send it.
+   */
+  const runCommand = async (name) => {
+    if (name === "compact") {
+      if (!conversationId) { note("Nothing to condense yet — this conversation has not started."); return true; }
       await compactNow();
-      return;
+      return true;
     }
+    if (["auto", "ask", "plan"].includes(name)) {
+      await setMode(name);
+      return true;
+    }
+    return false;
+  };
+
+  const send = async () => {
+    // A second run while one is streaming would queue behind it in the coordinator and arrive with this page
+    // already following the first — so it is refused here, where the button is also disabled.
+    if (sending) return;
+    const text = composer.text();
+    if (!text) return;
+    if (text.startsWith("/") && !/\s/.test(text)) {
+      const handled = await runCommand(text.slice(1));
+      // Cleared only once it is known to be a command. An unrecognised `/word` stays in the box and is sent as
+      // the message it is, rather than vanishing with nothing happening.
+      if (handled) { composer.clear(); return; }
+    }
+    sending = true;
     $("send").disabled = true;
-    $("text").value = "";
-    $("text").style.height = "auto";
+    composer.clear();
     if (log.querySelector(".empty")) log.innerHTML = "";
     turn("me").textContent = text;
     try {
@@ -1373,7 +1710,8 @@
       void stream(j.runId);
     } catch (e) {
       note(`Could not send: ${e.message}`, true);
-      $("send").disabled = false;
+      sending = false;
+      $("send").disabled = composer.text() === "";
     }
   };
 
@@ -1382,20 +1720,18 @@
   // cost panel is the one kind of stale figure people act on.
   $("usage").ontoggle = () => { if ($("usage").open) void loadUsage(); };
 
-  $("new").onclick = () => { conversationId = null; seen.clear(); closeAsk(); showEmpty(); void loadConversations(); $("text").focus(); };
-  $("text").onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void send(); } };
-  $("text").oninput = () => {
-    // Grow with the content up to the CSS max-height, so a long message is visible while being written.
-    $("text").style.height = "auto";
-    $("text").style.height = `${Math.min($("text").scrollHeight, 152)}px`;
-  };
+  $("new").onclick = () => { conversationId = null; seen.clear(); closeAsk(); showEmpty(); void loadConversations(); composer.focus(); };
   for (const id of ["tenant", "principal", "role"]) {
     // Identity changed: the parked run belongs to the previous person, and its panel with it.
     $(id).onchange = () => { conversationId = null; seen.clear(); closeAsk(); showEmpty(); void loadConversations(); };
   }
 
   showEmpty();
+  // After `showEmpty`, which replaces the log's contents — reported before it, the explanation was wiped by the
+  // empty state a few lines later and the input was simply dead with nothing said.
+  if (!composerApi) note("The composer failed to load — run `npm run build -w @agentkit/example-app`, then reload.", true);
   void loadConversations();
   void loadMode();
-  $("text").focus();
+  void loadModelMeta();
+  composer.focus();
 </script>

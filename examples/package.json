@@ -13,29 +13,39 @@
     }
   },
   "scripts": {
-    "build": "tsc -b",
+    "build": "tsc -b && node scripts/build-composer.mjs",
     "typecheck": "tsc -b",
     "test": "vitest run",
-    "clean": "rm -rf dist tsconfig.tsbuildinfo",
+    "clean": "rm -rf dist tsconfig.tsbuildinfo public/composer.js public/composer.js.map",
     "api": "node --env-file=../.env ./scripts/run-api.mjs",
     "worker": "node --env-file=../.env ./scripts/run-worker.mjs",
     "migrate": "node --env-file=../.env ./scripts/migrate.mjs",
     "app": "node --env-file=../.env ./scripts/run-app.mjs",
     "loadtest": "node --env-file=../.env ./scripts/loadtest.mjs",
     "memory": "node --env-file=../.env ./scripts/run-memory.mjs",
-    "test:kill": "node --env-file=../.env ./scripts/kill-worker-test.mjs"
+    "test:kill": "node --env-file=../.env ./scripts/kill-worker-test.mjs",
+    "build:composer": "node scripts/build-composer.mjs"
   },
   "dependencies": {
     "@agentkit/backend": "*",
     "@agentkit/frontend": "*",
     "@agentkit/server": "*",
     "@modelcontextprotocol/sdk": "^1.30.0",
+    "@tiptap/core": "^3.30.3",
+    "@tiptap/extension-document": "^3.30.3",
+    "@tiptap/extension-hard-break": "^3.30.3",
+    "@tiptap/extension-paragraph": "^3.30.3",
+    "@tiptap/extension-text": "^3.30.3",
+    "@tiptap/extensions": "^3.30.3",
+    "@tiptap/pm": "^3.30.3",
+    "@tiptap/suggestion": "^3.30.3",
     "ioredis": "^6.0.0",
     "pg": "^8.23.0"
   },
   "devDependencies": {
     "@types/node": "^20",
     "@types/pg": "^8.23.0",
+    "esbuild": "^0.25.12",
     "typescript": "^5",
     "vitest": "^4.1.9"
   }

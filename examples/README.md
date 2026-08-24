@@ -11,8 +11,22 @@ Example code is what people copy, so the disclaimers come first.
 - **Not an auth reference.** `authenticate` reads the tenant from a request header, which is not authentication —
   any caller can claim any tenant. It refuses to start without `AGENTKIT_EXAMPLE_DEV_AUTH=1` for that reason.
 - **Not a deployment template.** One process per role, no TLS, no rate limiting, GraphiQL on.
-- **Not a product UI.** The page is deliberately plain; anything that looks designed gets read as a design
-  decision and argued about instead of used.
+- **Not a product UI.** It is pleasant enough to read a model's answers in, because something you are meant to
+  *use* while judging an assistant has to be — but nothing here is a component library, and the layout is not
+  responsive below roughly 660px.
+
+## Build it first
+
+The composer is the one bundled thing here — Tiptap, with a `/` command menu — so the app needs a build before its
+first run:
+
+```bash
+npm run build -w @agentkit/example-app
+```
+
+Started without it, the page still loads and says exactly this in red rather than presenting a dead input: the
+server answers `/composer.js` with a script that reports itself missing. `npm run build:composer -w
+@agentkit/example-app -- --watch` while working on it.
 
 ## Run it
 
@@ -154,6 +168,23 @@ Above the composer rather than in the transcript, because a card in the message 
 back through what you were told, and a run parked on a question nobody can find stays parked. The panel also
 comes back on reload: `/api/history` reports the parked run, and the platform's `pendingQuestion` query supplies
 the prompts and options.
+
+## The composer
+
+Tiptap, in `src/composer/` — the one built file. What it does, and why each part is there rather than decorative:
+
+| | |
+|---|---|
+| `/` commands | Opens only when the slash opens the message: a slash mid-sentence is a date or a path, and a menu that appears while you type `and/or` interrupts four times a day. Matching is ranked, so a name beats an alias — typing `a` offers `/auto` and `/ask` before `/compact`. Aliases exist because nobody's first guess for "condense the history" is `/compact`; `/summarise` finds it. |
+| The four commands | `/compact`, `/auto`, `/ask`, `/plan` — every one implemented, checked by a test that reads `runCommand` out of the page. A menu listing something unimplemented is worse than no menu: the person now believes the app can do it. |
+| The mode chip | The same state as the sidebar selector, painted by the same function call, and both call `setMode`. The mode decides whether the message can change anything, so it belongs beside the message. |
+| `+` | Types a slash. The menu opens *because* the text starts with one, which is the path a keystroke takes — one way in, not two. Not an attachment button: there is nothing here to attach to. |
+| Dictation | The browser's own `SpeechRecognition`, and **hidden** where there is none rather than shown disabled. A control that is present and never works reads as a broken app. Interim results are not inserted — watching your sentence rewrite itself is worse than waiting. |
+| The model label | Read from `GET /api/model`, because the model is resolved from configuration the page cannot see and a label naming the wrong one is worse than none. Host only, never the endpoint URL — a base URL can carry credentials (#145 SEC-001). |
+| Enter / Shift+Enter | Send / new line. The hard break survives into the message as `\n`, checked live. |
+
+Commands from the menu and commands typed as text both go through `runCommand`, so the two entry points cannot
+diverge.
 
 ## Things running this found
 
