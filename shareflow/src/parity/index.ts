@@ -281,16 +281,35 @@ export const OLD_RUNTIME_REFERENCE_SCOPE = {
 } as const;
 
 /**
- * The written record AC-6 asks for.
+ * The written record AC-6 asks for — **answered**.
  *
- * Deliberately **unanswered**. The question — what happens to historical Agno conversation data — is a
- * retention and customer-expectation decision, not an implementation one. An unfilled record is visibly
- * unfilled; a guess dressed as a decision would not be.
+ * "We do not want the previous runs in our new systems" (Azeem Sarwar, 2026-08-24). History is not carried
+ * across: the new runtime starts clean.
+ *
+ * The consequence below is not softened, because it is the part that outlives the decision. Two things follow
+ * from it and neither is optional:
+ *
+ * 1. **Customers have to be told before cutover, not after.** A person who opens the assistant and finds last
+ *    month's conversation missing will read it as data loss, and they will be right in every sense except the
+ *    legal one.
+ * 2. **The deletion is REQ-034's retention work, not this one.** "Out of scope" here means *not migrated*; it
+ *    does not mean the old rows evaporate, and leaving them in a database nobody reads with no retention clock
+ *    is how data outlives its purpose.
  */
 export const DATA_DISPOSITION = {
   question: "What happens to historical Agno conversation data at cutover?",
-  decision: null as null | "migrate" | "retain-read-only" | "out-of-scope",
-  decidedBy: null as null | string,
+  decision: "out-of-scope" as null | "migrate" | "retain-read-only" | "out-of-scope",
+  decidedBy: "Azeem Sarwar" as null | string,
+  decidedAt: "2026-08-24",
+  /** The decision in the words it was made in, so a later reader is not left inferring intent from an enum. */
+  reason: "We do not want the previous runs in our new systems.",
+  /**
+   * What the decision obliges, recorded because a decision with unmet consequences is not finished.
+   */
+  followUps: [
+    "Tell customers their assistant history does not carry over, before their workspace is cut over.",
+    "Give the old conversation data a retention clock under REQ-034 — out-of-scope means not migrated, not deleted.",
+  ] as const,
   options: [
     {
       option: "migrate",

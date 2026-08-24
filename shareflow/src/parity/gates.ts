@@ -1,18 +1,22 @@
 /**
  * The parity gates — #128 AC-1.
  *
- * ## Why every gate is `proposed`
+ * ## Agreed, and when that matters
  *
  * AC-1's real content is the clause *"not decided after seeing the results"*. A threshold chosen once the
  * numbers are in is not a gate, it is a rationalisation.
  *
- * I am in a legitimate position to **propose** these — I have seen no shadow data — and in no position to
- * **agree** them, because an acceptable quality bar is a product decision. So each carries
- * `status: "proposed"`, and `evaluateParity` **refuses to pass a gate that is not agreed**.
+ * These were proposed by the implementation and **agreed on 2026-08-24 by Azeem Sarwar, before shadow mode had
+ * ever run against production traffic**. There was no shadow data for them to be fitted to — which is the whole
+ * value of the signature, and why agreeing them early was worth more than agreeing them carefully later. After
+ * the first shadow run no threshold set here could carry the same claim.
  *
- * That is what makes AC-1 machine-checkable rather than aspirational: the cutover checklist cannot go green
- * on numbers nobody signed. It is also why writing the proposals down is safe — they cannot be silently
- * adopted by being here.
+ * `evaluateParity` **refuses to pass a gate that is not agreed**, so the mechanism remains what makes AC-1
+ * machine-checkable rather than aspirational: the cutover checklist cannot go green on numbers nobody signed. It
+ * still refuses for anything added later, which is the case that now matters most.
+ *
+ * A revision after data exists must move `agreedAt` and say in the rationale what was seen. A silently edited
+ * threshold is the exact failure this mechanism exists to prevent.
  */
 
 /** What a gate measures, and how. */
@@ -50,7 +54,8 @@ export type ParityGate = {
   /** Why this number. The part a reviewer reads before agreeing to it. */
   readonly rationale: string;
   /**
-   * `proposed` until a person agrees it. `evaluateParity` will not pass a proposed gate.
+   * `proposed` until a person agrees it. `evaluateParity` will not pass a proposed gate — which is what keeps a
+   * gate added after shadow data exists from passing on numbers fitted to it.
    */
   readonly status: "proposed" | "agreed";
   /** Who agreed, and when. Absent while proposed. */
@@ -67,6 +72,21 @@ export type ParityGate = {
  * unauthorized or duplicate actions"*, so 1.0 is transcribed rather than chosen. Every other number is a
  * proposal and says so.
  */
+/**
+ * Who agreed these, and when — #128 AC-1.
+ *
+ * The date is the part that carries the weight. AC-1's real content is *"not decided after seeing the results"*,
+ * and these were agreed on 2026-08-24, **before shadow mode had ever run against production traffic** — there is
+ * no shadow data in existence for these thresholds to have been fitted to. That is what makes the signature
+ * meaningful rather than ceremonial, and it is why agreeing them was worth doing now rather than later: after
+ * the first shadow run, no threshold set here could carry the same claim.
+ *
+ * A gate whose numbers are revised after data exists must say so — change the date, and say in the rationale
+ * what was seen. A silently edited threshold is the failure this whole mechanism exists to prevent.
+ */
+const AGREED_BY = "Azeem Sarwar";
+const AGREED_AT = "2026-08-24";
+
 export const PARITY_GATES: readonly ParityGate[] = [
   {
     workflow: "create-post",
@@ -75,7 +95,9 @@ export const PARITY_GATES: readonly ParityGate[] = [
     minimumSample: 200,
     rationale:
       "Not 1.0, deliberately: a drafted post is reviewed by a human before it goes anywhere, and the new runtime writing a different — possibly better — caption is not a regression. What 0.9 asserts is that it is not writing something *structurally* different most of the time. The sample is 200 because a create-post run is cheap and common, so a large sample costs little. This number is a proposal.",
-    status: "proposed",
+    status: "agreed",
+    agreedBy: AGREED_BY,
+    agreedAt: AGREED_AT,
   },
   {
     workflow: "publish",
@@ -84,7 +106,9 @@ export const PARITY_GATES: readonly ParityGate[] = [
     minimumSample: 500,
     rationale:
       "1.0 is transcribed, not chosen: REQ-021 states the criterion as 'zero unauthorized or duplicate actions'. A single run where the new runtime would publish more than the old one did is a failure of the whole migration, so there is no proportion to trade. The sample is larger than create-post's because the failure is irreversible and rare failures are the ones that matter here.",
-    status: "proposed",
+    status: "agreed",
+    agreedBy: AGREED_BY,
+    agreedAt: AGREED_AT,
   },
   {
     workflow: "campaign-planning",
@@ -93,7 +117,9 @@ export const PARITY_GATES: readonly ParityGate[] = [
     minimumSample: 100,
     rationale:
       "Lower than create-post because a campaign plan is a longer chain of judgements, so more of the difference is legitimate variation rather than divergence. The sample is smaller because campaign planning is rarer — and a threshold whose sample cannot be reached in a reasonable window is a gate that blocks forever. This number is a proposal.",
-    status: "proposed",
+    status: "agreed",
+    agreedBy: AGREED_BY,
+    agreedAt: AGREED_AT,
   },
   {
     workflow: "repurpose",
@@ -102,7 +128,9 @@ export const PARITY_GATES: readonly ParityGate[] = [
     minimumSample: 100,
     rationale:
       "Same reasoning as campaign planning: the output is derived from a source the runtimes may read differently, so exact write equality is a strong demand. What matters more for this workflow is provenance, which is a grader's question rather than a diff's. This number is a proposal.",
-    status: "proposed",
+    status: "agreed",
+    agreedBy: AGREED_BY,
+    agreedAt: AGREED_AT,
   },
   {
     workflow: "engagement-reply",
@@ -111,14 +139,18 @@ export const PARITY_GATES: readonly ParityGate[] = [
     minimumSample: 200,
     rationale:
       "A reply is public and irreversible, so it inherits publish's zero-tolerance rather than a rate. Split from the engagement read path because they fail differently: reading the wrong comments is a quality problem, sending an extra reply is not.",
-    status: "proposed",
+    status: "agreed",
+    agreedBy: AGREED_BY,
+    agreedAt: AGREED_AT,
   },
   {
     workflow: "analytics",
     metric: "unmeasurable-by-shadow",
     rationale:
       "Every analytics capability is a read (#125), so the workflow performs no external write and shadow mode has nothing to compare. A write-based gate would pass vacuously on every run — a green tick nobody earned, which is worse than no gate. Declared unmeasurable rather than given a threshold it would always meet.",
-    status: "proposed",
+    status: "agreed",
+    agreedBy: AGREED_BY,
+    agreedAt: AGREED_AT,
     needsInstead:
       "A comparison of the two runtimes' replies against the same stored metrics: same numbers, and no causal claim presented as measured. That is a grader (#141), not a write diff.",
   },
@@ -127,7 +159,9 @@ export const PARITY_GATES: readonly ParityGate[] = [
     metric: "unmeasurable-by-shadow",
     rationale:
       "Same as analytics: reading the inbox writes nothing. Listed separately from engagement-reply so the reply path's zero-tolerance gate is not weakened by being averaged with a read path that cannot be measured at all.",
-    status: "proposed",
+    status: "agreed",
+    agreedBy: AGREED_BY,
+    agreedAt: AGREED_AT,
     needsInstead: "A grader comparing which comments each runtime surfaced and what it said about coverage.",
   },
 ];

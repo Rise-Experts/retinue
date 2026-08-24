@@ -43,6 +43,19 @@ const agreed = (gate: ParityGate): ParityGate => ({
   agreedAt: "2026-08-01T00:00:00.000Z",
 });
 
+/**
+ * The inverse, and now the one that needs injecting.
+ *
+ * Every shipped gate was `proposed`, so the refusal branch was reachable through `evaluateWorkflow` and the
+ * *pass* branch needed `agreed()`. Since the gates were signed (2026-08-24) that is the other way round: the
+ * refusal is the unreachable branch, and it is the one protecting a gate added later from passing on numbers
+ * fitted to it. So it keeps its tests, through here.
+ */
+const proposed = (gate: ParityGate): ParityGate => {
+  const { agreedBy: _by, agreedAt: _at, ...rest } = gate;
+  return { ...rest, status: "proposed" };
+};
+
 /** AC-1. */
 describe("the gates", () => {
   it("covers every docs/07 workflow", () => {
@@ -75,12 +88,29 @@ describe("the gates", () => {
     }
   });
 
-  it("is entirely unagreed, which is the honest current state", () => {
-    // I have seen no results, so proposing is legitimate. Agreeing is a product decision about an
-    // acceptable quality bar, and it is not mine to make.
+  it("is entirely agreed, by a named person, with a date", () => {
+    /**
+     * This asserted every gate was `proposed` until 2026-08-24, when they were agreed. The assertion had not
+     * become wrong so much as *expired* — it described a state, and the state legitimately changed.
+     *
+     * What replaces it asserts the properties that make a signature mean something: somebody is named, and there
+     * is a date. The date is the load-bearing half — AC-1 is about thresholds not being fitted to results, and
+     * these were signed before shadow mode had run against production traffic at all.
+     */
     for (const gate of PARITY_GATES) {
-      expect(gate.status, gate.workflow).toBe("proposed");
-      expect(gate.agreedBy, gate.workflow).toBeUndefined();
+      expect(gate.status, gate.workflow).toBe("agreed");
+      expect(gate.agreedBy, gate.workflow).toBeTruthy();
+      expect(gate.agreedAt, gate.workflow).toMatch(/^\d{4}-\d{2}-\d{2}/);
+    }
+  });
+
+  it("has no gate agreed without a signature or a date", () => {
+    // The shape of the claim, separate from today's values: a gate cannot be `agreed` while leaving either
+    // field empty, because "agreed by nobody on no date" is the state this whole mechanism exists to refuse.
+    for (const gate of PARITY_GATES) {
+      if (gate.status !== "agreed") continue;
+      expect(gate.agreedBy?.trim(), gate.workflow).not.toBe("");
+      expect(gate.agreedAt?.trim(), gate.workflow).not.toBe("");
     }
   });
 
@@ -111,7 +141,9 @@ describe("evaluating a workflow", () => {
     // Checked *before* the numbers, deliberately. A threshold agreed after the results are visible is
     // exactly what AC-1 forbids, and refusing to compute a pass against an unsigned one is how that is
     // enforced rather than hoped for.
-    const verdict = evaluateWorkflow("create-post", many(1_000));
+    // Through `proposed()`, because the shipped gates are agreed now — so this is the branch that is no longer
+    // reachable by default, and it is the one stopping a *newly added* gate from passing on fitted numbers.
+    const verdict = evaluateAgainstGate(proposed(gateFor("create-post") as ParityGate), many(1_000));
     expect(verdict.verdict).toBe("gate-not-agreed");
     expect(verdict.measured).toBeUndefined();
     expect(verdict.detail).toMatch(/before results are visible/);
@@ -163,7 +195,7 @@ describe("evaluating a workflow", () => {
     // check after the sample test passed all 368 without this — the safety was unchanged, but the advice
     // was wrong, and wrong advice during a cutover sends someone to collect a fortnight of data they did
     // not need.
-    const verdict = evaluateWorkflow("publish", many(3));
+    const verdict = evaluateAgainstGate(proposed(gateFor("publish") as ParityGate), many(3));
     expect(verdict.verdict).toBe("gate-not-agreed");
     expect(verdict.detail).not.toMatch(/the gate needs/);
   });
@@ -317,12 +349,31 @@ describe("the removal scope", () => {
 
 /** AC-6. */
 describe("the historical-data decision", () => {
-  it("is deliberately unanswered", () => {
-    // What happens to a customer's conversation history is a retention and expectation decision, not an
-    // implementation one. An unfilled record is visibly unfilled; a guess dressed as a decision would not
-    // be.
-    expect(DATA_DISPOSITION.decision).toBeNull();
-    expect(DATA_DISPOSITION.decidedBy).toBeNull();
+  it("records the decision, who made it, and the words it was made in", () => {
+    /**
+     * Answered on 2026-08-24: **out of scope** — "We do not want the previous runs in our new systems."
+     *
+     * The reason is stored verbatim beside the enum on purpose. `"out-of-scope"` alone leaves a later reader
+     * inferring intent, and the two readings — "we chose not to carry it" and "nobody got round to it" — imply
+     * very different things about whether customers were told.
+     */
+    expect(DATA_DISPOSITION.decision).toBe("out-of-scope");
+    expect(DATA_DISPOSITION.decidedBy).toBeTruthy();
+    expect(DATA_DISPOSITION.decidedAt).toMatch(/^\d{4}-\d{2}-\d{2}/);
+    expect(DATA_DISPOSITION.reason).toMatch(/previous runs/i);
+  });
+
+  it("carries the obligations the decision creates, rather than treating it as finished", () => {
+    /**
+     * "Out of scope" settles what is *not* built and creates two duties that are easy to lose: telling customers
+     * before their history disappears from view, and giving the old rows a retention clock.
+     *
+     * Asserted because a decision whose consequences are unrecorded is one that reads as complete. Deleting
+     * nothing is not the same as deciding nothing needs deleting.
+     */
+    expect(DATA_DISPOSITION.followUps.length).toBeGreaterThanOrEqual(2);
+    expect(DATA_DISPOSITION.followUps.join(" ")).toMatch(/before/i);
+    expect(DATA_DISPOSITION.followUps.join(" ")).toMatch(/retention/i);
   });
 
   it("lays out each option with what it costs", () => {
@@ -341,11 +392,22 @@ describe("the historical-data decision", () => {
 
 /** AC-3. */
 describe("the cutover runbook", () => {
-  it("does not name a decision-maker, and blocks because of it", () => {
-    // AC-3 requires one named. I do not know who it is, and writing a plausible role in would be worse than
-    // the blank: a blank gets filled, a plausible guess gets followed.
-    expect(CUTOVER_DECISION_MAKER).toBeNull();
-    expect(CUTOVER_RUNBOOK).toMatch(/not\s+yet\s+named/);
+  it("names one decision-maker, in the constant and in the runbook", () => {
+    /**
+     * AC-3. It was `null` until a person said so — a blank gets filled, a plausible guess gets followed.
+     *
+     * Both places, because the runbook is what someone reads at 2am and the constant is what code checks. If they
+     * could disagree, the one that is wrong is whichever the reader happens to look at.
+     */
+    expect(CUTOVER_DECISION_MAKER).toBeTruthy();
+    expect(CUTOVER_RUNBOOK).toContain(CUTOVER_DECISION_MAKER!);
+    expect(CUTOVER_RUNBOOK).not.toMatch(/not\s+yet\s+named/);
+  });
+
+  it("does not require a second person to roll back", () => {
+    // One name, not a committee: the four roll-back triggers are ones you act on in minutes, and a rollback
+    // that waits for consensus happens after the second duplicate publish.
+    expect(CUTOVER_RUNBOOK).toMatch(/does not need anyone else to roll back/);
   });
 
   it("orders the workflows least-reversible-last", () => {

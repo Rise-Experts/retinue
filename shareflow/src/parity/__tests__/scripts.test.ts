@@ -159,13 +159,24 @@ describe("parity-report.mjs", () => {
     expect(stderr).toContain("malformed");
   });
 
-  it("exits 1 while any gate is unagreed, and says so per workflow", async () => {
+  it("exits 1 on too little data, and calls it insufficient rather than failed", async () => {
+    /**
+     * Two runs against gates needing 200 and 500.
+     *
+     * This asserted `gate-not-agreed` until the gates were signed on 2026-08-24. Now the same input produces
+     * `insufficient-sample`, and the distinction is the point: "not enough data to say" and "the new runtime
+     * diverges" are different findings, and reporting the first as the second would stop a cutover that nothing
+     * is wrong with.
+     *
+     * Still exit 1, because neither is a pass.
+     */
     const path = await withShadow("good.json", [pair("create-post"), pair("publish")]);
     const { code, stdout } = await exec("parity-report.mjs", ["--shadow", path]);
-    // 1, not 0: every shipped gate is `proposed`, and a report that exited 0 on unsigned thresholds would be the
-    // green tick nobody earned.
     expect(code).toBe(1);
-    expect(stdout).toContain("gate-not-agreed");
+    expect(stdout).toContain("insufficient-sample");
+    expect(stdout).not.toContain("failed");
+    // And no longer this, which is how the signing is visible end to end rather than only in the gate file.
+    expect(stdout).not.toContain("gate-not-agreed");
     // Every gated workflow appears, including those with no data — a workflow missing from the report reads as
     // one with nothing to answer for.
     for (const workflow of ["create-post", "publish", "campaign-planning", "repurpose", "engagement-reply"])
@@ -182,8 +193,8 @@ describe("parity-report.mjs", () => {
     expect(stdout).not.toContain("? create-post");
   });
 
-  it("blocks the removal and lists every reason", async () => {
-    // #128 test step 2: attempt the removal while a gate is failing, and assert the checklist blocks it.
+  it("blocks the removal while a gate is unpassed, and lists every reason", async () => {
+    // #128 test step 2: attempt the removal while a gate is unpassed, and assert the checklist blocks it.
     const path = await withShadow("removal.json", [pair("create-post"), pair("publish")]);
     const { code, stdout } = await exec("parity-report.mjs", [
       "--shadow",
@@ -196,8 +207,16 @@ describe("parity-report.mjs", () => {
     ]);
     expect(code).toBe(1);
     expect(stdout).toContain("removal: BLOCKED");
-    // The unanswered data question is a blocker in its own right — AC-6.
-    expect(stdout).toContain("historical Agno conversation data");
+    // Blocked on evidence now, not on paperwork: every measurable gate is short of its sample.
+    expect(stdout).toContain("insufficient-sample");
+    /**
+     * And **not** on the data question any more.
+     *
+     * It blocked on that until 2026-08-24, when it was decided out-of-scope. Asserting its absence is what proves
+     * the decision reached the check rather than only the record — the same class of gap as a limit configured
+     * and never resolved.
+     */
+    expect(stdout).not.toContain("historical Agno conversation data");
   });
 
   it("does not pass a reference count the caller did not supply", async () => {

@@ -4,28 +4,35 @@
  * Beside the code for the same reason as `ROLLBACK_PROCEDURE`: a runbook in a wiki goes stale silently, and
  * the one moment it is read is the one moment nobody checks whether it is current.
  *
- * **The decision-maker is unnamed**, and that is not an omission I can fix. AC-3 requires the runbook to
- * *"name the decision-maker"*, and I do not know who that is — writing a plausible role in would be worse
- * than the blank, because a blank gets filled and a plausible guess gets followed.
+ * **The decision-maker is named** — AC-3. It was blank until a person said so, deliberately: a blank gets
+ * filled, and a plausible guess gets followed.
  */
 
-/** Filled in when a person is named. Until then, `canRemoveOldRuntime` blocks on it. */
-export const CUTOVER_DECISION_MAKER: string | null = null;
+/**
+ * Who decides to switch a workspace over, and who decides to roll back.
+ *
+ * One name, not a committee, because the four roll-back triggers below are the kind you act on in minutes. A
+ * rollback that waits for consensus is a rollback that happens after the second duplicate publish.
+ */
+export const CUTOVER_DECISION_MAKER: string | null = "Azeem Sarwar";
 
 export const CUTOVER_RUNBOOK = `# Cutting ShareFlow over to the new runtime
 
 ## Before anything
 
-- [ ] Every parity gate in \`parity/gates.ts\` is \`agreed\`, by a named person, **with a date before the
-      first shadow run**. A threshold agreed after the numbers are visible is not a gate.
+- [x] Every parity gate in \`parity/gates.ts\` is \`agreed\`, by a named person, **with a date before the
+      first shadow run**. Done: agreed 2026-08-24 by Azeem Sarwar, before any shadow data existed. A gate added
+      or revised from here needs a new date and a note saying what was seen.
 - [ ] \`npm run parity -w @agentkit/shareflow -- --shadow <runs.json>\` exits 0. While any gate is unagreed it
       exits 1 and names each one, so this is the check rather than a reading of the code.
-- [ ] The historical-data question in \`DATA_DISPOSITION\` is answered in writing.
-- [ ] The decision-maker below is named.
+- [x] The historical-data question in \`DATA_DISPOSITION\` is answered in writing: **out of scope** — history
+      does not carry over. Two obligations follow, and neither is done by this decision: tell customers
+      *before* their workspace is cut over, and give the old rows a retention clock under REQ-034.
+- [x] The decision-maker below is named.
 - [ ] The rollback procedure has been rehearsed against staging, and the measured time-to-effect written
       down. It is not the cache bound — see \`ROLLBACK_PROCEDURE\`.
 
-**Decision-maker:** _not yet named_ — this runbook cannot be executed until it is.
+**Decision-maker:** Azeem Sarwar — decides both cutover and rollback, and does not need anyone else to roll back.
 
 ## Order of workflows
 
