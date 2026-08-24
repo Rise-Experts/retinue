@@ -18,6 +18,8 @@ export const CUTOVER_RUNBOOK = `# Cutting ShareFlow over to the new runtime
 
 - [ ] Every parity gate in \`parity/gates.ts\` is \`agreed\`, by a named person, **with a date before the
       first shadow run**. A threshold agreed after the numbers are visible is not a gate.
+- [ ] \`npm run parity -w @agentkit/shareflow -- --shadow <runs.json>\` exits 0. While any gate is unagreed it
+      exits 1 and names each one, so this is the check rather than a reading of the code.
 - [ ] The historical-data question in \`DATA_DISPOSITION\` is answered in writing.
 - [ ] The decision-maker below is named.
 - [ ] The rollback procedure has been rehearsed against staging, and the measured time-to-effect written
@@ -88,10 +90,27 @@ failures, or anything a customer noticed.
 **Not part of cutover.** A separate, reviewed change, after every workspace is live and stable, and only
 when \`canRemoveOldRuntime\` returns \`allowed: true\`.
 
-It is 71 files across \`social_integgration\` — \`web/src\` and the whole of \`ai_backend\` — and it is in a
-different repository from this one. Sequence it by the hotspots in \`OLD_RUNTIME_REFERENCE_SCOPE\`, and make
-it a change that deletes and does nothing else: a removal PR that also fixes something is a removal PR
-nobody can review.
+It is in a **different repository** from this one. Do not trust the baseline count here — run the scan:
+
+\`\`\`
+npm run scan:old-runtime -w @agentkit/shareflow -- --root <path to social_integgration>
+\`\`\`
+
+It exits **2** if the repository or any configured root is missing, and that is the case that matters: a scan
+of a directory that is not there reports zero references, and zero reads as *clean*. The baseline in
+\`OLD_RUNTIME_REFERENCE_SCOPE\` is what was counted when the gate was written, kept only so a later number is
+comparable. Sequence the deletion by the hotspots the scan reports, and make it a change that deletes and does
+nothing else: a removal PR that also fixes something is a removal PR nobody can review.
+
+Feed the scan's \`remainingReferences\` to the removal check:
+
+\`\`\`
+npm run parity -w @agentkit/shareflow -- --shadow <runs.json> --removal \\
+  --signed-off-by "<name>" --references <count from the scan>
+\`\`\`
+
+Omitting \`--references\` does not mean zero. It blocks, because "I did not look" and "there are none" must not
+be worth the same.
 
 Keep the ability to roll back until the deletion lands. That is the point of doing it last: until then, the
 old path is still there.
