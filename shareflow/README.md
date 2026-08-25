@@ -1,10 +1,10 @@
-# `@agentkit/shareflow`
+# `@retinue/shareflow`
 
 The ShareFlow integration. ShareFlow is the platform's first consumer and stays outside the generic
 packages: `docs/01-architecture.md` requires those to *"build and test without ShareFlow or Twenty
 installed"*, and product-specific names *"live only in that application's integration package."*
 
-This package depends on `@agentkit/backend`. Nothing generic depends on it — R8 in
+This package depends on `@retinue/agentkit`. Nothing generic depends on it — R8 in
 `../scripts/check-boundaries.mjs` fails the build if that reverses.
 
 ## The seam, and why the dependency is inverted
@@ -301,7 +301,7 @@ a service method, and R7 fails the build on an attempt.
 ShareFlow supplies the implementations and registers the provider:
 
 ```ts
-import { createShareFlowToolProvider, type ShareFlowServices } from "@agentkit/shareflow";
+import { createShareFlowToolProvider, type ShareFlowServices } from "@retinue/shareflow";
 
 const services: ShareFlowServices = {
   connectors: myConnectorAdapter,   // implemented in the ShareFlow app
@@ -331,5 +331,5 @@ needs shadow data from a deployment running both runtimes, which does not exist 
 `canRemoveOldRuntime` returns `allowed: false` today, and lists every reason.
 
 `npm test` in this workspace runs `tsc -b` first. That is deliberate: this package value-imports
-`@agentkit/backend`, whose entry point is `dist/`, so `vitest run` on its own tests whatever was last
+`@retinue/agentkit`, whose entry point is `dist/`, so `vitest run` on its own tests whatever was last
 built — see the note in `vitest.config.ts`.

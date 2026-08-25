@@ -6,7 +6,7 @@
  * environment variable to be tested is a pure function nobody tests.
  */
 
-import type { QuestionSpec } from "@agentkit/backend";
+import type { QuestionSpec } from "@retinue/agentkit";
 
 /** A prompt longer than this is a model mistake, not a question. Stored capped rather than refused. */
 export const MAX_PROMPT_LENGTH = 500;

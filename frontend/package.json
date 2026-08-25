@@ -1,5 +1,5 @@
 {
-  "name": "@agentkit/frontend",
+  "name": "@retinue/react",
   "version": "0.0.0",
   "private": true,
   "description": "Headless client state for the reusable AI platform: typed part reducers, run-event ordering and the hook contracts consumed by web and mobile.",
@@ -23,7 +23,7 @@
     "clean": "rm -rf dist tsconfig.tsbuildinfo"
   },
   "dependencies": {
-    "@agentkit/backend": "*"
+    "@retinue/agentkit": "*"
   },
   "peerDependencies": {
     "react": "^19"

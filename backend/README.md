@@ -1,4 +1,4 @@
-# @agentkit/backend
+# @retinue/agentkit
 
 Server-side half of the reusable AI platform. Implements the specifications in
 [`../docs`](../docs).
@@ -74,9 +74,9 @@ distinction matters, and `docs/09` records which claims rest on which.
 ## Scripts
 
 ```bash
-npm run typecheck -w @agentkit/backend
-npm test -w @agentkit/backend
-npm run build -w @agentkit/backend
+npm run typecheck -w @retinue/agentkit
+npm test -w @retinue/agentkit
+npm run build -w @retinue/agentkit
 ```
 
 From the repository root, the checks that gate a change:
@@ -99,9 +99,9 @@ The root exports the runtime and installs `ai` and `zod` — nothing else. Every
 subpath with an optional peer:
 
 ```ts
-import { createRuntime } from "@agentkit/backend";
-import { createPostgresRunStore } from "@agentkit/backend/adapters/postgres";  // peer: pg
-import { runApiHost } from "@agentkit/backend/server";                          // peer: graphql, graphql-yoga
+import { createRuntime } from "@retinue/agentkit";
+import { createPostgresRunStore } from "@retinue/agentkit/adapters/postgres";  // peer: pg
+import { runApiHost } from "@retinue/agentkit/server";                          // peer: graphql, graphql-yoga
 ```
 
 `src/entries/README.md` lists them all, including why there is no `./testing` yet.

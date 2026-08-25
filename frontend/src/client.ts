@@ -4,7 +4,7 @@
  * provides an implementation (e.g. a GraphQL client) through `AgentkitProvider`.
  */
 
-import type { ApprovalDecision } from "@agentkit/backend";
+import type { ApprovalDecision } from "@retinue/agentkit";
 import type { ConversationSummary, ContextInspection, Message, RunEvent } from "./types/index.js";
 
 export type { ApprovalDecision };

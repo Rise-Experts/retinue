@@ -19,8 +19,8 @@ import { boot } from "../boot.js";
 import { createHealthRoutes, postgresProbe, redisProbe, schemaProbe, type Probe } from "../health.js";
 
 const validEnv = {
-  AGENTKIT_DATABASE_URL: "postgres://user:pw@localhost:5432/agentkit",
-  AGENTKIT_REDIS_URL: "redis://localhost:6379",
+  RETINUE_DATABASE_URL: "postgres://user:pw@localhost:5432/agentkit",
+  RETINUE_REDIS_URL: "redis://localhost:6379",
 };
 
 const pglite = (db: PGlite): SqlExecutor => ({
@@ -61,8 +61,8 @@ describe("configuration", () => {
 
   it("rejects a malformed URL by naming the variable and what was wrong", () => {
     for (const [variable, value] of [
-      ["AGENTKIT_DATABASE_URL", "mysql://nope"],
-      ["AGENTKIT_REDIS_URL", "http://nope"],
+      ["RETINUE_DATABASE_URL", "mysql://nope"],
+      ["RETINUE_REDIS_URL", "http://nope"],
     ] as const) {
       const error = (() => {
         try {
@@ -80,20 +80,20 @@ describe("configuration", () => {
 
   it("rejects a non-positive concurrency rather than booting a worker that consumes nothing", () => {
     for (const value of ["0", "-1", "1.5", "many"]) {
-      expect(() => loadConfig({ ...validEnv, AGENTKIT_WORKER_CONCURRENCY: value })).toThrow(
+      expect(() => loadConfig({ ...validEnv, RETINUE_WORKER_CONCURRENCY: value })).toThrow(
         ConfigurationError,
       );
     }
     // A zero concurrency is the interesting case: the process boots, passes its own health check, and
     // consumes no work — which is worse than refusing to start.
-    expect(() => loadConfig({ ...validEnv, AGENTKIT_WORKER_CONCURRENCY: "8" })).not.toThrow();
+    expect(() => loadConfig({ ...validEnv, RETINUE_WORKER_CONCURRENCY: "8" })).not.toThrow();
   });
 
   it("validates the schema mode against the library's union", () => {
     for (const mode of ["auto", "plan", "off"]) {
-      expect(loadConfig({ ...validEnv, AGENTKIT_SCHEMA_MODE: mode }).schemaMode).toBe(mode);
+      expect(loadConfig({ ...validEnv, RETINUE_SCHEMA_MODE: mode }).schemaMode).toBe(mode);
     }
-    expect(() => loadConfig({ ...validEnv, AGENTKIT_SCHEMA_MODE: "migrate" })).toThrow(/must be one of/);
+    expect(() => loadConfig({ ...validEnv, RETINUE_SCHEMA_MODE: "migrate" })).toThrow(/must be one of/);
   });
 
   it("takes the environment as an argument, so nothing global is read", () => {
@@ -101,7 +101,7 @@ describe("configuration", () => {
     // somewhere that is not `process.env`.
     const config = loadConfig({ ...validEnv, PORT: "9999" });
     expect(config.port).toBe(9999);
-    expect(process.env["AGENTKIT_DATABASE_URL"]).toBeUndefined();
+    expect(process.env["RETINUE_DATABASE_URL"]).toBeUndefined();
   });
 });
 
@@ -110,7 +110,7 @@ describe("startup provisioning", () => {
   const bootAgainst = async (sql: SqlExecutor, mode: string) => {
     const logs: Record<string, unknown>[] = [];
     const result = await boot({
-      env: { ...validEnv, AGENTKIT_SCHEMA_MODE: mode },
+      env: { ...validEnv, RETINUE_SCHEMA_MODE: mode },
       connect: async () => ({ sql }),
       log: (entry) => logs.push(entry),
       version: "test",
@@ -312,11 +312,11 @@ describe("runnable commands", () => {
       () => null,
       (e: unknown) => e,
     );
-    // Ordering matters: a deployment that removed AGENTKIT_DATABASE_URL must be told about *that*, not
-    // about AGENTKIT_APP_MODULE. An earlier version loaded the app module first and reported the wrong
+    // Ordering matters: a deployment that removed RETINUE_DATABASE_URL must be told about *that*, not
+    // about RETINUE_APP_MODULE. An earlier version loaded the app module first and reported the wrong
     // variable.
     expect(error).toBeInstanceOf(ConfigurationError);
-    expect((error as Error).message).toContain("AGENTKIT_DATABASE_URL");
+    expect((error as Error).message).toContain("RETINUE_DATABASE_URL");
   });
 
   it("refuses to start without an app module, and says why there is no default", async () => {

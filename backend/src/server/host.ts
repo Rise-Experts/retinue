@@ -1,9 +1,9 @@
 /**
  * Reference GraphQL host (#108).
  *
- * `@agentkit/backend` ships the schema as SDL and a thin resolver map with **no server dependency**,
+ * `@retinue/agentkit` ships the schema as SDL and a thin resolver map with **no server dependency**,
  * so a host can mount it on Yoga, Apollo or Mercurius. This is one such host, in its own workspace
- * precisely so the library keeps that property — AC-6 of #108 is that `@agentkit/backend` gained no
+ * precisely so the library keeps that property — AC-6 of #108 is that `@retinue/agentkit` gained no
  * GraphQL-server dependency, and putting Yoga inside it would have failed that outright.
  *
  * It is a *reference* host, not the sanctioned one. Nothing here is business logic: the resolver map

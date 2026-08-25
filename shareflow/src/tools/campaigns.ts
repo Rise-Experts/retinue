@@ -13,8 +13,8 @@
  * - **No paid operations.** See `PAID_CAMPAIGN_OPERATIONS` below.
  */
 import { z } from "zod";
-import { asId, type Tool } from "@agentkit/backend";
-import { defineDelegatingTool } from "@agentkit/backend";
+import { asId, type Tool } from "@retinue/agentkit";
+import { defineDelegatingTool } from "@retinue/agentkit";
 import {
   CAMPAIGN_CADENCES,
   CAMPAIGN_MEDIA_TYPES,

@@ -6,16 +6,16 @@
  * place to undermine that, since example code is what people copy.
  *
  * So this reads tenant and principal from request headers — which is exactly what you must not do in production
- * — and **refuses to run unless `AGENTKIT_EXAMPLE_DEV_AUTH=1` is set explicitly**. The opt-in is the whole
+ * — and **refuses to run unless `RETINUE_EXAMPLE_DEV_AUTH=1` is set explicitly**. The opt-in is the whole
  * point: nobody reaches this code path by accident, and the failure is a startup error naming the variable
  * rather than an open API nobody notices.
  */
 
-import { asId, parseExecutionContext } from "@agentkit/backend";
-import type { ExecutionContext } from "@agentkit/backend";
-import type { Authenticate } from "@agentkit/backend/server";
+import { asId, parseExecutionContext } from "@retinue/agentkit";
+import type { ExecutionContext } from "@retinue/agentkit";
+import type { Authenticate } from "@retinue/agentkit/server";
 
-export const DEV_AUTH_VARIABLE = "AGENTKIT_EXAMPLE_DEV_AUTH";
+export const DEV_AUTH_VARIABLE = "RETINUE_EXAMPLE_DEV_AUTH";
 
 /** Headers the dev authenticator reads. Named so the README and the code cannot drift. */
 export const TENANT_HEADER = "x-agentkit-tenant";

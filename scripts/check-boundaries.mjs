@@ -27,13 +27,13 @@ const GENERIC_ROOTS = ["backend", "server", "frontend", "examples"];
  * Integration workspaces (#114) — the one place a product name is allowed to appear.
  *
  * `owns` is the set of product names *this* workspace may name. Everything else in `PRODUCT_NAMES`
- * stays forbidden: `@agentkit/shareflow` importing Twenty is still a violation, because the
+ * stays forbidden: `@retinue/shareflow` importing Twenty is still a violation, because the
  * integration package is an integration for one product, not a place where every boundary stops
  * applying.
  */
 const INTEGRATION_PACKAGES = {
   // ShareFlow's own repository calls itself Chorus (`CHORUS_TEST_MODE`), so both names are one product.
-  shareflow: { specifier: "@agentkit/shareflow", owns: ["shareflow", "chorus"] },
+  shareflow: { specifier: "@retinue/shareflow", owns: ["shareflow", "chorus"] },
 };
 
 const DEFAULT_ROOTS = [...GENERIC_ROOTS, ...Object.keys(INTEGRATION_PACKAGES)];
@@ -280,11 +280,11 @@ export function scan(roots = DEFAULT_ROOTS) {
         const add = (rule) => violations.push({ file: path, specifier: spec, rule });
 
         // R1 — no deep cross-workspace imports; use the package root.
-        if (/^@agentkit\/[^/]+\/(src|dist)\//.test(spec)) add("R1 deep cross-workspace import (use the package root)");
+        if (/^@retinue\/[^/]+\/(src|dist)\//.test(spec)) add("R1 deep cross-workspace import (use the package root)");
 
         // R2 — frontend may only `import type` from the backend's public entry.
-        if (isFrontend && /^@agentkit\/backend(\/|$)/.test(spec) && !typeOnly)
-          add("R2 frontend must import type-only from @agentkit/backend");
+        if (isFrontend && /^@retinue\/agentkit(\/|$)/.test(spec) && !typeOnly)
+          add("R2 frontend must import type-only from @retinue/agentkit");
 
         // R3 — the AI/provider SDK is confined to the models layer.
         if ((spec === "ai" || spec.startsWith("@ai-sdk/")) && !isModels)
@@ -320,7 +320,7 @@ export function scan(roots = DEFAULT_ROOTS) {
 
         // R4 — ports must not import adapters.
         if (isPersistence &&
-            (/(^|\/)adapters?\//.test(spec) || ADAPTER_NAMES.some((a) => spec === `@agentkit/${a}` || spec.startsWith(`@agentkit/${a}/`))))
+            (/(^|\/)adapters?\//.test(spec) || ADAPTER_NAMES.some((a) => spec === `@retinue/${a}` || spec.startsWith(`@retinue/${a}/`))))
           add("R4 ports must not import adapters");
 
         // R5 — no forbidden product names in a generic package's imports.
@@ -333,7 +333,19 @@ export function scan(roots = DEFAULT_ROOTS) {
           add("R5 forbidden product name in import specifier");
 
         // R6 — core must be self-contained (no imports escaping core/).
-        if (isCore && spec.startsWith("../")) add("R6 core must not import outside core/");
+        /**
+         * R6 — core is self-contained. Tests excluded, and that is not a softening.
+         *
+         * A test lives in `core/__tests__/`, so importing the module under test reads as `../env.js` — one level
+         * up, and still inside core. The rule matched the `../` and reported an escape that was not one. The hole
+         * survived because core had no tests until #192 added the first; the first test in a directory is a
+         * reliable way to find a rule that never ran there.
+         *
+         * The rule is about what the shipped `core` depends on, and a test file is not shipped — the same
+         * reasoning R7 already applies to the tool envelope's tests.
+         */
+        if (isCore && !path.includes("__tests__") && spec.startsWith("../"))
+          add("R6 core must not import outside core/");
 
         // R7 — the tool envelope performs no I/O of its own (#113 AC-4).
         //
@@ -348,8 +360,8 @@ export function scan(roots = DEFAULT_ROOTS) {
         // R8 — a generic workspace must not import an integration package (#114 AC-2).
         //
         // Keyed on the package name, not on the word "shareflow". R5 already catches
-        // `@agentkit/shareflow` today, but only because of how it happens to be spelled — rename the
-        // package to `@agentkit/social` and R5 goes quiet while the architectural rule it was standing
+        // `@retinue/shareflow` today, but only because of how it happens to be spelled — rename the
+        // package to `@retinue/social` and R5 goes quiet while the architectural rule it was standing
         // in for is just as broken.
         if (isGeneric && INTEGRATION_SPECIFIERS.some((s) => spec === s || spec.startsWith(`${s}/`)))
           add("R8 a generic package must not import an integration package");

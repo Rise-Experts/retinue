@@ -27,7 +27,7 @@
  *    research is exactly when it is needed.
  */
 import { z } from "zod";
-import { AgentPlatformError, defineDelegatingTool, type Tool } from "@agentkit/backend";
+import { AgentPlatformError, defineDelegatingTool, type Tool } from "@retinue/agentkit";
 import type { ReadSourceResult, SearchOutcome, SourcePassage } from "../services/index.js";
 import type { ShareFlowToolContext, ShareFlowToolFactory } from "./index.js";
 

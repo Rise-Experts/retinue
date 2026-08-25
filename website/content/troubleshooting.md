@@ -25,4 +25,4 @@ sidebar_position: 6
 
 ## Still stuck?
 
-Open an issue on **[GitHub](https://github.com/Rise-Experts/agentkit)**.
+Open an issue on **[GitHub](https://github.com/Rise-Experts/retinue)**.

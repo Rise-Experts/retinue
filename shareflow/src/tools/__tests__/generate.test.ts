@@ -19,7 +19,7 @@ import {
   type TenantId,
   type Tool,
   type ToolResult,
-} from "@agentkit/backend";
+} from "@retinue/agentkit";
 import {
   DEFAULT_REPAIR_BOUND,
   DUPLICATE_CONTENT_CODE,

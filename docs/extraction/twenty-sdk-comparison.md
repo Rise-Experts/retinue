@@ -75,7 +75,7 @@ A failed run is delivered as a `next` frame carrying **both** `data` and `errors
 protocol error frame. An error frame carries no `id:`, so a failed run would otherwise be unresumable
 and a reconnecting client would never learn the run had ended.
 
-`graphql-sse` is a **devDependency** of `@agentkit/backend`, used only to validate the frames in tests.
+`graphql-sse` is a **devDependency** of `@retinue/agentkit`, used only to validate the frames in tests.
 The adapter still writes plain text and takes no server dependency.
 
 The SPEC numbers above were stale: on `develop`, #27 is the usage hook and **#37** is the SSE adapter.

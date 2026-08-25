@@ -1,7 +1,7 @@
-# `@agentkit/example-app`
+# `@retinue/example-app`
 
 A runnable app module and a browser test surface (#155). This is what makes
-`node server/dist/cli.js` boot: `AGENTKIT_APP_MODULE` needs a module that default-exports
+`node server/dist/cli.js` boot: `RETINUE_APP_MODULE` needs a module that default-exports
 `{ authenticate, deps, engine, buildContext }`, and until this existed there was none anywhere.
 
 ## What this is not
@@ -9,7 +9,7 @@ A runnable app module and a browser test surface (#155). This is what makes
 Example code is what people copy, so the disclaimers come first.
 
 - **Not an auth reference.** `authenticate` reads the tenant from a request header, which is not authentication —
-  any caller can claim any tenant. It refuses to start without `AGENTKIT_EXAMPLE_DEV_AUTH=1` for that reason.
+  any caller can claim any tenant. It refuses to start without `RETINUE_EXAMPLE_DEV_AUTH=1` for that reason.
 - **Not a deployment template.** One process per role, no TLS, no rate limiting, GraphiQL on.
 - **Not a product UI.** It is pleasant enough to read a model's answers in, because something you are meant to
   *use* while judging an assistant has to be — but nothing here is a component library, and the layout is not
@@ -21,21 +21,21 @@ The composer is the one bundled thing here — Tiptap, with a `/` command menu �
 first run:
 
 ```bash
-npm run build -w @agentkit/example-app
+npm run build -w @retinue/example-app
 ```
 
 Started without it, the page still loads and says exactly this in red rather than presenting a dead input: the
 server answers `/composer.js` with a script that reports itself missing. `npm run build:composer -w
-@agentkit/example-app -- --watch` while working on it.
+@retinue/example-app -- --watch` while working on it.
 
 ## Run it
 
 ```bash
-cp .env.example .env      # then set AGENTKIT_MODEL_API_KEY
+cp .env.example .env      # then set RETINUE_MODEL_API_KEY
 npm run build
-npm run migrate -w @agentkit/example-app   # once — creates the schema and its tables
-npm run app    -w @agentkit/example-app    # terminal 1: page + GraphQL + SSE
-npm run worker -w @agentkit/example-app    # terminal 2: nothing executes without this
+npm run migrate -w @retinue/example-app   # once — creates the schema and its tables
+npm run app    -w @retinue/example-app    # terminal 1: page + GraphQL + SSE
+npm run worker -w @retinue/example-app    # terminal 2: nothing executes without this
 ```
 
 Then open <http://localhost:4000/>.
@@ -47,7 +47,7 @@ exists to avoid — and #144 recorded that this boundary had never actually been
 ## Or run it with nothing installed
 
 ```bash
-AGENTKIT_MODEL_API_KEY=sk-… AGENTKIT_EXAMPLE_DEV_AUTH=1 npm run memory -w @agentkit/example-app
+RETINUE_MODEL_API_KEY=sk-… RETINUE_EXAMPLE_DEV_AUTH=1 npm run memory -w @retinue/example-app
 ```
 
 One process, in-memory adapters, an in-process queue. No database, no Redis, no migration, no second terminal.
@@ -70,8 +70,8 @@ Use `npm run app` for anything past a first look.
 ## Prove the durable path actually recovers
 
 ```bash
-npm run app -w @agentkit/example-app        # terminal 1
-npm run test:kill -w @agentkit/example-app  # terminal 2 — starts and kills its own workers
+npm run app -w @retinue/example-app        # terminal 1
+npm run test:kill -w @retinue/example-app  # terminal 2 — starts and kills its own workers
 ```
 
 Starts a run that performs an external write, `SIGKILL`s the worker mid-run, starts a replacement, and asserts
@@ -84,7 +84,7 @@ checkpointed" is milliseconds wide, and a pass is evidence rather than proof. It
 ## Measure it at size
 
 ```bash
-npm run loadtest -w @agentkit/example-app -- --messages=2000
+npm run loadtest -w @retinue/example-app -- --messages=2000
 ```
 
 Percentiles rather than averages at three sizes, so a linear scan hiding behind a small fixture shows up as a
@@ -98,14 +98,14 @@ Everything is in `.env` at the repository root; `.env.example` documents each va
 
 | Variable | Notes |
 |---|---|
-| `AGENTKIT_MODEL_API_KEY` | **Required, no default.** A key for whatever `AGENTKIT_MODEL_BASE_URL` points at. |
-| `AGENTKIT_MODEL_ID` | Defaults to `gpt-4o`. Mini is enough to prove the plumbing works and not enough to show the agent behaving. |
-| `AGENTKIT_MODEL_BASE_URL` | Unset for `api.openai.com`; set for a local server. |
-| `AGENTKIT_DATABASE_URL` | Any Postgres. |
-| `AGENTKIT_EXAMPLE_SCHEMA` | A **dedicated schema**, default `agentkit_example`. |
-| `AGENTKIT_REDIS_URL` | Include a database number (`/9`) if the Redis is shared. |
-| `AGENTKIT_SCHEMA_MODE` | `off`, so booting never migrates. Migration is a command you run on purpose. |
-| `AGENTKIT_EXAMPLE_DEV_AUTH` | Must be `1`. There is no implicit way to enable header auth. |
+| `RETINUE_MODEL_API_KEY` | **Required, no default.** A key for whatever `RETINUE_MODEL_BASE_URL` points at. |
+| `RETINUE_MODEL_ID` | Defaults to `gpt-4o`. Mini is enough to prove the plumbing works and not enough to show the agent behaving. |
+| `RETINUE_MODEL_BASE_URL` | Unset for `api.openai.com`; set for a local server. |
+| `RETINUE_DATABASE_URL` | Any Postgres. |
+| `RETINUE_EXAMPLE_SCHEMA` | A **dedicated schema**, default `agentkit_example`. |
+| `RETINUE_REDIS_URL` | Include a database number (`/9`) if the Redis is shared. |
+| `RETINUE_SCHEMA_MODE` | `off`, so booting never migrates. Migration is a command you run on purpose. |
+| `RETINUE_EXAMPLE_DEV_AUTH` | Must be `1`. There is no implicit way to enable header auth. |
 
 ### The model needs tool calling
 
@@ -115,8 +115,8 @@ endpoint cannot call tools, the example fails on the first turn — which is the
 
 ### It shares a database, and stays out of the way
 
-`AGENTKIT_EXAMPLE_SCHEMA` exists so the example can run inside a database that belongs to something else. All 20
-migrations land in that schema; nothing touches `public`. `npm run migrate -w @agentkit/example-app -- --down`
+`RETINUE_EXAMPLE_SCHEMA` exists so the example can run inside a database that belongs to something else. All 20
+migrations land in that schema; nothing touches `public`. `npm run migrate -w @retinue/example-app -- --down`
 drops the schema and everything in it. The migrate script **asserts the `search_path` actually took effect**,
 because a silently ignored connection option would put every table in `public` — which here is another project's
 schema.

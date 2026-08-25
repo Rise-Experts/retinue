@@ -14,7 +14,7 @@
  *   threshold can see.
  */
 
-import { compactThread, estimateTokens } from "@agentkit/backend";
+import { compactThread, estimateTokens } from "@retinue/agentkit";
 import type { ExampleStores } from "./stores.js";
 import type {
   ConversationId,
@@ -23,7 +23,7 @@ import type {
   TenantId,
   ThreadSummarizer,
   ThreadSummary,
-} from "@agentkit/backend";
+} from "@retinue/agentkit";
 
 /**
  * Compact when the window is this full.

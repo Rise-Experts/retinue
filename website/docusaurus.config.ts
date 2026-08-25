@@ -2,12 +2,12 @@ import type { Config } from "@docusaurus/types";
 import type * as Preset from "@docusaurus/preset-classic";
 
 const config: Config = {
-  title: "@agentkit",
+  title: "Retinue",
   tagline: "A reusable, provider-neutral AI agent platform",
   url: "https://docs.agentkit.riseexperts.de",
   baseUrl: "/",
   organizationName: "Rise-Experts",
-  projectName: "agentkit",
+  projectName: "retinue",
   onBrokenLinks: "warn",
   onBrokenMarkdownLinks: "warn",
 
@@ -56,7 +56,7 @@ const config: Config = {
           path: "content",
           routeBasePath: "docs",
           sidebarPath: "./sidebars.ts",
-          editUrl: "https://github.com/Rise-Experts/agentkit/tree/main/website/content/",
+          editUrl: "https://github.com/Rise-Experts/retinue/tree/main/website/content/",
         },
         blog: false,
         theme: { customCss: "./src/css/custom.css" },
@@ -71,12 +71,12 @@ const config: Config = {
       disableSwitch: false,
     },
     navbar: {
-      title: "@agentkit",
+      title: "Retinue",
       items: [
         { type: "docSidebar", sidebarId: "docs", position: "left", label: "Docs" },
         { to: "/api/", label: "API", position: "left" },
         { to: "/specifications/", label: "Specs", position: "left" },
-        { href: "https://github.com/Rise-Experts/agentkit", label: "GitHub", position: "right" },
+        { href: "https://github.com/Rise-Experts/retinue", label: "GitHub", position: "right" },
       ],
     },
     footer: {
@@ -94,11 +94,11 @@ const config: Config = {
           title: "More",
           items: [
             { label: "Specifications", to: "/specifications/" },
-            { label: "GitHub", href: "https://github.com/Rise-Experts/agentkit" },
+            { label: "GitHub", href: "https://github.com/Rise-Experts/retinue" },
           ],
         },
       ],
-      copyright: "© Rise Experts — @agentkit",
+      copyright: "© Rise Experts — Retinue",
     },
   } satisfies Preset.ThemeConfig,
 };

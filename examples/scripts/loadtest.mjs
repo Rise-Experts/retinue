@@ -22,9 +22,9 @@
 import pg from "pg";
 import { performance } from "node:perf_hooks";
 
-const SCHEMA = process.env.AGENTKIT_EXAMPLE_SCHEMA ?? "agentkit_example";
-const BASE = process.env.AGENTKIT_EXAMPLE_URL ?? "http://localhost:4000";
-const TENANT = process.env.AGENTKIT_LOADTEST_TENANT ?? "loadtest";
+const SCHEMA = process.env.RETINUE_EXAMPLE_SCHEMA ?? "agentkit_example";
+const BASE = process.env.RETINUE_EXAMPLE_URL ?? "http://localhost:4000";
+const TENANT = process.env.RETINUE_LOADTEST_TENANT ?? "loadtest";
 const PRINCIPAL = "loadtest-principal";
 
 const arg = (name, fallback) => {
@@ -35,12 +35,12 @@ const MESSAGES = Number(arg("messages", 2000));
 const NOTES = Number(arg("notes", 500));
 const SAMPLES = Number(arg("samples", 40));
 
-if (!process.env.AGENTKIT_DATABASE_URL) {
-  console.error("✗ AGENTKIT_DATABASE_URL is required.");
+if (!process.env.RETINUE_DATABASE_URL) {
+  console.error("✗ RETINUE_DATABASE_URL is required.");
   process.exit(2);
 }
 
-const url = new URL(process.env.AGENTKIT_DATABASE_URL);
+const url = new URL(process.env.RETINUE_DATABASE_URL);
 url.searchParams.set("options", `-c search_path=${SCHEMA},public`);
 const pool = new pg.Pool({ connectionString: url.toString(), max: 8 });
 const q = async (text, params) => (await pool.query(text, params)).rows;

@@ -15,7 +15,7 @@ import {
   type PrincipalId,
   type TenantId,
   type Tool,
-} from "@agentkit/backend";
+} from "@retinue/agentkit";
 import {
   SHAREFLOW_CONTEXT_PROVIDER_IDS,
   SHAREFLOW_TOOL_CATEGORIES,

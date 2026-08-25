@@ -18,7 +18,7 @@ import {
   createAgent,
   createMemoryPrincipalMemoryStore,
   createPrincipalMemoryProvider,
-} from "@agentkit/backend";
+} from "@retinue/agentkit";
 
 const memory = createMemoryPrincipalMemoryStore(); // swap for a Postgres adapter in production
 
@@ -34,7 +34,7 @@ An extraction step *proposes* candidate facts; `commitExtractedMemories` **valid
 them against existing entries before committing — raw model output is never stored directly.
 
 ```ts
-import { commitExtractedMemories } from "@agentkit/backend";
+import { commitExtractedMemories } from "@retinue/agentkit";
 
 await commitExtractedMemories(memory, {
   tenantId,

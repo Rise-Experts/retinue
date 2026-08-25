@@ -1,7 +1,7 @@
 /**
  * The example app module — #155.
  *
- * `AGENTKIT_APP_MODULE` must default-export `{ authenticate, deps, engine, buildContext }`, and until now no such
+ * `RETINUE_APP_MODULE` must default-export `{ authenticate, deps, engine, buildContext }`, and until now no such
  * module existed anywhere: `node server/dist/cli.js` was a documented command with nothing to boot. This is that
  * module.
  *
@@ -17,16 +17,16 @@
  * - **Not a product UI.** The page is deliberately plain; see `public/index.html`.
  */
 
-import { createAuthorizationPolicy, resolveCapabilities, createDefaultEngine, defineDelegatingTool, EMPTY_RUN_STREAM_STATE, createApprovalGate, createApprovalService, computeModelCostMinorUnits, commitExtractedMemories, asId, assemblePrompt, createCitationEmitter, createPrincipalMemoryProvider, createRunSkillTracker, createSkillResolver, createQuestionService, createQuotaGuard, createStoredLimitResolver, questionPending, createRunApprovals, createToolRegistry, parseExecutionContext, reduceRunEvent } from "@agentkit/backend";
-import { createBullMqJobDispatcher, createBullMqRunQueue } from "@agentkit/backend/adapters/bullmq";
-import { createPostgresApprovalGrantStore, createPostgresIdempotencyStore, createPostgresInteractionStore, createPostgresPrincipalMemoryStore, createPostgresRunEventLog, createPostgresSkillStore, createPostgresRunStore, createPostgresSessionStateStore, createPostgresUsageLimitStore, createPostgresUsageRollupStore, createPostgresUsageStore, createPostgresConversationStore } from "@agentkit/backend/adapters/postgres";
-import { createRedisLiveEventSource } from "@agentkit/backend/adapters/redis";
-import type { ContextBudget, ContextInspection, QuestionSpec, AgentManifest, ExecutionContext, ModelTurnTool, ResolverDeps, Run, Tool, TurnMessage } from "@agentkit/backend";
-import type { SqlExecutor, TransactionRunner } from "@agentkit/backend/adapters/postgres";
+import { createAuthorizationPolicy, resolveCapabilities, createDefaultEngine, defineDelegatingTool, EMPTY_RUN_STREAM_STATE, createApprovalGate, createApprovalService, computeModelCostMinorUnits, commitExtractedMemories, asId, assemblePrompt, createCitationEmitter, createPrincipalMemoryProvider, createRunSkillTracker, createSkillResolver, createQuestionService, createQuotaGuard, createStoredLimitResolver, questionPending, createRunApprovals, createToolRegistry, parseExecutionContext, reduceRunEvent } from "@retinue/agentkit";
+import { createBullMqJobDispatcher, createBullMqRunQueue } from "@retinue/agentkit/adapters/bullmq";
+import { createPostgresApprovalGrantStore, createPostgresIdempotencyStore, createPostgresInteractionStore, createPostgresPrincipalMemoryStore, createPostgresRunEventLog, createPostgresSkillStore, createPostgresRunStore, createPostgresSessionStateStore, createPostgresUsageLimitStore, createPostgresUsageRollupStore, createPostgresUsageStore, createPostgresConversationStore } from "@retinue/agentkit/adapters/postgres";
+import { createRedisLiveEventSource } from "@retinue/agentkit/adapters/redis";
+import type { ContextBudget, ContextInspection, QuestionSpec, AgentManifest, ExecutionContext, ModelTurnTool, ResolverDeps, Run, Tool, TurnMessage } from "@retinue/agentkit";
+import type { SqlExecutor, TransactionRunner } from "@retinue/agentkit/adapters/postgres";
 import { Redis } from "ioredis";
-import type { AgentkitConfig } from "@agentkit/backend/server";
+import type { AgentkitConfig } from "@retinue/agentkit/server";
 import { createDevAuthenticate } from "./auth.js";
-import type { Authenticate } from "@agentkit/backend/server";
+import type { Authenticate } from "@retinue/agentkit/server";
 
 /** One authenticator, built the first time a request needs it. */
 let devAuth: Authenticate | undefined;
@@ -204,7 +204,7 @@ const skillTracker = (backend: ExampleBackend) => {
 const questionServiceFor = (backend: ExampleBackend) =>
   createQuestionService({
     interactions: backend.interactions,
-    dispatcher: createBullMqJobDispatcher(createBullMqRunQueue({ url: process.env["AGENTKIT_REDIS_URL"] ?? "" })),
+    dispatcher: createBullMqJobDispatcher(createBullMqRunQueue({ url: process.env["RETINUE_REDIS_URL"] ?? "" })),
     runs: backend.runs,
   });
 
@@ -592,6 +592,18 @@ const app = {
   authenticate: ((request: Request) => authenticateOnce()(request)) as Authenticate,
 
   /**
+   * Readiness has to include Redis, because this app cannot work without it.
+   *
+   * The host only probes Redis if the app hands it a connection, and this app did not -- so `/readyz`
+   * answered "ready" with Redis down, and traffic arrived at a process that could not take a
+   * per-conversation lock or enqueue a run. Postgres being reachable says nothing about that.
+   *
+   * One connection, built once at boot: `cli.ts` calls this a single time and keeps the result for the
+   * probe, so this is not a connection per health check.
+   */
+  redis: (config: { readonly redisUrl: string }) => new Redis(config.redisUrl),
+
+  /**
    * What the configured model costs, so recorded usage can carry a price — #166.
    *
    * Resolves for the one model this app is configured with, and null for anything else: a resolver that priced
@@ -794,7 +806,7 @@ export const composeEngine = (backend: ExampleBackend) => {
       approvals: createApprovalService({
         interactions,
         grants: backend.grants,
-        dispatcher: createBullMqJobDispatcher(createBullMqRunQueue({ url: process.env["AGENTKIT_REDIS_URL"] ?? "" })),
+        dispatcher: createBullMqJobDispatcher(createBullMqRunQueue({ url: process.env["RETINUE_REDIS_URL"] ?? "" })),
         runs: backend.runs,
       }) as never,
       tools: registry as never,
@@ -947,7 +959,7 @@ const exampleSystemPrompt = async (
   mode: ConversationMode,
   backend: ExampleBackend,
 ): Promise<string> => {
-  const { gatherSections, renderContextBlock, makeNonce } = await import("@agentkit/backend");
+  const { gatherSections, renderContextBlock, makeNonce } = await import("@retinue/agentkit");
   const { randomBytes } = await import("node:crypto");
   /**
    * The notebook's provider, plus the **platform's** principal-memory provider.

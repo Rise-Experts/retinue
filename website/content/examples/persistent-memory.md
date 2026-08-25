@@ -13,8 +13,8 @@ import {
   createMemoryPrincipalMemoryStore,
   createPrincipalMemoryProvider,
   commitExtractedMemories,
-} from "@agentkit/backend";
-import { asId } from "@agentkit/backend";
+} from "@retinue/agentkit";
+import { asId } from "@retinue/agentkit";
 
 const memory = createMemoryPrincipalMemoryStore();
 const tenantId = asId("acme");

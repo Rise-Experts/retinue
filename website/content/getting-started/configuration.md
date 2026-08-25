@@ -10,7 +10,7 @@ sidebar_position: 3
 adapter; override only what you need:
 
 ```ts
-import { createAgent } from "@agentkit/backend";
+import { createAgent } from "@retinue/agentkit";
 
 const agent = createAgent({
   manifest: { id: "assistant", name: "Assistant", instructions: "…", modelPolicy: { role: "smart" } },
@@ -38,7 +38,7 @@ import {
   createToolRegistry,
   createDefaultEngine,
   createUsageRecorder,
-} from "@agentkit/backend";
+} from "@retinue/agentkit";
 
 const worker = createDurableWorker({
   runs,                  // RunStore (Postgres)

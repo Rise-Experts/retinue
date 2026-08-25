@@ -9,8 +9,8 @@
  * Nothing in this directory performs I/O — R7 in `scripts/check-boundaries.mjs` fails the build if it
  * tries. A ShareFlow tool is the envelope from #113 over a service method; the service does the work.
  */
-import type { DelegatingToolDeps, ExecutionContext, Tool, ToolProvider } from "@agentkit/backend";
-import { AgentPlatformError } from "@agentkit/backend";
+import type { DelegatingToolDeps, ExecutionContext, Tool, ToolProvider } from "@retinue/agentkit";
+import { AgentPlatformError } from "@retinue/agentkit";
 import type { ShareFlowServices } from "../services/index.js";
 
 /**

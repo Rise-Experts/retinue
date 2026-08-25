@@ -1,5 +1,5 @@
 {
-  "name": "@agentkit/backend",
+  "name": "@retinue/agentkit",
   "version": "0.0.0",
   "private": true,
   "description": "Server-side contracts and runtime for the reusable AI platform: core domain, models, agents, tools, MCP, skills, context, HITL and persistence ports.",

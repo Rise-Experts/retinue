@@ -7,7 +7,7 @@ sidebar_position: 1
 A complete, minimal embedded agent — no server.
 
 ```ts
-import { createAgent } from "@agentkit/backend";
+import { createAgent } from "@retinue/agentkit";
 
 const agent = createAgent({
   manifest: {

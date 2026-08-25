@@ -23,7 +23,7 @@
  *    reported as a boolean the model cannot get wrong.
  */
 import { z } from "zod";
-import { asId, defineDelegatingTool, type Tool } from "@agentkit/backend";
+import { asId, defineDelegatingTool, type Tool } from "@retinue/agentkit";
 import {
   POST_DRAFT_STATUSES,
   type CampaignId,

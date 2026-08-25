@@ -27,7 +27,7 @@
  * Every method takes an `ExecutionContext` first, and the implementation must scope its query by
  * `context.tenantId`. A tenant id passed in the arguments would be a value the model can choose.
  */
-import type { ExecutionContext } from "@agentkit/backend";
+import type { ExecutionContext } from "@retinue/agentkit";
 import type {
   CampaignId,
   InboxCommentId,

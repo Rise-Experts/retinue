@@ -17,20 +17,20 @@
 import { readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { resolve } from "node:path";
-import { turnText, asId, startOrEnqueueRun, createResolvers, bucketStartFor, createRollupJob, ROLLUP_PERIODS, parseWindowKey } from "@agentkit/backend";
-import { createPostgresApprovalGrantStore, createPostgresConversationStore, createPostgresMessageStore, createPostgresSessionStateStore, createPostgresUsageLimitStore, createPostgresUsageRollupStore } from "@agentkit/backend/adapters/postgres";
-import { citationViewModel, formatCost, formatTokens, shapeUsagePanel } from "@agentkit/frontend";
+import { turnText, asId, startOrEnqueueRun, createResolvers, bucketStartFor, createRollupJob, ROLLUP_PERIODS, parseWindowKey } from "@retinue/agentkit";
+import { createPostgresApprovalGrantStore, createPostgresConversationStore, createPostgresMessageStore, createPostgresSessionStateStore, createPostgresUsageLimitStore, createPostgresUsageRollupStore } from "@retinue/agentkit/adapters/postgres";
+import { citationViewModel, formatCost, formatTokens, shapeUsagePanel } from "@retinue/react";
 import { COMPACT_AT_FRACTION, compactConversation, createExampleSummarizer } from "./compaction.js";
 import { HISTORY_READ_LIMIT } from "./history.js";
 import { contextUsage } from "./context-usage.js";
 import { exampleProviders } from "./providers.js";
 import { resolveExampleModel } from "./model.js";
 import type { ConversationMode } from "./modes.js";
-import type { ContextProvider } from "@agentkit/backend";
+import type { ContextProvider } from "@retinue/agentkit";
 import type { ExampleStores } from "./stores.js";
-import type { ConversationId, ExecutionContext, PrincipalId, MessageId, MessagePartId, ResolverDeps, RunId, TenantId } from "@agentkit/backend";
-import type { SqlExecutor } from "@agentkit/backend/adapters/postgres";
-import { createAgentkitHost, type Authenticate } from "@agentkit/backend/server";
+import type { ConversationId, ExecutionContext, PrincipalId, MessageId, MessagePartId, ResolverDeps, RunId, TenantId } from "@retinue/agentkit";
+import type { SqlExecutor } from "@retinue/agentkit/adapters/postgres";
+import { createAgentkitHost, type Authenticate } from "@retinue/agentkit/server";
 import { conversationTurns } from "./history.js";
 import {
   CONVERSATION_MODES,
@@ -102,7 +102,7 @@ export const startExampleServer = async (options: ExampleServerOptions) => {
   /**
    * The composer bundle — #179.
    *
-   * The one built asset on the page. Missing means `npm run build -w @agentkit/example-app` has not run, and the
+   * The one built asset on the page. Missing means `npm run build -w @retinue/example-app` has not run, and the
    * response says so **as JavaScript that reports it**: a 404 here would leave the page with a dead input and no
    * explanation, which is the failure mode this codebase keeps finding. Served from disk per request for the same
    * reason the page is — a stale bundle after an edit costs more than a file read.
@@ -119,7 +119,7 @@ export const startExampleServer = async (options: ExampleServerOptions) => {
       });
     } catch {
       const message =
-        "the composer bundle is missing — run `npm run build -w @agentkit/example-app`. " +
+        "the composer bundle is missing — run `npm run build -w @retinue/example-app`. " +
         `Looked in ${path}.`;
       return new Response(
         `console.error(${JSON.stringify(`agentkit: ${message}`)});\n` +
@@ -549,7 +549,7 @@ export const startExampleServer = async (options: ExampleServerOptions) => {
      * quiet period looks quiet; the quota fraction is capped at 1 because a bar wider than its track is a
      * rendering bug. A page that reimplemented any of that would be a second answer to the same question.
      *
-     * `@agentkit/frontend` is a runtime dependency here for that reason. Its React components stay untouched —
+     * `@retinue/react` is a runtime dependency here for that reason. Its React components stay untouched —
      * `shapeUsagePanel`, `formatCost` and `formatTokens` are react-free by design, and `./ui` is opt-in.
      */
     if (url.pathname === "/api/usage" && request.method === "GET") {

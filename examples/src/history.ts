@@ -14,7 +14,7 @@
  * The fold is not merely redundant now — keeping it would double every assistant turn.
  */
 
-import type { ConversationId, Message, TenantId, TurnMessage } from "@agentkit/backend";
+import type { ConversationId, Message, TenantId, TurnMessage } from "@retinue/agentkit";
 import type { ExampleStores } from "./stores.js";
 
 /**

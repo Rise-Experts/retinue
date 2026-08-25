@@ -28,7 +28,7 @@
  * needed; the checker decides what leaves.
  */
 import { z } from "zod";
-import { AgentPlatformError, asId, defineDelegatingTool, type Tool } from "@agentkit/backend";
+import { AgentPlatformError, asId, defineDelegatingTool, type Tool } from "@retinue/agentkit";
 import { findForbiddenClaims } from "../context/claims.js";
 import {
   type ContentAngle,

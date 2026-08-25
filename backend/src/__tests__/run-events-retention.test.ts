@@ -18,7 +18,7 @@ const T1 = asId<TenantId>("ret-t1");
 const T2 = asId<TenantId>("ret-t2");
 const C1 = asId<ConversationId>("ret-c1");
 const AGENT = asId("ret-agent");
-const PG_URL = process.env["AGENTKIT_TEST_PG_URL"];
+const PG_URL = process.env["RETINUE_TEST_PG_URL"];
 
 const pglite = (db: PGlite): SqlExecutor => ({
   query<Row>(text: string, params?: readonly unknown[]): Promise<Row[]> {
@@ -374,7 +374,7 @@ describe("the append-only port is unchanged — AC-8", () => {
 
 if (!PG_URL) {
   describe("retention against a real server", () => {
-    it("[skipped: AGENTKIT_TEST_PG_URL unset — EXPLAIN needs a planner with statistics, and the append race needs two connections]", () => {
+    it("[skipped: RETINUE_TEST_PG_URL unset — EXPLAIN needs a planner with statistics, and the append race needs two connections]", () => {
       expect(PG_URL).toBeUndefined();
     });
   });

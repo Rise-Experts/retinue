@@ -31,7 +31,7 @@ import {
   type TenantId,
   type Tool,
   type ToolResult,
-} from "@agentkit/backend";
+} from "@retinue/agentkit";
 import {
   PUBLISHING_TOOL_FACTORIES,
   PUBLISHING_TOOL_NAMES,

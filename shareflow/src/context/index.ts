@@ -15,7 +15,7 @@
  * - **`estimatedTokens` is computed, not asserted.** A provider that under-reports its size defeats
  *   the prompt budget, and every provider guessing separately guarantees they disagree.
  */
-import type { ContextKind, ContextOrigin, ContextSection, ContextSensitivity, PruneStage } from "@agentkit/backend";
+import type { ContextKind, ContextOrigin, ContextSection, ContextSensitivity, PruneStage } from "@retinue/agentkit";
 
 /**
  * Token estimate for a body of prose.

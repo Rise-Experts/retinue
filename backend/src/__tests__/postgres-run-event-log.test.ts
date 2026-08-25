@@ -17,7 +17,7 @@ import { freshPgliteSchema } from "../testing/pglite.js";
 
 const T1 = asId<TenantId>("pg-log-t1");
 const RUN = asId<RunId>("pg-log-r1");
-const PG_URL = process.env["AGENTKIT_TEST_PG_URL"];
+const PG_URL = process.env["RETINUE_TEST_PG_URL"];
 
 const pglite = (db: PGlite): SqlExecutor => ({
   query<Row>(text: string, params?: readonly unknown[]): Promise<Row[]> {
@@ -265,7 +265,7 @@ describe("concurrent append across two connections", () => {
   };
 
   if (!PG_URL) {
-    it("[skipped: AGENTKIT_TEST_PG_URL unset — PGlite is one embedded instance, so a two-connection race here would be meaningless]", () => {
+    it("[skipped: RETINUE_TEST_PG_URL unset — PGlite is one embedded instance, so a two-connection race here would be meaningless]", () => {
       // A named passing test rather than it.skip: a silent skip reads as coverage.
       expect(PG_URL).toBeUndefined();
     });

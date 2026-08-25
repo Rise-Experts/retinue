@@ -24,7 +24,7 @@ import {
   SECURITY_CHECKS,
   manualChecks,
   overdueAcceptances,
-} from "@agentkit/backend";
+} from "@retinue/agentkit";
 
 const arg = (name) => {
   const i = process.argv.indexOf(`--${name}`);

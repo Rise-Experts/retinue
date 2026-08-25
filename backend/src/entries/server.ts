@@ -1,5 +1,5 @@
 /**
- * `@agentkit/backend/server` — the reference GraphQL host, and the runnable API and worker commands.
+ * `@retinue/agentkit/server` — the reference GraphQL host, and the runnable API and worker commands.
  *
  * A subpath in the same package rather than a package of its own (#196). The runtime still takes **no** HTTP or
  * GraphQL dependency: `graphql`, `graphql-yoga` and `@whatwg-node/server` are optional peers, so a consumer who

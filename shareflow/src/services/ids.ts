@@ -6,7 +6,7 @@
  * IDs already have, and the reason these are not bare strings. Every one of them is an opaque handle
  * to a row ShareFlow owns; this package never parses or constructs them.
  */
-import type { Branded } from "@agentkit/backend";
+import type { Branded } from "@retinue/agentkit";
 
 export type SocialAccountId = Branded<string, "SocialAccountId">;
 export type PostDraftId = Branded<string, "PostDraftId">;

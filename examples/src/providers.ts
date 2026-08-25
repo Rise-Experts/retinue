@@ -7,8 +7,8 @@
  * confidently wrong.
  */
 
-import { createPrincipalMemoryProvider } from "@agentkit/backend";
-import type { ContextProvider } from "@agentkit/backend";
+import { createPrincipalMemoryProvider } from "@retinue/agentkit";
+import type { ContextProvider } from "@retinue/agentkit";
 import type { ExampleBackend } from "./stores.js";
 import { exampleContextProviders } from "./agent.js";
 import { exampleStore } from "./store.js";

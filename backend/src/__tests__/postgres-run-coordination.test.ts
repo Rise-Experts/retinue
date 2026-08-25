@@ -33,7 +33,7 @@ const T1 = asId<TenantId>("pg-rc-t1");
 const C1 = asId<ConversationId>("pg-rc-c1");
 const AGENT = asId<AgentId>("pg-rc-agent");
 const r = (s: string) => asId<RunId>(s);
-const PG_URL = process.env["AGENTKIT_TEST_PG_URL"];
+const PG_URL = process.env["RETINUE_TEST_PG_URL"];
 
 const pglite = (db: PGlite): SqlExecutor => ({
   query<Row>(text: string, params?: readonly unknown[]): Promise<Row[]> {
@@ -312,7 +312,7 @@ describe("two-connection claim", () => {
   };
 
   if (!PG_URL) {
-    it("[skipped: AGENTKIT_TEST_PG_URL unset — one embedded connection cannot express this race]", () => {
+    it("[skipped: RETINUE_TEST_PG_URL unset — one embedded connection cannot express this race]", () => {
       expect(PG_URL).toBeUndefined();
     });
   } else {

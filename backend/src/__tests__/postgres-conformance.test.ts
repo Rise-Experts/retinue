@@ -10,7 +10,7 @@
  * one-line registry change plus a factory — never a new test body. The ports it does not implement
  * yet appear in the matrix as `NOT-IMPLEMENTED` against their tracking issue rather than as silence.
  *
- * Executor: `AGENTKIT_TEST_PG_URL` points at a real PostgreSQL server (CI, so server-only behaviour
+ * Executor: `RETINUE_TEST_PG_URL` points at a real PostgreSQL server (CI, so server-only behaviour
  * such as advisory locks and `SKIP LOCKED` is exercised for real); unset falls back to PGlite so a
  * local `npm test` needs no database (AC-6).
  */
@@ -99,7 +99,7 @@ import {
   skillStoreConformance,
 } from "../testing/conformance/records.js";
 
-const PG_URL = process.env["AGENTKIT_TEST_PG_URL"];
+const PG_URL = process.env["RETINUE_TEST_PG_URL"];
 
 /** Set when running against a real server, so teardown can close the pool. */
 const closers: Array<() => Promise<void>> = [];
@@ -465,7 +465,7 @@ artifactStoreConformance(() => {
  * disappearing. That is the point of `gatedIt`: an invisible skip is indistinguishable from coverage, and this
  * is a port whose absence would otherwise be silent.
  *
- * Run against pgvector with `AGENTKIT_TEST_PG_URL` pointing at a Postgres that has it.
+ * Run against pgvector with `RETINUE_TEST_PG_URL` pointing at a Postgres that has it.
  */
 const vectorAvailable = await (async () => {
   try {

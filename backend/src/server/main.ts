@@ -5,7 +5,7 @@
  * tested; this file's whole job is to be a documented command that serves the API.
  *
  * Run with:
- *   AGENTKIT_DATABASE_URL=postgres://… PORT=4000 node dist/main.js
+ *   RETINUE_DATABASE_URL=postgres://… PORT=4000 node dist/main.js
  *
  * `authenticate` is deliberately not implemented here. A reference host cannot know a deployment's
  * identity provider, and shipping a permissive default would be worse than shipping none — so the

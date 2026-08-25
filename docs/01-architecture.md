@@ -61,7 +61,7 @@ One rule per kind of name, applied everywhere. Deviations fail review.
 
 | Kind | Convention | Example |
 |---|---|---|
-| npm packages | kebab-case under the `@agentkit` scope | `@agentkit/runtime` |
+| npm packages | kebab-case under the `@agentkit` scope | `@retinue/runtime` |
 | Types and interfaces | PascalCase | `ExecutionContext`, `ToolProvider` |
 | Branded ID types | PascalCase ending `Id` | `ConversationId`, `RunId` |
 | Fields, variables, functions | camelCase | `tenantId`, `createAgentPlatform` |
@@ -82,25 +82,25 @@ product's branding lives.
 
 | Package | Responsibility |
 |---|---|
-| `@agentkit/core` | IDs, execution context, events, content parts and errors |
-| `@agentkit/models` | Provider/model registry and capability resolution |
-| `@agentkit/agents` | Declarative, versioned agent manifests |
-| `@agentkit/runtime` | AI execution loop and run lifecycle |
-| `@agentkit/tools` | Providers, catalog, discovery and dispatch |
-| `@agentkit/mcp` | Outbound MCP server consumption as authorization-filtered tools |
-| `@agentkit/authorization` | Permission model, tool filtering and scope resolution |
-| `@agentkit/context` | Context providers, budgeting and prompt assembly |
-| `@agentkit/skills` | Versioned lazy-loaded skills |
-| `@agentkit/hitl` | Questions, approvals and durable continuation |
-| `@agentkit/persistence` | Storage ports, schema provisioning and unit-of-work contract |
-| `@agentkit/usage` | Token counting, cost accounting, quotas and rollups |
-| `@agentkit/rag` | Ingestion and permission-aware retrieval |
-| `@agentkit/files` | Attachments, metadata, versions and processing |
-| `@agentkit/documents` | Parsing and deterministic document edits |
-| `@agentkit/graphql` | Schema and thin resolvers |
-| `@agentkit/react` | Headless client state and subscriptions |
-| `@agentkit/ui` | Optional reusable components |
-| `@agentkit/evals` | Datasets, runners and graders |
+| `@retinue/core` | IDs, execution context, events, content parts and errors |
+| `@retinue/models` | Provider/model registry and capability resolution |
+| `@retinue/agents` | Declarative, versioned agent manifests |
+| `@retinue/runtime` | AI execution loop and run lifecycle |
+| `@retinue/tools` | Providers, catalog, discovery and dispatch |
+| `@retinue/mcp` | Outbound MCP server consumption as authorization-filtered tools |
+| `@retinue/authorization` | Permission model, tool filtering and scope resolution |
+| `@retinue/context` | Context providers, budgeting and prompt assembly |
+| `@retinue/skills` | Versioned lazy-loaded skills |
+| `@retinue/hitl` | Questions, approvals and durable continuation |
+| `@retinue/persistence` | Storage ports, schema provisioning and unit-of-work contract |
+| `@retinue/usage` | Token counting, cost accounting, quotas and rollups |
+| `@retinue/rag` | Ingestion and permission-aware retrieval |
+| `@retinue/files` | Attachments, metadata, versions and processing |
+| `@retinue/documents` | Parsing and deterministic document edits |
+| `@retinue/graphql` | Schema and thin resolvers |
+| `@retinue/react` | Headless client state and subscriptions |
+| `@retinue/ui` | Optional reusable components |
+| `@retinue/evals` | Datasets, runners and graders |
 
 ## Composition API
 

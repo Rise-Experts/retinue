@@ -1,7 +1,7 @@
 /**
  * Runnable worker command (#110 AC-5).
  *
- * Same contract as the API host: `AGENTKIT_APP_MODULE` supplies the wiring. The worker additionally
+ * Same contract as the API host: `RETINUE_APP_MODULE` supplies the wiring. The worker additionally
  * needs an agent engine, which no generic entrypoint can invent — so the app module provides it, and
  * the command refuses to start without one rather than running a worker that consumes jobs it cannot
  * execute.

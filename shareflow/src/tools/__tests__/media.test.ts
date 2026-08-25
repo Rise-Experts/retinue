@@ -22,7 +22,7 @@ import {
   type TenantId,
   type Tool,
   type ToolResult,
-} from "@agentkit/backend";
+} from "@retinue/agentkit";
 import {
   EDIT_REMEDY_DUPLICATE,
   MEDIA_TOOL_FACTORIES,

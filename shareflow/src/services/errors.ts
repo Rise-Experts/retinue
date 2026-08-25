@@ -14,7 +14,7 @@
  * an adapter translating ShareFlow's boolean envelope has one obvious thing to call, rather than each
  * adapter author deciding independently whether to throw.
  */
-import { AgentPlatformError, type ErrorCode } from "@agentkit/backend";
+import { AgentPlatformError, type ErrorCode } from "@retinue/agentkit";
 
 /**
  * Codes a ShareFlow service is expected to produce. A subset of the platform's `ErrorCode`, listed so

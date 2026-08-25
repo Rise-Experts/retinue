@@ -8,7 +8,7 @@
  *
  * That last one is server-only. PGlite is a single embedded instance, so "two connections" against it
  * are not concurrent in any meaningful sense; a passing PGlite test would be theatre. It runs for
- * real against `AGENTKIT_TEST_PG_URL` in CI and reports why it was skipped otherwise.
+ * real against `RETINUE_TEST_PG_URL` in CI and reports why it was skipped otherwise.
  */
 
 import { PGlite } from "@electric-sql/pglite";
@@ -21,7 +21,7 @@ import { freshPgliteSchema } from "../testing/pglite.js";
 const T1 = asId<TenantId>("pg-run-t1");
 const CONVO = asId<ConversationId>("pg-run-c1");
 const AGENT = asId<AgentId>("pg-run-a1");
-const PG_URL = process.env["AGENTKIT_TEST_PG_URL"];
+const PG_URL = process.env["RETINUE_TEST_PG_URL"];
 
 const pglite = (db: PGlite): SqlExecutor => ({
   query<Row>(text: string, params?: readonly unknown[]): Promise<Row[]> {
@@ -184,7 +184,7 @@ describe("concurrent claim across two connections", () => {
   };
 
   if (!PG_URL) {
-    it("[skipped: AGENTKIT_TEST_PG_URL unset — PGlite is one embedded instance, so a two-connection test here would be meaningless]", () => {
+    it("[skipped: RETINUE_TEST_PG_URL unset — PGlite is one embedded instance, so a two-connection test here would be meaningless]", () => {
       // Deliberately a passing, named test rather than it.skip: a silent skip reads as coverage.
       expect(PG_URL).toBeUndefined();
     });

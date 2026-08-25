@@ -44,7 +44,7 @@ const registryPath = resolve("backend/.conformance/registry.json");
 if (!existsSync(registryPath)) {
   fail(
     `registry not found at ${registryPath}. It is written by the coverage guard test, so run the ` +
-      "backend suite first (npm test -w @agentkit/backend).",
+      "backend suite first (npm test -w @retinue/agentkit).",
   );
 }
 

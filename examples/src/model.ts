@@ -1,7 +1,7 @@
 /**
  * The model, from configuration — #155.
  *
- * Any OpenAI-compatible endpoint: `api.openai.com` when `AGENTKIT_MODEL_BASE_URL` is unset, or a local server
+ * Any OpenAI-compatible endpoint: `api.openai.com` when `RETINUE_MODEL_BASE_URL` is unset, or a local server
  * (Ollama, llama.cpp, Unsloth Studio, vLLM) when it is set. The provider factory in `models/` already handles
  * both, so this file is configuration reading and nothing else.
  *
@@ -14,12 +14,12 @@
  * defaults to a model known to support it rather than to whatever happens to be running.
  */
 
-import { createProviderFactory } from "@agentkit/backend/providers";
-import type { ModelDefinition, ModelPricing, ResolvedModel } from "@agentkit/backend";
+import { createProviderFactory } from "@retinue/agentkit/providers";
+import type { ModelDefinition, ModelPricing, ResolvedModel } from "@retinue/agentkit";
 
-export const MODEL_API_KEY_VARIABLE = "AGENTKIT_MODEL_API_KEY";
-export const MODEL_ID_VARIABLE = "AGENTKIT_MODEL_ID";
-export const MODEL_BASE_URL_VARIABLE = "AGENTKIT_MODEL_BASE_URL";
+export const MODEL_API_KEY_VARIABLE = "RETINUE_MODEL_API_KEY";
+export const MODEL_ID_VARIABLE = "RETINUE_MODEL_ID";
+export const MODEL_BASE_URL_VARIABLE = "RETINUE_MODEL_BASE_URL";
 
 /**
  * The default model.
@@ -29,8 +29,8 @@ export const MODEL_BASE_URL_VARIABLE = "AGENTKIT_MODEL_BASE_URL";
  * at *conversation*: shorter, flatter answers, and it drops instructions from a long system prompt more often.
  *
  * Cost is the trade, and for an example the right side of it is the one that makes the platform look like itself
- * rather than like the cheapest model available. Override with `AGENTKIT_MODEL_ID` — `gpt-5` is a further step up
- * again, and any OpenAI-compatible endpoint works via `AGENTKIT_MODEL_BASE_URL`.
+ * rather than like the cheapest model available. Override with `RETINUE_MODEL_ID` — `gpt-5` is a further step up
+ * again, and any OpenAI-compatible endpoint works via `RETINUE_MODEL_BASE_URL`.
  */
 export const DEFAULT_MODEL_ID = "gpt-4o";
 
@@ -93,7 +93,7 @@ export const resolveExampleModel = (
 /**
  * Prices, only if the operator supplied them — #155 AC-5.
  *
- * `AGENTKIT_MODEL_PRICE_INPUT` and `_OUTPUT`, in minor units per million tokens (so `250` is $2.50/M). Absent
+ * `RETINUE_MODEL_PRICE_INPUT` and `_OUTPUT`, in minor units per million tokens (so `250` is $2.50/M). Absent
  * means **zero**, and zero is the honest answer: this file cannot know what an arbitrary model id the operator
  * typed costs, and a usage panel showing a cost derived from invented prices is worse than one showing zero.
  * Zero is obviously not a measurement; a plausible number is not obviously wrong.
@@ -110,9 +110,9 @@ export const examplePricing = (env: Readonly<Record<string, string | undefined>>
     return Number.isFinite(raw) && raw >= 0 ? raw : 0;
   };
   return {
-    currency: env["AGENTKIT_MODEL_PRICE_CURRENCY"] ?? "USD",
-    inputPerMillion: read("AGENTKIT_MODEL_PRICE_INPUT"),
-    outputPerMillion: read("AGENTKIT_MODEL_PRICE_OUTPUT"),
+    currency: env["RETINUE_MODEL_PRICE_CURRENCY"] ?? "USD",
+    inputPerMillion: read("RETINUE_MODEL_PRICE_INPUT"),
+    outputPerMillion: read("RETINUE_MODEL_PRICE_OUTPUT"),
   };
 };
 

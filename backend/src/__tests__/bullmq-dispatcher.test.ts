@@ -27,7 +27,7 @@ import {
 const T1 = asId<TenantId>("bmq-t1");
 const T2 = asId<TenantId>("bmq-t2");
 const RUN = asId<RunId>("bmq-run1");
-const REDIS_URL = process.env["AGENTKIT_TEST_REDIS_URL"];
+const REDIS_URL = process.env["RETINUE_TEST_REDIS_URL"];
 
 type Recorded = { name: string; data: RunJobData; opts?: { jobId?: string; attempts?: number } };
 
@@ -199,7 +199,7 @@ describe("against a real Redis", () => {
   });
 
   if (REDIS_URL === undefined) {
-    it("[skipped: AGENTKIT_TEST_REDIS_URL unset — a fake queue cannot show that a job survives having no worker]", () => {
+    it("[skipped: RETINUE_TEST_REDIS_URL unset — a fake queue cannot show that a job survives having no worker]", () => {
       expect(REDIS_URL).toBeUndefined();
     });
   } else {

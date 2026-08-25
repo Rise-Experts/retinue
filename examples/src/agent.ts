@@ -15,8 +15,8 @@
  * can only show the bytes were enclosed.
  */
 
-import { estimateTokens } from "@agentkit/backend";
-import type { AgentManifest, ContextProvider, ContextSection, ExecutionContext } from "@agentkit/backend";
+import { estimateTokens } from "@retinue/agentkit";
+import type { AgentManifest, ContextProvider, ContextSection, ExecutionContext } from "@retinue/agentkit";
 import type { ExampleStore } from "./tools.js";
 
 export const exampleAgentManifest: AgentManifest = {

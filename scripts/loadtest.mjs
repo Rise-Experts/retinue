@@ -30,17 +30,17 @@ import {
   readEnvelope,
   runLoadStep,
   summarizeLatency,
-} from "@agentkit/backend";
-import { MIGRATIONS, migrate } from "@agentkit/backend";
+} from "@retinue/agentkit";
+import { MIGRATIONS, migrate } from "@retinue/agentkit/adapters/postgres";
 
 const arg = (name, fallback) => {
   const i = process.argv.indexOf(`--${name}`);
   return i === -1 ? fallback : process.argv[i + 1];
 };
 
-const PG = arg("pg", process.env.AGENTKIT_TEST_PG_URL);
+const PG = arg("pg", process.env.RETINUE_TEST_PG_URL);
 if (!PG) {
-  console.error("✗ --pg <url> (or AGENTKIT_TEST_PG_URL) is required: this harness needs a real PostgreSQL server.");
+  console.error("✗ --pg <url> (or RETINUE_TEST_PG_URL) is required: this harness needs a real PostgreSQL server.");
   console.error("  PGlite is one embedded instance, so a claim race between competing workers is unobservable there —");
   console.error("  and the claim race is the single most important thing a load test of this platform can hit.");
   process.exit(2);

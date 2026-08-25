@@ -25,8 +25,8 @@
  * disappearing from discovery, which is what lets a skill be retired without breaking anything in flight.
  */
 
-import { SKILL_LIMITS, validateSkillInput } from "@agentkit/backend";
-import type { SkillVersion } from "@agentkit/backend";
+import { SKILL_LIMITS, validateSkillInput } from "@retinue/agentkit";
+import type { SkillVersion } from "@retinue/agentkit";
 
 /**
  * The built-in skills.

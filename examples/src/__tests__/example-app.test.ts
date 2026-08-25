@@ -6,15 +6,15 @@ import { exampleAgentManifest, exampleContextProviders } from "../agent.js";
 import { questionSpecsFrom } from "../questions.js";
 import { buildWorkerContext } from "../worker-context.js";
 import { ASSIGNED_SKILLS, EXAMPLE_SKILLS, renderSkillCatalogue } from "../skills.js";
-import { SKILL_LIMITS, classifyMcpTool, hashToolList, mcpToolName } from "@agentkit/backend";
+import { SKILL_LIMITS, classifyMcpTool, hashToolList, mcpToolName } from "@retinue/agentkit";
 import { DOCS_MCP_EFFECTS, DOCS_MCP_SERVER_ID, DOCS_MCP_TOOLS, createDocsMcpProvider, docsMcpConnection } from "../mcp.js";
 import { createFetchUrl, htmlToText } from "../fetch-url.js";
-import { createMcpToolProvider } from "@agentkit/backend";
+import { createMcpToolProvider } from "@retinue/agentkit";
 import { createInProcessBus, createMemoryBackend } from "../memory-app.js";
 import { asExampleBackend } from "../memory-composition.js";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { resolveCapabilities } from "@agentkit/backend";
+import { resolveCapabilities } from "@retinue/agentkit";
 import { exampleCapabilities } from "../index.js";
 import { exampleProviders } from "../providers.js";
 import { COMPOSER_COMMANDS, commandQueryAt, filterCommands } from "../composer/commands.js";
@@ -45,12 +45,12 @@ describe("dev auth — AC-6", () => {
     // At construction, not per request: a misconfigured example should fail at boot with one clear message
     // rather than return 401 to every caller and leave someone guessing.
     expect(() => createDevAuthenticate({})).toThrow(DevAuthNotEnabled);
-    expect(() => createDevAuthenticate({ AGENTKIT_EXAMPLE_DEV_AUTH: "true" })).toThrow(DevAuthNotEnabled);
-    expect(() => createDevAuthenticate({ AGENTKIT_EXAMPLE_DEV_AUTH: "1" })).not.toThrow();
+    expect(() => createDevAuthenticate({ RETINUE_EXAMPLE_DEV_AUTH: "true" })).toThrow(DevAuthNotEnabled);
+    expect(() => createDevAuthenticate({ RETINUE_EXAMPLE_DEV_AUTH: "1" })).not.toThrow();
   });
 
   it("rejects a request with no tenant or no principal", async () => {
-    const authenticate = createDevAuthenticate({ AGENTKIT_EXAMPLE_DEV_AUTH: "1" });
+    const authenticate = createDevAuthenticate({ RETINUE_EXAMPLE_DEV_AUTH: "1" });
     // No fallback tenant. A default would mean an unauthenticated request landing in *somebody's* data, which is
     // the one failure tenant isolation exists to prevent.
     expect(await authenticate(request())).toBeNull();
@@ -60,7 +60,7 @@ describe("dev auth — AC-6", () => {
   });
 
   it("builds a context through the platform's own validator", async () => {
-    const authenticate = createDevAuthenticate({ AGENTKIT_EXAMPLE_DEV_AUTH: "1" });
+    const authenticate = createDevAuthenticate({ RETINUE_EXAMPLE_DEV_AUTH: "1" });
     const context = await authenticate(
       request({ [TENANT_HEADER]: "t1", [PRINCIPAL_HEADER]: "p1", [ROLES_HEADER]: "editor, viewer" }),
     );
@@ -77,15 +77,15 @@ describe("model configuration", () => {
   });
 
   it("defaults the model id but not the key", () => {
-    const resolved = resolveExampleModel({ AGENTKIT_MODEL_API_KEY: "sk-test" });
+    const resolved = resolveExampleModel({ RETINUE_MODEL_API_KEY: "sk-test" });
     expect(resolved.modelId).toBe(DEFAULT_MODEL_ID);
     expect(resolved.endpoint).toBe("https://api.openai.com/v1");
   });
 
   it("switches to the openai-compatible provider when a base URL is given", () => {
     const resolved = resolveExampleModel({
-      AGENTKIT_MODEL_API_KEY: "sk-test",
-      AGENTKIT_MODEL_BASE_URL: "http://127.0.0.1:8888/v1",
+      RETINUE_MODEL_API_KEY: "sk-test",
+      RETINUE_MODEL_BASE_URL: "http://127.0.0.1:8888/v1",
     });
     // The dedicated OpenAI provider assumes endpoints a local server may not implement, and the failure is a 404
     // on a path nobody chose.

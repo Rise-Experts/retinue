@@ -29,7 +29,7 @@
  * and that is raised rather than claimed.
  */
 import { z } from "zod";
-import { asId, defineDelegatingTool, type Tool } from "@agentkit/backend";
+import { asId, defineDelegatingTool, type Tool } from "@retinue/agentkit";
 import type {
   CampaignId,
   Fact,

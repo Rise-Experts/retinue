@@ -1,7 +1,7 @@
 /**
  * Deployment configuration (#110).
  *
- * Lives here rather than in `@agentkit/backend`, and that is deliberate: the library reads
+ * Lives here rather than in `@retinue/agentkit`, and that is deliberate: the library reads
  * `process.env` **zero times**, so a host can configure it however it likes — from a file, a secret
  * manager, a test fixture. A library that reads the environment cannot be configured by its host, and
  * that property erodes one convenient `process.env.DATABASE_URL` at a time, so there is a test for it.
@@ -10,6 +10,7 @@
  * message naming the problem" testable without mutating global state, and it means a caller can load
  * configuration from somewhere that is not `process.env` at all.
  */
+import { readEnv } from "../core/env.js";
 import type { SchemaMode } from "../entries/adapters-postgres.js";
 
 export type AgentkitConfig = {
@@ -61,8 +62,22 @@ export const loadConfig = (env: Env): AgentkitConfig => {
     variables.push(variable);
   };
 
-  const required = (variable: string): string => {
-    const value = env[variable];
+  /**
+   * The prefix is added here, not written at each call — #192.
+   *
+   * Every variable was `AGENTKIT_*` and is now `RETINUE_*`. `readEnv` accepts both and warns on the old one, so
+   * a deployment keeps working for one release while it is corrected. Adding the prefix in one place means a
+   * caller cannot accidentally name the legacy variable directly and skip the warning.
+   *
+   * Errors always name the **current** variable, because an error naming the deprecated one would teach the
+   * reader to set the wrong thing.
+   */
+  const lookup = (suffix: string): string | undefined => readEnv(env, suffix);
+  const named = (suffix: string): string => `RETINUE_${suffix}`;
+
+  const required = (suffix: string): string => {
+    const variable = named(suffix);
+    const value = lookup(suffix);
     if (value === undefined || value.trim() === "") {
       // Named, because "invalid configuration" without the name means reading the source to deploy.
       fail(variable, "is required but was not set");
@@ -71,23 +86,25 @@ export const loadConfig = (env: Env): AgentkitConfig => {
     return value;
   };
 
-  const databaseUrl = required("AGENTKIT_DATABASE_URL");
+  const databaseUrl = required("DATABASE_URL");
   if (databaseUrl !== "" && !/^postgres(ql)?:\/\//.test(databaseUrl)) {
-    fail("AGENTKIT_DATABASE_URL", `must be a postgres:// URL, got "${databaseUrl.slice(0, 12)}…"`);
+    fail(named("DATABASE_URL"), `must be a postgres:// URL, got "${databaseUrl.slice(0, 12)}…"`);
   }
 
-  const redisUrl = required("AGENTKIT_REDIS_URL");
+  const redisUrl = required("REDIS_URL");
   if (redisUrl !== "" && !/^rediss?:\/\//.test(redisUrl)) {
-    fail("AGENTKIT_REDIS_URL", `must be a redis:// URL, got "${redisUrl.slice(0, 12)}…"`);
+    fail(named("REDIS_URL"), `must be a redis:// URL, got "${redisUrl.slice(0, 12)}…"`);
   }
 
-  const rawSchemaMode = env["AGENTKIT_SCHEMA_MODE"] ?? DEFAULT_CONFIG.schemaMode;
+  const rawSchemaMode = lookup("SCHEMA_MODE") ?? DEFAULT_CONFIG.schemaMode;
   if (!SCHEMA_MODES.includes(rawSchemaMode as SchemaMode)) {
-    fail("AGENTKIT_SCHEMA_MODE", `must be one of ${SCHEMA_MODES.join(", ")}, got "${rawSchemaMode}"`);
+    fail(named("SCHEMA_MODE"), `must be one of ${SCHEMA_MODES.join(", ")}, got "${rawSchemaMode}"`);
   }
 
-  const positiveInt = (variable: string, fallback: number): number => {
-    const raw = env[variable];
+  const positiveInt = (suffix: string, fallback: number): number => {
+    // `PORT` has no prefix — it is the conventional name and always has been, so it is read directly.
+    const variable = suffix === "PORT" ? "PORT" : named(suffix);
+    const raw = suffix === "PORT" ? env["PORT"] : lookup(suffix);
     if (raw === undefined || raw.trim() === "") return fallback;
     const value = Number(raw);
     if (!Number.isInteger(value) || value <= 0) {
@@ -100,11 +117,11 @@ export const loadConfig = (env: Env): AgentkitConfig => {
   };
 
   const port = positiveInt("PORT", DEFAULT_CONFIG.port);
-  const workerConcurrency = positiveInt("AGENTKIT_WORKER_CONCURRENCY", DEFAULT_CONFIG.workerConcurrency);
+  const workerConcurrency = positiveInt("WORKER_CONCURRENCY", DEFAULT_CONFIG.workerConcurrency);
 
-  const rawLogLevel = env["AGENTKIT_LOG_LEVEL"] ?? DEFAULT_CONFIG.logLevel;
+  const rawLogLevel = lookup("LOG_LEVEL") ?? DEFAULT_CONFIG.logLevel;
   if (!LOG_LEVELS.includes(rawLogLevel as (typeof LOG_LEVELS)[number])) {
-    fail("AGENTKIT_LOG_LEVEL", `must be one of ${LOG_LEVELS.join(", ")}, got "${rawLogLevel}"`);
+    fail(named("LOG_LEVEL"), `must be one of ${LOG_LEVELS.join(", ")}, got "${rawLogLevel}"`);
   }
 
   if (problems.length > 0) throw new ConfigurationError(problems, variables);
@@ -120,10 +137,18 @@ export const loadConfig = (env: Env): AgentkitConfig => {
 };
 
 /** The variables a deployment must set, for the README and for error messages to stay in step. */
-export const REQUIRED_VARIABLES = ["AGENTKIT_DATABASE_URL", "AGENTKIT_REDIS_URL"] as const;
+/**
+ * The variables a deployment must set, by their **full current names**.
+ *
+ * The prefix belongs here even though `lookup` adds it internally: this is what a deployment reads to know what
+ * to configure, and a list saying `DATABASE_URL` would have people setting a variable nothing reads. The rename
+ * briefly stripped it — a regex over the file caught this constant along with the internal literals — and the
+ * test that asserts the error names every missing variable is what found it.
+ */
+export const REQUIRED_VARIABLES = ["RETINUE_DATABASE_URL", "RETINUE_REDIS_URL"] as const;
 export const OPTIONAL_VARIABLES = [
-  "AGENTKIT_SCHEMA_MODE",
-  "AGENTKIT_WORKER_CONCURRENCY",
-  "AGENTKIT_LOG_LEVEL",
+  "SCHEMA_MODE",
+  "WORKER_CONCURRENCY",
+  "LOG_LEVEL",
   "PORT",
 ] as const;

@@ -12,8 +12,8 @@
  * because those are #114's decisions and getting them consistent is the point of the closed sets they
  * come from.
  */
-import type { AgentManifest, ExecutionLimits, ModelPolicy, ResponseFormat } from "@agentkit/backend";
-import { AgentPlatformError } from "@agentkit/backend";
+import type { AgentManifest, ExecutionLimits, ModelPolicy, ResponseFormat } from "@retinue/agentkit";
+import { AgentPlatformError } from "@retinue/agentkit";
 import { SHAREFLOW_CONTEXT_PROVIDER_IDS } from "../context/index.js";
 import { SHAREFLOW_TOOL_CATEGORIES, type ShareFlowToolCategory } from "../tools/index.js";
 

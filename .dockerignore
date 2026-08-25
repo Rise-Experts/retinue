@@ -1,0 +1,15 @@
+# `COPY backend ./backend` would otherwise carry the host's node_modules and dist into the image,
+# shadowing the `npm ci` tree with a macOS-built one and shipping a stale build. Excluding them here
+# means the image is always built from source.
+node_modules
+**/node_modules
+dist
+**/dist
+**/*.tsbuildinfo
+.git
+.env
+**/.env
+.claude
+website
+docs
+evals

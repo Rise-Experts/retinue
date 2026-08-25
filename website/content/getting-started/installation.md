@@ -12,24 +12,24 @@ sidebar_position: 1
 
 ## Install
 
-@agentkit ships as two packages:
+Retinue ships as two packages:
 
 ```bash
 # backend: contracts, runtime, engine, tools, adapters, embedded agent facade
-npm install @agentkit/backend
+npm install @retinue/agentkit
 
 # headless React client (optional, for a UI) — React is a peer dependency
-npm install @agentkit/frontend react
+npm install @retinue/react react
 ```
 
-`@agentkit/backend` bundles everything server-side: the durable runtime, the default AI-SDK engine,
+`@retinue/agentkit` bundles everything server-side: the durable runtime, the default AI-SDK engine,
 the tool registry, the model registry and the reference in-memory adapters. Swap in the Postgres /
-Supabase adapters for production. `@agentkit/frontend` is transport-agnostic headless state — hooks,
+Supabase adapters for production. `@retinue/react` is transport-agnostic headless state — hooks,
 reducers, localization — plus an optional UI component set.
 
 ## Two profiles
 
-@agentkit runs the same core in two shapes — pick per app:
+Retinue runs the same core in two shapes — pick per app:
 
 | Profile | Use for | Adds |
 |---|---|---|
@@ -42,5 +42,5 @@ first agent, then **[Configuration](configuration)** for the server profile.
 ## Verify
 
 ```bash
-node -e "import('@agentkit/backend').then(() => console.log('agentkit ready'))"
+node -e "import('@retinue/agentkit').then(() => console.log('retinue ready'))"
 ```

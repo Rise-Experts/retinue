@@ -14,7 +14,7 @@ import {
   SKILL_LIMITS,
   type RunId,
   type TenantId,
-} from "@agentkit/backend";
+} from "@retinue/agentkit";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";

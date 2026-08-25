@@ -15,7 +15,7 @@ How @agentkit keeps a model from doing something it shouldn't.
 ## Approval decisions
 
 ```ts
-import { createApprovalService } from "@agentkit/backend";
+import { createApprovalService } from "@retinue/agentkit";
 
 const approvals = createApprovalService({ interactions, grants, dispatcher });
 

@@ -11,7 +11,7 @@ import { join } from "node:path";
 import { scan } from "./check-boundaries.mjs";
 
 function fixture(files) {
-  const dir = mkdtempSync(join(tmpdir(), "agentkit-bound-"));
+  const dir = mkdtempSync(join(tmpdir(), "retinue-bound-"));
   for (const [rel, content] of Object.entries(files)) {
     const p = join(dir, rel);
     mkdirSync(join(p, ".."), { recursive: true });
@@ -23,7 +23,7 @@ function fixture(files) {
 test("clean tree yields no violations", () => {
   const dir = fixture({
     "backend/src/core/ids.ts": `export type Id = string;\nimport { z } from "./util.js";\n`,
-    "frontend/src/x.ts": `import type { RunEvent } from "@agentkit/backend";\n`,
+    "frontend/src/x.ts": `import type { RunEvent } from "@retinue/agentkit";\n`,
     "backend/src/models/openai.ts": `import { openai } from "@ai-sdk/openai";\n`,
     // R11: OTel inside its own adapter is the allowed case, and its test is too -- the test's whole job is to
     // import the real package and prove the structural types hold against it.
@@ -36,11 +36,11 @@ test("clean tree yields no violations", () => {
 test("planted violations are all caught", () => {
   const dir = fixture({
     // R2: frontend value-imports the backend
-    "frontend/src/bad.ts": `import { runtime } from "@agentkit/backend";\n`,
+    "frontend/src/bad.ts": `import { runtime } from "@retinue/agentkit";\n`,
     // R3: AI SDK imported outside the models layer
     "backend/src/runtime/bad.ts": `import { openai } from "@ai-sdk/openai";\n`,
     // R4: a port imports an adapter
-    "backend/src/persistence/bad.ts": `import { PostgresStore } from "@agentkit/postgres";\n`,
+    "backend/src/persistence/bad.ts": `import { PostgresStore } from "@retinue/postgres";\n`,
     // R5: a forbidden product name
     "backend/src/tools/bad.ts": `import { Workspace } from "twenty-server";\n`,
     // R6: core reaches outside itself
@@ -63,9 +63,9 @@ test("planted violations are all caught", () => {
  */
 test("R8: a generic package must not import an integration package", () => {
   const dir = fixture({
-    "backend/src/tools/bad.ts": `import { createShareFlowToolProvider } from "@agentkit/shareflow";\n`,
-    "frontend/src/bad.ts": `import type { PostDraft } from "@agentkit/shareflow";\n`,
-    "server/src/bad.ts": `import { x } from "@agentkit/shareflow/dist/index.js";\n`,
+    "backend/src/tools/bad.ts": `import { createShareFlowToolProvider } from "@retinue/shareflow";\n`,
+    "frontend/src/bad.ts": `import type { PostDraft } from "@retinue/shareflow";\n`,
+    "server/src/bad.ts": `import { x } from "@retinue/shareflow/dist/index.js";\n`,
   });
   try {
     const byFile = new Map(scan([dir]).map((v) => [v.file.split("/").slice(-2).join("/"), v]));
@@ -81,9 +81,9 @@ test("R8: a generic package must not import an integration package", () => {
 
 test("R8 survives renaming the package, where R5 would not", () => {
   // The point of keying R8 on the package name rather than the word "shareflow": R5 catches
-  // `@agentkit/shareflow` only because of how it is spelled. This asserts R8 is the rule doing the
+  // `@retinue/shareflow` only because of how it is spelled. This asserts R8 is the rule doing the
   // work, so a future rename cannot silently drop the guarantee.
-  const dir = fixture({ "backend/src/bad.ts": `import { x } from "@agentkit/shareflow";\n` });
+  const dir = fixture({ "backend/src/bad.ts": `import { x } from "@retinue/shareflow";\n` });
   try {
     const rules = new Set(scan([dir]).map((v) => v.rule.slice(0, 2)));
     assert.ok(rules.has("R8"), "R8 must fire independently of R5");
@@ -121,12 +121,12 @@ test("R5 exempts an integration package for the product it owns, and nothing els
 
 test("R10: an import must be declared in the package's own manifest", () => {
   const dir = fixture({
-    "shareflow/package.json": JSON.stringify({ dependencies: { "@agentkit/backend": "*" } }),
+    "shareflow/package.json": JSON.stringify({ dependencies: { "@retinue/agentkit": "*" } }),
     // Resolves fine in the monorepo, because npm hoists every workspace's dependencies into one
     // node_modules. Breaks the moment the package is installed on its own — which is precisely the
     // "builds without the application installed" claim docs/01 makes.
     "shareflow/src/tools/bad.ts": `import { createClient } from "@supabase/supabase-js";\n`,
-    "shareflow/src/tools/ok.ts": `import { defineTool } from "@agentkit/backend";\nimport { join } from "node:path";\n`,
+    "shareflow/src/tools/ok.ts": `import { defineTool } from "@retinue/agentkit";\nimport { join } from "node:path";\n`,
   });
   try {
     const v = scan([dir]).filter((x) => x.rule.startsWith("R10"));
@@ -180,8 +180,8 @@ test("real imports are still found after sanitizing", () => {
   const dir = fixture({
     "frontend/src/bad.ts": [
       `// This file imports from the backend, which is fine as long as it is type-only.`,
-      `const note = "we import from @agentkit/backend";`,
-      `import { runtime } from "@agentkit/backend";`,
+      `const note = "we import from @retinue/agentkit";`,
+      `import { runtime } from "@retinue/agentkit";`,
       ``,
     ].join("\n"),
   });

@@ -14,7 +14,7 @@ import {
   type ExecutionContext,
   type PrincipalId,
   type TenantId,
-} from "@agentkit/backend";
+} from "@retinue/agentkit";
 import {
   CONTEXT_PRIORITY,
   FORBIDDEN_CLAIM_CODE,

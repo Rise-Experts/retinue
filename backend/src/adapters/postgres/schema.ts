@@ -6,7 +6,7 @@
  * (`off`, the default for Postgres). Forward-only and idempotent — running it twice is a no-op,
  * so concurrent workers never double-provision.
  */
-import { MIGRATIONS, type Migration } from "./migrations.js";
+import { MIGRATION_LEDGER, MIGRATIONS, appliedMigrationIds, type Migration } from "./migrations.js";
 import type { SqlExecutor } from "./sql.js";
 
 export type SchemaMode = "auto" | "plan" | "off";
@@ -25,24 +25,18 @@ export interface SchemaManager {
   apply(): Promise<void>;
 }
 
-const TRACKING = `CREATE TABLE IF NOT EXISTS schema_migrations (
-  id text PRIMARY KEY,
-  applied_at timestamptz NOT NULL DEFAULT now()
-)`;
-
 export const createSchemaManager = (
   sql: SqlExecutor,
   migrations: readonly Migration[] = MIGRATIONS,
 ): SchemaManager => {
   // Read-only: if the tracking table doesn't exist yet, nothing has been applied. `plan()` and
   // `currentVersion()` therefore have no side effects; only `apply()` creates the table.
+  // Intersected with this manager's own list, not counted raw: the ledger is shared with migrations
+  // this manager does not own -- the vector ones -- and a raw count would report a version *above*
+  // the target on a database that has them, which reads as "schema ahead" rather than "ready".
   const appliedIds = async (): Promise<Set<string>> => {
-    try {
-      const rows = await sql.query<{ id: string }>(`SELECT id FROM schema_migrations`);
-      return new Set(rows.map((r) => r.id));
-    } catch {
-      return new Set<string>();
-    }
+    const known = new Set(migrations.map((m) => m.id));
+    return new Set([...(await appliedMigrationIds(sql))].filter((id) => known.has(id)));
   };
   const pending = async (): Promise<Migration[]> => {
     const done = await appliedIds();
@@ -60,7 +54,7 @@ export const createSchemaManager = (
       return (await pending()).map((m) => ({ id: m.id, statements: m.up }));
     },
     async apply() {
-      await sql.query(TRACKING);
+      await sql.query(MIGRATION_LEDGER);
       for (const m of await pending()) {
         for (const stmt of m.up) await sql.query(stmt);
         // ON CONFLICT DO NOTHING: two workers applying the same migration can't both record it.

@@ -1,5 +1,5 @@
 {
-  "//": "TypeDoc-only config. Resolves @agentkit/* imports from SOURCE (not built dist) via paths,",
+  "//": "TypeDoc-only config. Resolves @retinue/* imports from SOURCE (not built dist) via paths,",
   "//2": "so the API reference generates without pre-building the workspace — works in CI, Cloudflare and locally.",
   "//3": "types: node, because the runtime uses `process` and node: builtins. This was [] and worked only because",
   "//4": "a dependency's .d.ts pulled node types in transitively; moving pg out of dependencies (#196) broke that",
@@ -16,9 +16,9 @@
     "types": ["node"],
     "baseUrl": ".",
     "paths": {
-      "@agentkit/backend": ["../backend/src/index.ts"],
-      "@agentkit/frontend": ["../frontend/src/index.ts"],
-      "@agentkit/shareflow": ["../shareflow/src/index.ts"]
+      "@retinue/agentkit": ["../backend/src/index.ts"],
+      "@retinue/react": ["../frontend/src/index.ts"],
+      "@retinue/shareflow": ["../shareflow/src/index.ts"]
     },
     "noEmit": true
   },

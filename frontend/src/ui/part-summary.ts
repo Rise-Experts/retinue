@@ -37,7 +37,7 @@ const KIND: Record<MessagePart["type"], PartRenderKind> = {
  * A file size in binary units, for an attachment preview (#130).
  *
  * The backend renders the same figure in `files/context.ts`, and R2 makes this a copy rather than an import:
- * the frontend may only `import type` from `@agentkit/backend`. Two things keep the copy honest — the unit
+ * the frontend may only `import type` from `@retinue/agentkit`. Two things keep the copy honest — the unit
  * convention is *binary*, matching the backend, so a user is never told 104.9 MB by the UI while the model
  * is told 100 MB; and the expected strings are pinned in `part-summary.test.ts`, so a divergence breaks a
  * test rather than surfacing as a support question.

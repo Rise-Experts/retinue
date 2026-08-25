@@ -17,7 +17,7 @@ import {
   type TenantId,
   type Tool,
   type ToolResult,
-} from "@agentkit/backend";
+} from "@retinue/agentkit";
 import {
   ACCOUNT_TOOL_FACTORIES,
   ACCOUNT_TOOL_NAMES,

@@ -1,8 +1,8 @@
-# @agentkit documentation site
+# Retinue documentation site
 
 Docusaurus site that renders **everything we build**:
 - the narrative specs (`../docs/01–15` + `../docs/extraction`) — auto sidebar, mermaid, versioning-ready;
-- the **API reference** auto-generated from the `@agentkit/*` TypeScript types (TypeDoc → `/api`);
+- the **API reference** auto-generated from the `@retinue/*` TypeScript types (TypeDoc → `/api`);
 - `llms.txt` + `llms-full.txt` for AI editors and a docs MCP server.
 
 Standalone app — **not** an npm workspace member, so it never affects package typecheck/boundaries.
@@ -30,6 +30,10 @@ can consume these directly. A docs **MCP server** can serve the same corpus:
 - **Self-hosted:** a small MCP server that returns sections of `llms-full.txt` by query.
 
 ## Deployment (Cloudflare Workers Static Assets → docs.agentkit.riseexperts.de)
+
+> The host name, the Cloudflare project id and `url` in `docusaurus.config.ts` still say `agentkit`.
+> That is deliberate: they are live DNS and a live project, and renaming them is a cutover with a
+> redirect to arrange, not a find-and-replace. Tracked separately from the package rename (#192).
 
 Deployed via **Cloudflare's Git build** (Workers Builds) using `wrangler.jsonc` — no API-token
 secret needed, Cloudflare builds from the connected repo on each push. One-time setup — **these

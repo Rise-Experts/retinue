@@ -6,7 +6,7 @@
  * engine and a tool registry, none of which a generic entrypoint can invent. Without a CLI,
  * `node server/dist/main.js` loads a module and exits, and the README would be fiction.
  *
- * The contract is one environment variable: `AGENTKIT_APP_MODULE`, a module that default-exports the
+ * The contract is one environment variable: `RETINUE_APP_MODULE`, a module that default-exports the
  * application's wiring. That keeps the deployment-specific parts — identity above all — in the
  * deployment, while the command itself stays the same everywhere.
  */
@@ -30,7 +30,7 @@ export type AgentkitApp = {
   readonly redis?: (config: AgentkitConfig) => { ping(): Promise<string> };
 };
 
-export const APP_MODULE_VARIABLE = "AGENTKIT_APP_MODULE";
+export const APP_MODULE_VARIABLE = "RETINUE_APP_MODULE";
 
 const loadApp = async (env: Readonly<Record<string, string | undefined>>): Promise<AgentkitApp> => {
   const specifier = env[APP_MODULE_VARIABLE];
@@ -53,7 +53,7 @@ export const runApiHost = async (
   env: Readonly<Record<string, string | undefined>> = process.env,
 ): Promise<{ readonly port: number; readonly close: () => Promise<void> }> => {
   // Configuration is validated before the app module is loaded, so a deployment that removed
-  // AGENTKIT_DATABASE_URL is told about *that* rather than about AGENTKIT_APP_MODULE. Cheap to do
+  // RETINUE_DATABASE_URL is told about *that* rather than about RETINUE_APP_MODULE. Cheap to do
   // twice: `loadConfig` is pure and `boot` validates again.
   loadConfig(env);
   const app = await loadApp(env);

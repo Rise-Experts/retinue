@@ -1,5 +1,5 @@
 /**
- * `@agentkit/backend/adapters/otel` — the OpenTelemetry exporter for the telemetry port.
+ * `@retinue/agentkit/adapters/otel` — the OpenTelemetry exporter for the telemetry port.
  *
  * Its own entry for the reason boundary rule R11 exists: "vendor-neutral instrumentation" is only true if the
  * vendor's SDK is confined to one place.

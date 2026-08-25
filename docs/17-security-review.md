@@ -85,7 +85,7 @@ must decide and "nobody thought about it" is a compile error. Two values deliber
 caller to decide that *their* source is a bit trustworthy, and the interesting question has two answers — did
 someone the tenant trusts author this, or did they not.
 
-Making it required immediately found every consumer, which is the point. `@agentkit/shareflow` has **ten**
+Making it required immediately found every consumer, which is the point. `@retinue/shareflow` has **ten**
 context sections, and it already carried a provider called `shareflow.untrusted-content` — a policy *about*
 untrusted content, held as a convention because the port had nowhere to say it structurally. All ten are
 `platform`: the tenant's own configuration, their own drafts and past posts, and the platform's own policy text.

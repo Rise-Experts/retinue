@@ -16,7 +16,7 @@ import assert from "node:assert/strict";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 
-// The CLI imports `@agentkit/backend`, so it needs the built dist -- and a *stale* dist is worse than a missing
+// The CLI imports `@retinue/agentkit`, so it needs the built dist -- and a *stale* dist is worse than a missing
 // one, because the tests then pass or fail against last build's logic. Named here rather than left as a
 // resolution error, which is what it cost me the first time.
 if (!existsSync(join(ROOT, "backend/dist/index.js")))
@@ -63,13 +63,13 @@ const reportOf = (release, results) => {
  * the committed trend would put fake releases in the project's real quality history.
  */
 const sandbox = () => {
-  const dir = mkdtempSync(join(tmpdir(), "agentkit-gate-"));
+  const dir = mkdtempSync(join(tmpdir(), "retinue-gate-"));
   mkdirSync(join(dir, "scripts"));
   mkdirSync(join(dir, "evals"));
   cpSync(join(ROOT, "scripts/release-gate.mjs"), join(dir, "scripts/release-gate.mjs"));
   cpSync(join(ROOT, "evals/thresholds.json"), join(dir, "evals/thresholds.json"));
   cpSync(join(ROOT, "evals/trend.json"), join(dir, "evals/trend.json"));
-  // node_modules *symlinked*, not copied, so `@agentkit/backend` resolves from the sandbox. Copying it
+  // node_modules *symlinked*, not copied, so `@retinue/agentkit` resolves from the sandbox. Copying it
   // recursively silently produced a tree Node could not resolve through, and every test here failed with the
   // same exit code -- which looked like the script being broken rather than the fixture.
   symlinkSync(join(ROOT, "node_modules"), join(dir, "node_modules"), "dir");
@@ -149,8 +149,8 @@ test("an override exits zero but records itself as overridden", () => {
   const failing = PASSING.map((r) => (r.caseId === "a1" ? caseResult("a1", "authorization", 0) : r));
   writeFileSync(join(dir, "report.json"), JSON.stringify(reportOf("1.2", failing)));
   const { code, stdout } = run(dir, ["--record"], {
-    AGENTKIT_GATE_OVERRIDE_ACTOR: "azeem",
-    AGENTKIT_GATE_OVERRIDE_REASON: "SEV-1 hotfix, ticket OPS-411",
+    RETINUE_GATE_OVERRIDE_ACTOR: "azeem",
+    RETINUE_GATE_OVERRIDE_REASON: "SEV-1 hotfix, ticket OPS-411",
   });
   assert.equal(code, 0, stdout);
   assert.match(stdout, /OVERRIDDEN by azeem: SEV-1 hotfix, ticket OPS-411/);
@@ -170,11 +170,11 @@ test("half an override is refused rather than ignored", () => {
   const dir = sandbox();
   writeFileSync(join(dir, "report.json"), JSON.stringify(reportOf("1.3", PASSING)));
   for (const env of [
-    { AGENTKIT_GATE_OVERRIDE_ACTOR: "azeem" },
-    { AGENTKIT_GATE_OVERRIDE_REASON: "because" },
+    { RETINUE_GATE_OVERRIDE_ACTOR: "azeem" },
+    { RETINUE_GATE_OVERRIDE_REASON: "because" },
     // Whitespace is not a reason. Without the trim, a CI input left blank produces an override with an empty
     // reason, which reads in the trend exactly like no record at all.
-    { AGENTKIT_GATE_OVERRIDE_ACTOR: "azeem", AGENTKIT_GATE_OVERRIDE_REASON: "   " },
+    { RETINUE_GATE_OVERRIDE_ACTOR: "azeem", RETINUE_GATE_OVERRIDE_REASON: "   " },
   ]) {
     const { code, stdout } = run(dir, [], env);
     assert.equal(code, 2, stdout);

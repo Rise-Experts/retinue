@@ -13,7 +13,7 @@
  * classifies *kinds* of difference, because those are what a reviewer needs to triage a hundred workflows,
  * and it deliberately does not score them.
  */
-import type { SuppressedWrite } from "@agentkit/backend";
+import type { SuppressedWrite } from "@retinue/agentkit";
 
 /**
  * Everything one run would have written.

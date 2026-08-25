@@ -1,8 +1,10 @@
 /**
  * `migrate` must be safe to run twice — #182.
  *
- * There is no applied-migrations ledger: `migrate` walks the whole list and executes every statement, which
- * works only because every statement is written to be a no-op when its effect is already there. That invariant
+ * There is a ledger now (see `migration-ledger.test.ts`), so `migrate` normally skips what it has already
+ * applied -- but re-runnability is still load-bearing rather than a safety net: a schema provisioned before
+ * the ledger existed has every table and no rows, so its first run re-executes the whole list. That works
+ * only because every statement is written to be a no-op when its effect is already there. That invariant
  * was never asserted, and #181's `ALTER TABLE ... RENAME COLUMN` broke it — the migration succeeded once and
  * then failed on every subsequent run with `column "period" does not exist`. The example's `npm run migrate`
  * stopped working, and nothing in the suite noticed, because a fresh schema only ever migrates once.

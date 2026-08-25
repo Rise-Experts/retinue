@@ -2,7 +2,7 @@
 /**
  * The whole example in one process, with no database, queue or network — #155 AC-7.
  *
- *   AGENTKIT_MODEL_API_KEY=sk-… node scripts/run-memory.mjs
+ *   RETINUE_MODEL_API_KEY=sk-… node scripts/run-memory.mjs
  *
  * A model key and nothing else. No `docker`, no migration, no second terminal.
  *
@@ -31,8 +31,8 @@ import { pathToFileURL } from "node:url";
 
 const PORT = Number(process.env.PORT ?? 4010);
 
-if (!process.env.AGENTKIT_MODEL_API_KEY) {
-  console.error("✗ AGENTKIT_MODEL_API_KEY is required — the model is the one thing this mode cannot fake.");
+if (!process.env.RETINUE_MODEL_API_KEY) {
+  console.error("✗ RETINUE_MODEL_API_KEY is required — the model is the one thing this mode cannot fake.");
   process.exit(2);
 }
 /**
@@ -91,7 +91,7 @@ console.log(`
 
     page      http://localhost:${port}/
     graphql   http://localhost:${port}/graphql
-    model     ${process.env.AGENTKIT_MODEL_ID ?? "gpt-4o"}
+    model     ${process.env.RETINUE_MODEL_ID ?? "gpt-4o"}
 
   Nothing is persisted. Restarting loses every conversation, and this mode cannot demonstrate
   durability, the API/worker split, lease recovery, slot contention or RLS — see the header of this

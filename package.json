@@ -1,5 +1,5 @@
 {
-  "name": "@agentkit/monorepo",
+  "name": "@retinue/monorepo",
   "version": "0.0.0",
   "private": true,
   "description": "Reusable AI agent platform \u2014 npm-workspaces monorepo (see docs/).",
@@ -17,7 +17,7 @@
   "scripts": {
     "typecheck": "tsc -b",
     "build": "tsc -b",
-    "test": "npm run test --workspaces --if-present && npm run test:boundaries && npm run test:evals && npm run check:reachability",
+    "test": "npm run test --workspaces --if-present && npm run test:boundaries && npm run test:evals && npm run check:reachability && npm run check:scripts",
     "test:boundaries": "node --test scripts/*.test.mjs",
     "test:evals": "node --test evals/*.test.mjs",
     "evals:coverage": "node evals/coverage.mjs",
@@ -26,12 +26,13 @@
     "deploy": "npm run docs:build && npx wrangler deploy",
     "clean": "npm run clean --workspaces --if-present && rm -rf tsconfig.tsbuildinfo",
     "conformance:matrix": "node scripts/conformance-matrix.mjs backend/.conformance/vitest.json",
-    "conformance:report": "rm -rf backend/.conformance/vitest.json && npm run test -w @agentkit/backend -- --reporter=json --outputFile=.conformance/vitest.json",
+    "conformance:report": "rm -rf backend/.conformance/vitest.json && npm run test -w @retinue/agentkit -- --reporter=json --outputFile=.conformance/vitest.json",
     "conformance": "npm run conformance:report; npm run conformance:matrix",
     "release:gate": "node scripts/release-gate.mjs",
     "loadtest": "node scripts/loadtest.mjs",
     "security:review": "node scripts/security-review.mjs",
-    "check:reachability": "node scripts/check-reachability.mjs"
+    "check:reachability": "node scripts/check-reachability.mjs",
+    "check:scripts": "node scripts/check-script-imports.mjs"
   },
   "devDependencies": {
     "typescript": "^5"

@@ -40,7 +40,7 @@ const T2 = asId<TenantId>("pg-cp-t2");
 const RUN = asId<RunId>("pg-cp-r1");
 const CONVO = asId<ConversationId>("pg-cp-c1");
 const AGENT = asId<AgentId>("pg-cp-a1");
-const PG_URL = process.env["AGENTKIT_TEST_PG_URL"];
+const PG_URL = process.env["RETINUE_TEST_PG_URL"];
 
 const pglite = (db: PGlite): SqlExecutor => ({
   query<Row>(text: string, params?: readonly unknown[]): Promise<Row[]> {
@@ -289,7 +289,7 @@ describe("monotonic save across two connections", () => {
   };
 
   if (!PG_URL) {
-    it("[skipped: AGENTKIT_TEST_PG_URL unset — PGlite is one embedded instance, so a two-connection race here would be meaningless]", () => {
+    it("[skipped: RETINUE_TEST_PG_URL unset — PGlite is one embedded instance, so a two-connection race here would be meaningless]", () => {
       expect(PG_URL).toBeUndefined();
     });
   } else {

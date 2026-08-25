@@ -52,8 +52,8 @@ import {
   createMemoryUsageBackend,
   createMemoryUsageLimitStore,
   createDurableWorker,
-} from "@agentkit/backend";
-import type { RunId, TenantId } from "@agentkit/backend";
+} from "@retinue/agentkit";
+import type { RunId, TenantId } from "@retinue/agentkit";
 
 /**
  * A realtime bus over the in-memory event log.

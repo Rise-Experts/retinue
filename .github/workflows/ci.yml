@@ -41,14 +41,14 @@ jobs:
         run: npm install
       - name: Typecheck
         run: npm run typecheck
-      # Build *before* test, since #142: the release-gate CLI is a thin wrapper importing @agentkit/backend, so
+      # Build *before* test, since #142: the release-gate CLI is a thin wrapper importing @retinue/agentkit, so
       # its tests need the built package. Running them against a stale dist is worse than against none -- they
       # pass or fail against the previous build's logic, which cost an hour of confusion when the gate was added.
       - name: Build
         run: npm run build
       - name: Test
         env:
-          AGENTKIT_TEST_REDIS_URL: redis://localhost:6379
+          RETINUE_TEST_REDIS_URL: redis://localhost:6379
         run: npm test
       - name: Dependency boundaries
         run: npm run check:boundaries
@@ -82,7 +82,7 @@ jobs:
         run: npm install
       - name: Conformance suite (real PostgreSQL)
         env:
-          AGENTKIT_TEST_PG_URL: postgres://postgres:postgres@localhost:5432/agentkit_test
+          RETINUE_TEST_PG_URL: postgres://postgres:postgres@localhost:5432/agentkit_test
         run: npm run conformance:report
       - name: Publish matrix
         # always(): a regression must still publish the table, or the job fails without showing
@@ -127,11 +127,11 @@ jobs:
         env:
           # Empty unless the dispatch supplied them. The CLI refuses *half* an override rather than ignoring it,
           # so a blank reason with an actor set fails loudly instead of shipping unrecorded.
-          AGENTKIT_GATE_OVERRIDE_ACTOR: ${{ inputs.override_reason && github.actor || '' }}
-          AGENTKIT_GATE_OVERRIDE_REASON: ${{ inputs.override_reason || '' }}
+          RETINUE_GATE_OVERRIDE_ACTOR: ${{ inputs.override_reason && github.actor || '' }}
+          RETINUE_GATE_OVERRIDE_REASON: ${{ inputs.override_reason || '' }}
         # --record appends to evals/trend.json; the commit below is what makes the trend accumulate.
         #
-        # THE GAP, STATED. `AGENTKIT_EVAL_REPORT` is a scored run, and producing one needs a deployed runtime to
+        # THE GAP, STATED. `RETINUE_EVAL_REPORT` is a scored run, and producing one needs a deployed runtime to
         # score against -- which lands with the ShareFlow cutover, not here. Until then this step fails with a
         # message naming why, rather than skipping: a gate that skips when its input is missing is a gate that
         # silently stops gating the day someone renames a variable. It only fires on a release tag and there are
@@ -139,13 +139,13 @@ jobs:
         # protection required checks, because a required check that cannot pass blocks every release. Adding it
         # there is the last step of the cutover, and docs/09 says so.
         run: |
-          if [ -z "${AGENTKIT_EVAL_REPORT:-}" ] || [ ! -f "$AGENTKIT_EVAL_REPORT" ]; then
-            echo "✗ no scored eval report at '${AGENTKIT_EVAL_REPORT:-<unset>}'."
+          if [ -z "${RETINUE_EVAL_REPORT:-}" ] || [ ! -f "$RETINUE_EVAL_REPORT" ]; then
+            echo "✗ no scored eval report at '${RETINUE_EVAL_REPORT:-<unset>}'."
             echo "  The gate is implemented and tested; producing a scored run needs a deployed runtime."
             echo "  See docs/09-quality-and-release.md -> 'The gate's live half'."
             exit 2
           fi
-          node scripts/release-gate.mjs --report "$AGENTKIT_EVAL_REPORT" --record --release "${GITHUB_REF_NAME}"
+          node scripts/release-gate.mjs --report "$RETINUE_EVAL_REPORT" --record --release "${GITHUB_REF_NAME}"
       - name: Record the trend
         # always(): a *failed* gate must still record its entry, or the trend shows only the releases that passed
         # and reads as an unbroken record of quality. That is the history this file exists to prevent.
@@ -178,3 +178,35 @@ jobs:
         # prebuild installs the workspace (npm --prefix .. ci) so TypeDoc resolves backend deps
         run: npm run build
         working-directory: website
+
+  image:
+    # The image build is the only check that the application layer declares every dependency it
+    # imports: the runtime declares its heavy dependencies as optional peers, so inside this repo they
+    # resolve by hoisting from the runtime's devDependencies and an under-declared app works anyway.
+    # The runtime stage installs with --omit=dev, so there it does not. This job also catches a
+    # Dockerfile left pointing at a workspace that no longer exists, which is how it started: #196
+    # merged the `server` workspace into the runtime package and the Dockerfile still copied it.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the image
+        run: docker build -t retinue:ci .
+      - name: The host must at least start and answer /healthz
+        # No database here, so readiness is expected to fail; liveness must not. A process that exits
+        # because a dependency is missing turns a dependency blip into a restart storm.
+        run: |
+          docker run -d --name retinue-ci -p 4000:4000 \
+            -e RETINUE_DATABASE_URL=postgres://nobody@127.0.0.1:1/none \
+            -e RETINUE_REDIS_URL=redis://127.0.0.1:1 \
+            -e RETINUE_EXAMPLE_DEV_AUTH=1 \
+            retinue:ci
+          for i in $(seq 20); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:4000/healthz || true)
+            [ "$code" = "200" ] && break
+            sleep 1
+          done
+          docker logs retinue-ci
+          test "$code" = "200"
+      - name: Cleanup
+        if: always()
+        run: docker rm -f retinue-ci || true

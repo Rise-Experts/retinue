@@ -27,7 +27,7 @@ const T1 = asId<TenantId>("pg-ss-t1");
 const T2 = asId<TenantId>("pg-ss-t2");
 const C1 = asId<ConversationId>("pg-ss-c1");
 const MSG = asId<MessageId>("pg-ss-m1");
-const PG_URL = process.env["AGENTKIT_TEST_PG_URL"];
+const PG_URL = process.env["RETINUE_TEST_PG_URL"];
 
 const pglite = (db: PGlite): SqlExecutor => ({
   query<Row>(text: string, params?: readonly unknown[]): Promise<Row[]> {
@@ -235,7 +235,7 @@ describe("stale-version rejection across two connections", () => {
   };
 
   if (!PG_URL) {
-    it("[skipped: AGENTKIT_TEST_PG_URL unset — PGlite is one embedded instance, so a two-connection race here would be meaningless]", () => {
+    it("[skipped: RETINUE_TEST_PG_URL unset — PGlite is one embedded instance, so a two-connection race here would be meaningless]", () => {
       expect(PG_URL).toBeUndefined();
     });
   } else {

@@ -2,7 +2,7 @@
 
 The versioned, representative cases that are the parity gate for every runtime phase
 (SPEC #13). The grading engine that runs these against a live runtime lands in Phase 12
-(`@agentkit/evals`, SPEC-050); this folder is the **data + schema + loader + coverage**.
+(`@retinue/evals`, SPEC-050); this folder is the **data + schema + loader + coverage**.
 
 ## Layout
 - `schema.mjs` — the `EvalCase` shape + `validateCase()` (zero deps).

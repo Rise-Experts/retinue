@@ -19,7 +19,7 @@ import {
   type TenantId,
   type Tool,
   type ToolResult,
-} from "@agentkit/backend";
+} from "@retinue/agentkit";
 import {
   ANALYTICS_TOOL_FACTORIES,
   ANALYTICS_TOOL_NAMES,

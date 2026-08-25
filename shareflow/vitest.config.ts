@@ -3,7 +3,7 @@ import { defineConfig } from "vitest/config";
 /**
  * `test` is `tsc -b && vitest run`, not `vitest run` — and that is a correctness fix, not tidiness.
  *
- * This package value-imports `@agentkit/backend`, whose `main` is `dist/index.js`. So `vitest run`
+ * This package value-imports `@retinue/agentkit`, whose `main` is `dist/index.js`. So `vitest run`
  * alone tests whatever was last built: edit the backend, run this suite, and it passes against the
  * previous version. #115's sabotage pass found it — disabling input validation in the envelope failed
  * nothing here until the build was re-run, at which point eight tests failed. The suite had been

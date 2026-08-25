@@ -7,7 +7,7 @@
  * hot path is how a platform acquires a vendor, and it is invisible in review.
  *
  * **Structural types, no runtime import.** The OTel API surface this needs is declared below as interfaces, and
- * a caller passes their own `TracerProvider` and `MeterProvider`. So `@agentkit/backend` has no dependency on
+ * a caller passes their own `TracerProvider` and `MeterProvider`. So `@retinue/agentkit` has no dependency on
  * any OTel package — a customer already running the OTel SDK hands us the objects they have, and a customer
  * running something else implements four small interfaces. `otel.test.ts` imports the *real*
  * `@opentelemetry/api` and passes real providers through, which is the only way to know the structural types are
@@ -164,7 +164,7 @@ const toOtelSpan = (span: OtelSpan): Span => ({
 });
 
 export const createOtelTelemetry = (options: OtelTelemetryOptions): Telemetry => {
-  const scope = options.scopeName ?? "@agentkit/backend";
+  const scope = options.scopeName ?? "@retinue/agentkit";
   const otelTracer = options.tracerProvider.getTracer(scope, options.scopeVersion);
   const otelMeter = options.meterProvider.getMeter(scope, options.scopeVersion);
   const sink = options.sink ?? (() => {});

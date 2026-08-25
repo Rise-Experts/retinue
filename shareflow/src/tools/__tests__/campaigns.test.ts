@@ -15,7 +15,7 @@ import {
   type TenantId,
   type Tool,
   type ToolResult,
-} from "@agentkit/backend";
+} from "@retinue/agentkit";
 import {
   CAMPAIGN_TOOL_FACTORIES,
   CAMPAIGN_TOOL_NAMES,

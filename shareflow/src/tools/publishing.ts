@@ -32,7 +32,7 @@
  * mid-transcode would be claiming an outcome nobody confirmed.
  */
 import { z } from "zod";
-import { AgentPlatformError, asId, defineDelegatingTool, type ExecutionContext, type Tool } from "@agentkit/backend";
+import { AgentPlatformError, asId, defineDelegatingTool, type ExecutionContext, type Tool } from "@retinue/agentkit";
 import {
   type PostDraftId,
   type PublishTarget,

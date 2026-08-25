@@ -19,7 +19,7 @@
  * returned an empty "products" section on every request would look like a configured-but-empty catalogue
  * rather than a missing feature.
  */
-import type { ContextProvider, ExecutionContext } from "@agentkit/backend";
+import type { ContextProvider, ExecutionContext } from "@retinue/agentkit";
 import { remediationFor } from "../tools/accounts.js";
 import {
   type CampaignId,

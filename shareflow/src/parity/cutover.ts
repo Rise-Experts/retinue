@@ -23,7 +23,7 @@ export const CUTOVER_RUNBOOK = `# Cutting ShareFlow over to the new runtime
 - [x] Every parity gate in \`parity/gates.ts\` is \`agreed\`, by a named person, **with a date before the
       first shadow run**. Done: agreed 2026-08-24 by Azeem Sarwar, before any shadow data existed. A gate added
       or revised from here needs a new date and a note saying what was seen.
-- [ ] \`npm run parity -w @agentkit/shareflow -- --shadow <runs.json>\` exits 0. While any gate is unagreed it
+- [ ] \`npm run parity -w @retinue/shareflow -- --shadow <runs.json>\` exits 0. While any gate is unagreed it
       exits 1 and names each one, so this is the check rather than a reading of the code.
 - [x] The historical-data question in \`DATA_DISPOSITION\` is answered in writing: **out of scope** — history
       does not carry over. Two obligations follow, and neither is done by this decision: tell customers
@@ -100,7 +100,7 @@ when \`canRemoveOldRuntime\` returns \`allowed: true\`.
 It is in a **different repository** from this one. Do not trust the baseline count here — run the scan:
 
 \`\`\`
-npm run scan:old-runtime -w @agentkit/shareflow -- --root <path to social_integgration>
+npm run scan:old-runtime -w @retinue/shareflow -- --root <path to social_integgration>
 \`\`\`
 
 It exits **2** if the repository or any configured root is missing, and that is the case that matters: a scan
@@ -112,7 +112,7 @@ nothing else: a removal PR that also fixes something is a removal PR nobody can 
 Feed the scan's \`remainingReferences\` to the removal check:
 
 \`\`\`
-npm run parity -w @agentkit/shareflow -- --shadow <runs.json> --removal \\
+npm run parity -w @retinue/shareflow -- --shadow <runs.json> --removal \\
   --signed-off-by "<name>" --references <count from the scan>
 \`\`\`
 

@@ -1,9 +1,9 @@
 /**
- * `@agentkit/shareflow` — the ShareFlow integration.
+ * `@retinue/shareflow` — the ShareFlow integration.
  *
  * ShareFlow is the platform's first consumer and stays outside the generic packages (docs/01:
  * *"product-specific names … live only in that application's integration package"*). This package
- * depends on `@agentkit/backend`; nothing generic depends on it, and R8 in
+ * depends on `@retinue/agentkit`; nothing generic depends on it, and R8 in
  * `scripts/check-boundaries.mjs` fails the build if that ever reverses.
  *
  * It contains four things and no application code:

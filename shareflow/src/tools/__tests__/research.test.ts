@@ -22,7 +22,7 @@ import {
   type TenantId,
   type Tool,
   type ToolResult,
-} from "@agentkit/backend";
+} from "@retinue/agentkit";
 import {
   CONTENT_FENCE,
   RESEARCH_TOOL_FACTORIES,

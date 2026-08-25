@@ -1,7 +1,7 @@
 /**
  * What the package root drags in — #196 AC-2.
  *
- * Before this, `src/index.ts` re-exported every adapter, so `import "@agentkit/backend"` loaded six provider
+ * Before this, `src/index.ts` re-exported every adapter, so `import "@retinue/agentkit"` loaded six provider
  * SDKs, a Postgres driver, a Redis client and a queue — whatever the consumer actually used. Someone embedding
  * the runtime in a Next.js route with OpenAI and their own storage installed four SDKs they would never call.
  *

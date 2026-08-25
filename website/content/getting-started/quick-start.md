@@ -11,7 +11,7 @@ durable runtime for you.
 ## 1. Create an agent
 
 ```ts
-import { createAgent } from "@agentkit/backend";
+import { createAgent } from "@retinue/agentkit";
 
 const agent = createAgent({
   manifest: {

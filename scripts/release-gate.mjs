@@ -5,7 +5,7 @@
  * Usage:
  *   node scripts/release-gate.mjs --report <scored-run.json> [--record] [--release <name>]
  *
- * A thin wrapper. All the deciding happens in `evaluateGate` in `@agentkit/backend`, which is a pure function
+ * A thin wrapper. All the deciding happens in `evaluateGate` in `@retinue/agentkit`, which is a pure function
  * with its own tests; this file reads files, prints, appends to the trend and sets an exit code. Deliberately
  * thin, because logic here would be logic the test suite does not cover — and the gate is the one script whose
  * being wrong is invisible (it fails open by passing).
@@ -14,14 +14,14 @@
  * a live runtime to score against, which lands with the ShareFlow cutover; until then the gate runs against a
  * recorded report. That boundary is stated in docs/09 rather than hidden behind a green tick.
  *
- * THE OVERRIDE. Environment, not a flag: `AGENTKIT_GATE_OVERRIDE_ACTOR` and `AGENTKIT_GATE_OVERRIDE_REASON`,
+ * THE OVERRIDE. Environment, not a flag: `RETINUE_GATE_OVERRIDE_ACTOR` and `RETINUE_GATE_OVERRIDE_REASON`,
  * both required. In GitHub Actions these come from a `workflow_dispatch` input, so the actor is the person who
  * clicked and the reason is text they typed — neither can be defaulted. An override with a blank reason is
  * refused, because "overridden: " in the trend is the same as no record at all.
  */
 
 import { readFileSync, writeFileSync } from "node:fs";
-import { evaluateGate, formatGateReport, trendEntryFor } from "@agentkit/backend";
+import { evaluateGate, formatGateReport, trendEntryFor } from "@retinue/agentkit";
 
 const THRESHOLDS = "evals/thresholds.json";
 const TREND = "evals/trend.json";
@@ -80,12 +80,12 @@ const baseline = baselinePath === undefined ? null : readJson(baselinePath);
  */
 const requireBaseline = trend.entries.length > 0;
 
-const actor = process.env.AGENTKIT_GATE_OVERRIDE_ACTOR?.trim();
-const reason = process.env.AGENTKIT_GATE_OVERRIDE_REASON?.trim();
+const actor = process.env.RETINUE_GATE_OVERRIDE_ACTOR?.trim();
+const reason = process.env.RETINUE_GATE_OVERRIDE_REASON?.trim();
 if ((actor === undefined || actor === "") !== (reason === undefined || reason === "")) {
   // Half an override is not an override. Refused rather than ignored: silently dropping it would fail the build
   // for someone who believed they had overridden it, and they would then reach for a worse workaround.
-  console.error("✗ an override needs both AGENTKIT_GATE_OVERRIDE_ACTOR and AGENTKIT_GATE_OVERRIDE_REASON");
+  console.error("✗ an override needs both RETINUE_GATE_OVERRIDE_ACTOR and RETINUE_GATE_OVERRIDE_REASON");
   process.exit(2);
 }
 const override = actor !== undefined && actor !== "" && reason !== undefined && reason !== "" ? { actor, reason } : undefined;

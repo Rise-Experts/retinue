@@ -2,7 +2,7 @@
 /**
  * Migrate the example's schema — #155.
  *
- * Separate from boot on purpose. `AGENTKIT_SCHEMA_MODE=off` means the server never changes the database, which
+ * Separate from boot on purpose. `RETINUE_SCHEMA_MODE=off` means the server never changes the database, which
  * matters here because the example runs in a **dedicated schema inside a database it shares with another
  * project**. A boot that silently migrated would make starting the example an act that modifies someone else's
  * database, and the person starting it would not know.
@@ -10,14 +10,14 @@
  * So migrating is a command you run, once, on purpose.
  */
 import pg from "pg";
-import { migrate, MIGRATIONS, rollback } from "@agentkit/backend";
+import { migrate, MIGRATIONS, rollback } from "@retinue/agentkit/adapters/postgres";
 
-const SCHEMA = process.env.AGENTKIT_EXAMPLE_SCHEMA ?? "agentkit_example";
-const URL_ = process.env.AGENTKIT_DATABASE_URL;
+const SCHEMA = process.env.RETINUE_EXAMPLE_SCHEMA ?? "agentkit_example";
+const URL_ = process.env.RETINUE_DATABASE_URL;
 const DOWN = process.argv.includes("--down");
 
 if (!URL_) {
-  console.error("✗ AGENTKIT_DATABASE_URL is required. Copy .env.example to .env first.");
+  console.error("✗ RETINUE_DATABASE_URL is required. Copy .env.example to .env first.");
   process.exit(2);
 }
 

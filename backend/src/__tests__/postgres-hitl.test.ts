@@ -32,7 +32,7 @@ const RUN = asId<RunId>("pg-hitl-run1");
 const AGENT = asId<AgentId>("pg-hitl-agent");
 const NOW = "2020-01-01T00:00:00.000Z";
 const LATER = "2020-01-02T00:00:00.000Z";
-const PG_URL = process.env["AGENTKIT_TEST_PG_URL"];
+const PG_URL = process.env["RETINUE_TEST_PG_URL"];
 
 const pglite = (db: PGlite): SqlExecutor => ({
   query<Row>(text: string, params?: readonly unknown[]): Promise<Row[]> {
@@ -462,7 +462,7 @@ describe("concurrent decide across two connections", () => {
   };
 
   if (!PG_URL) {
-    it("[skipped: AGENTKIT_TEST_PG_URL unset — one embedded connection cannot express this race]", () => {
+    it("[skipped: RETINUE_TEST_PG_URL unset — one embedded connection cannot express this race]", () => {
       expect(PG_URL).toBeUndefined();
     });
   } else {

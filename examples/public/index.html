@@ -466,7 +466,7 @@
   const headers = () => ({
     "content-type": "application/json",
     // The dev authenticator reads these. This is not authentication — any caller can claim any workspace, which
-    // is exactly why the server refuses to start without AGENTKIT_EXAMPLE_DEV_AUTH=1.
+    // is exactly why the server refuses to start without RETINUE_EXAMPLE_DEV_AUTH=1.
     "x-agentkit-tenant": $("tenant").value.trim(),
     "x-agentkit-principal": $("principal").value.trim(),
     "x-agentkit-roles": $("role").value,
@@ -1841,7 +1841,7 @@
   showEmpty();
   // After `showEmpty`, which replaces the log's contents — reported before it, the explanation was wiped by the
   // empty state a few lines later and the input was simply dead with nothing said.
-  if (!composerApi) note("The composer failed to load — run `npm run build -w @agentkit/example-app`, then reload.", true);
+  if (!composerApi) note("The composer failed to load — run `npm run build -w @retinue/example-app`, then reload.", true);
   void loadConversations();
   void loadMode();
   void loadModelMeta();

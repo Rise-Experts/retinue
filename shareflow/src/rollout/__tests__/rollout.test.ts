@@ -6,7 +6,7 @@
  * the kind of property a fake clock can be made to satisfy without the code working.
  */
 import { beforeEach, describe, expect, it } from "vitest";
-import { asId, type PrincipalId, type TenantId } from "@agentkit/backend";
+import { asId, type PrincipalId, type TenantId } from "@retinue/agentkit";
 import {
   DEFAULT_RUNTIME,
   MAX_FLAG_STALENESS_MS,

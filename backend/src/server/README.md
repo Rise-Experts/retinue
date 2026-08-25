@@ -1,6 +1,6 @@
-# @agentkit/server
+# @retinue/agentkit/server
 
-The reference GraphQL host for [`@agentkit/backend`](../backend). 9 source files, ~1,100
+The reference GraphQL host for [`@retinue/agentkit`](../backend). 9 source files, ~1,100
 lines, 89 tests.
 
 This README did not exist until 2026-08-24. The package did, and was runnable — which is
@@ -9,7 +9,7 @@ reader rediscovers from `package.json`.
 
 ## What it is for
 
-`@agentkit/backend` deliberately takes no HTTP or GraphQL server dependency: it ships SDL
+`@retinue/agentkit` deliberately takes no HTTP or GraphQL server dependency: it ships SDL
 and a resolver map, and the host mounts them. This package is *a* host — the one used to
 prove the surface works and to run the examples — not the only way to deploy.
 
@@ -28,17 +28,17 @@ supply.
 ## Two processes, not one
 
 The API admits work and the worker executes it. That boundary is load-bearing, and running
-them in one process hides exactly the defects worth finding: [#161](https://github.com/Rise-Experts/agentkit/issues/161)
+them in one process hides exactly the defects worth finding: [#161](https://github.com/Rise-Experts/retinue/issues/161)
 (a hard-coded no-op event publisher, so nothing streamed) and
-[#157](https://github.com/Rise-Experts/agentkit/issues/157) (an unwired message store, so
+[#157](https://github.com/Rise-Experts/retinue/issues/157) (an unwired message store, so
 turn two saw half of turn one) both survived because nothing exercised the split.
 
 ## Scripts
 
 ```bash
-npm run typecheck -w @agentkit/server
-npm test -w @agentkit/server
-npm run build -w @agentkit/server
+npm run typecheck -w @retinue/agentkit/server
+npm test -w @retinue/agentkit/server
+npm run build -w @retinue/agentkit/server
 ```
 
 For something runnable end to end — a page, a worker, real Postgres and Redis — use

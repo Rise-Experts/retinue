@@ -4,10 +4,11 @@ TypeScript implementation of the specifications in [`docs/`](docs/README.md).
 
 | Folder | Package | Runs where |
 |---|---|---|
-| [`backend/`](backend) | `@agentkit/backend` | Server: runtime, tools, MCP, skills, context, HITL, persistence adapters. **Takes no server or HTTP dependency and reads no environment variables.** |
-| [`server/`](server) | `@agentkit/server` | The reference GraphQL host: Yoga, the SSE endpoint, configuration and health probes |
-| [`frontend/`](frontend) | `@agentkit/frontend` | Client: headless React state, subscriptions and typed part reducers |
-| [`shareflow/`](shareflow) | `@agentkit/shareflow` | The ShareFlow integration: its tools, context providers, skills and agent manifests. Depends on `backend`; nothing generic depends on it |
+| [`backend/`](backend) | `@retinue/agentkit` | Server: runtime, tools, MCP, skills, context, HITL, persistence adapters. **The package root takes no server or HTTP dependency and reads no environment variables** |
+| [`backend/src/server/`](backend/src/server) | `@retinue/agentkit/server` | The reference GraphQL host: Yoga, the SSE endpoint, configuration and health probes. A subpath rather than its own package since #196 — one install, and the boundary is enforced by path (rules R12/R13) rather than by package name |
+| [`examples/`](examples) | `@retinue/example-app` | The reference application: what a deployment's own app module looks like |
+| [`frontend/`](frontend) | `@retinue/react` | Client: headless React state, subscriptions and typed part reducers |
+| [`shareflow/`](shareflow) | `@retinue/shareflow` | The ShareFlow integration: its tools, context providers, skills and agent manifests. Depends on `backend`; nothing generic depends on it |
 | [`docs/`](docs) | — | The specifications these packages implement |
 
 ## Status
@@ -32,9 +33,27 @@ are deliberately **not** members — they keep their own lockfiles, and CI insta
 ```bash
 npm install          # from the repository root
 npm run typecheck
-npm run build        # before npm test: the release-gate CLI imports the built @agentkit/backend
+npm run build        # before npm test: the release-gate CLI imports the built @retinue/agentkit
 npm test
 ```
+
+## Names that still say `agentkit`
+
+The packages are `@retinue/*` and the environment variables are `RETINUE_*` (#192). Some names were
+left alone on purpose, because renaming them is a *migration* rather than an edit:
+
+| Name | Why it stays |
+|---|---|
+| `agentkit-lock:*` Redis keys | Two processes must agree on a lock's name. Changing the prefix in a rolling deploy means old and new instances hold different locks for the same conversation — the exact race the lock exists to prevent. Renaming needs a release that reads both prefixes and a later one that stops |
+| `x-agentkit-tenant`, `x-agentkit-principal`, `x-agentkit-roles` | Request headers are a wire contract. Every caller sends them today; renaming breaks them at the same moment the server starts expecting the new spelling |
+| `schema_migrations` ids, `agentkit_example` schema | Applied migrations are recorded by id, and the schema name is where the data physically is. Both are what an existing database already contains |
+| `mcp__agentkit-docs__*` tool ids | Tool ids appear in stored run history and in approval grants. Renaming them orphans grants that name the old id |
+| `AgentkitConfig`, `AgentkitApp`, `createAgentkitHost` | Exported type and function names, so renaming them is a breaking API change. It belongs with the rest of the public-surface work, not smuggled into a package rename |
+| `docs.agentkit.riseexperts.de` | Live DNS and a live Cloudflare project — a cutover with a redirect to arrange |
+| `agentkit-test-pg`, `agentkit-test-redis`, `agentkit-test-pgvector` | Local container names on developer machines. Renaming them orphans running containers and their volumes |
+
+`RETINUE_*` variables fall back to their `AGENTKIT_*` spelling and warn once per variable, so an
+existing deployment keeps booting; the fallback goes away in the next minor release.
 
 ## The release gate
 
@@ -48,14 +67,14 @@ npm run release:gate -- --report <scored-run.json> [--baseline <prev.json>] [--r
 ```
 
 Exit codes: **0** pass or overridden, **1** a quality failure, **2** a usage error. An override needs both
-`AGENTKIT_GATE_OVERRIDE_ACTOR` and `AGENTKIT_GATE_OVERRIDE_REASON`; half of one is refused rather than ignored,
+`RETINUE_GATE_OVERRIDE_ACTOR` and `RETINUE_GATE_OVERRIDE_REASON`; half of one is refused rather than ignored,
 and the trend entry records both. The CI job runs on a release tag and on demand, not on every push. See
 `docs/09-quality-and-release.md` — including what the gate cannot yet do, which is score a live run.
 
 ## Telemetry
 
 `src/telemetry` is a vendor-neutral port — traces, metrics and structured logs — and `src/adapters/otel` is the
-only place OpenTelemetry is imported, enforced by boundary rule **R11**. `@agentkit/backend` has no runtime
+only place OpenTelemetry is imported, enforced by boundary rule **R11**. `@retinue/agentkit` has no runtime
 dependency on any OTel package: pass your own `TracerProvider` and `MeterProvider`, and your collector endpoint
 stays in your wiring where it belongs.
 
@@ -126,49 +145,58 @@ Validated at startup: a missing or malformed variable fails the boot with a mess
 
 | Variable | Required | Default | Notes |
 |---|---|---|---|
-| `AGENTKIT_DATABASE_URL` | yes | — | `postgres://…` |
-| `AGENTKIT_REDIS_URL` | yes | — | `redis://…`, for the job queue and the lock |
-| `AGENTKIT_SCHEMA_MODE` | no | `off` | `off` \| `plan` \| `auto`. Keep `off` in production so managed migrations stay in control; `plan` logs the pending diff and applies nothing |
-| `AGENTKIT_WORKER_CONCURRENCY` | no | `4` | Runs handled at once per worker |
-| `AGENTKIT_LOG_LEVEL` | no | `info` | `debug` \| `info` \| `warn` \| `error` |
+| `RETINUE_DATABASE_URL` | yes | — | `postgres://…` |
+| `RETINUE_REDIS_URL` | yes | — | `redis://…`, for the job queue and the lock |
+| `RETINUE_SCHEMA_MODE` | no | `off` | `off` \| `plan` \| `auto`. Keep `off` in production so managed migrations stay in control; `plan` logs the pending diff and applies nothing |
+| `RETINUE_WORKER_CONCURRENCY` | no | `4` | Runs handled at once per worker |
+| `RETINUE_LOG_LEVEL` | no | `info` | `debug` \| `info` \| `warn` \| `error` |
 | `PORT` | no | `4000` | API host only |
 
 ### Running
 
-Both commands need one more variable: `AGENTKIT_APP_MODULE`, pointing at a module that
+Both commands need one more variable: `RETINUE_APP_MODULE`, pointing at a module that
 default-exports your wiring — `{ authenticate, deps }` for the API host, plus `{ engine, buildContext }`
 for the worker. There is deliberately **no default for `authenticate`**: a fallback would serve an open
 API to anyone who forgot to set it, which is a worse failure than refusing to start.
 
 ```bash
 # API host — GraphQL at /graphql, SSE at /runs/events, probes at /healthz and /readyz
-AGENTKIT_APP_MODULE=./dist/my-app.js node server/dist/cli.js
+RETINUE_APP_MODULE=./dist/my-app.js node node_modules/@retinue/agentkit/dist/server/cli.js
 
 # Worker — consumes the run queue, heartbeats its claims, reaps stale runs
-AGENTKIT_APP_MODULE=./dist/my-app.js node server/dist/cli-worker.js
+RETINUE_APP_MODULE=./dist/my-app.js node node_modules/@retinue/agentkit/dist/server/cli-worker.js
 ```
 
 With the image:
 
 ```bash
-docker build -t agentkit .
-docker run -p 4000:4000 --env-file .env agentkit                     # API host
-docker run --env-file .env agentkit node server/dist/cli-worker.js   # worker
+docker build -t retinue .
+docker run -p 4000:4000 --env-file .env retinue                                        # API host
+docker run --env-file .env retinue node backend/dist/server/cli-worker.js              # worker
 ```
+
+The image builds the runtime and the `examples` app layer, and defaults `RETINUE_APP_MODULE` to it, so
+it boots as-is. Your own deployment replaces that layer: the runtime declares its heavy dependencies as
+*optional* peers, so the application is what declares the ones a given wiring actually uses. That is
+also why the runtime stage installs with `--omit=dev` — an app layer that imports something it does not
+declare fails the image build rather than production.
+
+`RETINUE_DATABASE_URL` must carry its own `search_path` where the schema is not the default one; the
+host builds its pool from the URL alone and cannot be told separately.
 
 ### Probes
 
 | Path | Answers | Behaviour |
 |---|---|---|
 | `/healthz` | Is the process alive? | 200 **even while the database is down**. Restarting a process because a dependency is unavailable turns a blip into a restart storm |
-| `/readyz` | Should traffic come here? | 200 when Postgres, Redis and the schema version all check out; **503** naming every failing probe otherwise |
+| `/readyz` | Should traffic come here? | 200 when Postgres and the schema version check out, plus Redis where the app module exposes a connection (`redis` on its default export — without it Redis is not probed, and a host that cannot take a lock still reports ready); **503** naming every failing probe otherwise |
 
 Both are served before authentication, because a load balancer carries no credentials.
 
 ### First boot against an empty database
 
 ```bash
-AGENTKIT_SCHEMA_MODE=auto node server/dist/main.js   # provisions, then logs the applied migration ids
+RETINUE_SCHEMA_MODE=auto node node_modules/@retinue/agentkit/dist/server/main.js   # provisions, then logs the applied migration ids
 ```
 
 `auto` is idempotent — a second boot applies nothing — but the production default is `off` on purpose.

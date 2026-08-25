@@ -1,4 +1,4 @@
-# @agentkit/frontend
+# @retinue/react
 
 Headless client half of the reusable AI platform. Implements
 [`../docs/06-graphql-and-frontend.md`](../docs/06-graphql-and-frontend.md).
@@ -17,7 +17,7 @@ reader to write again what is already here.
 
 | Module | Contains |
 |---|---|
-| `types` | Re-exports the wire contract from `@agentkit/backend`, plus client-only view state. Type-only, erased at build time. |
+| `types` | Re-exports the wire contract from `@retinue/agentkit`, plus client-only view state. Type-only, erased at build time. |
 | `event-buffer` | **Implemented.** Orders and de-duplicates run events across a reconnect. |
 | `hooks` | **Implemented** — all ten: `useAgentkitClient`, `useConversations`, `useConversation`, `useRunSubscription`, `usePendingInteraction`, `useSendMessage`, `useAnswerQuestion`, `useDecideApproval`, `useCancelRun`, `useSessionContext`. |
 | `client` | The transport port the hooks take. An interface, so the host supplies fetch, SSE or WebSocket and this package assumes none of them. |
@@ -40,15 +40,15 @@ without a DOM. `ui/` renders them.
 
 ## Why the backend dependency is type-only
 
-Every import from `@agentkit/backend` is an `import type`, so nothing survives
+Every import from `@retinue/agentkit` is an `import type`, so nothing survives
 compilation. The client owns no copy of the wire contract, and the two halves cannot
 drift. TypeScript project references build the backend's declarations first.
 
 ## Scripts
 
 ```bash
-npm test -w @agentkit/frontend
-npm run build -w @agentkit/frontend   # builds @agentkit/backend first
+npm test -w @retinue/react
+npm run build -w @retinue/react   # builds @retinue/agentkit first
 ```
 
 ## Not yet here

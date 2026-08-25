@@ -29,7 +29,7 @@ import {
 } from "../adapters/bullmq/index.js";
 import type { DistributedLockStore } from "../runtime/index.js";
 
-const REDIS_URL = process.env["AGENTKIT_TEST_REDIS_URL"];
+const REDIS_URL = process.env["RETINUE_TEST_REDIS_URL"];
 const KEY = "conversation:c1";
 
 /** A Redis good enough to assert the arguments and the script semantics, with no server. */
@@ -237,7 +237,7 @@ describe("against a real Redis", () => {
   });
 
   if (REDIS_URL === undefined) {
-    it("[skipped: AGENTKIT_TEST_REDIS_URL unset — a fake cannot expire a key by wall clock or contend across connections]", () => {
+    it("[skipped: RETINUE_TEST_REDIS_URL unset — a fake cannot expire a key by wall clock or contend across connections]", () => {
       expect(REDIS_URL).toBeUndefined();
     });
   } else {

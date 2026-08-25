@@ -1396,10 +1396,55 @@ export const rollbackVector = async (sql: SqlExecutor): Promise<void> => {
   for (const m of [...VECTOR_MIGRATIONS].reverse()) for (const stmt of m.down) await sql.query(stmt);
 };
 
+/**
+ * The applied-migrations ledger. Defined here rather than in `schema.ts` because both provisioning
+ * paths write it -- `migrate()` below and `SchemaManager.apply()` -- and a second copy of the DDL is
+ * how they would drift. They did drift: `migrate()` used to apply statements without recording them,
+ * so `/readyz`'s schema probe read an empty ledger and never reported ready for anyone who
+ * provisioned with `migrate()` rather than `apply()`.
+ */
+export const MIGRATION_LEDGER = `CREATE TABLE IF NOT EXISTS schema_migrations (
+  id text PRIMARY KEY,
+  applied_at timestamptz NOT NULL DEFAULT now()
+)`;
+
+/**
+ * Ledger rows, or an empty set where the table does not exist yet. Read-only: asking what has been
+ * applied must not itself apply anything.
+ */
+export const appliedMigrationIds = async (sql: SqlExecutor): Promise<Set<string>> => {
+  try {
+    const rows = await sql.query<{ id: string }>(`SELECT id FROM schema_migrations`);
+    return new Set(rows.map((r) => r.id));
+  } catch {
+    return new Set<string>();
+  }
+};
+
+/**
+ * Applies every pending migration and records it.
+ *
+ * Migrations already in the ledger are skipped, but a schema provisioned before the ledger existed
+ * has the tables and no rows -- so the first run after upgrading re-executes all of them. That is
+ * safe because every statement is idempotent (`migrations-rerunnable.test.ts` is what keeps it so),
+ * and it leaves the ledger complete afterwards.
+ */
 export const migrate = async (sql: SqlExecutor): Promise<void> => {
-  for (const m of MIGRATIONS) for (const stmt of m.up) await sql.query(stmt);
+  await sql.query(MIGRATION_LEDGER);
+  const done = await appliedMigrationIds(sql);
+  for (const m of MIGRATIONS) {
+    if (done.has(m.id)) continue;
+    for (const stmt of m.up) await sql.query(stmt);
+    // ON CONFLICT DO NOTHING: two processes migrating at once must not both record the same id.
+    await sql.query(`INSERT INTO schema_migrations (id) VALUES ($1) ON CONFLICT (id) DO NOTHING`, [m.id]);
+  }
 };
 
 export const rollback = async (sql: SqlExecutor): Promise<void> => {
-  for (const m of [...MIGRATIONS].reverse()) for (const stmt of m.down) await sql.query(stmt);
+  for (const m of [...MIGRATIONS].reverse()) {
+    for (const stmt of m.down) await sql.query(stmt);
+    // Forget the migration only once its `down` has succeeded, so a failure mid-rollback leaves a
+    // ledger that still names what is actually present.
+    await sql.query(`DELETE FROM schema_migrations WHERE id = $1`, [m.id]).catch(() => undefined);
+  }
 };

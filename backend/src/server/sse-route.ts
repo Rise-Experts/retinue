@@ -1,7 +1,7 @@
 /**
  * HTTP SSE endpoint for run events (#109).
  *
- * `@agentkit/backend`'s `graphql/sse.ts` already produces ready-to-write frames and maps
+ * `@retinue/agentkit`'s `graphql/sse.ts` already produces ready-to-write frames and maps
  * `Last-Event-ID` to a resume cursor, deliberately without an HTTP dependency. This is the route that
  * serves it, in the workspace where the server dependency already lives.
  *

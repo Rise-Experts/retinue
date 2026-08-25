@@ -20,7 +20,7 @@
  *
  * Usage:
  *   node scripts/scan-old-runtime.mjs [--root <path>] [--json]
- *   AGENTKIT_OLD_RUNTIME_ROOT=/path/to/social_integgration node scripts/scan-old-runtime.mjs
+ *   RETINUE_OLD_RUNTIME_ROOT=/path/to/social_integgration node scripts/scan-old-runtime.mjs
  */
 
 import { readdir, readFile, stat } from "node:fs/promises";
@@ -42,7 +42,7 @@ const asJson = args.includes("--json");
  * wrong, the error says which path was tried rather than reporting an empty result.
  */
 const DEFAULT_ROOT = resolve(import.meta.dirname, "../../../..", OLD_RUNTIME_REFERENCE_SCOPE.repository);
-const root = resolve(flag("root") ?? process.env.AGENTKIT_OLD_RUNTIME_ROOT ?? DEFAULT_ROOT);
+const root = resolve(flag("root") ?? process.env.RETINUE_OLD_RUNTIME_ROOT ?? DEFAULT_ROOT);
 
 /** Directories never worth scanning: build output and dependencies are not the old runtime's source. */
 const SKIP = new Set(["node_modules", ".git", "dist", "build", ".next", "__pycache__", ".venv", "coverage"]);
@@ -69,7 +69,7 @@ const isDirectory = async (path) => {
 if (!(await isDirectory(root)))
   die(`the old runtime repository is not here, so nothing can be counted`, {
     looked: root,
-    fix: "pass --root <path> or set AGENTKIT_OLD_RUNTIME_ROOT",
+    fix: "pass --root <path> or set RETINUE_OLD_RUNTIME_ROOT",
   });
 
 const missing = [];

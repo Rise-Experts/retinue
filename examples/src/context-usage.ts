@@ -9,10 +9,10 @@
  * Providers are passed in rather than reached for, so this file knows nothing about notebooks or memory.
  */
 
-import { assemblePrompt, estimateTokens, gatherSections, inspectAssembledPrompt, turnText } from "@agentkit/backend";
+import { assemblePrompt, estimateTokens, gatherSections, inspectAssembledPrompt, turnText } from "@retinue/agentkit";
 import type { ExampleStores } from "./stores.js";
-import type { ContextBudget, ContextInspection, ContextProvider, ExecutionContext } from "@agentkit/backend";
-import type { SqlExecutor } from "@agentkit/backend/adapters/postgres";
+import type { ContextBudget, ContextInspection, ContextProvider, ExecutionContext } from "@retinue/agentkit";
+import type { SqlExecutor } from "@retinue/agentkit/adapters/postgres";
 import { conversationTurns } from "./history.js";
 import { resolveExampleModel } from "./model.js";
 import { MODE_DESCRIPTIONS, type ConversationMode } from "./modes.js";
@@ -30,7 +30,7 @@ export const contextLimitFor = (): number => resolveExampleModel().definition.li
  * Bucket budgets, as fractions of the window rather than fixed numbers.
  *
  * A **function**, not a constant. It was a module-level IIFE, so importing anything that transitively reached
- * this file demanded `AGENTKIT_MODEL_API_KEY` — which made the whole module untestable, and captured the budget
+ * this file demanded `RETINUE_MODEL_API_KEY` — which made the whole module untestable, and captured the budget
  * of whatever model happened to be configured when the process loaded rather than the one resolved for the turn.
  *
  * Fixed token counts are wrong the moment the configured model changes — a budget tuned for a 128k window
