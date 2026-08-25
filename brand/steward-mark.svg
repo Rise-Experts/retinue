@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Steward">
+  <!--
+    A cradle, and what is held in it.
+
+    Custody rather than control: the arc is open at the top, so the thing held is not enclosed. A steward keeps
+    something safe on your behalf and can hand it back, which is a different promise from a shield or a lock —
+    and the difference is the product's actual claim about approvals and reversibility.
+  -->
+  <path d="M14 30a18 18 0 0 0 36 0" fill="none" stroke="#234b7e" stroke-width="9" stroke-linecap="round" />
+  <circle cx="32" cy="19" r="7" fill="#4f81bd" />
+</svg>

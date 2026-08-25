@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 250 64" width="250" height="64" role="img" aria-label="Retinue">
+  <circle cx="32" cy="32" r="10.5" fill="#234b7e" />
+  <g fill="#4f81bd">
+    <circle cx="39.5" cy="52.7" r="3.6" /><circle cx="52.7" cy="39.5" r="4.2" /><circle cx="51.1" cy="21.0" r="4.6" />
+    <circle cx="35.8" cy="10.3" r="4.2" /><circle cx="17.9" cy="15.1" r="3.6" />
+  </g>
+  <text x="76" y="41" font-family="Onest, Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
+        font-size="27" font-weight="600" letter-spacing="-0.5" fill="#234b7e">retinue</text>
+</svg>

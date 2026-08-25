@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Rise-Experts">
+  <!--
+    Three ascending strokes and a detached cap.
+
+    The cap is the whole idea: three bars alone say "chart", and a chart is what every consultancy uses. A mark
+    that has left the sequence says the rise continues past what is measured, which is what "Rise" is claiming.
+    Round caps and one shared baseline keep it stable at 16px, where thin geometry turns to mush.
+  -->
+  <g fill="none" stroke="#234b7e" stroke-width="9" stroke-linecap="round">
+    <path d="M16 48V40" />
+    <path d="M32 48V30" />
+    <path d="M48 48V20" />
+  </g>
+  <circle cx="48" cy="9" r="4.5" fill="#4f81bd" />
+</svg>
