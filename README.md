@@ -5,6 +5,7 @@ TypeScript implementation of the specifications in [`docs/`](docs/README.md).
 | Folder | Package | Runs where |
 |---|---|---|
 | [`backend/`](backend) | `@retinue/agentkit` | Server: runtime, tools, MCP, skills, context, HITL, persistence adapters. **The package root takes no server or HTTP dependency and reads no environment variables** |
+| [`backend/src/tools/library/`](backend/src/tools/library) | `@retinue/agentkit/tools` | Fifteen first-party tools — web fetch and search, HTTP, CSV, JSON, read-only SQL, knowledge search, attachments, time and arithmetic. No optional peer: they reach the network through the platform's own egress policy |
 | [`backend/src/server/`](backend/src/server) | `@retinue/agentkit/server` | The reference GraphQL host: Yoga, the SSE endpoint, configuration and health probes. A subpath rather than its own package since #196 — one install, and the boundary is enforced by path (rules R12/R13) rather than by package name |
 | [`examples/`](examples) | `@retinue/example-app` | The reference application: what a deployment's own app module looks like |
 | [`frontend/`](frontend) | `@retinue/react` | Client: headless React state, subscriptions and typed part reducers |

@@ -12,6 +12,10 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
+    "./tools": {
+      "types": "./dist/entries/tools.d.ts",
+      "default": "./dist/entries/tools.js"
+    },
     "./providers": {
       "types": "./dist/entries/providers.d.ts",
       "default": "./dist/entries/providers.js"

@@ -7,11 +7,17 @@ Importing the package root loads `ai` and `zod`. Nothing else.
 
 | Entry | Subpath | Optional peer |
 |---|---|---|
+| `tools.ts` | `./tools` | *none* — the tools reach the network through `fetch`, which the runtime already assumes |
 | `providers.ts` | `./providers` | the six `@ai-sdk/*` packages |
 | `adapters-postgres.ts` | `./adapters/postgres` | `pg` |
 | `adapters-redis.ts` | `./adapters/redis` | `ioredis` |
 | `adapters-bullmq.ts` | `./adapters/bullmq` | `bullmq`, `ioredis` |
 | `adapters-otel.ts` | `./adapters/otel` | *none* — the adapter takes structural types; the SDK appears only in its tests |
+| `server.ts` | `./server` | `graphql`, `graphql-yoga`, `@whatwg-node/server` |
+
+Two of these have no peer at all, for different reasons. `./adapters/otel` takes structural types so a vendor
+never enters the graph. `./tools` genuinely needs nothing: an HTTP client built on the global `fetch` and a
+handful of parsers, so the only cost of the subpath is that the root's export list stays short (#199).
 
 ## Why there is no `./testing` yet
 

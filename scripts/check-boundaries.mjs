@@ -276,7 +276,37 @@ export function scan(roots = DEFAULT_ROOTS) {
       const isTest = /\/__tests__\/|\.test\.ts$/.test(path);
       const isTools = inLayer("tools") && !isTest;
 
-      for (const { specifier: spec, typeOnly } of imports(readFileSync(file, "utf8"))) {
+      const source = readFileSync(file, "utf8");
+
+      /**
+       * R7, second half: I/O needs no import.
+       *
+       * The import-based half of R7 was blind to the most likely way a tool performs I/O today, because `fetch`
+       * is a *global* -- a tools file could call it and pass the check with nothing to flag. Verified, not
+       * assumed: a bare `fetch("https://…")` planted in `tools/library/data.ts` produced zero violations while an
+       * `import "node:fs"` in the same file produced one.
+       *
+       * Matched on the call, and only where it is the global: `client.request(…)`, `doFetch(…)` and a parameter
+       * named `fetchImpl` are all indirections through something injected, which is precisely the delegation the
+       * rule is asking for. `WebSocket` and `EventSource` are here for the same reason as `fetch` -- a socket
+       * opened from an envelope is I/O the envelope was supposed to delegate.
+       */
+      if (isTools) {
+        for (const [pattern, what] of [
+          [/(^|[^.\w$])fetch\s*\(/m, "fetch()"],
+          [/new\s+WebSocket\s*\(/m, "new WebSocket()"],
+          [/new\s+EventSource\s*\(/m, "new EventSource()"],
+        ]) {
+          if (pattern.test(source))
+            violations.push({
+              file: path,
+              specifier: what,
+              rule: "R7 the tools layer must delegate I/O, not perform it (global, no import)",
+            });
+        }
+      }
+
+      for (const { specifier: spec, typeOnly } of imports(source)) {
         const add = (rule) => violations.push({ file: path, specifier: spec, rule });
 
         // R1 — no deep cross-workspace imports; use the package root.

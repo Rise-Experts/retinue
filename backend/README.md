@@ -56,6 +56,8 @@ distinction matters, and `docs/09` records which claims rest on which.
 | `loadtest` | [16](../docs/16-load-and-resilience.md) | Load, soak and failure injection harnesses |
 | `worker` | [05](../docs/05-knowledge-and-documents.md) | The export worker |
 | `server` | [06](../docs/06-graphql-and-frontend.md) | The reference GraphQL host, SSE endpoint, boot, config, health and the runnable API and worker commands. Reached at the `./server` subpath; `graphql`, `graphql-yoga` and `@whatwg-node/server` are **optional peers**, so a consumer embedding the runtime in their own server installs none of them. Rules **R12** and **R13** keep the dependency one-way |
+| `tools/library` | — | The first-party tools (#188), reached at the `./tools` subpath: web fetch and search, HTTP, CSV, JSON, read-only SQL, knowledge search, attachments, time and arithmetic. Envelopes only — rule **R7** forbids I/O here |
+| `toolkit` | — | The deterministic functions those tools delegate to, and the only place the outbound HTTP client is built. Separate from `tools/` precisely because it *does* perform I/O |
 | `testing` | [09](../docs/09-quality-and-release.md) | The conformance suite every adapter runs, plus PGlite fixtures. Named `testing` and shipped deliberately: an adapter written outside this repository has to be holdable to the same behaviour |
 
 ## Rules these contracts encode
@@ -100,11 +102,41 @@ subpath with an optional peer:
 
 ```ts
 import { createRuntime } from "@retinue/agentkit";
+import { createStandardToolProvider } from "@retinue/agentkit/tools";           // no peer: uses global fetch
 import { createPostgresRunStore } from "@retinue/agentkit/adapters/postgres";  // peer: pg
 import { runApiHost } from "@retinue/agentkit/server";                          // peer: graphql, graphql-yoga
 ```
 
 `src/entries/README.md` lists them all, including why there is no `./testing` yet.
+
+## Tools
+
+Fifteen first-party tools, at `@retinue/agentkit/tools`. **Wiring is the toggle** — a tool exists when its
+dependency was supplied and not otherwise, because a separate `enable` flag beside a `sqlQuery` function is how a
+deployment ends up with a tool that is enabled and unwired:
+
+```ts
+const tools = createStandardToolProvider({
+  deps: { authorization, idempotency, approvals },
+  http: {},                                          // fetch_url, fetch_json, http_request, http_write
+  search: braveProvider,                             // web_search — omitted, and the tool does not exist
+  sql: { query: readOnlyPool, readOnly: true, schemas: ["app"] },
+  knowledge: { retriever, authSubjects: (ctx) => [String(ctx.conversationId)] },
+});
+```
+
+| | |
+|---|---|
+| `fetch_url`, `fetch_json`, `http_request` | `read`. Egress-policy checked before any request, redirects refused rather than followed, bodies bounded while reading and fenced as untrusted content |
+| `http_write` | `external-write`, so approval and an idempotency key are required by the registry. Two tools rather than one with a `method` argument, because effect is classified per *tool* — a single tool could only be gated for every call or none |
+| `parse_csv`, `query_json` | `read`, pure. They take text, not a path or a URL: reading is `read_attachment`'s or `fetch_url`'s job, and each should be checked by the thing that should check it |
+| `sql_query`, `sql_schema` | `read`, and only honest because `createSqlQuery` demands a `readOnly: true` acknowledgement. The keyword scan inside it is a second line of defence; the connection is the control |
+| `search_knowledge` | `read`. `authSubjects` comes from the host, never from tool input — a model must not widen its own read scope by asking |
+| `read_attachment`, `list_attachments`, `read_document` | `read`, through `FileService` so the entitlement check is not duplicated |
+| `now`, `calculate` | `read`, pure. `calculate` is a parser, not `eval`: the expression comes from a model |
+
+Credentials are configured per host (`headersFor`) and never appear in a tool's input schema. The client refuses
+an `authorization` or `cookie` header supplied by a caller rather than forwarding it.
 
 ## Import convention
 

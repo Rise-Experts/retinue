@@ -29,7 +29,7 @@ const base = { async query(text, params) { return (await pool.query(text, params
  * too. Without the second argument the coordinator's `FOR UPDATE` would run against `public` — another project's
  * schema in this setup.
  */
-const { createTransactionScope, createPoolOpener } = await import("@retinue/agentkit");
+const { createTransactionScope, createPoolOpener } = await import("@retinue/agentkit/adapters/postgres");
 const scope = createTransactionScope(createPoolOpener(pool, SCHEMA));
 const sql = scope.scoped(base);
 const runner = scope.runner;

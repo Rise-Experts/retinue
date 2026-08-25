@@ -4,7 +4,7 @@ sidebar_position: 1
 
 # Architecture
 
-@agentkit is a set of composable packages behind a single composition root, built on
+Retinue is a set of composable packages behind a single composition root, built on
 ports-and-adapters so every piece of infrastructure is swappable.
 
 ```mermaid

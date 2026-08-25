@@ -492,3 +492,89 @@ describe("shadow mode", () => {
     expect(recorded).toEqual([]);
   });
 });
+
+/**
+ * Two providers, one name — #188.
+ *
+ * `findAuthorized` took the first match, so a provider listed earlier silently shadowed a later one. That was
+ * invisible: the catalogue showed the name twice, and which one executed depended on registration order. The
+ * dangerous direction is a `read` tool shadowing an `external-write` tool of the same name, because the shadowed
+ * gating goes with it — an unapproved external write, arrived at by adding a provider.
+ *
+ * MCP tools are namespaced `mcp__<server>__<tool>` exactly to stop a remote server doing this. Nothing stopped
+ * two local providers, which the first-party tool library made a live possibility rather than a hypothetical.
+ */
+describe("duplicate tool names across providers", () => {
+  const toolNamed = (name: string, effect: "read" | "external-write") => ({
+    descriptor: {
+      name,
+      label: name,
+      description: name,
+      category: "general",
+      effect,
+      approvalPolicy: effect === "read" ? ("never" as const) : ("always" as const),
+      inputSchema: {},
+      outputSchema: {},
+      requiresIdempotencyKey: effect !== "read",
+    },
+    execute: async () => ({ ok: true as const, data: { from: effect } }),
+  });
+
+  const duplicated = (reports: unknown[] = []) =>
+    createToolRegistry({
+      providers: [
+        { id: "first", async listTools() { return [toolNamed("search", "read")]; } },
+        // The shadowed one. Under first-wins this executes as a read, with no approval and no idempotency key.
+        { id: "second", async listTools() { return [toolNamed("search", "external-write")]; } },
+      ],
+      authorization: policy,
+      idempotency: createMemoryIdempotencyStore(),
+      approval: { isAllowed: async () => true },
+      onMisconfiguration: (report) => reports.push(report),
+    });
+
+  it("refuses the ambiguous name instead of picking one", async () => {
+    const result = await duplicated().execute(ctx(["editor"]), { name: "search", input: {}, idempotencyKey: "k1" });
+    expect(result).toMatchObject({ ok: false, error: { code: "capability_unavailable" } });
+    // The message has to name both providers: "unknown tool" would send a reader looking for a missing
+    // registration when the problem is two of them.
+    expect(!result.ok && result.error.message).toContain("first");
+    expect(!result.ok && result.error.message).toContain("second");
+  });
+
+  it("hides it from the catalogue too, so the model is never offered a name that cannot run", async () => {
+    const catalogue = await duplicated().catalog(ctx(["editor"]), { preloaded: [], categories: [], excluded: [] });
+    const names = [...catalogue.preloaded, ...catalogue.discoverable].map((entry) => entry.name);
+    expect(names).not.toContain("search");
+  });
+
+  it("reports the misconfiguration once, naming both providers", async () => {
+    const reports: unknown[] = [];
+    const registry = duplicated(reports);
+    await registry.execute(ctx(["editor"]), { name: "search", input: {}, idempotencyKey: "k1" });
+    await registry.execute(ctx(["editor"]), { name: "search", input: {}, idempotencyKey: "k2" });
+    expect(reports).toEqual([
+      {
+        kind: "duplicate-tool-name",
+        layer: "registry",
+        toolName: "search",
+        providerIds: ["first", "second"],
+        configField: "ToolRegistryConfig.providers",
+      },
+    ]);
+  });
+
+  it("leaves every other tool from both providers working", async () => {
+    // Refusing the ambiguous name must not be refusing the providers. One bad name is one tool lost.
+    const registry = createToolRegistry({
+      providers: [
+        { id: "first", async listTools() { return [toolNamed("search", "read"), toolNamed("publish", "read")]; } },
+        { id: "second", async listTools() { return [toolNamed("search", "read")]; } },
+      ],
+      authorization: policy,
+      idempotency: createMemoryIdempotencyStore(),
+    });
+    const result = await registry.execute(ctx(["editor"]), { name: "publish", input: {}, idempotencyKey: "k3" });
+    expect(result.ok).toBe(true);
+  });
+});

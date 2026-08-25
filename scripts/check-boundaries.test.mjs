@@ -190,3 +190,55 @@ test("real imports are still found after sanitizing", () => {
     assert.ok(rules.has("R2"), "the real value-import must still be caught");
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+/**
+ * R7's second half — #188.
+ *
+ * The import-based half of R7 could not see the most likely way a tool performs I/O, because `fetch` is a global:
+ * a `fetch("https://…")` planted in a tools file produced zero violations while `import "node:fs"` in the same
+ * file produced one. That hole surfaced when the first-party tool library became the first substantial addition to
+ * the tools layer.
+ *
+ * The false-positive cases matter as much as the true one. Delegating *is* calling something — `client.request()`,
+ * an injected `doFetch`, a `fetchImpl` parameter — and a rule that flagged those would forbid the pattern it
+ * exists to require.
+ */
+test("R7 catches I/O performed through a global, with no import", () => {
+  const dir = fixture({
+    "backend/src/tools/bad-fetch.ts": `export const go = async () => fetch("https://example.com");\n`,
+    "backend/src/tools/bad-socket.ts": `export const go = () => new WebSocket("wss://example.com");\n`,
+    "backend/src/tools/bad-events.ts": `export const go = () => new EventSource("https://example.com/sse");\n`,
+  });
+  try {
+    const rules = scan([dir]).filter((v) => v.rule.startsWith("R7"));
+    assert.equal(rules.length, 3, JSON.stringify(rules));
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("R7 does not flag delegation, which is what it asks for", () => {
+  const dir = fixture({
+    // Every one of these is the tools layer calling something it was handed, which is the rule being obeyed.
+    "backend/src/tools/library/ok.ts": [
+      `export const a = (client) => client.request({ url: "https://example.com" });`,
+      `export const b = (doFetch) => doFetch("https://example.com");`,
+      `export const c = (config) => config.fetchImpl("https://example.com");`,
+      `export const d = (fetchPage) => fetchPage("https://example.com");`,
+      `export const e = (o) => o.fetch("https://example.com");`,
+      ``,
+    ].join("\n"),
+  });
+  try {
+    assert.deepEqual(scan([dir]).filter((v) => v.rule.startsWith("R7")), []);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("R7's global check exempts tests, like its import check does", () => {
+  const dir = fixture({
+    // A test that fetches is a test making a request, not an envelope performing I/O -- and test files are not
+    // shipped. The import half of R7 already exempts them; the halves must agree or the rule has two meanings.
+    "backend/src/tools/__tests__/thing.test.ts": `it("fetches", async () => { await fetch("https://example.com"); });\n`,
+  });
+  try {
+    assert.deepEqual(scan([dir]).filter((v) => v.rule.startsWith("R7")), []);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

@@ -105,3 +105,60 @@ test("relative and node: specifiers are left alone", (t) => {
   assert.equal(code, 0, out);
   assert.match(out, /0 package import sites/);
 });
+
+/**
+ * Parsing — #188.
+ *
+ * `npm run api`, the documented way to start the example, had never parsed: its banner is a template literal
+ * containing backticks, so the literal closed early and the remainder of the line became syntax. Nothing caught
+ * it, because `tsc` does not read `.mjs` and the import probe extracts specifiers happily from a file that does
+ * not compile. It failed for the person following the README and for nobody else.
+ */
+test("a script that does not parse is caught", (t) => {
+  const dir = fixture({
+    // Exactly the shape that broke: a backtick inside a template literal.
+    "banner.mjs": "console.log(`hello `world` there`);\n",
+  });
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const { code, out } = run(dir);
+  assert.equal(code, 1);
+  assert.match(out, /does not parse/);
+});
+
+test("parsing is a parse, not an execution", (t) => {
+  const dir = fixture({
+    // Top-level code with an obvious runtime failure. It parses, so this check passes it; running every script
+    // to check it would be a check that starts servers and sends requests.
+    "boom.mjs": 'import { alpha } from "fixture-pkg";\nthrow new Error("boom" + alpha);\n',
+  });
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const { code, out } = run(dir);
+  assert.equal(code, 0, out);
+});
+
+test("a destructured dynamic import is checked", (t) => {
+  const dir = fixture({
+    "runner.mjs": 'const { alpha, beta } = await import("fixture-pkg");\nconsole.log(alpha, beta);\n',
+  });
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const { code, out } = run(dir);
+  assert.equal(code, 1);
+  assert.match(out, /does not export beta/);
+});
+
+test("a dynamic import written in a comment is not one", (t) => {
+  const dir = fixture({
+    // The checker's own doc comment contains this exact line, and matched itself before the anchor was added.
+    "ok.mjs": [
+      "/**",
+      ' * Runner scripts use `const { a } = await import("no-such-package")` so the env is set first.',
+      " */",
+      'import { alpha } from "fixture-pkg";',
+      "console.log(alpha);",
+      "",
+    ].join("\n"),
+  });
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const { code, out } = run(dir);
+  assert.equal(code, 0, out);
+});

@@ -6,7 +6,7 @@ sidebar_position: 4
 
 ## What is it?
 
-Memory is what the agent knows beyond the current message. @agentkit layers it by **scope and
+Memory is what the agent knows beyond the current message. Retinue layers it by **scope and
 lifetime**, and assembles the relevant pieces into each prompt **under the model's token budget**.
 
 | Scope | Keyed by | Lifetime |
@@ -19,7 +19,7 @@ lifetime**, and assembles the relevant pieces into each prompt **under the model
 
 So the assistant remembers what matters — the current thread, facts about the user, and org
 knowledge — **without** blowing the context window. The naive "re-send the last N turns" approach
-bloats prompts and fails on long threads; @agentkit budgets and compacts instead.
+bloats prompts and fails on long threads; Retinue budgets and compacts instead.
 
 ## Session memory
 
@@ -47,7 +47,7 @@ Org-wide knowledge via **[retrieval / RAG](retrieval)** (permission-scoped, cite
 
 ## The budget
 
-Each turn, @agentkit computes a budget from the **selected model's** context limit, fills it by
+Each turn, Retinue computes a budget from the **selected model's** context limit, fills it by
 priority (base policy, session state, recent turns, tool continuity are protected), prunes old
 reasoning/tool detail first, **compacts** older history into a summary rather than dropping it,
 and **fails loudly** if critical instructions can't fit — never silent truncation.

@@ -57,6 +57,15 @@ if (files.length === 0) {
 
 const NAMED = /^import\s*\{([^}]*)\}\s*from\s*["']([^"']+)["']/gm;
 const DEFAULTED = /^import\s+([A-Za-z_$][\w$]*)(?:\s*,\s*\{[^}]*\})?\s*from\s*["']([^"']+)["']/gm;
+/**
+ * `const { a, b } = await import("spec")`.
+ *
+ * Added after `npm run app` -- the command the example's own README calls "the command to run" -- died on
+ * `createPoolOpener is not a function`. #195 moved it to the postgres subpath and this destructuring form was
+ * invisible to the two patterns above, so the check reported clean while the app would not start. A dynamic
+ * import is exactly where a runner script reaches for the package, because it wants the env set first.
+ */
+const DYNAMIC = /^[ \t]*(?:const|let|var)\s*\{([^}]*)\}\s*=\s*await\s+import\s*\(\s*["']([^"']+)["']\s*\)/gm;
 
 /** specifier -> names, grouped by the directory it must resolve from. */
 const byDirectory = new Map();
@@ -75,6 +84,15 @@ for (const file of files) {
     ]);
   }
   for (const m of source.matchAll(DEFAULTED)) found.push([m[2], ["default"]]);
+  for (const m of source.matchAll(DYNAMIC)) {
+    found.push([
+      m[2],
+      m[1]
+        .split(",")
+        .map((n) => n.trim().split(":")[0].trim())
+        .filter(Boolean),
+    ]);
+  }
 
   for (const [spec, names] of found) {
     // Relative and node: specifiers are the file's own business; this is about package surfaces.
@@ -88,6 +106,30 @@ for (const file of files) {
 }
 
 const violations = [];
+
+/**
+ * Does the file parse at all?
+ *
+ * Added after `npm run api` -- the documented way to run the example -- turned out never to have parsed: its
+ * banner is a template literal containing backticks, so the literal closed early and the rest of the line became
+ * syntax. It failed the moment anyone ran it and nothing else could have caught it, because `tsc` does not read
+ * `.mjs` and the import probe below only asks about *package specifiers*, which it can extract from a file that
+ * does not compile.
+ *
+ * `--check` is a parse, not an execution: a script with a broken import still passes this and is caught below.
+ */
+for (const file of files) {
+  try {
+    execFileSync(process.execPath, ["--check", file], { stdio: ["ignore", "pipe", "pipe"] });
+  } catch (error) {
+    const detail = String(error.stderr ?? error.message)
+      .split("\n")
+      .filter((line) => /Error|error/.test(line))
+      .slice(0, 1)
+      .join("");
+    violations.push(`${file}: does not parse — ${detail.trim() || "syntax error"}`);
+  }
+}
 
 for (const [dir, entries] of byDirectory) {
   // One child per directory, not per import: resolution only depends on where you ask from.
@@ -130,4 +172,4 @@ if (violations.length > 0) {
   process.exit(1);
 }
 
-console.log(`✓ ${sites} package import sites resolve across ${files.length} scripts`);
+console.log(`✓ ${files.length} scripts parse; ${sites} package import sites resolve`);

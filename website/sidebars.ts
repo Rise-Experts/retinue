@@ -37,6 +37,7 @@ const sidebars: SidebarsConfig = {
         "guides/build-an-agent",
         "guides/persistent-memory",
         "guides/approvals-and-safety",
+        "guides/tools",
       ],
     },
     {

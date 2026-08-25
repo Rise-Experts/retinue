@@ -251,12 +251,21 @@ const CAPABILITIES = [
   {
     name: "HTTP egress policy",
     symbol: "validateHttpEgress",
-    scope: "host",
     /**
+     * `platform`, not `host`, since #188 — and the move is the improvement rather than a relaxation.
+     *
      * The policy was reachable only from MCP endpoint registration, which an operator configures once. A tool
-     * whose URL the *model* chooses is the case it matters most for, and nothing exercised it there.
+     * whose URL the *model* chooses is the case it matters most for, and nothing exercised it there. #176 fixed
+     * that by having the example apply the policy in its own fetcher, so the guard tracked the *host*: the
+     * platform offering a policy nobody applied was the failure.
+     *
+     * The first-party tool library removed the requirement to remember. Every outbound tool now goes through
+     * `toolkit/http.ts`, which applies the policy before any request, so an application gets it by using the
+     * tools rather than by reimplementing them — and the example deleted its own fetcher. Tracking this at host
+     * scope now would demand that every host keep a copy of the thing the platform does for it.
      */
-    why: "#176 — an outbound tool must apply the egress policy, not reimplement it.",
+    scope: "platform",
+    why: "#176, #188 — every outbound tool applies the egress policy, and applies the same one.",
   },
   {
     name: "context inspection",
@@ -288,6 +297,30 @@ const CAPABILITIES = [
      * the engine forgetting to say what the model accepts.
      */
     why: "#185 — an attachment the platform accepted must reach the model, and a model that cannot take one must refuse rather than be sent it silently.",
+  },
+  {
+    name: "the first-party tool library",
+    symbol: "createStandardToolProvider",
+    scope: "host",
+    /**
+     * Fifteen tools with tests and no registration would be the largest instance of this defect yet, and the
+     * most plausible: a tool library reads as finished the moment it compiles, because nothing about an unused
+     * provider looks wrong. The symbol tracked is the *provider*, not any individual tool — a provider that is
+     * built and never listed is the failure, and once it is listed the registry is what decides the rest.
+     */
+    why: "#188 — the kit shipped zero tools; a library nothing registers ships zero tools with extra steps.",
+  },
+  {
+    name: "duplicate tool-name detection",
+    symbol: "duplicate-tool-name",
+    scope: "platform",
+    /**
+     * Reachable means the registry can actually emit it. The check was added because a second first-party
+     * provider became possible (#188) and `findAuthorized` takes the first match — so a shadowed tool executed
+     * as whichever provider was registered first, with its effect classification and therefore its approval
+     * requirement silently replaced.
+     */
+    why: "#188 — two providers offering one name must be refused loudly, not resolved by registration order.",
   },
 ];
 

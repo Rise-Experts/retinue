@@ -49,7 +49,7 @@ reaches a terminal state. Token/cost usage is recorded as the turn streams.
 await agent.run({ conversationId: "conv-1", message: "Make it more playful." });
 ```
 
-Because the thread carries its own history, you don't re-send prior context — @agentkit loads the
+Because the thread carries its own history, you don't re-send prior context — Retinue loads the
 conversation's messages and assembles the prompt under the model's token budget for you. State
 persists across turns on the same `conversationId`.
 

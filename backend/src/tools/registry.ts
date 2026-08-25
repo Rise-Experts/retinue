@@ -60,6 +60,12 @@ const compact = (d: ToolDescriptor): ToolCatalogEntry => ({
 });
 
 const invalidInput = (message: string): PlatformError => ({ code: "invalid_input", message, retryable: false });
+/** A wiring problem, not a caller problem: retrying the identical call cannot help. */
+const capabilityUnavailable = (message: string): PlatformError => ({
+  code: "capability_unavailable",
+  message,
+  retryable: false,
+});
 const requiresKey = (effect: ToolDescriptor["effect"], requires: boolean): boolean =>
   requires || effect === "external-write" || effect === "destructive";
 
@@ -100,14 +106,34 @@ type ApprovalPolicyValue = "never" | "policy" | "always";
  * `kind` is a union with one arm today rather than a bare string, so a second class of unrunnable tool has an
  * obvious place to go and an exhaustive switch over it keeps compiling.
  */
-export type ToolMisconfiguration = {
-  readonly kind: "approval-check-missing";
-  readonly layer: "registry" | "delegating-envelope";
-  readonly toolName: string;
-  readonly approvalPolicy: string;
-  /** The exact field the reader has to set, named so the report is actionable without a grep. */
-  readonly configField: string;
-};
+export type ToolMisconfiguration =
+  | {
+      readonly kind: "approval-check-missing";
+      readonly layer: "registry" | "delegating-envelope";
+      readonly toolName: string;
+      readonly approvalPolicy: string;
+      /** The exact field the reader has to set, named so the report is actionable without a grep. */
+      readonly configField: string;
+    }
+  | {
+      /**
+       * Two providers offering the same tool name — #188.
+       *
+       * Found when the first-party tool library became a second first-party provider. `findAuthorized` takes the
+       * **first** match, so a provider listed earlier silently shadows a later one: the catalogue shows the name
+       * twice, possibly with different descriptions and different effects, and execution picks one of them with
+       * nothing recording which. A `read` tool shadowing an `external-write` tool of the same name is an
+       * unapproved write; the reverse is a read that suddenly needs a human.
+       *
+       * MCP-imported tools are namespaced `mcp__<server>__<tool>` precisely so a remote server cannot do this.
+       * Nothing was stopping two local providers.
+       */
+      readonly kind: "duplicate-tool-name";
+      readonly layer: "registry";
+      readonly toolName: string;
+      readonly providerIds: readonly string[];
+      readonly configField: string;
+    };
 
 export type ToolRegistryConfig = {
   readonly providers: readonly ToolProvider[];
@@ -185,13 +211,53 @@ export const createToolRegistry = (config: ToolRegistryConfig): ToolRegistry => 
     });
   };
 
-  /** Resolve every tool the caller could use, then keep only the authorized ones. */
+  /**
+   * Names offered by more than one provider, remembered so `execute` can say why it refused.
+   *
+   * Per registry rather than per call: which tools exist depends on the context, so a name can be ambiguous for
+   * one caller and fine for another, but a name that was ever ambiguous is a wiring bug worth reporting once.
+   */
+  const ambiguous = new Map<string, readonly string[]>();
+
+  /** Resolve every tool the caller could use, then keep only the authorized, unambiguous ones. */
   const authorizedTools = async (context: ExecutionContext): Promise<Tool[]> => {
     const all: Tool[] = [];
-    for (const provider of config.providers) all.push(...(await provider.listTools(context)));
-    const descriptors = all.map((t) => t.descriptor);
+    const providersByName = new Map<string, string[]>();
+    for (const provider of config.providers) {
+      for (const tool of await provider.listTools(context)) {
+        all.push(tool);
+        providersByName.set(tool.descriptor.name, [...(providersByName.get(tool.descriptor.name) ?? []), provider.id]);
+      }
+    }
+
+    /**
+     * A duplicated name is **dropped, not resolved**.
+     *
+     * Picking one is the behaviour this replaces, and the problem with it is that both choices are defensible
+     * and neither is visible: first-wins hides the second tool, last-wins hides the first, and either way the
+     * catalogue and the executor can disagree about what a name means. Refusing makes the wiring bug loud at
+     * the cost of one tool, which is the right trade for a name whose meaning is genuinely unknown.
+     */
+    const duplicated = new Set<string>();
+    for (const [name, providerIds] of providersByName) {
+      if (providerIds.length <= 1) continue;
+      duplicated.add(name);
+      if (!ambiguous.has(name)) {
+        ambiguous.set(name, providerIds);
+        config.onMisconfiguration?.({
+          kind: "duplicate-tool-name",
+          layer: "registry",
+          toolName: name,
+          providerIds,
+          configField: "ToolRegistryConfig.providers",
+        });
+      }
+    }
+
+    const usable = all.filter((t) => !duplicated.has(t.descriptor.name));
+    const descriptors = usable.map((t) => t.descriptor);
     const permitted = new Set((await config.authorization.filterTools(context, descriptors)).map((d) => d.name));
-    return all.filter((t) => permitted.has(t.descriptor.name));
+    return usable.filter((t) => permitted.has(t.descriptor.name));
   };
 
   const findAuthorized = async (context: ExecutionContext, name: string): Promise<Tool | null> =>
@@ -223,6 +289,18 @@ export const createToolRegistry = (config: ToolRegistryConfig): ToolRegistry => 
       const tool = await findAuthorized(context, input.name);
       // Not found OR not authorized → both reject; execution is never a way around discovery filtering.
       if (!tool) {
+        const providerIds = ambiguous.get(input.name);
+        if (providerIds !== undefined) {
+          // Named precisely, because "unknown tool" would send a reader looking for a missing registration when
+          // the actual problem is two of them.
+          return {
+            ok: false,
+            error: capabilityUnavailable(
+              `Tool ${input.name} is offered by more than one provider (${providerIds.join(", ")}), so which one ` +
+                `runs is undefined. Rename or remove one — see ToolRegistryConfig.providers.`,
+            ),
+          };
+        }
         await assertToolAuthorized(config.authorization, context, { name: input.name, category: "unknown" });
         return { ok: false, error: invalidInput(`Unknown tool ${input.name}`) };
       }

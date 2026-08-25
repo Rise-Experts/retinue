@@ -130,9 +130,10 @@ schema.
 | `write_note`, `remember` | Internal writes, and what plan mode excludes. |
 | `ask_user` | A batch of questions, the run parking on them, and the answers reaching the model. |
 | `load_skill` | A named, versioned block of instructions pulled into context on demand — the catalogue is in the prompt, the bodies are not. |
-| `fetch_url` | The platform's egress policy where the *model* chooses the argument: SSRF refusals, no redirects, and the page fenced as untrusted content. |
+| `fetch_url` | From the kit (#188), not this app: the platform's egress policy where the *model* chooses the argument — SSRF refusals, no redirects, the page fenced as untrusted content. |
+| `http_write` | The same approval gate as `share_note`, on a tool from the library. `external-write` is a property of the tool, so the gate applies without this app arranging it. |
 | `mcp__agentkit-docs__*` | A real MCP server (this repo's own docs, over stdio) imported through the same registry as the first-party tools. |
-| `calculate` | A recursive-descent parser behind a character whitelist. Not `eval`, deliberately. |
+| `calculate`, `now`, `parse_csv`, `query_json` | Also from the kit. This app used to carry its own copies of the first two; every application needs them, which is what "the platform ships zero tools" looked like from the inside. |
 | role selector | `viewer` cannot *see* `share_note` in the catalogue, rather than being refused after asking. |
 | note `n3` | Its body is a prompt-injection payload. Watch the model not comply. |
 

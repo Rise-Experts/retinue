@@ -27,6 +27,7 @@ import { Redis } from "ioredis";
 import type { AgentkitConfig } from "@retinue/agentkit/server";
 import { createDevAuthenticate } from "./auth.js";
 import type { Authenticate } from "@retinue/agentkit/server";
+import { STANDARD_TOOL_CATEGORIES, createStandardToolProvider } from "@retinue/agentkit/tools";
 
 /** One authenticator, built the first time a request needs it. */
 let devAuth: Authenticate | undefined;
@@ -42,7 +43,6 @@ import { exampleStore } from "./store.js";
 import { exampleProviders } from "./providers.js";
 import { ASSIGNED_SKILLS, EXAMPLE_SKILLS, renderSkillCatalogue } from "./skills.js";
 import { DOCS_MCP_SERVER_ID, DOCS_MCP_TOOLS, createDocsMcpClient, createDocsMcpProvider } from "./mcp.js";
-import { createFetchUrl } from "./fetch-url.js";
 import { fileURLToPath } from "node:url";
 import { exampleAgentManifest, exampleContextProviders } from "./agent.js";
 import { EXCLUDED_EFFECTS, MODE_DESCRIPTIONS, type ConversationMode } from "./modes.js";
@@ -70,12 +70,42 @@ export const exampleState = { store, impl };
  * They used to be two hand-maintained arrays, and adding a tool meant remembering both. `viewer` silently
  * missing a new read-only tool is the failure that shape invites, and it looks like the tool being broken.
  */
-const FIRST_PARTY_TOOLS = ["remember", "recall", "list_notes", "search_notes", "calculate", "now", "ask_user", "load_skill", "fetch_url"] as const;
+const FIRST_PARTY_TOOLS = ["remember", "recall", "list_notes", "search_notes", "ask_user", "load_skill"] as const;
+
+/**
+ * The kit's tools this app grants — REQ-039 (#188).
+ *
+ * Listed by name rather than derived from `STANDARD_TOOL_NAMES`, and that is the point: a derived list would
+ * grant every tool a future version of the library adds, so upgrading the package would widen what a model may
+ * do without anyone deciding to. A grant is a decision, so it is typed out.
+ *
+ * The drift this invites — the library gains a tool and nobody notices — is caught by a test rather than by
+ * hoping: `example-app.test.ts` asserts every tool the provider actually lists is granted to some role, so an
+ * undecided tool is a failing build and not an invisible one.
+ */
+const KIT_READ_TOOLS = ["fetch_url", "fetch_json", "http_request", "parse_csv", "query_json", "calculate", "now"] as const;
 
 /** Only `editor` gets these: they change or share something. */
 const WRITE_TOOLS = ["write_note", "share_note"] as const;
 
+/** `http_write` reaches another system, so it sits with the writes and is gated like them. */
+const KIT_WRITE_TOOLS = ["http_write"] as const;
+
 // The imported MCP tools come from `./mcp.ts`, derived from the administrator classification there.
+
+/**
+ * Every tool name any role may use.
+ *
+ * Exported for the drift test rather than for the app: the app reads `ROLES`. A test that recomputed this list
+ * from the same constants would agree with itself no matter what the roles actually say.
+ */
+export const ROLE_TOOL_NAMES: readonly string[] = [
+  ...FIRST_PARTY_TOOLS,
+  ...KIT_READ_TOOLS,
+  ...WRITE_TOOLS,
+  ...KIT_WRITE_TOOLS,
+  ...DOCS_MCP_TOOLS,
+];
 
 const ROLES = [
   {
@@ -86,7 +116,7 @@ const ROLES = [
       { action: "execute", resourceType: "tool" },
       { action: "publish", resourceType: "note", requiresApproval: true },
     ],
-    tools: [...FIRST_PARTY_TOOLS, ...WRITE_TOOLS, ...DOCS_MCP_TOOLS],
+    tools: [...FIRST_PARTY_TOOLS, ...KIT_READ_TOOLS, ...WRITE_TOOLS, ...KIT_WRITE_TOOLS, ...DOCS_MCP_TOOLS],
   },
   {
     roleId: "viewer",
@@ -96,7 +126,7 @@ const ROLES = [
     ],
     // No `write_note`, no `share_note`. `viewer` cannot *see* them in the catalogue, so the model never offers
     // something the person cannot do — which is a better experience than a refusal after asking.
-    tools: [...FIRST_PARTY_TOOLS, ...DOCS_MCP_TOOLS],
+    tools: [...FIRST_PARTY_TOOLS, ...KIT_READ_TOOLS, ...DOCS_MCP_TOOLS],
   },
 ] as const;
 
@@ -170,6 +200,24 @@ export const closeExampleMcp = async (): Promise<void> => {
 const exampleToolProviders = (backend: ExampleBackend) => [
   { id: "example.notes-tools", async listTools() { return buildTools(backend); } },
   /**
+   * The kit's own tools — REQ-039 (#188).
+   *
+   * `fetch_url`, `calculate` and `now` used to be written out in this file. They are not domain tools; every
+   * application needs them, and this one having its own copies is what "the platform ships zero tools" looked
+   * like from the inside. They come from the library now, and what is left in `buildTools` is the part that is
+   * genuinely about notes.
+   *
+   * Wiring is the toggle: an HTTP client is supplied, so the web tools exist. No search provider is configured,
+   * so there is no `web_search` — rather than one that always answers "not configured", which costs the model a
+   * turn to discover. **No SQL either, deliberately**: this app's pool is read-write, and `createSqlQuery`
+   * requires a `readOnly: true` acknowledgement that would be a lie here. Wiring it would make `sql_query`'s
+   * `read` classification false, which no test could catch.
+   */
+  createStandardToolProvider({
+    deps: { authorization, idempotency: backend.idempotency, approvals: approvalGateFor(backend) },
+    http: {},
+  }),
+  /**
    * The MCP server's tools, arriving through the same registry as the first-party ones.
    *
    * That is the point of the whole bridge: an imported tool inherits authorization filtering, the approval gate,
@@ -207,14 +255,6 @@ const questionServiceFor = (backend: ExampleBackend) =>
     dispatcher: createBullMqJobDispatcher(createBullMqRunQueue({ url: process.env["RETINUE_REDIS_URL"] ?? "" })),
     runs: backend.runs,
   });
-
-/**
- * One fetcher for the process, so the egress policy is decided in exactly one place.
- *
- * A per-call factory would be harmless today and would be the seam through which a second, looser policy
- * eventually appears — and a second SSRF defence is one that drifts from the first.
- */
-const fetchUrl = createFetchUrl({});
 
 /**
  * The tool registry, built from the shared providers — used by both the engine and the GraphQL surface.
@@ -399,16 +439,6 @@ const buildTools = (backend: ExampleBackend): readonly Tool[] => {
         if (!store.notes.has(noteId)) throw new NoteNotFound(noteId);
       },
     }),
-    defineDelegatingTool(deps, {
-      name: "calculate",
-      description: "Evaluate an arithmetic expression (+ - * / and parentheses).",
-      category: "assistant",
-      effect: "read" as const,
-      delegatesTo: "exampleTools.calculate",
-      inputSchema: { type: "object", properties: { expression: { type: "string" } }, required: ["expression"] },
-      delegate: (input: unknown) =>
-        impl.calculate({ expression: str((input as { expression?: unknown }).expression) }),
-    }),
     /**
      * Ask the person a question with options — #155.
      *
@@ -539,41 +569,6 @@ const buildTools = (backend: ExampleBackend): readonly Tool[] => {
         });
         return { loaded: true, name: body.name, version: body.version, instructions: body.instructions };
       },
-    }),
-    defineDelegatingTool(deps, {
-      name: "fetch_url",
-      description:
-        "Read a public web page and return its text. Use it when the answer is on a page the person names, or " +
-        "one you found in a note. https only; private and internal addresses are refused.",
-      category: "assistant",
-      /**
-       * `read`, and that is a real decision rather than a default.
-       *
-       * It reads; it changes nothing. But it *leaves the workspace*, which is the property the effect taxonomy
-       * usually cares about — so the argument for `external-write` is that an outbound request is observable to
-       * a third party, and someone might not want the agent visiting arbitrary URLs on their behalf.
-       *
-       * `read` wins because the effect classification drives **approval**, and an approval prompt on every page
-       * load is a prompt people learn to click through — which would weaken the approval on `share_note`, where
-       * it genuinely matters. The exposure is bounded by the egress policy instead, which is a control that
-       * cannot be clicked through. A deployment that disagrees changes this line and gets approvals.
-       */
-      effect: "read" as const,
-      delegatesTo: "fetchUrl",
-      inputSchema: {
-        type: "object",
-        properties: { url: { type: "string", description: "An absolute https:// URL." } },
-        required: ["url"],
-      },
-      delegate: (input: unknown) => fetchUrl(str((input as { url?: unknown }).url)),
-    }),
-    defineDelegatingTool(deps, {
-      name: "now",
-      description: "The current date and time in ISO-8601.",
-      category: "assistant",
-      effect: "read" as const,
-      delegatesTo: "exampleTools.now",
-      delegate: () => impl.now(),
     }),
   ];
 };
@@ -903,7 +898,18 @@ export const composeEngine = (backend: ExampleBackend) => {
          */
         const all = await registry.catalog(context, {
           preloaded: [],
-          categories: ["assistant", `mcp:${DOCS_MCP_SERVER_ID}`],
+          /**
+           * ...and the kit's categories, which is the same lesson learned twice — REQ-039 (#188).
+           *
+           * The list above said `["assistant", "mcp:…"]`, so the fifteen tools from `@retinue/agentkit/tools` —
+           * `web`, `data`, `general` — were registered, authorized, listed in the catalogue, and never handed to
+           * the model. The only symptom was the assistant declining to fetch a URL it appeared to have a tool
+           * for, which reads as a model problem and is not one.
+           *
+           * Spread from the library's own export rather than typed out here: a hand-kept copy of someone else's
+           * category list is a copy that goes stale the next time they add one, and the failure is silent.
+           */
+          categories: ["assistant", `mcp:${DOCS_MCP_SERVER_ID}`, ...STANDARD_TOOL_CATEGORIES],
           excluded: [],
         });
         const catalog = {

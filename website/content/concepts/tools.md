@@ -12,7 +12,7 @@ policy, and an idempotency requirement.
 
 ## Why would I use it?
 
-Tools are how the model *does* things safely. @agentkit filters them by permission before the
+Tools are how the model *does* things safely. Retinue filters them by permission before the
 model even sees them, re-checks authorization at execution, and gates dangerous ones behind
 approval — so a model can't act beyond what the caller is allowed to do.
 

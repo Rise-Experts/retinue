@@ -5,14 +5,14 @@ sidebar_position: 1
 
 # Overview
 
-**@agentkit** is a reusable, provider-neutral AI agent platform for TypeScript. It gives an
+**Retinue** is a reusable, provider-neutral AI agent platform for TypeScript. It gives an
 application everything it needs to run AI agents in production — durable execution, safe tools,
 layered memory, human-in-the-loop approvals, and permission-aware retrieval — without tying the
 application to any single model provider or framework.
 
-## Why @agentkit
+## Why Retinue
 
-Most agent frameworks are easy to demo and hard to run. @agentkit is built for the parts that
+Most agent frameworks are easy to demo and hard to run. Retinue is built for the parts that
 actually bite in production:
 
 - **Provider neutrality** — one model registry over OpenAI, Anthropic, Google, Mistral, Azure,
@@ -42,6 +42,6 @@ New here? Start with **[Installation](getting-started/installation)** then the
 **[Quick Start](getting-started/quick-start)**.
 
 :::note Status
-@agentkit is under active development. Concept docs describe the settled design; code examples
+Retinue is under active development. Concept docs describe the settled design; code examples
 show the intended public API as it comes online.
 :::

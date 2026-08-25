@@ -37,8 +37,8 @@ console.log(`
     x-agentkit-principal: you
     x-agentkit-roles: editor
 
-  There is no page here — the reference host serves GraphQL and SSE only. This banner advertised one at `/`
-  and it has always answered 404. For the browser surface, use `npm run app` instead.
+  There is no page here — the reference host serves GraphQL and SSE only. This banner advertised one at '/'
+  and it has always answered 404. For the browser surface, use 'npm run app' instead.
 
   Start the worker in a second terminal, or nothing will execute:
     npm run worker -w @retinue/example-app
