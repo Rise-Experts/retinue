@@ -11,13 +11,8 @@
 
 import { assemblePrompt, estimateTokens, gatherSections, inspectAssembledPrompt, turnText } from "@agentkit/backend";
 import type { ExampleStores } from "./stores.js";
-import type {
-  ContextBudget,
-  ContextInspection,
-  ContextProvider,
-  ExecutionContext,
-  SqlExecutor,
-} from "@agentkit/backend";
+import type { ContextBudget, ContextInspection, ContextProvider, ExecutionContext } from "@agentkit/backend";
+import type { SqlExecutor } from "@agentkit/backend/adapters/postgres";
 import { conversationTurns } from "./history.js";
 import { resolveExampleModel } from "./model.js";
 import { MODE_DESCRIPTIONS, type ConversationMode } from "./modes.js";

@@ -11,10 +11,32 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
-    }
+    },
+    "./providers": {
+      "types": "./dist/entries/providers.d.ts",
+      "default": "./dist/entries/providers.js"
+    },
+    "./adapters/postgres": {
+      "types": "./dist/entries/adapters-postgres.d.ts",
+      "default": "./dist/entries/adapters-postgres.js"
+    },
+    "./adapters/redis": {
+      "types": "./dist/entries/adapters-redis.d.ts",
+      "default": "./dist/entries/adapters-redis.js"
+    },
+    "./adapters/bullmq": {
+      "types": "./dist/entries/adapters-bullmq.d.ts",
+      "default": "./dist/entries/adapters-bullmq.js"
+    },
+    "./adapters/otel": {
+      "types": "./dist/entries/adapters-otel.d.ts",
+      "default": "./dist/entries/adapters-otel.js"
+    },
+    "./package.json": "./package.json"
   },
   "files": [
-    "dist"
+    "dist",
+    "README.md"
   ],
   "scripts": {
     "build": "tsc -b",
@@ -23,16 +45,7 @@
     "clean": "rm -rf dist tsconfig.tsbuildinfo"
   },
   "dependencies": {
-    "@ai-sdk/anthropic": "^4.0.39",
-    "@ai-sdk/azure": "^4.0.43",
-    "@ai-sdk/google": "^4.0.44",
-    "@ai-sdk/mistral": "^4.0.29",
-    "@ai-sdk/openai": "^4.0.42",
-    "@ai-sdk/openai-compatible": "^3.0.31",
     "ai": "^7.0.66",
-    "bullmq": "^6.2.0",
-    "ioredis": "^6.0.0",
-    "pg": "^8.23.0",
     "zod": "^3.25.76"
   },
   "devDependencies": {
@@ -49,5 +62,46 @@
   },
   "engines": {
     "node": ">=20"
-  }
+  },
+  "peerDependencies": {
+    "pg": "^8.23.0",
+    "ioredis": "^6.0.0",
+    "bullmq": "^6.2.0",
+    "@ai-sdk/anthropic": "^4.0.39",
+    "@ai-sdk/azure": "^4.0.43",
+    "@ai-sdk/google": "^4.0.44",
+    "@ai-sdk/mistral": "^4.0.29",
+    "@ai-sdk/openai": "^4.0.42",
+    "@ai-sdk/openai-compatible": "^3.0.31"
+  },
+  "peerDependenciesMeta": {
+    "pg": {
+      "optional": true
+    },
+    "ioredis": {
+      "optional": true
+    },
+    "bullmq": {
+      "optional": true
+    },
+    "@ai-sdk/anthropic": {
+      "optional": true
+    },
+    "@ai-sdk/azure": {
+      "optional": true
+    },
+    "@ai-sdk/google": {
+      "optional": true
+    },
+    "@ai-sdk/mistral": {
+      "optional": true
+    },
+    "@ai-sdk/openai": {
+      "optional": true
+    },
+    "@ai-sdk/openai-compatible": {
+      "optional": true
+    }
+  },
+  "sideEffects": false
 }

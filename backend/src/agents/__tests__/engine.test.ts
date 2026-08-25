@@ -10,7 +10,7 @@ import type { NeutralStreamChunk, ResolvedModel } from "../../models/index.js";
 import { reduceRunEvents, type RunEvent } from "../../core/events.js";
 import type { EngineEvent, Run } from "../../runtime/index.js";
 import { createDefaultEngine } from "../engine.js";
-import { defineAgent } from "../agent.js";
+import { defineAgent } from "../define.js";
 
 const RUN = asId<RunId>("r1");
 const run: Run = {

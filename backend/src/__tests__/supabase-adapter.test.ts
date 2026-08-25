@@ -1,15 +1,8 @@
 import { PGlite } from "@electric-sql/pglite";
 import { describe, expect, it } from "vitest";
-import {
-  applyRls,
-  createSupabaseConversationStore,
-  createSupabaseRealtimePublisher,
-  migrate,
-  setTenantContext,
-  type RealtimeBroadcaster,
-  type RunEvent,
-  type SqlExecutor,
-} from "../index.js";
+import { type RealtimeBroadcaster, type RunEvent } from "../index.js";
+import { applyRls, setTenantContext } from "../entries/adapters-postgres.js";
+import { createSupabaseConversationStore, createSupabaseRealtimePublisher, migrate, type SqlExecutor } from "../entries/adapters-postgres.js";
 import { conversationStoreConformance } from "../testing/conformance.js";
 
 const pgliteSql = (db: PGlite): SqlExecutor => ({

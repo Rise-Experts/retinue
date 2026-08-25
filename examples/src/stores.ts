@@ -15,43 +15,9 @@
  * reads through the other.
  */
 
-import {
-  createPostgresApprovalGrantStore,
-  createPostgresConversationRunCoordinator,
-  createPostgresIdempotencyStore,
-  createPostgresInteractionStore,
-  createPostgresPrincipalMemoryStore,
-  createPostgresRunEventLog,
-  createPostgresRunStore,
-  createPostgresSkillStore,
-  createPostgresUsageStore,
-  createPostgresConversationStore,
-  createPostgresMessageStore,
-  createPostgresSessionStateStore,
-  createPostgresThreadSummaryStore,
-  createPostgresUsageLimitStore,
-  createPostgresUsageRollupStore,
-} from "@agentkit/backend";
-import type {
-  ApprovalGrantStore,
-  ConversationRunCoordinator,
-  IdempotencyStore,
-  InteractionStore,
-  LiveEventSource,
-  PrincipalMemoryStore,
-  RunEventLog,
-  RunStore,
-  SkillStore,
-  TransactionRunner,
-  UsageStore,
-  ConversationStore,
-  MessageStore,
-  SessionStateStore,
-  SqlExecutor,
-  ThreadSummaryStore,
-  UsageLimitStore,
-  UsageRollupStore,
-} from "@agentkit/backend";
+import { createPostgresApprovalGrantStore, createPostgresConversationRunCoordinator, createPostgresIdempotencyStore, createPostgresInteractionStore, createPostgresPrincipalMemoryStore, createPostgresRunEventLog, createPostgresRunStore, createPostgresSkillStore, createPostgresUsageStore, createPostgresConversationStore, createPostgresMessageStore, createPostgresSessionStateStore, createPostgresThreadSummaryStore, createPostgresUsageLimitStore, createPostgresUsageRollupStore } from "@agentkit/backend/adapters/postgres";
+import type { ApprovalGrantStore, ConversationRunCoordinator, IdempotencyStore, InteractionStore, LiveEventSource, PrincipalMemoryStore, RunEventLog, RunStore, SkillStore, UsageStore, ConversationStore, MessageStore, SessionStateStore, ThreadSummaryStore, UsageLimitStore, UsageRollupStore } from "@agentkit/backend";
+import type { TransactionRunner, SqlExecutor } from "@agentkit/backend/adapters/postgres";
 
 export type ExampleStores = {
   readonly conversations: ConversationStore;

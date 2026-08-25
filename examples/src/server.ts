@@ -17,22 +17,8 @@
 import { readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { resolve } from "node:path";
-import {
-  turnText,
-  asId,
-  createPostgresApprovalGrantStore,
-  createPostgresConversationStore,
-  createPostgresMessageStore,
-  createPostgresSessionStateStore,
-  startOrEnqueueRun,
-  createResolvers,
-  bucketStartFor,
-  createRollupJob,
-  createPostgresUsageLimitStore,
-  createPostgresUsageRollupStore,
-  ROLLUP_PERIODS,
-  parseWindowKey,
-} from "@agentkit/backend";
+import { turnText, asId, startOrEnqueueRun, createResolvers, bucketStartFor, createRollupJob, ROLLUP_PERIODS, parseWindowKey } from "@agentkit/backend";
+import { createPostgresApprovalGrantStore, createPostgresConversationStore, createPostgresMessageStore, createPostgresSessionStateStore, createPostgresUsageLimitStore, createPostgresUsageRollupStore } from "@agentkit/backend/adapters/postgres";
 import { citationViewModel, formatCost, formatTokens, shapeUsagePanel } from "@agentkit/frontend";
 import { COMPACT_AT_FRACTION, compactConversation, createExampleSummarizer } from "./compaction.js";
 import { HISTORY_READ_LIMIT } from "./history.js";
@@ -42,17 +28,8 @@ import { resolveExampleModel } from "./model.js";
 import type { ConversationMode } from "./modes.js";
 import type { ContextProvider } from "@agentkit/backend";
 import type { ExampleStores } from "./stores.js";
-import type {
-  ConversationId,
-  ExecutionContext,
-  PrincipalId,
-  MessageId,
-  MessagePartId,
-  ResolverDeps,
-  RunId,
-  SqlExecutor,
-  TenantId,
-} from "@agentkit/backend";
+import type { ConversationId, ExecutionContext, PrincipalId, MessageId, MessagePartId, ResolverDeps, RunId, TenantId } from "@agentkit/backend";
+import type { SqlExecutor } from "@agentkit/backend/adapters/postgres";
 import { createAgentkitHost, type Authenticate } from "@agentkit/server";
 import { conversationTurns } from "./history.js";
 import {

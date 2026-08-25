@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { createProviderFactory, type ModelDefinition, type ModelProvider } from "../models/index.js";
+import { type ModelDefinition, type ModelProvider } from "../models/index.js";
+import { createProviderFactory } from "../models/provider-factory.js";
 
 const def = (provider: ModelProvider, modelId: string): ModelDefinition => ({
   provider, modelId, label: "m", lifecycle: "generally-available",

@@ -9,7 +9,8 @@
 import { boot } from "./boot.js";
 import { APP_MODULE_VARIABLE, type AgentkitApp } from "./cli.js";
 import { loadConfig, type AgentkitConfig } from "./config.js";
-import type { AgentEngine, PricingResolver, ResolverDeps, SqlExecutor } from "@agentkit/backend";
+import type { AgentEngine, PricingResolver, ResolverDeps } from "@agentkit/backend";
+import type { SqlExecutor } from "@agentkit/backend/adapters/postgres";
 
 export type AgentkitWorkerApp = AgentkitApp & {
   readonly engine: (input: { readonly config: AgentkitConfig; readonly sql: SqlExecutor }) => AgentEngine;
@@ -49,16 +50,27 @@ export const runWorker = async (
     env,
     connect: async (loaded) => {
       const { Pool } = await import("pg");
-      const { createPgExecutor } = await import("@agentkit/backend");
+      const { createPgExecutor } = await import("@agentkit/backend/adapters/postgres");
       return { sql: createPgExecutor(new Pool({ connectionString: loaded.databaseUrl })) };
     },
   });
 
+  /**
+   * Three imports rather than one — #196.
+   *
+   * The root no longer re-exports the adapters, so the worker names what it needs: the runtime, the Postgres
+   * stores, the queue, the realtime publisher. Verbose on purpose — this file is the reference deployment, and
+   * what it imports is what a reader copies. A single namespace import taught them that everything came from one
+   * place, which is exactly the thing that made the package install six provider SDKs.
+   */
   const backend = await import("@agentkit/backend");
+  const pgAdapters = await import("@agentkit/backend/adapters/postgres");
+  const queueAdapters = await import("@agentkit/backend/adapters/bullmq");
+  const redisAdapters = await import("@agentkit/backend/adapters/redis");
   const deps = (await app.deps({ config, sql })) as ResolverDeps;
 
-  const queue = backend.createBullMqRunQueue({ url: config.redisUrl });
-  const dispatcher = backend.createBullMqJobDispatcher(queue);
+  const queue = queueAdapters.createBullMqRunQueue({ url: config.redisUrl });
+  const dispatcher = queueAdapters.createBullMqJobDispatcher(queue);
 
   /**
    * A **real** publisher, over Redis pub/sub (#161).
@@ -76,11 +88,11 @@ export const runWorker = async (
    * "publish nothing" reachable by configuration is what produced this bug.
    */
   const realtimeConnection = new (await import("ioredis")).Redis(config.redisUrl);
-  const publisher = backend.createRedisRealtimePublisher(realtimeConnection);
+  const publisher = redisAdapters.createRedisRealtimePublisher(realtimeConnection);
 
   const worker = backend.createDurableWorker({
     runs: deps.runs,
-    checkpoints: backend.createPostgresCheckpointStore(sql),
+    checkpoints: pgAdapters.createPostgresCheckpointStore(sql),
     publisher,
     engine: app.engine({ config, sql }),
     eventLog: deps.eventLog,
@@ -91,7 +103,7 @@ export const runWorker = async (
      * migration set, and an app module that had to remember to supply it would be an app module that ships an
      * amnesiac agent the first time someone forgets.
      */
-    messages: backend.createPostgresMessageStore(sql),
+    messages: pgAdapters.createPostgresMessageStore(sql),
     /**
      * Usage is recorded — #166.
      *
@@ -104,7 +116,7 @@ export const runWorker = async (
      * remember is an app module that bills silently the first time someone forgets.
      */
     usage: backend.createUsageRecorder({
-      store: backend.createPostgresUsageStore(sql),
+      store: pgAdapters.createPostgresUsageStore(sql),
       // No catalogue means no prices, and `record` writes the tokens regardless.
       pricing: app.pricing ?? { resolve: () => null },
     }),
@@ -115,7 +127,7 @@ export const runWorker = async (
   const { Worker } = await import("bullmq");
   const { Redis } = await import("ioredis");
   const connection = new Redis(config.redisUrl, { maxRetriesPerRequest: null });
-  const createQueueWorker: Parameters<typeof backend.createBullMqJobConsumer>[0] = (
+  const createQueueWorker: Parameters<typeof queueAdapters.createBullMqJobConsumer>[0] = (
     name,
     handler,
     options,
@@ -124,7 +136,7 @@ export const runWorker = async (
       connection,
       concurrency: options.concurrency,
     });
-  const consumer = backend.createBullMqJobConsumer(createQueueWorker, {
+  const consumer = queueAdapters.createBullMqJobConsumer(createQueueWorker, {
     concurrency: config.workerConcurrency,
   });
 

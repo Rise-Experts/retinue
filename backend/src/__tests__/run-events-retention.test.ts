@@ -1,22 +1,8 @@
 import { PGlite } from "@electric-sql/pglite";
 import pg from "pg";
 import { describe, expect, it } from "vitest";
-import {
-  DEFAULT_RUN_EVENT_RETENTION_DAYS,
-  MIGRATIONS,
-  PRUNABLE_RUN_STATUSES,
-  RUN_STATUSES,
-  createPostgresConversationStore,
-  createPostgresRunEventLog,
-  createPostgresRunEventPruner,
-  createPostgresRunStore,
-  cutoffFor,
-  drain,
-  migrate,
-  rollback,
-  type RunEventPruner,
-  type SqlExecutor,
-} from "../index.js";
+import { DEFAULT_RUN_EVENT_RETENTION_DAYS, PRUNABLE_RUN_STATUSES, RUN_STATUSES, cutoffFor, drain, type RunEventPruner } from "../index.js";
+import { MIGRATIONS, createPostgresConversationStore, createPostgresRunEventLog, createPostgresRunEventPruner, createPostgresRunStore, migrate, rollback, type SqlExecutor } from "../adapters/postgres/index.js";
 import { asId } from "../core/ids.js";
 import type { ConversationId, RunId, TenantId } from "../core/ids.js";
 

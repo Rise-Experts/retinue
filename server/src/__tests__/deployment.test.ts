@@ -13,7 +13,7 @@
 
 import { PGlite } from "@electric-sql/pglite";
 import { describe, expect, it } from "vitest";
-import { createSchemaManager, MIGRATIONS, type SqlExecutor } from "@agentkit/backend";
+import { createSchemaManager, MIGRATIONS, type SqlExecutor } from "@agentkit/backend/adapters/postgres";
 import { ConfigurationError, DEFAULT_CONFIG, loadConfig, REQUIRED_VARIABLES } from "../config.js";
 import { boot } from "../boot.js";
 import { createHealthRoutes, postgresProbe, redisProbe, schemaProbe, type Probe } from "../health.js";

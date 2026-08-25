@@ -5,7 +5,7 @@
  * substance: configuration is validated *before* anything connects, so a misconfigured deployment
  * fails with a message about the variable rather than a connection error that names nothing useful.
  */
-import { provisionSchema, type SchemaMode, type SqlExecutor } from "@agentkit/backend";
+import { provisionSchema, type SchemaMode, type SqlExecutor } from "@agentkit/backend/adapters/postgres";
 import { loadConfig, type AgentkitConfig, type Env } from "./config.js";
 
 export type StartupLog = {

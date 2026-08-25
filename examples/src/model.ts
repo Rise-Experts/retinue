@@ -14,7 +14,7 @@
  * defaults to a model known to support it rather than to whatever happens to be running.
  */
 
-import { createProviderFactory } from "@agentkit/backend";
+import { createProviderFactory } from "@agentkit/backend/providers";
 import type { ModelDefinition, ModelPricing, ResolvedModel } from "@agentkit/backend";
 
 export const MODEL_API_KEY_VARIABLE = "AGENTKIT_MODEL_API_KEY";

@@ -25,7 +25,7 @@ import { createToolRegistry, defineDelegatingTool } from "../../tools/index.js";
 import type { Tool, ToolProvider } from "../../tools/index.js";
 import type { EngineEvent, Run } from "../../runtime/index.js";
 import { createDefaultEngine } from "../engine.js";
-import { defineAgent } from "../agent.js";
+import { defineAgent } from "../define.js";
 
 const T = asId<TenantId>("t1");
 const RUN = asId<RunId>("run1");

@@ -17,60 +17,12 @@
  * - **Not a product UI.** The page is deliberately plain; see `public/index.html`.
  */
 
-import {
-  createAuthorizationPolicy,
-  resolveCapabilities,
-  createBullMqJobDispatcher,
-  createBullMqRunQueue,
-  createDefaultEngine,
-  defineDelegatingTool,
-  createRedisLiveEventSource,
-  EMPTY_RUN_STREAM_STATE,
-  createPostgresApprovalGrantStore,
-  createPostgresIdempotencyStore,
-  createPostgresInteractionStore,
-  createPostgresPrincipalMemoryStore,
-  createPostgresRunEventLog,
-  createPostgresSkillStore,
-  createPostgresRunStore,
-  createPostgresSessionStateStore,
-  createPostgresUsageLimitStore,
-  createPostgresUsageRollupStore,
-  createPostgresUsageStore,
-  createPostgresConversationStore,
-  createApprovalGate,
-  createApprovalService,
-  computeModelCostMinorUnits,
-  commitExtractedMemories,
-  asId,
-  assemblePrompt,
-  createCitationEmitter,
-  createPrincipalMemoryProvider,
-  createRunSkillTracker,
-  createSkillResolver,
-  createQuestionService,
-  createQuotaGuard,
-  createStoredLimitResolver,
-  questionPending,
-  createRunApprovals,
-  createToolRegistry,
-  parseExecutionContext,
-  reduceRunEvent,
-} from "@agentkit/backend";
-import type {
-  ContextBudget,
-  ContextInspection,
-  QuestionSpec,
-  AgentManifest,
-  ExecutionContext,
-  ModelTurnTool,
-  ResolverDeps,
-  Run,
-  SqlExecutor,
-  Tool,
-  TransactionRunner,
-  TurnMessage,
-} from "@agentkit/backend";
+import { createAuthorizationPolicy, resolveCapabilities, createDefaultEngine, defineDelegatingTool, EMPTY_RUN_STREAM_STATE, createApprovalGate, createApprovalService, computeModelCostMinorUnits, commitExtractedMemories, asId, assemblePrompt, createCitationEmitter, createPrincipalMemoryProvider, createRunSkillTracker, createSkillResolver, createQuestionService, createQuotaGuard, createStoredLimitResolver, questionPending, createRunApprovals, createToolRegistry, parseExecutionContext, reduceRunEvent } from "@agentkit/backend";
+import { createBullMqJobDispatcher, createBullMqRunQueue } from "@agentkit/backend/adapters/bullmq";
+import { createPostgresApprovalGrantStore, createPostgresIdempotencyStore, createPostgresInteractionStore, createPostgresPrincipalMemoryStore, createPostgresRunEventLog, createPostgresSkillStore, createPostgresRunStore, createPostgresSessionStateStore, createPostgresUsageLimitStore, createPostgresUsageRollupStore, createPostgresUsageStore, createPostgresConversationStore } from "@agentkit/backend/adapters/postgres";
+import { createRedisLiveEventSource } from "@agentkit/backend/adapters/redis";
+import type { ContextBudget, ContextInspection, QuestionSpec, AgentManifest, ExecutionContext, ModelTurnTool, ResolverDeps, Run, Tool, TurnMessage } from "@agentkit/backend";
+import type { SqlExecutor, TransactionRunner } from "@agentkit/backend/adapters/postgres";
 import { Redis } from "ioredis";
 import type { AgentkitConfig } from "@agentkit/server";
 import { createDevAuthenticate } from "./auth.js";

@@ -14,15 +14,15 @@ import { AgentPlatformError } from "../core/errors.js";
 import { asId } from "../core/ids.js";
 import type { ConversationId, MessageId, PrincipalId, RunId, TenantId } from "../core/ids.js";
 import type { Message, MessagePart, TextPart } from "../core/content-parts.js";
+import { createModelRegistry, computeModelCostMinorUnits } from "../models/index.js";
+import type { ModelDefinition, ModelRoleAssignments } from "../models/index.js";
+// From the module rather than the barrel: `models/index.ts` no longer re-exports the factory, because doing so
+// made every root import load six provider SDKs (#196).
 import {
-  createModelRegistry,
-  computeModelCostMinorUnits,
   createProviderFactory,
-  type ModelDefinition,
-  type ModelRoleAssignments,
   type ProviderCredentials,
   type ProviderFactory,
-} from "../models/index.js";
+} from "../models/provider-factory.js";
 import type { ModelProvider } from "../models/index.js";
 import type { AuthorizationPolicy } from "../authorization/index.js";
 import { gatherSections, type ContextProvider } from "../context/index.js";
@@ -40,35 +40,12 @@ import { createMemoryEventBus } from "../runtime/index.js";
 import { createMemoryMessageStore } from "../adapters/memory/message-store.js";
 import { createDefaultEngine, type ResolvedModelInfo } from "./engine.js";
 import type { AgentManifest } from "./index.js";
-
-/** The subset a caller must supply; everything else gets a sensible default. */
-export type AgentManifestInput = Pick<AgentManifest, "id" | "name" | "instructions" | "modelPolicy"> &
-  Partial<AgentManifest>;
-
-export const DEFAULT_EXECUTION_LIMITS: AgentManifest["limits"] = {
-  maxSteps: 8,
-  maxToolCalls: 16,
-  wallClockTimeoutMs: 120_000,
-  maxInputTokens: 100_000,
-  maxOutputTokens: 4_096,
-  costCeilingMinorUnits: 100_000,
-  maxRetries: 5,
-  retryBackoffMs: 500,
-  maxInlineToolOutputBytes: 8_192,
-};
-
-/** Fill a partial manifest with defaults so the common case is a few fields. */
-export const defineAgent = (input: AgentManifestInput): AgentManifest => ({
-  version: 1,
-  description: "",
-  responseFormat: { kind: "text" },
-  toolPolicy: { preloaded: [], categories: [], excluded: [] },
-  skillPolicy: { assigned: [], allowTenantSkills: false },
-  authorizationPolicyId: "default",
-  contextProviderIds: [],
-  limits: DEFAULT_EXECUTION_LIMITS,
-  ...input,
-});
+import {
+  DEFAULT_MODEL_CATALOG,
+  DEFAULT_ROLE_ASSIGNMENTS,
+  defineAgent,
+  type AgentManifestInput,
+} from "./define.js";
 
 /** Permissive policy used by the embedded facade when a caller wires tools but no authorization. */
 const allowAllAuthorization = (): AuthorizationPolicy => ({
@@ -307,34 +284,3 @@ const assistantMessage = (conversationId: ConversationId, id: string, parts: rea
   parts,
   createdAt: new Date(0).toISOString(),
 });
-
-/** A small default catalog so `modelPolicy: { role: "smart" }` resolves out of the box. */
-export const DEFAULT_MODEL_CATALOG: readonly ModelDefinition[] = [
-  {
-    provider: "anthropic",
-    modelId: "claude-sonnet-5",
-    label: "Claude Sonnet 5",
-    lifecycle: "generally-available",
-    inputModalities: ["text", "image"],
-    capabilities: { tools: true, structuredOutput: true, reasoning: true, nativeSearch: false },
-    limits: { contextTokens: 200_000, maxOutputTokens: 8_192 },
-    pricing: { currency: "USD", inputPerMillion: 3_000, outputPerMillion: 15_000 },
-    dataResidency: ["us"],
-  },
-  {
-    provider: "anthropic",
-    modelId: "claude-haiku-4-5-20251001",
-    label: "Claude Haiku 4.5",
-    lifecycle: "generally-available",
-    inputModalities: ["text", "image"],
-    capabilities: { tools: true, structuredOutput: true, reasoning: false, nativeSearch: false },
-    limits: { contextTokens: 200_000, maxOutputTokens: 8_192 },
-    pricing: { currency: "USD", inputPerMillion: 800, outputPerMillion: 4_000 },
-    dataResidency: ["us"],
-  },
-];
-
-export const DEFAULT_ROLE_ASSIGNMENTS: ModelRoleAssignments = {
-  smart: ["claude-sonnet-5"],
-  fast: ["claude-haiku-4-5-20251001"],
-};

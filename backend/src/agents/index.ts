@@ -41,4 +41,12 @@ export type AgentManifest = {
 };
 
 export * from "./engine.js";
-export * from "./agent.js";
+export * from "./define.js";
+/**
+ * `agent.js` is deliberately absent — #196.
+ *
+ * It holds `createAgent`, which builds a provider factory from credentials and therefore needs the six
+ * `@ai-sdk/*` packages. Those are optional peers, so anything reachable from the package root must not import
+ * them: a consumer using OpenAI would otherwise get a resolution failure for Anthropic. It is exported from the
+ * `providers` entry, where the cost is visible in the import path.
+ */

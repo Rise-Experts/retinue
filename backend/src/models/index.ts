@@ -130,7 +130,13 @@ export const createModelRegistry = (config: ModelRegistryConfig): ModelRegistry 
   };
 };
 
-export * from "./provider-factory.js";
+/**
+ * `provider-factory` is **not** re-exported here — #196.
+ *
+ * It statically imports six `@ai-sdk/*` packages, so anything that pulls this barrel pulled all six. Since they
+ * are optional peers now, a root import must not reach them: a consumer using OpenAI would get a resolution
+ * failure for Anthropic. It lives behind the `./providers` subpath instead.
+ */
 
 /**
  * Cost of a unit of usage, in the pricing currency's minor units. Prices are per-million tokens.

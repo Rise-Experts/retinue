@@ -4,7 +4,8 @@ import type { MessageId, MessagePartId } from "../../core/ids.js";
 import type { TextPart } from "../../core/content-parts.js";
 import type { AgentEngine, EngineEvent } from "../../runtime/index.js";
 import { deriveRunMessageId } from "../../runtime/index.js";
-import { createAgent, defineAgent } from "../agent.js";
+import {  defineAgent } from "../define.js";
+import { createAgent } from "../agent.js";
 
 /** A fake engine that echoes the latest user message — lets us test facade wiring without a model. */
 const echoEngine = (): AgentEngine => ({

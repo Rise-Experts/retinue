@@ -19,16 +19,19 @@ export * from "./skills/index.js";
 export * from "./context/index.js";
 export * from "./hitl/index.js";
 export * from "./persistence/index.js";
+/**
+ * The in-memory adapters stay in the root — #196.
+ *
+ * They are the only ones with no dependency of their own, and they are what makes the package usable the moment
+ * it is installed: a test, a prototype or a first look needs no database. Every other adapter moved behind a
+ * subpath, because each carries a driver.
+ *
+ * The comment that used to sit here argued the opposite — that a subpath for the queue alone would be "an
+ * inconsistency without a benefit", since "the package already loads provider SDKs at import time". That was an
+ * accurate description of a problem being used to justify itself. Importing this root loaded six provider SDKs,
+ * a Postgres driver, a Redis client and a queue, whatever the consumer used.
+ */
 export * from "./adapters/memory/index.js";
-export * from "./adapters/postgres/index.js";
-export * from "./adapters/supabase/index.js";
-// Exported from the root like `models` (the AI SDK) and the Postgres adapter, for consistency: the
-// package already loads provider SDKs at import time, so a subpath export for this one alone would be
-// an inconsistency without a benefit. Loading `bullmq`/`ioredis` constructs no connection — only
-// `createBullMqRunQueue` does.
-export * from "./adapters/bullmq/index.js";
-export * from "./adapters/otel/index.js";
-export * from "./adapters/redis/index.js";
 export * from "./worker/main.js";
 export * from "./worker/extraction.js";
 export * from "./worker/export.js";

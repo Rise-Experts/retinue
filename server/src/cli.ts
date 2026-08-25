@@ -14,7 +14,8 @@ import { boot } from "./boot.js";
 import { createAgentkitHost, type Authenticate } from "./host.js";
 import { createHealthRoutes, postgresProbe, redisProbe, schemaProbe } from "./health.js";
 import { loadConfig, type AgentkitConfig } from "./config.js";
-import type { ResolverDeps, SqlExecutor } from "@agentkit/backend";
+import type { ResolverDeps } from "@agentkit/backend";
+import type { SqlExecutor } from "@agentkit/backend/adapters/postgres";
 
 /**
  * What a deployment's app module must default-export.
@@ -60,13 +61,13 @@ export const runApiHost = async (
     env,
     connect: async (loaded) => {
       const { Pool } = await import("pg");
-      const { createPgExecutor } = await import("@agentkit/backend");
+      const { createPgExecutor } = await import("@agentkit/backend/adapters/postgres");
       return { sql: createPgExecutor(new Pool({ connectionString: loaded.databaseUrl })) };
     },
   });
 
   const deps = await app.deps({ config, sql });
-  const { createSchemaManager } = await import("@agentkit/backend");
+  const { createSchemaManager } = await import("@agentkit/backend/adapters/postgres");
   const probes = [postgresProbe(sql), schemaProbe(createSchemaManager(sql))];
   if (app.redis) probes.push(redisProbe(app.redis(config)));
 

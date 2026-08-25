@@ -1,28 +1,10 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import {
-  CREDENTIAL_FIELD_EXEMPTIONS,
-  FINDINGS,
-  LOG_FIELD_ALLOWLIST,
-  MIGRATIONS,
-  RLS_EXEMPT_TABLES,
-  SECURITY_CHECKS,
-  TENANT_SCOPED_TABLES,
-  UNTRUSTED_PREAMBLE,
-  VECTOR_MIGRATIONS,
-  VECTOR_TENANT_SCOPED_TABLES,
-  areasWithFindings,
-  encloseUntrusted,
-  makeNonce,
-  manualChecks,
-  neutralizeDelimiters,
-  overdueAcceptances,
-  renderAttachmentReference,
-  renderContextBlock,
-  tablesInMigrations,
-  validateEndpoint,
-} from "../index.js";
+import { CREDENTIAL_FIELD_EXEMPTIONS, FINDINGS, LOG_FIELD_ALLOWLIST, SECURITY_CHECKS, UNTRUSTED_PREAMBLE, areasWithFindings, encloseUntrusted, makeNonce, manualChecks, neutralizeDelimiters, overdueAcceptances, renderAttachmentReference, renderContextBlock, validateEndpoint } from "../index.js";
+// The RLS tables and the migration scan live in the Supabase adapter, which moved behind a subpath (#196).
+import { RLS_EXEMPT_TABLES, TENANT_SCOPED_TABLES, VECTOR_TENANT_SCOPED_TABLES, tablesInMigrations } from "../adapters/supabase/rls.js";
+import { MIGRATIONS, VECTOR_MIGRATIONS } from "../adapters/postgres/index.js";
 import type { FileMetadata } from "../persistence/index.js";
 
 /**
