@@ -186,19 +186,17 @@ export const resolveCapabilities = (input: ResolveCapabilitiesInput): Capability
 };
 
 /**
- * A capability that must be on, or a refusal naming it.
+ * ## What is deliberately *not* here yet: a point-of-use gate
  *
- * The counterpart to `resolveCapabilities`: that one is called once at construction, this one at the point of
- * use, so a code path guarded by a capability cannot run when it is off. Returning a boolean would leave every
- * caller to remember the `if`, and the ones that forgot are exactly the six defects above.
+ * The obvious companion to `resolveCapabilities` is a `requireCapability(map, cap, forWhat)` that a code path
+ * calls to refuse when its capability is off. It was written, tested, and **removed before shipping** — because
+ * nothing could call it.
+ *
+ * No runtime object holds a capability map today: a host wires `ResolverDeps` by hand, and the map produced here
+ * is consulted by nobody. So the gate would have been exported, covered by its own tests, and reachable from
+ * nothing — which is #157, #159, #161, #163, #165 and #185, in the module whose entire purpose is to stop that.
+ * Leaving it in because it "will be used soon" is precisely the reasoning that produced those six.
+ *
+ * It returns with #196, when the composition root exists and there is something to consult the map. The check
+ * that matters until then is the construction-time one above, and that one *is* called.
  */
-export const requireCapability = (map: CapabilityMap, capability: Capability, forWhat: string): void => {
-  if (map[capability] === "on") return;
-  throw new AgentPlatformError({
-    code: "invalid_input",
-    message:
-      `${forWhat} needs the "${capability}" capability, and this runtime has it off. Turn it on and supply ` +
-      `${CAPABILITY_REQUIRES[capability].join(" and ") || "nothing further"}, or do not call this path.`,
-    retryable: false,
-  });
-};

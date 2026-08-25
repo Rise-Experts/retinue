@@ -13,7 +13,6 @@ import {
   CAPABILITY_REQUIRES as REQUIRES,
   PROFILES,
   profileToMap,
-  requireCapability,
   resolveCapabilities,
   type CapabilityMap,
 } from "../index.js";
@@ -160,24 +159,6 @@ describe("profiles", () => {
      */
     expect(CAPABILITIES).not.toContain("approvals");
     expect(CAPABILITIES).not.toContain("quota");
-  });
-});
-
-describe("using a capability at the point of use", () => {
-  const map = (over: Partial<CapabilityMap> = {}): CapabilityMap =>
-    ({ ...profileToMap("automation"), ...over }) as CapabilityMap;
-
-  it("passes silently when the capability is on", () => {
-    expect(() => requireCapability(map({ history: "on" }), "history", "loading history")).not.toThrow();
-  });
-
-  it("throws when it is off, naming the capability and what needs it", () => {
-    // Returning a boolean would leave every caller to remember the `if`, and the ones that forgot are the six
-    // defects this module exists for.
-    const error = caught(() => requireCapability(map(), "memory", "recalling what the user told us"));
-    expect(error?.message).toContain('"memory"');
-    expect(error?.message).toContain("recalling what the user told us");
-    expect(error?.message).toContain("principalMemory");
   });
 });
 
