@@ -14,6 +14,8 @@ import { createInProcessBus, createMemoryBackend } from "../memory-app.js";
 import { asExampleBackend } from "../memory-composition.js";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { resolveCapabilities } from "@agentkit/backend";
+import { exampleCapabilities } from "../index.js";
 import { exampleProviders } from "../providers.js";
 import { COMPOSER_COMMANDS, commandQueryAt, filterCommands } from "../composer/commands.js";
 import { postgresBackend } from "../stores.js";
@@ -914,5 +916,29 @@ describe("the composer's command menu", () => {
     for (const command of COMPOSER_COMMANDS) {
       expect(implementation.includes(`"${command.name}"`), `/${command.name} must be handled`).toBe(true);
     }
+  });
+});
+
+describe("the app's capability declaration", () => {
+  it("matches what the app wires", () => {
+    /**
+     * #198. The declaration is only worth having if it is checked — `resolveCapabilities` throws when anything
+     * is declared on with nothing behind it, *or* wired with nothing declaring it. Calling it here is what makes
+     * the second direction bite: remove a store from the composition and this fails, naming the capability,
+     * instead of the feature going quietly missing.
+     */
+    const capabilities = exampleCapabilities();
+    expect(capabilities.history).toBe("on");
+    expect(capabilities.memory).toBe("on");
+    expect(capabilities.citations).toBe("on");
+    // Off, and truthfully: the docs MCP server is composed per role rather than in the base runtime.
+    expect(capabilities.mcp).toBe("off");
+  });
+
+  it("refuses a declaration that claims a capability the app does not wire", () => {
+    // The guarantee, demonstrated rather than described: turning something on without its store is refused.
+    expect(() =>
+      resolveCapabilities({ profile: "assistant", capabilities: { mcp: "on" }, wired: new Set(["messages"]) }),
+    ).toThrow(/mcp is on but/);
   });
 });

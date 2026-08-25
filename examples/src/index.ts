@@ -19,6 +19,7 @@
 
 import {
   createAuthorizationPolicy,
+  resolveCapabilities,
   createBullMqJobDispatcher,
   createBullMqRunQueue,
   createDefaultEngine,
@@ -779,6 +780,37 @@ const app = {
  * the modes, the context providers. That is the claim ports-and-adapters makes, and this function is where it
  * is finally load-bearing rather than asserted — the memory composition calls exactly this.
  */
+/**
+ * This app's capability declaration — #198.
+ *
+ * The example is a chat assistant, so it starts from that profile. Every "on" here has its dependency wired
+ * below, and `resolveCapabilities` is what *proves* that rather than asserting it: an entry that loses its
+ * wiring fails at construction with the capability named, instead of going quiet — which is how #157, #159,
+ * #161, #163, #165 and #185 each survived their own tests.
+ *
+ * Written out rather than left to the profile, because a reader of this file should be able to see what the app
+ * does without opening the platform.
+ */
+export const exampleCapabilities = () =>
+  resolveCapabilities({
+    profile: "assistant",
+    capabilities: {
+      // The docs MCP server is composed per role rather than in the base runtime, so it is off here and the
+      // declaration stays true of *this* configuration rather than of what the app could do.
+      mcp: "off",
+    },
+    wired: new Set([
+      "messages",
+      "principalMemory",
+      "summaries",
+      "summarizer",
+      "citations",
+      "interactions",
+      "skills",
+      "usage",
+    ]),
+  });
+
 export const composeEngine = (backend: ExampleBackend) => {
   {
     const modes = createModeStore({

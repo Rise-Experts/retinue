@@ -265,6 +265,16 @@ const CAPABILITIES = [
     why: "#168 — context utilization is unanswerable if nothing inspects the assembled prompt.",
   },
   {
+    name: "capability declaration",
+    symbol: "resolveCapabilities",
+    scope: "host",
+    /**
+     * The guard for the guard. This module exists because six capabilities were built, tested and wired to
+     * nothing — so a capability *checker* that no host calls would be the joke writing itself.
+     */
+    why: "#198 — a host must declare what it enables, and be held to it; unchecked, the declaration is decoration.",
+  },
+  {
     name: "turn modality gating",
     symbol: "modelModalities",
     scope: "platform",

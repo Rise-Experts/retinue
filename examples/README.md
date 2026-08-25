@@ -253,6 +253,22 @@ So `/api/limits` and `/api/usage` both refresh the buckets before answering (a r
 running it twice cannot double count). It remains true that **a calendar limit is enforced from whatever the
 buckets last said** — a deployment runs `createRollupJob` on a schedule and this app does not.
 
+## What it declares, and why that is checked
+
+`exampleCapabilities()` states what this app does — history, memory, compaction, citations, questions, skills,
+usage on; MCP off, because the docs server is composed per role rather than in the base runtime.
+
+It is not documentation. `resolveCapabilities` refuses to return a declaration that disagrees with the wiring,
+**in either direction**:
+
+- declared on with nothing behind it → construction fails, naming the capability *and* the missing store
+- wired with nothing declaring it → construction also fails, because a declaration that has drifted into a lie
+  is worse than none: the next reader trusts it
+
+That second direction is the one that matters here. Six of the defects listed below were a capability that
+existed, passed its tests, and was wired to nothing — and this app is where every one of them was found. Removing
+a store from the composition now fails a test that names the capability, instead of the feature going quiet.
+
 ## Things running this found
 
 The wiring being *correct* was where the surprises were, as the issue predicted. Every one of these was in the
