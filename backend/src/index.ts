@@ -7,6 +7,7 @@
 
 export * from "./core/index.js";
 export * from "./capabilities/index.js";
+export * from "./capabilities/runtime.js";
 export * from "./models/index.js";
 export * from "./agents/index.js";
 export * from "./runtime/index.js";

@@ -26,7 +26,8 @@ distinction matters, and `docs/09` records which claims rest on which.
 | Module | Specification | Contains |
 |---|---|---|
 | `core` | [02](../docs/02-core-and-persistence.md) | `ExecutionContext`, branded IDs, typed message parts, error and event contracts |
-| `capabilities` | #198 | What a runtime does, **declared and cross-checked**. A capability on with nothing wired refuses to construct; so does one wired that nothing declares — the second direction is what catches a feature present, tested and reachable from nothing. Profiles for the two common shapes: a chat assistant, and a headless automation |
+| `capabilities` | #198, #196 | `createRuntime` — the composition root. The wired set is **derived** from the dependencies supplied, not declared beside them, so there is one statement of intent and one of fact. A capability that is off is **enforced**: `runtime.stores.messages` throws when `history` is off, so no caller has to remember to check |
+| `capabilities` *(model)* | #198 | What a runtime does, **declared and cross-checked**. A capability on with nothing wired refuses to construct; so does one wired that nothing declares — the second direction is what catches a feature present, tested and reachable from nothing. Profiles for the two common shapes: a chat assistant, and a headless automation |
 | `models` | [03](../docs/03-intelligence-runtime.md) | Model definitions, capabilities, pricing, resolution policy |
 | `agents` | [03](../docs/03-intelligence-runtime.md) | `AgentManifest` — declarative, stored, versioned |
 | `tools` | [03](../docs/03-intelligence-runtime.md) | Tool descriptors, effect classification, result envelope, meta-tools |
