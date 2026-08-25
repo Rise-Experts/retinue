@@ -257,6 +257,19 @@ export function scan(roots = DEFAULT_ROOTS) {
       // and prove the structural types are satisfied by it -- see R11. Excluding the test would leave the claim
       // "vendor-neutral" resting on interfaces nobody had checked against the actual package.
       const isOtelAdapter = inLayer("adapters/otel") || /adapters\/otel\//.test(path);
+      /**
+       * The host, which now lives inside the runtime's package — #196.
+       *
+       * `server/` was its own workspace, so the dependency direction was enforced by npm: the runtime could not
+       * import the host because it did not depend on it. Merging them into one package removed that enforcement
+       * and left nothing in its place, which would have been the whole point of the boundary lost to a
+       * packaging decision. R12 restores it by path.
+       *
+       * The entry file is exempt: `entries/server.ts` exists precisely to re-export the host, and it is not the
+       * runtime — it is the subpath's front door.
+       */
+      const isServer = inLayer("server");
+      const isServerEntry = workspace === "backend" && dir === "entries" && path.endsWith("/server.ts");
       // Only the shipped envelope, not its tests. A test legitimately wires an in-memory store to
       // exercise the pipeline, and test files are excluded from the published build — the rule is about
       // what the envelope does in production, not what a test needs to construct one.
@@ -284,6 +297,26 @@ export function scan(roots = DEFAULT_ROOTS) {
         // platform, and it is invisible in review because the import looks like every other import.
         if (/^@opentelemetry\//.test(spec) && !isOtelAdapter)
           add("R11 OpenTelemetry may only be imported inside backend/src/adapters/otel");
+
+        /**
+         * R12 — the runtime must not import the host (#196).
+         *
+         * One direction only, as when they were separate packages: the host composes the runtime, never the
+         * reverse. Without this the merge is a merge in fact while looking like a boundary, and the first
+         * convenience import would make the runtime unshippable without an HTTP server.
+         */
+        if (workspace === "backend" && !isServer && !isServerEntry && /^\.{1,2}\/(\.\.\/)*server\//.test(spec))
+          add("R12 the runtime must not import from backend/src/server (the host composes the runtime, not the reverse)");
+
+        /**
+         * R13 — the host's dependencies stay in the host.
+         *
+         * `graphql`, `graphql-yoga` and `@whatwg-node/server` are optional peers, so the runtime reaching one
+         * would put an HTTP server in every consumer's install — the same failure the subpath split just
+         * removed, arriving from the other side.
+         */
+        if (/^(graphql|graphql-yoga|@whatwg-node\/)/.test(spec) && !isServer && !isServerEntry && workspace === "backend")
+          add("R13 the GraphQL server packages may only be imported inside backend/src/server");
 
         // R4 — ports must not import adapters.
         if (isPersistence &&

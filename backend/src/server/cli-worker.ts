@@ -9,12 +9,12 @@
 import { boot } from "./boot.js";
 import { APP_MODULE_VARIABLE, type AgentkitApp } from "./cli.js";
 import { loadConfig, type AgentkitConfig } from "./config.js";
-import type { AgentEngine, PricingResolver, ResolverDeps } from "@agentkit/backend";
-import type { SqlExecutor } from "@agentkit/backend/adapters/postgres";
+import type { AgentEngine, PricingResolver, ResolverDeps } from "../index.js";
+import type { SqlExecutor } from "../entries/adapters-postgres.js";
 
 export type AgentkitWorkerApp = AgentkitApp & {
   readonly engine: (input: { readonly config: AgentkitConfig; readonly sql: SqlExecutor }) => AgentEngine;
-  readonly buildContext: Parameters<typeof import("@agentkit/backend").createDurableWorker>[0]["buildContext"];
+  readonly buildContext: Parameters<typeof import("../index.js").createDurableWorker>[0]["buildContext"];
   /**
    * What a model costs — #166.
    *
@@ -50,7 +50,7 @@ export const runWorker = async (
     env,
     connect: async (loaded) => {
       const { Pool } = await import("pg");
-      const { createPgExecutor } = await import("@agentkit/backend/adapters/postgres");
+      const { createPgExecutor } = await import("../entries/adapters-postgres.js");
       return { sql: createPgExecutor(new Pool({ connectionString: loaded.databaseUrl })) };
     },
   });
@@ -63,10 +63,10 @@ export const runWorker = async (
    * what it imports is what a reader copies. A single namespace import taught them that everything came from one
    * place, which is exactly the thing that made the package install six provider SDKs.
    */
-  const backend = await import("@agentkit/backend");
-  const pgAdapters = await import("@agentkit/backend/adapters/postgres");
-  const queueAdapters = await import("@agentkit/backend/adapters/bullmq");
-  const redisAdapters = await import("@agentkit/backend/adapters/redis");
+  const backend = await import("../index.js");
+  const pgAdapters = await import("../entries/adapters-postgres.js");
+  const queueAdapters = await import("../adapters/bullmq/index.js");
+  const redisAdapters = await import("../adapters/redis/index.js");
   const deps = (await app.deps({ config, sql })) as ResolverDeps;
 
   const queue = queueAdapters.createBullMqRunQueue({ url: config.redisUrl });

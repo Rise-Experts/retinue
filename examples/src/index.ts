@@ -24,9 +24,9 @@ import { createRedisLiveEventSource } from "@agentkit/backend/adapters/redis";
 import type { ContextBudget, ContextInspection, QuestionSpec, AgentManifest, ExecutionContext, ModelTurnTool, ResolverDeps, Run, Tool, TurnMessage } from "@agentkit/backend";
 import type { SqlExecutor, TransactionRunner } from "@agentkit/backend/adapters/postgres";
 import { Redis } from "ioredis";
-import type { AgentkitConfig } from "@agentkit/server";
+import type { AgentkitConfig } from "@agentkit/backend/server";
 import { createDevAuthenticate } from "./auth.js";
-import type { Authenticate } from "@agentkit/server";
+import type { Authenticate } from "@agentkit/backend/server";
 
 /** One authenticator, built the first time a request needs it. */
 let devAuth: Authenticate | undefined;

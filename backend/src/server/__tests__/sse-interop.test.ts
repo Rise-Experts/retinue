@@ -27,7 +27,7 @@ import {
   type RunEvent,
   type RunId,
   type TenantId,
-} from "@agentkit/backend";
+} from "../../index.js";
 import { createAgentkitHost } from "../host.js";
 
 const T1 = asId<TenantId>("interop-t1");

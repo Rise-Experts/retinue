@@ -55,6 +55,7 @@ distinction matters, and `docs/09` records which claims rest on which.
 | `telemetry` | [16](../docs/16-load-and-resilience.md) | The telemetry port and its OTel adapter |
 | `loadtest` | [16](../docs/16-load-and-resilience.md) | Load, soak and failure injection harnesses |
 | `worker` | [05](../docs/05-knowledge-and-documents.md) | The export worker |
+| `server` | [06](../docs/06-graphql-and-frontend.md) | The reference GraphQL host, SSE endpoint, boot, config, health and the runnable API and worker commands. Reached at the `./server` subpath; `graphql`, `graphql-yoga` and `@whatwg-node/server` are **optional peers**, so a consumer embedding the runtime in their own server installs none of them. Rules **R12** and **R13** keep the dependency one-way |
 | `testing` | [09](../docs/09-quality-and-release.md) | The conformance suite every adapter runs, plus PGlite fixtures. Named `testing` and shipped deliberately: an adapter written outside this repository has to be holdable to the same behaviour |
 
 ## Rules these contracts encode
@@ -91,6 +92,19 @@ npm run security:review      # the acceptances in `security`, and their revisit 
 is wrong — it is code that is **correct, tested and unreachable**. Citations, questions,
 usage recording, compaction, skills and MCP import were each built, each passing tests,
 and each wired to nothing.
+
+## Subpaths
+
+The root exports the runtime and installs `ai` and `zod` — nothing else. Everything with a driver behind it is a
+subpath with an optional peer:
+
+```ts
+import { createRuntime } from "@agentkit/backend";
+import { createPostgresRunStore } from "@agentkit/backend/adapters/postgres";  // peer: pg
+import { runApiHost } from "@agentkit/backend/server";                          // peer: graphql, graphql-yoga
+```
+
+`src/entries/README.md` lists them all, including why there is no `./testing` yet.
 
 ## Import convention
 

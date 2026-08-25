@@ -13,7 +13,7 @@
 
 import { asId, parseExecutionContext } from "@agentkit/backend";
 import type { ExecutionContext } from "@agentkit/backend";
-import type { Authenticate } from "@agentkit/server";
+import type { Authenticate } from "@agentkit/backend/server";
 
 export const DEV_AUTH_VARIABLE = "AGENTKIT_EXAMPLE_DEV_AUTH";
 

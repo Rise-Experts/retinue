@@ -10,7 +10,7 @@
  * message naming the problem" testable without mutating global state, and it means a caller can load
  * configuration from somewhere that is not `process.env` at all.
  */
-import type { SchemaMode } from "@agentkit/backend/adapters/postgres";
+import type { SchemaMode } from "../entries/adapters-postgres.js";
 
 export type AgentkitConfig = {
   readonly databaseUrl: string;

@@ -32,7 +32,7 @@ process.env.AGENTKIT_APP_MODULE = pathToFileURL(resolve(import.meta.dirname, "..
   }
 }
 
-const { runWorker } = await import("@agentkit/server");
+const { runWorker } = await import("@agentkit/backend/server");
 const { shutdown } = await runWorker();
 console.log(`  agentkit example — worker running (schema ${SCHEMA}). Ctrl-C to drain.`);
 

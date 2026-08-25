@@ -24,7 +24,7 @@ import {
   type LiveEventSource,
   type ResolverDeps,
   type RunId,
-} from "@agentkit/backend";
+} from "../index.js";
 import type { Authenticate } from "./host.js";
 
 export type SseRouteOptions = {

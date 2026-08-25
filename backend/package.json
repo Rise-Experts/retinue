@@ -32,7 +32,11 @@
       "types": "./dist/entries/adapters-otel.d.ts",
       "default": "./dist/entries/adapters-otel.js"
     },
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./server": {
+      "types": "./dist/entries/server.d.ts",
+      "default": "./dist/entries/server.js"
+    }
   },
   "files": [
     "dist",
@@ -49,6 +53,12 @@
     "zod": "^3.25.76"
   },
   "devDependencies": {
+    "@ai-sdk/anthropic": "^4.0.42",
+    "@ai-sdk/azure": "^4.0.49",
+    "@ai-sdk/google": "^4.0.51",
+    "@ai-sdk/mistral": "^4.0.33",
+    "@ai-sdk/openai": "^4.0.47",
+    "@ai-sdk/openai-compatible": "^3.0.37",
     "@electric-sql/pglite": "^0.5.5",
     "@opentelemetry/api": "^1.9.1",
     "@opentelemetry/resources": "^2.10.0",
@@ -56,7 +66,13 @@
     "@opentelemetry/sdk-trace-base": "^2.10.0",
     "@types/node": "^20",
     "@types/pg": "^8.23.0",
+    "@whatwg-node/server": "^0.11.0",
+    "bullmq": "^6.2.2",
+    "graphql": "^16.14.2",
     "graphql-sse": "^2.6.0",
+    "graphql-yoga": "^5.22.0",
+    "ioredis": "^6.0.0",
+    "pg": "^8.23.0",
     "typescript": "^5",
     "vitest": "^4.1.9"
   },
@@ -64,15 +80,18 @@
     "node": ">=20"
   },
   "peerDependencies": {
-    "pg": "^8.23.0",
-    "ioredis": "^6.0.0",
-    "bullmq": "^6.2.0",
     "@ai-sdk/anthropic": "^4.0.39",
     "@ai-sdk/azure": "^4.0.43",
     "@ai-sdk/google": "^4.0.44",
     "@ai-sdk/mistral": "^4.0.29",
     "@ai-sdk/openai": "^4.0.42",
-    "@ai-sdk/openai-compatible": "^3.0.31"
+    "@ai-sdk/openai-compatible": "^3.0.31",
+    "@whatwg-node/server": "^0.11.0",
+    "bullmq": "^6.2.0",
+    "graphql": "^16.9.0",
+    "graphql-yoga": "^5.10.0",
+    "ioredis": "^6.0.0",
+    "pg": "^8.23.0"
   },
   "peerDependenciesMeta": {
     "pg": {
@@ -100,6 +119,15 @@
       "optional": true
     },
     "@ai-sdk/openai-compatible": {
+      "optional": true
+    },
+    "graphql": {
+      "optional": true
+    },
+    "graphql-yoga": {
+      "optional": true
+    },
+    "@whatwg-node/server": {
       "optional": true
     }
   },

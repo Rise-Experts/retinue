@@ -13,7 +13,7 @@
  */
 import { createServer } from "node:http";
 import { createAgentkitHost, type Authenticate } from "./host.js";
-import type { ResolverDeps } from "@agentkit/backend";
+import type { ResolverDeps } from "../index.js";
 
 export type MainOptions = {
   readonly deps: ResolverDeps;

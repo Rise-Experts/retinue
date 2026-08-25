@@ -30,7 +30,7 @@ import type { ContextProvider } from "@agentkit/backend";
 import type { ExampleStores } from "./stores.js";
 import type { ConversationId, ExecutionContext, PrincipalId, MessageId, MessagePartId, ResolverDeps, RunId, TenantId } from "@agentkit/backend";
 import type { SqlExecutor } from "@agentkit/backend/adapters/postgres";
-import { createAgentkitHost, type Authenticate } from "@agentkit/server";
+import { createAgentkitHost, type Authenticate } from "@agentkit/backend/server";
 import { conversationTurns } from "./history.js";
 import {
   CONVERSATION_MODES,

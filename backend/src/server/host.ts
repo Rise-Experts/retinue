@@ -14,8 +14,8 @@ import { createGraphQLError, createSchema, createYoga } from "graphql-yoga";
 import { createServerAdapter } from "@whatwg-node/server";
 import { createRunEventSseRoute, type SseRouteOptions } from "./sse-route.js";
 import type { HealthRoutes } from "./health.js";
-import { createResolvers, typeDefs, type GraphQLContext, type ResolverDeps } from "@agentkit/backend";
-import type { ExecutionContext } from "@agentkit/backend";
+import { createResolvers, typeDefs, type GraphQLContext, type ResolverDeps } from "../index.js";
+import type { ExecutionContext } from "../index.js";
 
 /**
  * Turns a request into an execution context, or `null` to refuse it.

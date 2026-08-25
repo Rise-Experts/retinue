@@ -64,12 +64,12 @@ const ROOT = resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
  * Where a capability may be consumed from.
  *
  * - `platform` — wired inside `backend/src`, so a host gets it without doing anything.
- * - `entrypoint` — wired by the shipped `server/src` commands, so a documented deployment gets it.
+ * - `entrypoint` — wired by the shipped host commands in `backend/src/server`, so a documented deployment gets it.
  * - `host` — wired by an application; the reference host in `examples/src` is the proof it can be.
  */
 const SCOPES = {
   platform: ["backend/src"],
-  entrypoint: ["server/src"],
+  entrypoint: ["backend/src/server"],
   host: ["examples/src", "examples/scripts"],
 };
 
@@ -157,7 +157,7 @@ const CAPABILITIES = [
     name: "assistant turn persistence",
     symbol: "messages:",
     scope: "entrypoint",
-    file: "server/src/cli-worker.ts",
+    file: "backend/src/server/cli-worker.ts",
     why: "#157 — the worker's message store has to be wired or the agent has amnesia between runs.",
   },
   {

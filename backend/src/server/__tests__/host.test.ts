@@ -26,7 +26,7 @@ import {
   type ResolverDeps,
   type RunEvent,
   type TenantId,
-} from "@agentkit/backend";
+} from "../../index.js";
 import { createAgentkitHost, UNAUTHENTICATED } from "../host.js";
 
 const T1 = asId<TenantId>("host-t1");
@@ -299,29 +299,37 @@ describe("layering", () => {
     }
   });
 
-  it("keeps @agentkit/backend free of any GraphQL-server dependency", async () => {
+  it("keeps a GraphQL server out of every consumer's install", async () => {
+    /**
+     * The same claim as before, restated for the new packaging — #196.
+     *
+     * It used to read the backend's `package.json` and assert no server framework appeared in `dependencies`
+     * **or `devDependencies`**, which worked while the host was a separate workspace. The host now lives in this
+     * package, so `graphql-yoga` is legitimately a devDependency here: it has to be installed to build.
+     *
+     * What must stay true is the part that affects a consumer: a server framework is never a *dependency*, so
+     * installing the runtime never installs one. It is an **optional peer**, which means the host's subpath asks
+     * for it and nothing else does.
+     *
+     * The import-level half of the claim — that no runtime file reaches `graphql` — is rule R13 in
+     * `check-boundaries.mjs`, where it belongs: a package manifest cannot see an import.
+     */
     const { readFile } = await import("node:fs/promises");
-    const backend = JSON.parse(
-      await readFile(new URL("../../../backend/package.json", import.meta.url), "utf8"),
-    ) as { dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
-    const declared = Object.keys({ ...backend.dependencies, ...backend.devDependencies });
+    const manifest = JSON.parse(
+      await readFile(new URL("../../../package.json", import.meta.url), "utf8"),
+    ) as {
+      dependencies?: Record<string, string>;
+      peerDependencies?: Record<string, string>;
+      peerDependenciesMeta?: Record<string, { optional?: boolean }>;
+    };
 
-    // AC-6, and the reason this workspace exists at all. The library ships SDL plus a thin resolver
-    // map so a host can mount it on Yoga, Apollo or Mercurius; a server dependency here would quietly
-    // make one of those the only real option.
-    for (const framework of [
-      "graphql-yoga",
-      "apollo-server",
-      "@apollo/server",
-      "mercurius",
-      "express",
-      "fastify",
-      "koa",
-      "hono",
-    ]) {
-      expect(declared, `@agentkit/backend must not depend on ${framework}`).not.toContain(framework);
+    const runtimeDeps = Object.keys(manifest.dependencies ?? {});
+    for (const framework of ["graphql-yoga", "apollo-server", "@apollo/server", "mercurius", "express", "fastify"]) {
+      expect(runtimeDeps, `${framework} must not be a dependency`).not.toContain(framework);
     }
-    // `graphql` itself is also absent: the library ships SDL as a string, so it needs no parser.
-    expect(declared).not.toContain("graphql");
+
+    // And the one the host does use is optional, so it is the consumer's choice rather than ours.
+    expect(manifest.peerDependencies?.["graphql-yoga"]).toBeDefined();
+    expect(manifest.peerDependenciesMeta?.["graphql-yoga"]?.optional).toBe(true);
   });
 });

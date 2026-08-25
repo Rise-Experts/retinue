@@ -1,6 +1,9 @@
 {
   "//": "TypeDoc-only config. Resolves @agentkit/* imports from SOURCE (not built dist) via paths,",
   "//2": "so the API reference generates without pre-building the workspace — works in CI, Cloudflare and locally.",
+  "//3": "types: node, because the runtime uses `process` and node: builtins. This was [] and worked only because",
+  "//4": "a dependency's .d.ts pulled node types in transitively; moving pg out of dependencies (#196) broke that",
+  "//5": "chain and the doc build began failing on `process`. Declaring it states what was already relied upon.",
   "compilerOptions": {
     "target": "ES2022",
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
@@ -10,7 +13,7 @@
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "types": [],
+    "types": ["node"],
     "baseUrl": ".",
     "paths": {
       "@agentkit/backend": ["../backend/src/index.ts"],

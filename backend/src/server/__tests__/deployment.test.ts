@@ -13,7 +13,7 @@
 
 import { PGlite } from "@electric-sql/pglite";
 import { describe, expect, it } from "vitest";
-import { createSchemaManager, MIGRATIONS, type SqlExecutor } from "@agentkit/backend/adapters/postgres";
+import { createSchemaManager, MIGRATIONS, type SqlExecutor } from "../../entries/adapters-postgres.js";
 import { ConfigurationError, DEFAULT_CONFIG, loadConfig, REQUIRED_VARIABLES } from "../config.js";
 import { boot } from "../boot.js";
 import { createHealthRoutes, postgresProbe, redisProbe, schemaProbe, type Probe } from "../health.js";
@@ -265,7 +265,10 @@ describe("health and readiness", () => {
 describe("the library reads no environment", () => {
   it("contains no process.env access outside its tests", async () => {
     const { readFile, readdir } = await import("node:fs/promises");
-    const root = new URL("../../../backend/src/", import.meta.url);
+    // `../../` — this test moved into the package it inspects (#196). It used to sit in its own workspace and
+    // reach sideways into `../../../backend/src/`; from `backend/src/server/__tests__/` that now resolves to
+    // `backend/backend/src`, which does not exist.
+    const root = new URL("../../", import.meta.url);
 
     const offenders: string[] = [];
     const walk = async (dir: URL): Promise<void> => {
@@ -273,6 +276,18 @@ describe("the library reads no environment", () => {
         const child = new URL(`${entry.name}${entry.isDirectory() ? "/" : ""}`, dir);
         if (entry.isDirectory()) {
           if (entry.name === "__tests__" || entry.name === "testing") continue;
+          /**
+           * `server/` is skipped — #196, and it is the point of the rule rather than an exception to it.
+           *
+           * The invariant is that the **library** reads no environment, so a host can configure it from a file,
+           * a secret manager or a test fixture. The host is the thing doing the configuring: `config.ts` reading
+           * `process.env` is its entire job, and `cli.ts` is an entry point.
+           *
+           * They used to be a separate workspace, so this scan never saw them. Merging the packages made the
+           * skip explicit, which is better — the boundary is now stated here instead of implied by a directory
+           * layout, and rule R12 stops the library importing back into it.
+           */
+          if (entry.name === "server") continue;
           await walk(child);
         } else if (entry.name.endsWith(".ts") && !entry.name.endsWith(".test.ts")) {
           const source = await readFile(child, "utf8");
@@ -328,7 +343,8 @@ describe("runnable commands", () => {
 
   it("has both documented entrypoints present in the build output", async () => {
     const { access } = await import("node:fs/promises");
-    for (const file of ["../../dist/cli.js", "../../dist/cli-worker.js"]) {
+    // The host compiles into the runtime's build now, under `dist/server/`.
+    for (const file of ["../../../dist/server/cli.js", "../../../dist/server/cli-worker.js"]) {
       // The README names these commands; if the files are not built, the documentation is fiction.
       await expect(access(new URL(file, import.meta.url))).resolves.toBeUndefined();
     }

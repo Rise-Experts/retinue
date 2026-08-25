@@ -7,7 +7,6 @@
   "type": "module",
   "workspaces": [
     "backend",
-    "server",
     "frontend",
     "shareflow",
     "examples"

@@ -21,14 +21,14 @@ if (process.env.AGENTKIT_DATABASE_URL && !process.env.AGENTKIT_DATABASE_URL.incl
 }
 process.env.AGENTKIT_APP_MODULE = pathToFileURL(resolve(import.meta.dirname, "../dist/index.js")).href;
 
-const { runApiHost } = await import("@agentkit/server");
+const { runApiHost } = await import("@agentkit/backend/server");
 const { port } = await runApiHost();
 
 const endpoint = process.env.AGENTKIT_MODEL_BASE_URL ?? "https://api.openai.com/v1";
 console.log(`
   agentkit example — API host
     graphql   http://localhost:${port}/graphql
-    page      http://localhost:${port}/
+    sse       http://localhost:${port}/runs/events
     schema    ${SCHEMA}
     model     ${process.env.AGENTKIT_MODEL_ID ?? "gpt-4o-mini"} at ${endpoint}
 
@@ -36,6 +36,9 @@ console.log(`
     x-agentkit-tenant: demo
     x-agentkit-principal: you
     x-agentkit-roles: editor
+
+  There is no page here — the reference host serves GraphQL and SSE only. This banner advertised one at `/`
+  and it has always answered 404. For the browser surface, use `npm run app` instead.
 
   Start the worker in a second terminal, or nothing will execute:
     npm run worker -w @agentkit/example-app
