@@ -59,7 +59,13 @@ export type ResolverDeps = {
 
 /** Serialize a stored Run to the GraphQL RunStatus enum (underscores, not hyphens). */
 const runStatus = (status: string): string => status.replace(/-/g, "_");
-const toRun = (run: { id: string; conversationId: string; status: string; createdAt: string; finishedAt?: string }) => ({
+/**
+ * `conversationId` is nullable here since #198 — a run can belong to no conversation.
+ *
+ * Null, never a placeholder. A client that receives an empty string or a synthetic id would key a cache by it
+ * and group unrelated automations together.
+ */
+const toRun = (run: { id: string; conversationId?: string; status: string; createdAt: string; finishedAt?: string }) => ({
   id: run.id,
   conversationId: run.conversationId,
   status: runStatus(run.status),

@@ -228,6 +228,17 @@ export const createDurableWorker = (deps: DurableWorkerDeps) => {
     const persistAssistantTurn = async (status: Run["status"]): Promise<void> => {
       if (deps.messages === undefined || !isTerminal(status)) return;
       if (state.parts.length === 0) return;
+      /**
+       * No conversation, nothing to persist the turn to — #198.
+       *
+       * A no-op rather than a throw, and the distinction matters: one runtime serves both a chat assistant and a
+       * headless automation, so a run without a conversation is a *fact about that run*, not a wiring mistake.
+       * Throwing here would make an automation fail at the end of successful work.
+       *
+       * What must still fail loudly is a caller *asking* for conversation-scoped data on such a run — that is a
+       * programming error, and `conversationScoped` below is where it is refused.
+       */
+      if (run.conversationId === undefined) return;
       const message: Message = {
         // The same id the client already saw on every `part.added`. A second convention here would mean the
         // streamed message and the persisted row disagreed about their own identity, so a client that kept the

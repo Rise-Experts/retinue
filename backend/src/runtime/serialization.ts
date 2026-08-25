@@ -27,7 +27,18 @@ export const startOrEnqueueRun = async (
   coordinator: ConversationRunCoordinator,
   input: {
     tenantId: TenantId;
-    conversationId: ConversationId;
+    /**
+     * Absent for a run that belongs to no conversation — #198.
+     *
+     * Then **no slot is claimed at all**, and the run is admitted directly. The SPEC first proposed a
+     * *tenant-level* slot for these; that was wrong and is corrected here. A tenant-level slot would serialise
+     * every automation a tenant owns — two unrelated webhooks would queue behind each other for no reason —
+     * and the reason there is a conversation slot in the first place is that turns in one conversation have an
+     * order a person can see. An automation has no such ordering requirement.
+     *
+     * Concurrency for these runs is bounded where it should be: the worker's own limits, and quotas.
+     */
+    conversationId?: ConversationId;
     runId: RunId;
     /**
      * The durable log, so admission is *observable* — #170.
@@ -48,7 +59,15 @@ export const startOrEnqueueRun = async (
     now?: () => string;
   },
 ): Promise<"started" | "queued"> => {
-  const { status } = await coordinator.claimOrEnqueue(input);
+  /**
+   * A conversation-less run skips the coordinator entirely, and is `started` by definition — there is nothing
+   * for it to be queued *behind*. Calling `claimOrEnqueue` with no conversation would mean inventing a slot key,
+   * which is the fabricated-identity failure this whole change exists to remove.
+   */
+  const status =
+    input.conversationId === undefined
+      ? ("started" as const)
+      : (await coordinator.claimOrEnqueue({ ...input, conversationId: input.conversationId })).status;
   if (input.eventLog !== undefined) {
     /**
      * Best-effort, and deliberately so.

@@ -21,7 +21,7 @@ import type { SqlExecutor } from "./sql.js";
 type Row = {
   tenant_id: string;
   id: string;
-  conversation_id: string;
+  conversation_id: string | null;
   agent_id: string;
   agent_version: number;
   status: string;
@@ -42,7 +42,10 @@ const iso = (v: string | Date): string => (v instanceof Date ? v.toISOString() :
 const toRun = (r: Row): Run => ({
   id: r.id as RunId,
   tenantId: r.tenant_id as TenantId,
-  conversationId: r.conversation_id as ConversationId,
+  // Spread conditionally, so an absent conversation is *absent* from the object rather than an explicit
+  // `undefined` — `"conversationId" in run` then answers "does this belong to a conversation" without a
+  // second convention, which is how every other optional field in these adapters behaves (#198).
+  ...(r.conversation_id === null ? {} : { conversationId: r.conversation_id as ConversationId }),
   agentId: r.agent_id as AgentId,
   agentVersion: r.agent_version,
   status: r.status as RunStatus,
@@ -83,7 +86,9 @@ export const createPostgresRunStore = (sql: SqlExecutor): RunStore => {
          VALUES ($1, $2, $3, $4, $5, 'queued', now(), $6, $7)
          ON CONFLICT (tenant_id, id) DO NOTHING
          RETURNING *`,
-        [tenantId, id, conversationId, agentId, agentVersion, principalId ?? null, roleIds ?? null],
+        // `?? null` on the conversation since #198: absent means the run belongs to none, and a
+        // fabricated id here would be indistinguishable from a real conversation in every later query.
+        [tenantId, id, conversationId ?? null, agentId, agentVersion, principalId ?? null, roleIds ?? null],
       );
       const row = rows[0];
       if (!row) throw conflict(`Run ${id} already exists`);

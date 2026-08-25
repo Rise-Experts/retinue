@@ -1253,6 +1253,27 @@ export const MIGRATIONS: readonly Migration[] = [
       `ALTER TABLE usage_limits DROP COLUMN IF EXISTS model_id`,
     ],
   },
+  {
+    /**
+     * A run need not belong to a conversation — #198.
+     *
+     * `conversation_id NOT NULL` forced a triggered automation to invent a conversation id to exist. That is
+     * #164's shape: `runs` carried no principal, so hosts fabricated one, and every per-person figure silently
+     * became a machine's. A fabricated conversation id would do the same to every conversation-scoped query,
+     * and it would look exactly like data.
+     *
+     * Dropping NOT NULL only. The column stays, the index stays, and every existing row is unaffected — which
+     * is why this is safe to run against a live database.
+     */
+    id: "0026_run_without_conversation",
+    up: [`ALTER TABLE runs ALTER COLUMN conversation_id DROP NOT NULL`],
+    down: [
+      // Rows with no conversation cannot survive the constraint coming back, and there is no id to give them
+      // that would not be a lie. Deleted, deliberately, rather than blocking the rollback.
+      `DELETE FROM runs WHERE conversation_id IS NULL`,
+      `ALTER TABLE runs ALTER COLUMN conversation_id SET NOT NULL`,
+    ],
+  },
 ];
 
 /**

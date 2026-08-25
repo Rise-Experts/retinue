@@ -73,6 +73,52 @@ export function runStoreConformance(makeStore: () => RunStore): void {
       expect(found?.roleIds).toBeUndefined();
     });
 
+    it("creates a run that belongs to no conversation", async () => {
+      /**
+       * The whole point of #198. A triggered automation — a webhook, a schedule, a flow step — has no
+       * conversation, and until now had to invent one to exist at all.
+       *
+       * `conversationId` must come back **absent**, not as an empty string or a placeholder. That is what
+       * distinguishes "belongs to no conversation" from "belongs to a conversation whose id we lost", and the
+       * difference decides whether every conversation-scoped query silently matches it.
+       */
+      const store = makeStore();
+      const created = await store.create({ tenantId: T1, id: run("no-convo"), agentId: AGENT, agentVersion: 1 });
+      expect(created.conversationId).toBeUndefined();
+      expect(created.status).toBe("queued");
+
+      const read = await store.findById({ tenantId: T1, id: run("no-convo") });
+      expect(read?.conversationId).toBeUndefined();
+      // Not the empty string, which a NOT NULL column would have forced a caller to write.
+      expect(read?.conversationId).not.toBe("");
+    });
+
+    it("keeps a conversation-less run separate from one in a conversation", async () => {
+      // Both exist, and neither acquires the other's conversation. A store that defaulted the absent one to
+      // some sentinel would make them collide in any query grouped by conversation.
+      const store = makeStore();
+      await store.create({ tenantId: T1, id: run("in-convo"), conversationId: CONVO, agentId: AGENT, agentVersion: 1 });
+      await store.create({ tenantId: T1, id: run("free"), agentId: AGENT, agentVersion: 1 });
+      expect((await store.findById({ tenantId: T1, id: run("in-convo") }))?.conversationId).toBe(CONVO);
+      expect((await store.findById({ tenantId: T1, id: run("free") }))?.conversationId).toBeUndefined();
+    });
+
+    it("claims and completes a conversation-less run like any other", async () => {
+      // The lifecycle must not depend on having a conversation, or an automation could be admitted and never
+      // executed — which would be the worst possible reading of "supported".
+      const store = makeStore();
+      await store.create({ tenantId: T1, id: run("free-2"), agentId: AGENT, agentVersion: 1 });
+      const claimed = await store.claim({
+        tenantId: T1, id: run("free-2"), workerId: "w1", leaseMs: 30_000, now: T0,
+      });
+      expect(claimed?.status).toBe("running");
+      const done = await store.transition({
+        tenantId: T1, id: run("free-2"), workerId: "w1", to: "completed", now: T30,
+      });
+      expect(done.status).toBe("completed");
+      expect(done.conversationId).toBeUndefined();
+    });
+
     it("enforces tenant isolation", async () => {
       const store = makeStore();
       await seed(store, "r1");

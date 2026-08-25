@@ -191,7 +191,20 @@ export const createAgent = (config: CreateAgentConfig) => {
         }
       : {}),
     async loadHistory(context) {
-      const page = await messages.listByConversation({ tenantId: context.tenantId, conversationId: context.conversationId!, limit: 1_000 });
+      /**
+       * The non-null assertion is gone — #198. It was the only thing standing between a conversation-less run
+       * and a query keyed on `undefined`, which Postgres would have accepted as a literal and returned nothing
+       * for. A refusal that names the capability is the whole point of making the field optional.
+       */
+      if (context.conversationId === undefined)
+        throw new AgentPlatformError({
+          code: "invalid_input",
+          message:
+            "history needs a conversation, and this context has none. The embedded runtime is conversation-based; " +
+            "for a run without one, use the composed runtime with history turned off.",
+          retryable: false,
+        });
+      const page = await messages.listByConversation({ tenantId: context.tenantId, conversationId: context.conversationId, limit: 1_000 });
       return page.items.map((m) => ({
         role: m.role === "assistant" ? ("assistant" as const) : ("user" as const),
         // Text only here, deliberately: the embedded facade has no file store to resolve an attachment

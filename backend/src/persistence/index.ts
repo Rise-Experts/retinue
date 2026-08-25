@@ -162,7 +162,20 @@ export interface ThreadSummaryStore {
 
 export type NewRun = {
   readonly id: RunId;
-  readonly conversationId: ConversationId;
+  /**
+   * The conversation this run belongs to, or **absent for a run that belongs to none** — #198.
+   *
+   * Required until now, which meant a triggered automation — a webhook, a schedule, a flow step — had to invent
+   * a conversation id to exist at all. That is #164 exactly: `Run` carried no principal, so every host
+   * fabricated one, the shipped example used `"example-worker"`, and every per-person figure silently became a
+   * machine's. Nothing failed. A fabricated conversation id would do the same to every conversation-scoped
+   * query, and it would look like data.
+   *
+   * Absent is a *fact about the run*, not a missing field: the conversation-scoped capabilities — history,
+   * compaction, thread summaries — are then **unavailable** rather than operating on nothing. Asking for them is
+   * a programming error and says so.
+   */
+  readonly conversationId?: ConversationId;
   readonly agentId: AgentId;
   readonly agentVersion: number;
   /**

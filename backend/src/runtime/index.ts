@@ -2,6 +2,7 @@
  * Run lifecycle and execution limits — `docs/04-durable-runtime-and-hitl.md`.
  */
 
+import { AgentPlatformError } from "../core/errors.js";
 import type { PlatformError } from "../core/errors.js";
 import type { AgentId, ConversationId, PrincipalId, RunId, TenantId } from "../core/ids.js";
 
@@ -67,10 +68,38 @@ export type ExecutionLimits = {
   readonly temperature?: number;
 };
 
+/**
+ * The conversation a run belongs to, or a refusal — #198 AC-3.
+ *
+ * The whole point of making `conversationId` optional is that a run without one no longer invents one. That
+ * creates a second hazard immediately: a caller reaching for conversation-scoped data — history, compaction,
+ * thread summaries — and receiving *nothing* rather than an error.
+ *
+ * Silently empty is the worse failure. An automation whose history came back empty would look like a fresh
+ * conversation, the model would be prompted as if nothing had happened, and the run would produce a confident
+ * answer built on an absence nobody reported. That is the same class of defect as a scan reporting zero
+ * references for a directory it could not read.
+ *
+ * So this throws, naming the capability the caller asked for. Reaching for history on a run that has no
+ * conversation is a programming error, and the message says which one.
+ */
+export const conversationScoped = (run: Run, capability: string): ConversationId => {
+  if (run.conversationId !== undefined) return run.conversationId;
+  throw new AgentPlatformError({
+    code: "invalid_input",
+    message:
+      `${capability} needs a conversation, and run ${run.id} belongs to none. This is a run admitted without ` +
+      `a conversation — a triggered automation rather than a chat turn — so conversation-scoped capabilities ` +
+      `are unavailable to it. Either give the run a conversation, or turn ${capability} off for this runtime.`,
+    retryable: false,
+  });
+};
+
 export type Run = {
   readonly id: RunId;
   readonly tenantId: TenantId;
-  readonly conversationId: ConversationId;
+  /** Absent for a run that belongs to no conversation — see `NewRun.conversationId` (#198). */
+  readonly conversationId?: ConversationId;
   readonly agentId: AgentId;
   readonly agentVersion: number;
   readonly status: RunStatus;

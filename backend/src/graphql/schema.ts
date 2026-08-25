@@ -39,7 +39,8 @@ export const typeDefs = /* GraphQL */ `
 
   type Run {
     id: ID!
-    conversationId: ID!
+    "Null for a run that belongs to no conversation — a triggered automation rather than a chat turn (#198)."
+    conversationId: ID
     status: RunStatus!
     createdAt: DateTime!
     finishedAt: DateTime
