@@ -144,3 +144,59 @@ describe("each subpath entry", () => {
     expect(OPTIONAL_PEERS.filter((peer) => reachable.has(peer))).toEqual([]);
   });
 });
+
+describe("the published shape", () => {
+  const manifest = JSON.parse(
+    readFileSync(resolve(import.meta.dirname, "../../package.json"), "utf8"),
+  ) as {
+    files?: string[];
+    exports?: Record<string, unknown>;
+    dependencies?: Record<string, string>;
+    peerDependenciesMeta?: Record<string, { optional?: boolean }>;
+  };
+
+  it("ships no source maps", () => {
+    /**
+     * They were 1.7 MB of a 4.2 MB unpacked install and every one of them pointed at `../src/index.ts`, which
+     * is not shipped. A map that cannot resolve its source is worse than no map: a debugger fails to find the
+     * file instead of falling back to the emitted JavaScript.
+     *
+     * Either ship sources too or ship neither. Neither, at this size.
+     */
+    expect(manifest.files).toContain("!dist/**/*.map");
+  });
+
+  it("ships no sources and no tests", () => {
+    const patterns = manifest.files ?? [];
+    // An allowlist, not a denylist: `dist/**/*.js` cannot accidentally include `src/`, whereas a list of
+    // exclusions has to anticipate every directory somebody adds later.
+    expect(patterns.some((p) => p.startsWith("src"))).toBe(false);
+    expect(patterns).toContain("dist/**/*.js");
+    expect(patterns).toContain("dist/**/*.d.ts");
+  });
+
+  it("declares every subpath a consumer is documented to import", () => {
+    // A subpath missing from `exports` is not importable at all, and the failure surfaces as
+    // ERR_PACKAGE_PATH_NOT_EXPORTED in someone else's project rather than here.
+    for (const subpath of [
+      ".",
+      "./server",
+      "./providers",
+      "./adapters/postgres",
+      "./adapters/redis",
+      "./adapters/bullmq",
+      "./adapters/otel",
+    ]) {
+      expect(Object.keys(manifest.exports ?? {}), `${subpath} must be exported`).toContain(subpath);
+    }
+  });
+
+  it("keeps every heavy dependency optional", () => {
+    // Verified against a real install: the tarball in a clean project pulls 12 packages — the runtime, `ai` and
+    // its transitive dependencies, and `zod`. Not one driver, not one provider SDK, no GraphQL server.
+    for (const peer of OPTIONAL_PEERS) {
+      expect(manifest.dependencies?.[peer], `${peer} must not be a dependency`).toBeUndefined();
+      expect(manifest.peerDependenciesMeta?.[peer]?.optional, `${peer} must be optional`).toBe(true);
+    }
+  });
+});
