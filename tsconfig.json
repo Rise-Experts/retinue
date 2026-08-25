@@ -12,6 +12,9 @@
     },
     {
       "path": "./examples"
+    },
+    {
+      "path": "./services/api"
     }
   ]
 }
