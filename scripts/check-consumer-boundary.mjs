@@ -70,6 +70,9 @@ const PACKAGE_NAME = "@retinue/agentkit";
 export const DEEP_IMPORTS = [
   `${PACKAGE_NAME}/dist/index.js`,
   `${PACKAGE_NAME}/dist/tools/library/http.js`,
+  // An adapter internal specifically, because #192's test steps name one: the SQL a Postgres adapter emits is
+  // explicitly not API (`docs/19-versioning.md`), and that only holds if the module cannot be reached.
+  `${PACKAGE_NAME}/dist/adapters/postgres/flows.js`,
   `${PACKAGE_NAME}/dist/entries/flows.js`,
   `${PACKAGE_NAME}/src/index.ts`,
   `${PACKAGE_NAME}/src/runtime/worker.ts`,
