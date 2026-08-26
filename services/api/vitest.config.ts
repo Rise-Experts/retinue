@@ -1,4 +1,5 @@
 import { defineConfig } from "vitest/config";
+import { reporters } from "../../vitest.shared.js";
 
 export default defineConfig({
   /**
@@ -13,6 +14,8 @@ export default defineConfig({
    */
   resolve: { dedupe: ["graphql"] },
   test: {
+    // JUnit XML when CI asks for it, so Jenkins can show test trends. See `vitest.shared.ts`.
+    ...reporters("api-service"),
     // Inlined so vitest transforms them through one module graph. `dedupe` alone was not enough: the packages
     // that build scalars are pre-bundled dependencies, and a pre-bundled CJS copy is the second realm.
     server: { deps: { inline: ["graphql", "graphql-yoga", "@graphql-tools/schema", "@retinue/agentkit"] } },

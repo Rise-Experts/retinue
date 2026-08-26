@@ -26,3 +26,4 @@ backend/.conformance/
 # Built by `npm run build -w @retinue/example-app` — source is examples/src/composer (#179).
 examples/public/composer.js
 examples/public/composer.js.map
+reports/

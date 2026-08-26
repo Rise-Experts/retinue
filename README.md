@@ -50,8 +50,10 @@ npm run ci:local        # the same commands, on this machine
 npm run release:check   # the full gate, plus the manifest checks a release needs
 ```
 
-`ci-local.mjs --verify` runs inside `npm test` and fails if `ci.yml` gains a command the local runner lacks, so
-the two cannot drift — which matters most when CI is unavailable and the local gate is all there is.
+There is also a `Jenkinsfile`, for test **trends** — the one thing neither the Actions UI nor a console log gives.
+`ci-local.mjs --verify` runs inside `npm test` and reads all three definitions, failing if `ci.yml` gains a command
+the local runner or Jenkins lacks. Three descriptions of one pipeline reliably drift, and the one nobody watches
+is the one that stops catching things.
 
 ## Names that still say `agentkit`
 

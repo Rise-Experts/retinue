@@ -26,6 +26,7 @@ import { execSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 
 const WORKFLOW = ".github/workflows/ci.yml";
+const JENKINSFILE = "Jenkinsfile";
 
 /**
  * What the workflow's jobs run, in the order a person wants the failures in.
@@ -51,41 +52,89 @@ export const NOT_RUN = new Map([
   ["npm run ci:local", "this script — the workflow invoking it would be recursion"],
 ]);
 
-const workflowCommands = () => {
-  let source;
+const NPM_COMMAND = /npm (?:--prefix \S+ run [a-z:]+|run [a-z:]+|test|ci|install)/g;
+
+const read = (path) => {
   try {
-    source = readFileSync(WORKFLOW, "utf8");
+    return readFileSync(path, "utf8");
   } catch (error) {
-    console.error(`✗ cannot read ${WORKFLOW}: ${error.message}`);
+    console.error(`✗ cannot read ${path}: ${error.message}`);
+    console.error("  a definition that cannot be read cannot be compared, and treating that as agreement is the");
+    console.error("  mistake this whole check exists to prevent");
     process.exit(2);
   }
-  // Only `run:` lines. A command mentioned in a comment is not a command the workflow runs, and matching prose
-  // would make this fail on its own explanations.
+};
+
+/**
+ * Strip comments, then scan what is left.
+ *
+ * The first version matched only lines that *began* a command — `run:` in YAML, `sh` in Groovy — and reported
+ * four false positives, because `stage('Typecheck') { steps { sh 'npm run typecheck' } }` is all on one line and
+ * a `sh \'\'\'…\'\'\'` block puts its commands on the lines after the opener. Both files also explain
+ * themselves in prose that names commands, so matching everything without removing comments would make each one
+ * fail on its own documentation.
+ *
+ * Removing the comments and scanning the remainder handles both, and is the shorter rule.
+ */
+const commandsIn = (path, kind) => {
+  let source = read(path);
+  source =
+    kind === "yaml"
+      ? source
+          .split("\n")
+          .map((line) => line.replace(/(^|\s)#.*$/, ""))
+          .join("\n")
+      : source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+
   const found = new Set();
-  for (const line of source.split("\n")) {
-    const run = /^\s*(?:-\s*)?run:\s*(.+)$/.exec(line);
-    if (run === null) continue;
-    for (const match of run[1].matchAll(/npm (?:run [a-z:]+|test|ci|install)/g)) found.add(match[0]);
-  }
+  for (const match of source.matchAll(NPM_COMMAND)) found.add(match[0]);
   if (found.size === 0) {
-    console.error(`✗ found no commands in ${WORKFLOW} — the format changed, so this check is checking nothing`);
+    console.error(`✗ found no commands in ${path} — the format changed, so this check is checking nothing`);
     process.exit(2);
   }
   return found;
 };
 
+const workflowCommands = () => commandsIn(WORKFLOW, "yaml");
+const jenkinsCommands = () => commandsIn(JENKINSFILE, "groovy");
+
+/**
+ * Three definitions of one pipeline, cross-checked — because there are three now.
+ *
+ * `ci.yml` on a self-hosted runner, `Jenkinsfile` on an agent, and this script on a workstation. Two would have
+ * been a risk; three is the shape that reliably drifts, and the failure mode is that a check exists in one and
+ * not the others, and the one nobody watches is the one that stops catching things.
+ *
+ * So the workflow is the reference and the other two must **cover** it. Covering, not equalling: Jenkins
+ * legitimately does more (JUnit publishing, artifact archiving) and that is not drift. What is refused is a
+ * command the workflow runs that another definition does not.
+ */
 const verify = () => {
-  const declared = new Set(STEPS.map(([, command]) => command));
+  const workflow = workflowCommands();
+  const local = new Set(STEPS.map(([, command]) => command));
   // `npm --prefix website run build` is how the docs job's `working-directory: website` reads from here.
-  declared.add("npm run build");
-  const missing = [...workflowCommands()].filter((command) => !declared.has(command) && !NOT_RUN.has(command));
-  if (missing.length > 0) {
-    console.error(`✗ the workflow runs commands this script does not: ${missing.join(", ")}`);
-    console.error("  add them to STEPS, or to NOT_RUN with the reason — a local gate missing a check is a gate that lies");
-    return false;
+  local.add("npm run build");
+  const jenkins = jenkinsCommands();
+
+  let ok = true;
+  for (const [label, covered] of [
+    ["scripts/ci-local.mjs", local],
+    [JENKINSFILE, jenkins],
+  ]) {
+    const missing = [...workflow].filter((command) => !covered.has(command) && !NOT_RUN.has(command));
+    if (missing.length > 0) {
+      console.error(`✗ ${WORKFLOW} runs commands ${label} does not: ${missing.join(", ")}`);
+      console.error(`  add them there, or to NOT_RUN with the reason — a gate missing a check is a gate that lies`);
+      ok = false;
+    }
   }
-  console.log(`✓ covers every command ${WORKFLOW} runs (${workflowCommands().size} found, ${NOT_RUN.size} deliberately skipped)`);
-  return true;
+  if (ok) {
+    console.log(
+      `✓ ${WORKFLOW} (${workflow.size} commands) is covered by scripts/ci-local.mjs and ${JENKINSFILE}` +
+        ` — ${NOT_RUN.size} deliberately skipped`,
+    );
+  }
+  return ok;
 };
 
 if (process.argv.includes("--verify")) process.exit(verify() ? 0 : 1);
