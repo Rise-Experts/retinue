@@ -95,6 +95,40 @@ few things that got easier today.
   normal starting point; the upgrade path is a second machine as an agent with the controller's executors set
   to 0.
 
+## A first pipeline, before the real one
+
+Get a green build in five minutes with something you can read in one screen. Create a Pipeline job, choose
+*Pipeline script* (not "from SCM"), and paste:
+
+```groovy
+pipeline {
+  agent { label 'linux' }          // the label trap above applies here too
+  options { timestamps() }         // needs the Timestamper plugin
+  stages {
+    stage('Hello') {
+      steps { sh 'echo "built on $(hostname) at $(date -u)"' }
+    }
+    stage('Something that can fail') {
+      steps { sh 'test -d /var/lib/jenkins || echo "not on the controller"' }
+    }
+  }
+  post {
+    always  { echo 'runs whatever happened — this is where cleanup belongs' }
+    failure { echo 'only on red' }
+  }
+}
+```
+
+Then break it on purpose, because that is where the learning is: change the second `sh` to `exit 1` and watch
+the build go **red** and `post { failure }` fire. Then change it to `sh 'exit 0'` and add a `junit` step pointing
+at a file that does not exist, and watch what a missing report does instead. The difference between those two
+outcomes — FAILED versus UNSTABLE versus a step that quietly passes — is most of what there is to understand
+about a Jenkins pipeline.
+
+From there, the real `Jenkinsfile` differs in four ways, each of which is the subject of a row below: it declares
+`options` that matter on a busy agent, it starts service containers by hand and waits for them, it publishes
+JUnit XML in `post { always }`, and it cleans up in `post` rather than at the end of a stage.
+
 ## The `Jenkinsfile`, stage by stage
 
 This is the part worth reading as a tutorial, because every stage in it exists because of a specific failure.
