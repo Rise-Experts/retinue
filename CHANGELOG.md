@@ -166,6 +166,7 @@
 
 ### CI
 
+- a conformance failure that names itself ([#193](https://github.com/Rise-Experts/retinue/issues/193)) `50f7f119`
 - hosted runners now that the repo is public, and the fork hazard becomes a check ([#193](https://github.com/Rise-Experts/retinue/issues/193)) `44755dae`
 - a fork's pull request cannot reach the self-hosted runner (#193, prerequisite for going public) ([#193](https://github.com/Rise-Experts/retinue/issues/193)) `ba6db571`
 - a Jenkinsfile for test trends, and a guard so three definitions cannot drift `ffc4e303`
@@ -176,6 +177,7 @@
 
 ### Chores
 
+- **changelog**: regenerate `525807d5`
 - **changelog**: regenerate `63dda644`
 - **changelog**: regenerate `38d1a31c`
 - **changelog**: regenerate `791a6145`
