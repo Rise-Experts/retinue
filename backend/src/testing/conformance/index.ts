@@ -45,6 +45,10 @@ export type PortCoverage = {
  */
 export const REGISTERED_PORTS: readonly PortCoverage[] = [
   { port: "ConversationStore", harness: "conversationStoreConformance" },
+  // #187, #186. Both have harnesses, and both are tenant-scoped — a flow's definition and its execution are as
+  // much a tenant's data as a conversation is.
+  { port: "FlowDefinitionStore", harness: "flowDefinitionStoreConformance" },
+  { port: "FlowExecutionStore", harness: "flowExecutionStoreConformance" },
   { port: "SessionStateStore", harness: "sessionStateStoreConformance" },
   { port: "ConversationBindingStore", harness: "conversationBindingStoreConformance" },
   { port: "ConversationRunCoordinator", harness: "conversationRunCoordinatorConformance" },
@@ -232,6 +236,9 @@ export const ADAPTER_COVERAGE: readonly AdapterCoverage[] = [
     adapter: "postgres",
     implemented: [
       "ConversationStore",
+      // #187, #186 — both harnesses run against the Postgres adapter in `postgres-conformance.test.ts`.
+      "FlowDefinitionStore",
+      "FlowExecutionStore",
       "RunStore",
       "RunEventLog",
       "CheckpointStore",
@@ -289,6 +296,7 @@ export const ADAPTER_COVERAGE: readonly AdapterCoverage[] = [
  */
 export const HARNESS_MODULES: readonly string[] = [
   "src/testing/conformance/conversation-store.ts",
+  "src/testing/conformance/flows.ts",
   "src/testing/conformance/run-store.ts",
   "src/testing/conformance/run-event-log.ts",
   "src/testing/conformance/checkpoint-store.ts",
@@ -304,3 +312,4 @@ export const HARNESS_MODULES: readonly string[] = [
   "src/testing/conformance/usage-limits.ts",
   "src/testing/conformance/evaluation.ts",
 ];
+export * from "./flows.js";

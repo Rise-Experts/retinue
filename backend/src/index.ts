@@ -78,6 +78,10 @@ export type * from "./telemetry/index.js";
 export type * from "./security/index.js";
 export type * from "./retention/index.js";
 export type * from "./loadtest/index.js";
+export type * from "./flows/index.js";
+export type * from "./flows/interpreter.js";
+export type * from "./flows/runner.js";
+export type * from "./teams/index.js";
 export type * from "./graphql/index.js";
 
 /**

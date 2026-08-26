@@ -1533,3 +1533,83 @@ export type AdapterCapability = (typeof ADAPTER_CAPABILITIES)[number];
 export interface CapabilityAware {
   capabilities(): readonly AdapterCapability[];
 }
+
+// ---------------------------------------------------------------------------------------------------
+// Flows and teams — REQ-038 (#187), REQ-037 (#186)
+// ---------------------------------------------------------------------------------------------------
+
+/**
+ * Stored flow and team definitions, **immutable per version**.
+ *
+ * `put` writes a new version rather than overwriting one, and `get` takes a version. That is not
+ * over-engineering: an execution pins the version it started with and reads it for its whole life, so a
+ * definition that could change under a running execution would change the shape of an automation halfway
+ * through — and the person who edited step 4 has no idea an execution is sitting at step 3.
+ *
+ * `latest` exists for *starting* something new, which is the only moment "the current version" is the right
+ * question.
+ */
+export interface FlowDefinitionStore {
+  /** Refuses to overwrite an existing (id, version) — a version that changed is not a version. */
+  put(input: TenantScope & { definition: StoredFlowDefinition }): Promise<void>;
+  get(input: TenantScope & { flowId: string; version: number }): Promise<StoredFlowDefinition | null>;
+  latest(input: TenantScope & { flowId: string }): Promise<StoredFlowDefinition | null>;
+  list(input: TenantScope & PageRequest): Promise<Page<StoredFlowDefinition>>;
+}
+
+/**
+ * The definition as stored: the shape is the flows layer's, kept opaque here.
+ *
+ * `unknown` rather than an import, deliberately — `persistence` is a ports layer and importing `flows` would make
+ * the storage contract depend on the interpreter's types. An adapter stores and returns JSON; the flows layer
+ * parses it. The same reasoning as `SessionState.data`.
+ */
+export type StoredFlowDefinition = {
+  readonly flowId: string;
+  readonly version: number;
+  readonly name: string;
+  readonly kind: "flow" | "team";
+  readonly definition: unknown;
+  readonly createdAt: string;
+  readonly createdBy?: PrincipalId;
+};
+
+/**
+ * A running or finished flow execution.
+ *
+ * `save` is a full write of the execution document rather than a patch, because the interpreter produces a whole
+ * next state and a patch would need the two to agree about which fields it touched — a second contract, kept in
+ * agreement by hand.
+ */
+export interface FlowExecutionStore {
+  create(input: TenantScope & { execution: StoredFlowExecution }): Promise<void>;
+  /**
+   * Overwrite the execution.
+   *
+   * **Monotonic on `steps`**, like `CheckpointStore.save`: a save carrying fewer completed steps than the stored
+   * one is ignored. Two workers that both picked up the same execution would otherwise let the slower one move it
+   * backwards, and a flow that goes backwards re-performs external writes.
+   */
+  save(input: TenantScope & { execution: StoredFlowExecution }): Promise<void>;
+  get(input: TenantScope & { executionId: string }): Promise<StoredFlowExecution | null>;
+  /** Executions parked on a signal, so a delivered signal can find what was waiting for it. */
+  waitingOnSignal(input: TenantScope & { signal: string; limit?: number }): Promise<readonly StoredFlowExecution[]>;
+  /** For the inspector: what has this flow been doing? #187 AC-7. */
+  listByFlow(input: TenantScope & PageRequest & { flowId: string }): Promise<Page<StoredFlowExecution>>;
+}
+
+export type StoredFlowExecution = {
+  readonly id: string;
+  readonly flowId: string;
+  readonly flowVersion: number;
+  readonly runId: RunId;
+  readonly status: string;
+  readonly currentStep: string | null;
+  /** How many steps have completed. The monotonic guard reads this. */
+  readonly steps: number;
+  /** The whole execution document, as the flows layer wrote it. */
+  readonly execution: unknown;
+  readonly waitingSignal?: string;
+  readonly startedAt: string;
+  readonly finishedAt?: string;
+};

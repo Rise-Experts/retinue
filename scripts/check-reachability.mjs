@@ -336,6 +336,29 @@ const CAPABILITIES = [
      */
     why: "#185 — an attachment the platform accepted must reach the model, through the same file authorization as a tool read.",
   },
+  {
+    name: "durable flows",
+    symbol: "createFlowRunner",
+    scope: "host",
+    /**
+     * A workflow engine with tests and no host is the largest possible instance of this defect, and the most
+     * plausible: an interpreter reads as finished the moment its tests pass, because nothing about an unused
+     * runner looks wrong. The symbol tracked is the *runner* rather than `advance` — a pure function is easy to
+     * exercise from a test and prove nothing about, which is exactly the trap.
+     */
+    why: "#187 — a flow engine nothing runs is a library, and the buyer is a developer rather than a business.",
+  },
+  {
+    name: "teams",
+    symbol: "compileTeam",
+    scope: "host",
+    /**
+     * Tracked separately from flows even though a team *is* a flow, because the compilation is the part that can
+     * be built and left unreachable on its own: the interpreter would keep passing its tests while no host ever
+     * turned a team into a flow to run.
+     */
+    why: "#186 — work divided between agents is the first question a buyer asks; a compiler nobody calls answers it on paper.",
+  },
 ];
 
 /**

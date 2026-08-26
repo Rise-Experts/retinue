@@ -9,6 +9,7 @@ Importing the package root loads `ai` and `zod`. Nothing else.
 |---|---|---|---|
 | — | `.` | Everyone. Five values and every type | *none* |
 | `runtime.ts` | `./runtime` | A host composing its own engine instead of taking `createRuntime`'s defaults | *none* |
+| `flows.ts` | `./flows` | Durable workflows, and teams as a kind of step (#187, #186) | *none* — a pure interpreter and a runner that takes ports |
 | `tools.ts` | `./tools` | Anyone writing or dispatching a tool, plus the first-party library (#188) | *none* — the tools use the global `fetch` |
 | `persistence.ts` | `./persistence` | A host wiring storage; the in-memory adapters live here | *none* — verified: it reaches nothing at all |
 | `context.ts` | `./context` | Prompt assembly and budgeting, skills, per-principal memory, citations, and the untrusted-content fence | *none* |

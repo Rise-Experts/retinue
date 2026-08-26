@@ -20,6 +20,10 @@
       "types": "./dist/entries/tools.d.ts",
       "default": "./dist/entries/tools.js"
     },
+    "./flows": {
+      "types": "./dist/entries/flows.d.ts",
+      "default": "./dist/entries/flows.js"
+    },
     "./persistence": {
       "types": "./dist/entries/persistence.d.ts",
       "default": "./dist/entries/persistence.js"

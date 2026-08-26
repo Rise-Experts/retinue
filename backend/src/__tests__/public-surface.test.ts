@@ -18,6 +18,7 @@ import { describe, expect, it } from "vitest";
 // Static namespace imports, because Vite cannot resolve a dynamic import whose specifier is a variable — and a
 // list written out here is also what makes "a subpath was added and nobody checked it" visible in review.
 import * as contextEntry from "../entries/context.js";
+import * as flowsEntry from "../entries/flows.js";
 import * as hitlEntry from "../entries/hitl.js";
 import * as knowledgeEntry from "../entries/knowledge.js";
 import * as mcpEntry from "../entries/mcp.js";
@@ -31,6 +32,7 @@ import * as usageEntry from "../entries/usage.js";
 const ENTRIES: readonly [string, Record<string, unknown>][] = [
   ["./runtime", runtimeEntry],
   ["./tools", toolsEntry],
+  ["./flows", flowsEntry],
   ["./persistence", persistenceEntry],
   ["./context", contextEntry],
   ["./knowledge", knowledgeEntry],
@@ -64,6 +66,7 @@ const ROOT_SURFACE = [
 const SUBPATHS = [
   "./runtime",
   "./tools",
+  "./flows",
   "./persistence",
   "./context",
   "./knowledge",

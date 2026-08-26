@@ -153,6 +153,12 @@ const SEEDS: Readonly<Record<string, (tenant: string, principal: string) => stri
              'stored', '${p}', now())`,
   // #185. The bytes, which live in Postgres for a deployment with no object storage — so the isolation case has
   // to be exercised on the row that actually holds them, not only on the metadata beside it.
+  flow_definitions: (t) =>
+    `INSERT INTO flow_definitions (tenant_id, flow_id, version, name, kind, definition, created_at)
+     VALUES ('${t}', '${t}-flow', 1, 'a flow', 'flow', '{"steps":[]}'::jsonb, now())`,
+  flow_executions: (t) =>
+    `INSERT INTO flow_executions (tenant_id, id, flow_id, flow_version, run_id, status, current_step, steps, execution, started_at)
+     VALUES ('${t}', '${t}-exec', '${t}-flow', 1, '${t}-r1', 'running', 'a', 0, '{"state":{}}'::jsonb, now())`,
   file_objects: (t) =>
     `INSERT INTO file_objects (tenant_id, content_key, media_type, byte_size, checksum, bytes)
      VALUES ('${t}', '${t}/f1', 'image/png', 3, 'deadbeef', decode('414243', 'hex'))`,
@@ -262,10 +268,11 @@ describe("policy coverage is derived from MIGRATIONS, not transcribed", () => {
       expect(RLS_STATEMENTS).toContain(`ALTER TABLE ${table} ENABLE ROW LEVEL SECURITY`);
       expect(RLS_STATEMENTS).toContain(`ALTER TABLE ${table} FORCE ROW LEVEL SECURITY`);
     }
-    // 28 tables as of #185 (`file_objects`); the count is asserted so a table silently dropping out is visible.
+    // 30 tables as of #187 (`flow_definitions`, `flow_executions`); the count is asserted so a table silently
+    // dropping out is visible.
     // Updating this number is meant to be a moment of thought: it is the one place that notices a policy list
     // shrinking, which no per-table test can see.
-    expect(TENANT_SCOPED_TABLES).toHaveLength(28);
+    expect(TENANT_SCOPED_TABLES).toHaveLength(30);
 
     // #135. `knowledge_chunks` lives behind the optional pgvector migration, so its policies are a separate
     // list applied by whoever ran that migration -- `ALTER TABLE ... ENABLE ROW LEVEL SECURITY` on an absent

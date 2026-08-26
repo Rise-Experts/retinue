@@ -114,3 +114,13 @@ export const SUPABASE_CAPABILITIES: readonly AdapterCapability[] = [
   "distributed-locking",
   "realtime",
 ];
+
+/**
+ * Flows — #187, #186.
+ *
+ * Aliased, like every other relational port: the tables are ordinary Postgres and there is nothing
+ * Supabase-specific about a flow definition or an execution. An alias rather than a wrapper keeps AC-5's
+ * "identical results" true by identity rather than by proof.
+ */
+export { createPostgresFlowDefinitionStore as createSupabaseFlowDefinitionStore } from "../postgres/flows.js";
+export { createPostgresFlowExecutionStore as createSupabaseFlowExecutionStore } from "../postgres/flows.js";

@@ -1336,6 +1336,60 @@ export const MIGRATIONS: readonly Migration[] = [
     ],
     down: [`DROP TABLE IF EXISTS file_objects`],
   },
+  {
+    /**
+     * Flows and teams — REQ-038 (#187), REQ-037 (#186).
+     *
+     * Two constraints carry the guarantees rather than leaving them to the adapter:
+     *
+     * - `(tenant_id, flow_id, version)` is the primary key on definitions, and the insert has no `ON CONFLICT`.
+     *   A version cannot be overwritten, which is what makes an execution's version pin meaningful — a definition
+     *   that could change under a running execution would change an automation's shape halfway through.
+     * - `steps >= 0`, and the save's `WHERE steps <= $n` predicate: an execution cannot be moved backwards by a
+     *   stale write from a slower worker. A flow that goes backwards re-performs external writes.
+     *
+     * A team is stored as a definition with `kind = 'team'`, because a team compiles to a flow and storing them
+     * apart would mean two tables whose rows mean the same thing.
+     */
+    id: "0029_flows",
+    up: [
+      `CREATE TABLE IF NOT EXISTS flow_definitions (
+        tenant_id   text        NOT NULL,
+        flow_id     text        NOT NULL,
+        version     integer     NOT NULL,
+        name        text        NOT NULL,
+        kind        text        NOT NULL,
+        definition  jsonb       NOT NULL,
+        created_at  timestamptz NOT NULL DEFAULT now(),
+        created_by  text,
+        PRIMARY KEY (tenant_id, flow_id, version),
+        CONSTRAINT flow_definitions_kind CHECK (kind IN ('flow', 'team')),
+        CONSTRAINT flow_definitions_version_positive CHECK (version >= 1)
+      )`,
+      `CREATE TABLE IF NOT EXISTS flow_executions (
+        tenant_id      text        NOT NULL,
+        id             text        NOT NULL,
+        flow_id        text        NOT NULL,
+        flow_version   integer     NOT NULL,
+        run_id         text        NOT NULL,
+        status         text        NOT NULL,
+        current_step   text,
+        steps          integer     NOT NULL DEFAULT 0,
+        execution      jsonb       NOT NULL,
+        waiting_signal text,
+        started_at     timestamptz NOT NULL DEFAULT now(),
+        finished_at    timestamptz,
+        PRIMARY KEY (tenant_id, id),
+        CONSTRAINT flow_executions_steps_non_negative CHECK (steps >= 0),
+        CONSTRAINT flow_executions_status CHECK (status IN ('running', 'waiting', 'completed', 'failed', 'cancelled'))
+      )`,
+      // A delivered signal has to find what was waiting for it, and the inspector reads a flow's history.
+      `CREATE INDEX IF NOT EXISTS flow_executions_signal_idx
+         ON flow_executions (tenant_id, waiting_signal) WHERE status = 'waiting'`,
+      `CREATE INDEX IF NOT EXISTS flow_executions_flow_idx ON flow_executions (tenant_id, flow_id, started_at DESC)`,
+    ],
+    down: [`DROP TABLE IF EXISTS flow_executions`, `DROP TABLE IF EXISTS flow_definitions`],
+  },
 ];
 
 /**

@@ -205,6 +205,81 @@ const tools = createStandardToolProvider({
 Credentials are configured per host (`headersFor`) and never appear in a tool's input schema. The client refuses
 an `authorization` or `cookie` header supplied by a caller rather than forwarding it.
 
+## Flows and teams
+
+`@retinue/agentkit/flows` — REQ-038 ([#187](https://github.com/Rise-Experts/retinue/issues/187)) and REQ-037
+([#186](https://github.com/Rise-Experts/retinue/issues/186)).
+
+**A team is a kind of flow step, and a team compiles to a flow.** Both issues say they share design, and they are
+right: a flow's step and a team's member turn are the same idea, and modelling them separately produces two
+overlapping notions of "a step" to keep in agreement forever.
+
+```ts
+import { compileTeam, createFlowRunner } from "@retinue/agentkit/flows";
+```
+
+### The interpreter is a pure function
+
+`advance(definition, execution, outcome)` returns the next execution and **one effect** for the caller to perform.
+It performs nothing itself — no agent call, no tool call, no clock read, no store write. Every property these two
+REQs ask for is a consequence rather than a separate mechanism:
+
+| Property | Why it follows |
+|---|---|
+| Durable resume | The returned execution *is* the position. A host persists it; after a restart it calls `advance` again and gets the same effect. There is no interpreter instance to rebuild |
+| Idempotency across a resume | The effect's key is `(executionId, step, attempt)` — all three are in the stored state, so a step that wrote externally and crashed produces the *same* key and the idempotency store answers with the first result |
+| Budgets | Checked before the effect is produced, so an over-budget flow performs nothing rather than spending and then noticing |
+| Tests | Feeding outcomes to a function needs no agent, no database and no clock. The awkward cases — a crash mid-step, a retry surviving a process death — are testable at all |
+
+The alternative, an async interpreter that awaits its own effects, is shorter and cannot be made durable without a
+checkpoint after every `await` — which is the same state machine with the states implicit.
+
+### A definition and an execution are different things
+
+`FlowExecution.flowVersion` is pinned at start and the definition is read at that version for the execution's whole
+life. **Editing a flow does not change one already running.** Proven live: a v2 with a completely different shape
+was published while an execution sat parked at a checkpoint, and it still finished through v1.
+
+The store refuses to overwrite a version at all — `(tenant_id, flow_id, version)` is the primary key with no
+`ON CONFLICT` — which is what makes the pin worth having.
+
+### Step kinds
+
+`agent`, `team`, `tool`, `branch`, `wait`, `checkpoint`, `subflow`, `done`. A `checkpoint` uses the **existing**
+HITL path, so a parked flow is the same object the assistant surface already answers.
+
+Two arithmetic details that were bugs first: `done` consumes no budget and is not gated by one, because a budget
+stops *work* and finishing is not work. Counting it meant a flow whose ceiling exactly matched its work always
+failed on the last step — so `maxSteps: 3` really meant two steps and a marker. A `branch` does count, because a
+branch can loop.
+
+### Failure is chosen in the definition
+
+`retry` (bounded, with backoff), `skip`, `escalate`, `fail`. A retry gets a **different** idempotency key, because
+reusing it would have the store answer with the *failed* first result — a retry policy that silently does nothing.
+A failed step that spent money is still charged, or a retrying flow costs more than its ceiling allows.
+
+### Teams
+
+`sequential` chains one agent step per member, each reading the previous one's output *and* the original brief —
+passing only the previous output loses the request by the third member, which is how a chain of agents drifts off
+the question. `manager-led` compiles to **one** agent step whose tools include a delegation tool, so the engine's
+own turn loop does the iterating and a delegation is a real tool call: authorised, approved, deduplicated and
+accounted for unchanged, because it *is* one rather than resembling one.
+
+A member's tools are an **intersection**, never a union: a member cannot reach a tool the delegating context could
+not, and the delegation tool itself is always stripped — a member that could delegate would be a manager.
+
+### What is not wired yet
+
+**An agent step needs a child run.** The engine takes a `Run`, and giving each agent step one is what earns
+checkpointing, recovery, quota admission and per-agent usage attribution. Calling a model directly from the runner
+would be a second turn implementation with none of those, and it would pass a demo — so the shipped example flow
+uses the step kinds that work end to end and the handler throws a sentence naming what is missing.
+
+Tool steps, branches, waits, human checkpoints and terminal steps run end to end today. `npm run flow -w
+@retinue/example-app` drives one against Postgres.
+
 ## Import convention
 
 The package is ESM with `NodeNext` resolution, so relative imports carry an explicit

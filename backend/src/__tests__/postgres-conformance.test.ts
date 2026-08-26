@@ -25,6 +25,8 @@ import {
   createPostgresArtifactStore,
   createPostgresConversationStore,
   createPostgresFileContentStore,
+  createPostgresFlowDefinitionStore,
+  createPostgresFlowExecutionStore,
   createPostgresFileMetadataStore,
   createPostgresAgentStore,
   createPostgresCheckpointStore,
@@ -69,6 +71,7 @@ import { checkpointStoreConformance } from "../testing/conformance/checkpoint-st
 import { crossPortInvariants } from "../testing/conformance/invariants.js";
 import { agentStoreConformance, messageStoreConformance } from "../testing/conformance/records.js";
 import { fileContentStoreConformance, fileMetadataStoreConformance } from "../testing/conformance/files.js";
+import { flowDefinitionStoreConformance, flowExecutionStoreConformance } from "../testing/conformance/flows.js";
 import { artifactStoreConformance } from "../testing/conformance/artifacts.js";
 import { artifactExportStoreConformance } from "../testing/conformance/artifact-exports.js";
 import { usageRollupStoreConformance } from "../testing/conformance/rollups.js";
@@ -581,6 +584,12 @@ fileMetadataStoreConformance(() => {
  */
 fileContentStoreConformance(() => createPostgresFileContentStore(freshExecutor()));
 
+// #187, #186. Held to the same suite as the reference implementations — the version-immutability and
+// monotonic-save guarantees are the whole reason a flow can be resumed safely, and "the Postgres one behaves the
+// same" has to be a fact rather than a claim about two hundred lines nobody compared.
+flowDefinitionStoreConformance(() => createPostgresFlowDefinitionStore(freshExecutor()));
+flowExecutionStoreConformance(() => createPostgresFlowExecutionStore(freshExecutor()));
+
 // ---------------------------------------------------------------------------------------------
 // The registry contract. Not a placeholder — these assertions are what make the matrix's
 // NOT-IMPLEMENTED cells trustworthy rather than a guess.
@@ -597,6 +606,9 @@ describe("postgres adapter coverage", () => {
     expect(coverage).toBeDefined();
     expect([...(coverage?.implemented ?? [])]).toEqual([
       "ConversationStore",
+      // #187, #186.
+      "FlowDefinitionStore",
+      "FlowExecutionStore",
       "RunStore",
       "RunEventLog",
       "CheckpointStore",

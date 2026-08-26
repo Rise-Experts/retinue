@@ -25,6 +25,8 @@ import {
   createMemoryBlobStore,
   createMemoryEvaluationStore,
   createMemoryFileContentStore,
+  createMemoryFlowDefinitionStore,
+  createMemoryFlowExecutionStore,
   createMemoryKnowledgeBackend,
   createMemoryUsageBackend,
   createMemoryFileMetadataStore,
@@ -64,6 +66,8 @@ import {
   evaluationStoreConformance,
   crossPortInvariants,
   fileContentStoreConformance,
+  flowDefinitionStoreConformance,
+  flowExecutionStoreConformance,
   fileMetadataStoreConformance,
   idempotencyStoreConformance,
   interactionStoreConformance,
@@ -182,6 +186,10 @@ usageRollupStoreConformance(() => createMemoryUsageBackend());
 usageLimitStoreConformance(() => createMemoryUsageLimitStore());
 evaluationStoreConformance(() => createMemoryEvaluationStore());
 fileContentStoreConformance(() => createMemoryFileContentStore());
+
+// #187, #186. The reference implementations for flow definitions and executions.
+flowDefinitionStoreConformance(() => createMemoryFlowDefinitionStore());
+flowExecutionStoreConformance(() => createMemoryFlowExecutionStore());
 idempotencyStoreConformance(() => createMemoryIdempotencyStore());
 principalMemoryStoreConformance(() => createMemoryPrincipalMemoryStore());
 

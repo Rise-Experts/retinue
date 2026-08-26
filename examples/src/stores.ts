@@ -15,11 +15,11 @@
  * reads through the other.
  */
 
-import { createPostgresApprovalGrantStore, createPostgresConversationRunCoordinator, createPostgresIdempotencyStore, createPostgresInteractionStore, createPostgresPrincipalMemoryStore, createPostgresRunEventLog, createPostgresRunStore, createPostgresSkillStore, createPostgresUsageStore, createPostgresConversationStore, createPostgresMessageStore, createPostgresSessionStateStore, createPostgresThreadSummaryStore, createPostgresUsageLimitStore, createPostgresUsageRollupStore, createPostgresFileContentStore, createPostgresFileMetadataStore } from "@retinue/agentkit/adapters/postgres";
+import { createPostgresApprovalGrantStore, createPostgresConversationRunCoordinator, createPostgresIdempotencyStore, createPostgresInteractionStore, createPostgresPrincipalMemoryStore, createPostgresRunEventLog, createPostgresRunStore, createPostgresSkillStore, createPostgresUsageStore, createPostgresConversationStore, createPostgresMessageStore, createPostgresSessionStateStore, createPostgresThreadSummaryStore, createPostgresUsageLimitStore, createPostgresUsageRollupStore, createPostgresFileContentStore, createPostgresFileMetadataStore, createPostgresFlowDefinitionStore, createPostgresFlowExecutionStore } from "@retinue/agentkit/adapters/postgres";
 import type { ApprovalGrantStore, ConversationRunCoordinator, IdempotencyStore, InteractionStore, LiveEventSource, PrincipalMemoryStore, RunEventLog, RunStore, SkillStore, UsageStore, ConversationStore, MessageStore, SessionStateStore, ThreadSummaryStore, UsageLimitStore, UsageRollupStore } from "@retinue/agentkit";
 import type { TransactionRunner, SqlExecutor } from "@retinue/agentkit/adapters/postgres";
 import { createFileService } from "@retinue/agentkit/knowledge";
-import type { AuthorizationPolicy, FileService } from "@retinue/agentkit";
+import type { AuthorizationPolicy, FileService, FlowDefinitionStore, FlowExecutionStore } from "@retinue/agentkit";
 
 export type ExampleStores = {
   readonly conversations: ConversationStore;
@@ -61,6 +61,15 @@ export type ExampleBackend = ExampleStores & {
    * content store would upload in one process and be unreadable in the other, which looks like corruption.
    */
   readonly files?: FileService;
+  /**
+   * Flow storage — #187.
+   *
+   * Optional for the same reason `files` is: the single-process memory mode can hold definitions and executions
+   * in memory, but the API and the worker would each have their own, so a flow started in one would be invisible
+   * to the other. Absent means no flows, which is smaller than flows that lose their place.
+   */
+  readonly flowDefinitions?: FlowDefinitionStore;
+  readonly flowExecutions?: FlowExecutionStore;
 };
 
 /**
@@ -143,6 +152,9 @@ export const postgresBackend = (
    */
   coordinator: lazyCoordinator(sql, runner),
   live,
+  // Postgres for both, so the API can start a flow and the worker can resume it (#187).
+  flowDefinitions: createPostgresFlowDefinitionStore(sql),
+  flowExecutions: createPostgresFlowExecutionStore(sql),
   /**
    * The file service, over Postgres for both halves — #185.
    *

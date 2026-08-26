@@ -39,6 +39,7 @@ import {
   fileContentStoreConformance,
   fileMetadataStoreConformance,
 } from "../testing/conformance/files.js";
+import { flowDefinitionStoreConformance, flowExecutionStoreConformance } from "../testing/conformance/flows.js";
 import { artifactStoreConformance } from "../testing/conformance/artifacts.js";
 import { artifactExportStoreConformance } from "../testing/conformance/artifact-exports.js";
 import { usageRollupStoreConformance } from "../testing/conformance/rollups.js";
@@ -387,6 +388,16 @@ fileMetadataStoreConformance(() => {
   };
 });
 
+/**
+ * Flows — #187, #186.
+ *
+ * Run here as well as against Postgres even though these are aliases to the same factories. The identity
+ * assertion below proves they are the same function; running the suite proves the *tables* behave under this
+ * adapter's schema too, and the matrix's 31/31 is only honest if every cell was actually executed.
+ */
+flowDefinitionStoreConformance(() => supabase.createSupabaseFlowDefinitionStore(freshExecutor()));
+flowExecutionStoreConformance(() => supabase.createSupabaseFlowExecutionStore(freshExecutor()));
+
 // ---------------------------------------------------------------------------------------------
 // The alias contract and the registry contract.
 // ---------------------------------------------------------------------------------------------
@@ -394,6 +405,8 @@ fileMetadataStoreConformance(() => {
 /** Every Supabase factory and the Postgres factory it must be. */
 const ALIASES: readonly (readonly [keyof typeof supabase, keyof typeof postgres])[] = [
   ["createSupabaseConversationStore", "createPostgresConversationStore"],
+  ["createSupabaseFlowDefinitionStore", "createPostgresFlowDefinitionStore"],
+  ["createSupabaseFlowExecutionStore", "createPostgresFlowExecutionStore"],
   ["createSupabaseRunStore", "createPostgresRunStore"],
   ["createSupabaseRunEventLog", "createPostgresRunEventLog"],
   ["createSupabaseCheckpointStore", "createPostgresCheckpointStore"],

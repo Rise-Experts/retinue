@@ -125,3 +125,4 @@ export * from "./principal-memory.js";
 
 /** Message + agent reference adapters (used by the embedded agent facade). */
 export * from "./message-store.js";
+export * from "./flows.js";

@@ -25,6 +25,7 @@ const SUBPATHS = [
   ["", "../backend/dist/index.js"],
   ["/runtime", "../backend/dist/entries/runtime.js"],
   ["/tools", "../backend/dist/entries/tools.js"],
+  ["/flows", "../backend/dist/entries/flows.js"],
   ["/persistence", "../backend/dist/entries/persistence.js"],
   ["/context", "../backend/dist/entries/context.js"],
   ["/knowledge", "../backend/dist/entries/knowledge.js"],

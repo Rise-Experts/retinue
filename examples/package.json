@@ -24,7 +24,8 @@
     "loadtest": "node --env-file=../.env ./scripts/loadtest.mjs",
     "memory": "node --env-file=../.env ./scripts/run-memory.mjs",
     "test:kill": "node --env-file=../.env ./scripts/kill-worker-test.mjs",
-    "build:composer": "node scripts/build-composer.mjs"
+    "build:composer": "node scripts/build-composer.mjs",
+    "flow": "node --env-file=../.env ./scripts/run-flow.mjs"
   },
   "dependencies": {
     "@retinue/agentkit": "^0.1.0",

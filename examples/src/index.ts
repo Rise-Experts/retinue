@@ -34,6 +34,8 @@ import { createDevAuthenticate } from "./auth.js";
 import type { Authenticate } from "@retinue/agentkit/server";
 import { STANDARD_TOOL_CATEGORIES, createStandardToolProvider } from "@retinue/agentkit/tools";
 import { createAttachmentResolver } from "@retinue/agentkit/knowledge";
+import { createFlowRunner } from "@retinue/agentkit/flows";
+import { EXAMPLE_FLOWS, createExampleFlowHandler } from "./flows.js";
 
 /** One authenticator, built the first time a request needs it. */
 let devAuth: Authenticate | undefined;
@@ -218,6 +220,53 @@ export const closeExampleMcp = async (): Promise<void> => {
  */
 const attachmentResolver = (backend: ExampleBackend) =>
   backend.files === undefined ? undefined : createAttachmentResolver({ files: backend.files });
+
+/**
+ * The flow runner, when the composition can store flows — REQ-038 (#187).
+ *
+ * A flow's durability is its storage: an execution that is not written between steps cannot be resumed, so a
+ * composition without the stores has no flows rather than flows that lose their place. `undefined` says so.
+ *
+ * `EXAMPLE_FLOWS` are published on first use rather than at import, and a conflict is swallowed: publishing a
+ * version that already exists is the *expected* outcome on every boot after the first, and the store refuses it
+ * precisely so a version cannot change under a running execution.
+ */
+export const exampleFlowRunner = (backend: ExampleBackend) => {
+  if (backend.flowDefinitions === undefined || backend.flowExecutions === undefined) return undefined;
+  return createFlowRunner({
+    definitions: backend.flowDefinitions,
+    executions: backend.flowExecutions,
+    handler: createExampleFlowHandler({
+      registry: exampleRegistry(backend),
+      runAgentTurn: async (_context, input) => {
+        /**
+         * Not wired to the engine yet, and saying so rather than pretending.
+         *
+         * A flow's agent step needs a turn run *inside* the flow's run identity, which means threading the
+         * engine's composition through the runner — real work, and #187's ACs are about the engine rather than
+         * about this app's wiring. A stub that returned plausible text would make the flow look like it worked.
+         */
+        throw new Error(
+          `this app runs flow tool steps and human checkpoints; an agent step (${input.agentId}) needs the engine threaded through the runner`,
+        );
+      },
+      askQuestion: async (context, input) => {
+        /**
+         * The platform's own question service, on the flow's run.
+         *
+         * The run id comes from the context rather than being invented: a flow *is* a run (#197), so its
+         * checkpoint parks the same run a chat turn would, and the assistant surface can answer it with the
+         * mutation it already has. A synthetic run id here would produce a question nothing could find.
+         */
+        const service = questionServiceFor(backend);
+        const asked = await service.ask(context, asId(String(context.runId ?? "")), [
+          { key: "flow", prompt: input.question, ...(input.options === undefined ? {} : { options: [...input.options] }) },
+        ]);
+        return String(asked.id);
+      },
+    }),
+  });
+};
 
 const exampleToolProviders = (backend: ExampleBackend) => [
   { id: "example.notes-tools", async listTools() { return buildTools(backend); } },

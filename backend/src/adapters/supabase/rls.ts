@@ -109,6 +109,12 @@ export const TENANT_SCOPED_TABLES: readonly RlsTable[] = [
   { table: "artifacts" },
   { table: "artifact_versions" },
   { table: "artifact_exports" },
+  /**
+   * #187, #186. A flow definition is a tenant's automation and an execution is a tenant's data — including its
+   * `state`, which routinely holds whatever the automation was working on.
+   */
+  { table: "flow_definitions" },
+  { table: "flow_executions" },
 ];
 
 /**
