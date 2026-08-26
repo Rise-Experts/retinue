@@ -59,6 +59,6 @@ reverse, and is deliberately not a mobile dependency.
 
 ## Licence
 
-Apache License 2.0 — see [LICENSE](./LICENSE).
+MIT — see [LICENSE](./LICENSE).
 
-Copyright 2026 Rise Experts.
+Copyright (c) 2026 Azeem Sarwar and Rise Experts.

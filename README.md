@@ -267,12 +267,21 @@ RETINUE_SCHEMA_MODE=auto node node_modules/@retinue/agentkit/dist/server/main.js
 
 ## Licence
 
-Apache License 2.0 — see [LICENSE](LICENSE). Copyright 2026 Rise Experts.
+MIT — see [LICENSE](LICENSE).
 
-The runtime is Apache-2.0 so that installing it needs no conversation: it carries an explicit patent grant, and
-it is the licence an enterprise security review passes without involving a lawyer. That is the point of a
-library people are meant to adopt.
+Copyright (c) 2026 [Azeem Sarwar](https://github.com/azeem-sarwar) and
+[Rise Experts](https://github.com/Rise-Experts), jointly. Both are named, on their own line each, because a
+joint holder who is not in the notice is not a holder — and the notice is what every consumer is obliged to
+reproduce.
+
+MIT so that installing the runtime needs no conversation: it is the shortest permissive licence and the one
+every reviewer already knows. What it gives up against Apache-2.0 is an **explicit patent grant** — MIT grants
+patent rights only by implication, which is a distinction some enterprise reviews care about and most do not.
+That trade was made deliberately.
 
 It does **not** oblige anything built on top to be open source. The platform (REQ-042, `docs/21-platform.md`)
-lives in its own repository, consumes this package as a published dependency, and is proprietary — which is
-exactly what Apache-2.0 permits, and one of the reasons the boundary in that document is worth enforcing.
+lives in its own repository, consumes this package as a published dependency, and is proprietary — which any
+permissive licence permits, and one of the reasons the boundary in that document is worth enforcing.
+
+The deprecation policy that governs how a removed export stops working is in
+[`docs/19-versioning.md`](docs/19-versioning.md#deprecation-policy): one minor version, told three ways.

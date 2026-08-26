@@ -305,6 +305,6 @@ The package is ESM with `NodeNext` resolution, so relative imports carry an expl
 
 ## Licence
 
-Apache License 2.0 — see [LICENSE](./LICENSE).
+MIT — see [LICENSE](./LICENSE).
 
-Copyright 2026 Rise Experts.
+Copyright (c) 2026 Azeem Sarwar and Rise Experts.

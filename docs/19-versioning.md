@@ -84,11 +84,11 @@ entry a reader does not believe can be checked in one click.
 
 Honest gaps rather than a plan presented as a state:
 
-- **Nothing is published.** Every package is still `private: true`. Both original reasons are gone — the
-  `retinue` npm organisation exists and is ours (confirmed by an authenticated `npm org ls`, not by a 404 on the
-  registry, which proves nothing: a scope can be held by an org with nothing published), and the licence is
-  chosen. What remains is the publish itself, #193 — a pipeline, a provenance identity, and a decision about
-  when. Flipping `private` is then a one-line change somebody should make deliberately.
+- **Nothing is published yet**, but everything except the act of publishing is in place — see *Releasing*
+  below. The `retinue` npm organisation exists and is
+  ours (confirmed by an authenticated `npm org ls`, not by a 404 on the registry, which proves nothing: a scope
+  can be held by an org with nothing published), the licence is chosen, and both shipping packages are
+  publishable with a guard in front of them. What remains is a **decision about repository visibility**, below.
 - **No provenance, and no published `next` tag.** Both need a registry and a CI publishing identity, which is
   #193. The *policy* for prereleases is below, because it is needed by a decision already taken (the platform
   consumes this package as a published dependency — [21-platform](21-platform.md)) and it does not need a
@@ -96,33 +96,89 @@ Honest gaps rather than a plan presented as a state:
 
 ## The licence
 
-**Apache-2.0**, for `@retinue/agentkit` and `@retinue/react`.
+**MIT**, for `@retinue/agentkit` and `@retinue/react`, held jointly by
+[Azeem Sarwar](https://github.com/azeem-sarwar) and [Rise Experts](https://github.com/Rise-Experts).
 
-Chosen for the reason a runtime is licensed at all: installing it should need no conversation. Apache-2.0
-carries an explicit patent grant and is the licence an enterprise security review passes without involving a
-lawyer, which matters for a package whose whole purpose is to be adopted. MIT would have been shorter and
-almost equivalent, minus that patent grant — and the grant is precisely what the audience this is aimed at
-checks for.
+Chosen for the reason a runtime is licensed at all: installing it should need no conversation. MIT is the
+shortest permissive licence and the one every reviewer already recognises, which for a package whose whole
+purpose is to be adopted is the property that matters.
+
+**What it gives up, stated because it is the only real difference:** Apache-2.0 carries an *explicit* patent
+grant and MIT does not — MIT grants patent rights only by implication. Some enterprise reviews ask for the
+explicit grant; most do not. That trade was made deliberately, and it is the one thing to revisit if a large
+customer's counsel ever objects.
+
+A source-available licence (BUSL, Elastic) was the other alternative and was rejected on the reasoning of
+REQ-035 itself: it would protect the platform's revenue by dampening adoption of the runtime, which is the thing
+that REQ exists to increase.
 
 **It obliges nothing of what is built on top.** The platform ([21-platform](21-platform.md)) lives in its own
-repository, consumes this package as a published dependency, and is proprietary. That is exactly what a
-permissive licence permits, and it is a further reason the boundary in that document is worth *enforcing*
-rather than merely stating: a proprietary product built on a permissive dependency is ordinary; one built by
-vendoring the dependency's internals is a licensing question nobody wants to answer later.
-
-A source-available licence (BUSL, Elastic) was the alternative, and it was rejected on the same reasoning:
-it would protect the platform's revenue by dampening adoption of the runtime, which is the thing REQ-035 exists
-to increase.
+repository, consumes this package as a published dependency, and is proprietary. That is what any permissive
+licence permits, and it is a further reason the boundary in that document is worth *enforcing* rather than
+merely stating: a proprietary product built on a permissive dependency is ordinary; one built by vendoring the
+dependency's internals is a licensing question nobody wants to answer later.
 
 The decision is not reversible in the direction that matters. A future version may change licence, but the
 licence a consumer already received cannot be withdrawn from the version they have — so this had to be settled
 before the first publish, and it was.
 
-`LICENSE` is a byte-identical copy of the canonical Apache-2.0 text
-(`sha256 c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4`), in the repository root and in each
-shipping package. In each package, because `npm pack` includes a `LICENSE` from the package directory and knows
-nothing about the root — and `npm run check:consumer` asserts the tarball carries one, since a manifest claiming
+`LICENSE` carries the canonical MIT body verbatim (identical, excluding the copyright lines, to the text shipped
+by `zod`, `graphql` and `pg`) with **two** copyright lines rather than one, because a joint holder who is not in
+the notice is not a holder, and the notice is what every consumer is obliged to reproduce. It sits in the
+repository root and in each shipping package: `npm pack` includes a `LICENSE` from the package directory and
+knows nothing about the root, and `npm run check:consumer` asserts the tarball carries one — a manifest claiming
 a licence over a tarball with no licence text fails somebody else's compliance review rather than one of ours.
+
+## Releasing
+
+A release is a **tag**, and the tag names its package:
+
+```
+agentkit@0.1.0          the runtime, to `latest`
+react@0.1.0             the client, to `latest`
+agentkit@0.2.0-next.1   a prerelease, to `next`
+```
+
+Per-package rather than one `v0.1.0`, because the versions are independent: a client-only fix must not bump the
+runtime, and a shared version teaches consumers that every release affects them. The first release is therefore
+two tags — the runtime first, since `@retinue/react` depends on `@retinue/agentkit@^0.1.0` and a client
+published against an absent runtime is uninstallable.
+
+`.github/workflows/release.yml` does the rest: resolve the tag, run the whole gate, publish with provenance,
+then install the *published* package into a scratch project and check the exported surface against it.
+
+### A publish from a workstation is refused
+
+`scripts/publish-guard.mjs` is wired as `prepublishOnly` on both packages, so npm itself refuses unless GitHub
+Actions is running it, the ref is a `<package>@<version>` tag, and the workflow is `Release`. A dry run is
+allowed anywhere — refusing it would mean the only way to inspect what would ship is to ship it.
+
+This replaced `private: true`, which used to be what stopped an accidental publish and which also stopped the
+real one. `release-check.mjs` fails a publishable package whose `prepublishOnly` is not the guard, so the two
+cannot be separated: whoever removes the guard has to remove that check as well, and then they have written down
+that they meant to.
+
+The reasoning is about *evidence*, not discipline. A tarball built on a workstation is a tarball nobody can
+reproduce: the version is permanent, the artefact is what consumers install forever, and the only record of what
+went into it is one person's shell history.
+
+### What blocks the first release, and it is a decision
+
+**The repository is private, and npm cannot generate provenance for a publish from a private source
+repository** — GitHub withdrew that in July 2023, for public packages too. npm's trusted publishing (short-lived
+OIDC credentials instead of a long-lived token) additionally does not support self-hosted runners, which is the
+only kind of runner this project has. So there is no configuration of the release workflow that produces a
+provenance-carrying release while the repository is private.
+
+Two ways forward, and they are a choice rather than a fix:
+
+1. **Make the repository public.** Provenance works, trusted publishing works, and hosted Actions minutes cost
+   nothing — which is also what has had CI switched off. The cost is that the whole git history becomes public,
+   so **every credential ever committed must be rotated first**, and the `pull_request` trigger in `ci.yml` has
+   to stop running on a self-hosted runner (a fork's pull request would then execute arbitrary code on our
+   hardware — the file already says so).
+2. **Publish without provenance.** Delete the preflight step and the `--provenance` flag. Everything else works,
+   and #193 AC-3 is then met in the "CI-only, from a tag" half and not in the provenance half.
 
 ## Prereleases on `next`
 
