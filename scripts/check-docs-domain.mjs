@@ -47,6 +47,18 @@ const CONFIG = "website/docusaurus.config.ts";
 const BUILD = "website/build";
 
 /**
+ * Two copies of one Worker name, which is the pair that drifts.
+ *
+ * Checked because it *had* drifted from reality: both said `agentkit-docs` and no Worker by that name existed —
+ * the site is served by `agentkit`, redeployed by Cloudflare's Git integration on every push. The documented
+ * `npx wrangler deploy` would therefore have created a third Worker and published the site to it: the deploy
+ * succeeds, and what is deployed is not what is served. Nothing local could have noticed, because the name is
+ * only wrong in comparison with an account this check cannot see. What it *can* see is the two files agreeing,
+ * which is the half that catches the next drift.
+ */
+const WRANGLER = ["wrangler.jsonc", "website/wrangler.jsonc"];
+
+/**
  * The host the site is served from today.
  *
  * A constant rather than derived, and it stays here **after** the cutover: the thing being checked from then on
@@ -54,6 +66,12 @@ const BUILD = "website/build";
  * assertion that the old links kept working.
  */
 export const LEGACY_URL = "https://docs.agentkit.riseexperts.de";
+
+/** The Worker name a wrangler config declares. */
+export const wranglerName = (source) => {
+  const match = /^\s*"name":\s*"([^"]+)"/m.exec(source);
+  return match ? match[1] : null;
+};
 
 /** The `url` the site claims. Parsed rather than imported, because the config is TypeScript with plugins. */
 export const configuredUrl = (source) => {
@@ -130,6 +148,17 @@ const main = async () => {
 
   const problems = [];
   const cutOver = intended !== LEGACY_URL;
+
+  // ── the deploy target: one name, in two files ─────────────────────────────────────────────────────────────
+  const names = WRANGLER.map((path) => (existsSync(path) ? wranglerName(readFileSync(path, "utf8")) : null));
+  if (names.some((name) => name === null)) {
+    problems.push(`a wrangler config is missing or declares no \`name\`: ${WRANGLER.join(", ")}`);
+  } else if (names[0] !== names[1]) {
+    problems.push(
+      `${WRANGLER[0]} deploys to "${names[0]}" and ${WRANGLER[1]} to "${names[1]}" — one of them publishes the` +
+        ` site to a Worker nobody serves from, and the deploy succeeds either way`,
+    );
+  }
 
   // ── the offline half: the build on disk agrees with the config ─────────────────────────────────────────────
   const sitemapPath = join(BUILD, "sitemap.xml");

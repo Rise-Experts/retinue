@@ -2,8 +2,18 @@
   // Repo-root deploy config, so Cloudflare works even when "Root directory" is the repo root.
   // Build with `npm run docs:build` (produces website/build), then `npx wrangler deploy` here
   // uploads website/build as static assets. (website/wrangler.jsonc covers Root directory=website.)
+  //
+  // `name` is the Worker that actually serves the site, and it was wrong until #203. Both files said
+  // `agentkit-docs`, and no Worker by that name exists in the account: the docs are served by `agentkit`,
+  // an assets-only Worker (no user code, matching the config below) that Cloudflare's Git integration
+  // redeploys on every push to main. So `npx wrangler deploy` — the command in the line above — would have
+  // created a *third* Worker called `agentkit-docs` and published the site to it. The deploy succeeds, the
+  // command prints a URL, and the thing deployed is not the thing anybody visits.
+  //
+  // Renaming this to `retinue-docs` is #203 step 4, and it is not an edit here: `wrangler deploy` with a
+  // changed name does not rename a Worker, it creates another one. The domain bindings move first.
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "agentkit-docs",
+  "name": "agentkit",
   "compatibility_date": "2024-11-01",
   "assets": {
     "directory": "./website/build"

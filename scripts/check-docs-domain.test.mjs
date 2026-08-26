@@ -15,6 +15,7 @@ import {
   originsIn,
   redirectVerdict,
   settledPath,
+  wranglerName,
 } from "./check-docs-domain.mjs";
 
 const INTENDED = "https://docs.retinue.riseexperts.de";
@@ -79,6 +80,14 @@ test("origins on our own domain are found, so a stale canonical is visible", () 
   assert.deepEqual([...originsIn(html)].sort(), [LEGACY_URL, INTENDED].sort());
   // A third-party absolute URL is not ours and must not be reported as a hostname problem.
   assert.deepEqual([...originsIn('<a href="https://github.com/Rise-Experts/retinue">')], []);
+});
+
+test("the Worker name is read from a wrangler config, comments and all", () => {
+  // JSONC: the real files open with a dozen lines of comment before any key, and one of those comments
+  // contains the word "name" in prose.
+  const config = '{\n  // `name` is the Worker that actually serves the site.\n  "$schema": "x",\n  "name": "agentkit",\n}';
+  assert.equal(wranglerName(config), "agentkit");
+  assert.equal(wranglerName('{ "assets": { "directory": "./build" } }'), null);
 });
 
 test("the legacy host stays named after the cutover", () => {

@@ -2,8 +2,12 @@
   // Cloudflare Workers Static Assets — serves the Docusaurus build output (./build).
   // Deployed from the repo root: `npm run docs:build` then
   // `npx wrangler deploy --config website/wrangler.jsonc`. No Worker script needed.
+  //
+  // `name` must match ../wrangler.jsonc, and `npm run check:domain -- --offline` fails if it does not:
+  // two copies of one Worker name is exactly the pair that drifts, and the direction that hurts is a deploy
+  // aimed at a Worker nobody serves from. See the reasoning in ../wrangler.jsonc.
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "agentkit-docs",
+  "name": "agentkit",
   "compatibility_date": "2024-11-01",
   "assets": {
     "directory": "./build"

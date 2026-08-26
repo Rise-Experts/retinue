@@ -66,7 +66,7 @@ left alone on purpose, because renaming them is a *migration* rather than an edi
 | `x-agentkit-tenant`, `x-agentkit-principal`, `x-agentkit-roles` | Request headers are a wire contract. Every caller sends them today; renaming breaks them at the same moment the server starts expecting the new spelling |
 | `schema_migrations` ids, `agentkit_example` schema | Applied migrations are recorded by id, and the schema name is where the data physically is. Both are what an existing database already contains |
 | `mcp__agentkit-docs__*` tool ids | Tool ids appear in stored run history and in approval grants. Renaming them orphans grants that name the old id |
-| `docs.agentkit.riseexperts.de` | Live DNS and a live Cloudflare project — a cutover with a redirect to arrange |
+| `docs.agentkit.riseexperts.de`, and the `agentkit` Worker that serves it | Live DNS and a live Cloudflare deployment — a cutover with a redirect to arrange, and renaming the Worker is the step that can take the site down. #203 |
 | `agentkit-test-pg`, `agentkit-test-redis`, `agentkit-test-pgvector` | Local container names on developer machines. Renaming them orphans running containers and their volumes |
 
 `RETINUE_*` variables fall back to their `AGENTKIT_*` spelling and warn once per variable, so an
@@ -170,9 +170,15 @@ Two processes, one image. They share every dependency, so two images would only 
 
 ### The docs site is still on the old hostname
 
-`docs.agentkit.riseexperts.de`, served by a Cloudflare Worker named `agentkit-docs` (`wrangler.jsonc`, and
-`website/wrangler.jsonc` for a build whose root directory is `website`). The site's own title is already
-*Retinue*; what has not moved is the hostname, the Worker name and `docusaurus.config.ts`'s `url`.
+`docs.agentkit.riseexperts.de`, served by a Cloudflare Worker named **`agentkit`** — an assets-only Worker that
+Cloudflare's Git integration redeploys on every push to `main`. The site's own title is already *Retinue*; what
+has not moved is the hostname, the Worker name and `docusaurus.config.ts`'s `url`.
+
+Both `wrangler.jsonc` files said `agentkit-docs` until #203, and **no Worker by that name exists**. The
+`npx wrangler deploy` those files document would have created a third Worker and published the site to it: the
+deploy succeeds, prints a URL, and the thing deployed is not the thing anybody visits. Nothing local could have
+caught it — the name is only wrong in comparison with the account — so what is checked instead is that the two
+files agree, which is the half that catches the next drift.
 
 Deliberately not done as an edit, because it is a cutover with a live site on the other end of it. The order
 matters, and one step in it is a trap:
