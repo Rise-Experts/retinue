@@ -168,6 +168,28 @@ the public interfaces from `shareflow/`, never added to a generic package.
 
 Two processes, one image. They share every dependency, so two images would only drift.
 
+### The docs site is still on the old hostname
+
+`docs.agentkit.riseexperts.de`, served by a Cloudflare Worker named `agentkit-docs` (`wrangler.jsonc`, and
+`website/wrangler.jsonc` for a build whose root directory is `website`). The site's own title is already
+*Retinue*; what has not moved is the hostname, the Worker name and `docusaurus.config.ts`'s `url`.
+
+Deliberately not done as an edit, because it is a cutover with a live site on the other end of it. The order
+matters, and one step in it is a trap:
+
+1. Add `docs.retinue.riseexperts.de` to the zone and attach it to the Worker as a custom domain. Both hostnames
+   then serve the same site, which is the point — nothing breaks while the rest happens.
+2. Change `url` in `docusaurus.config.ts`, rebuild, deploy. Canonical links and the sitemap move; the old
+   hostname keeps serving.
+3. Redirect the old hostname to the new one (a Cloudflare Bulk Redirect, or a route on the Worker), 301, keeping
+   the path. Existing links are in issue comments, commit messages and anything already indexed.
+4. **Only then** rename the Worker, if it is renamed at all. `wrangler deploy` with a changed `name` does not
+   rename anything — it creates a *second* Worker and leaves the first one serving the live domain, so the
+   deploy succeeds, the site looks fine, and the thing being deployed is not the thing being served. If the name
+   changes, the old Worker's domain bindings have to be moved and the old Worker deleted, in that order.
+
+Steps 1–3 are the cutover; step 4 is cosmetic and is the one that can take the site down.
+
 ### Configuration
 
 Validated at startup: a missing or malformed variable fails the boot with a message naming it, and
