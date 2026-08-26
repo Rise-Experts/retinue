@@ -37,6 +37,7 @@ const JENKINSFILE = "Jenkinsfile";
 export const STEPS = [
   ["typecheck", "npm run typecheck"],
   ["build", "npm run build"],
+  ["package boundary as installed", "npm run check:consumer"],
   ["tests · boundaries · reachability · scripts · docs", "npm test"],
   ["boundary rules", "npm run check:boundaries"],
   ["eval coverage", "npm run evals:coverage"],

@@ -61,6 +61,11 @@ jobs:
       # pass or fail against the previous build's logic, which cost an hour of confusion when the gate was added.
       - name: Build
         run: npm run build
+      # Straight after the build, because it is a question about the built artifact and not about the source:
+      # `npm pack`, extract, and try to import past the exports map from outside. It is the only check that sees
+      # the package the way #195's platform will — installed, with no `src/` within reach.
+      - name: Package boundary (as installed)
+        run: npm run check:consumer
       - name: Test
         env:
           RETINUE_TEST_REDIS_URL: redis://localhost:6479

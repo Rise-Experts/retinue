@@ -18,6 +18,9 @@ import { readFileSync } from "node:fs";
 const STEPS = [
   ["typecheck", "npm run typecheck"],
   ["build", "npm run build"],
+  // Before the tests, deliberately: this one asks whether the artifact a consumer installs is usable at all,
+  // and a suite that passes against a package whose entry points do not resolve is the wrong thing to learn first.
+  ["package boundary as installed", "npm run check:consumer"],
   ["tests, boundaries, reachability, scripts, docs", "npm test"],
   ["boundary rules", "npm run check:boundaries"],
   ["conformance matrix", "npm run conformance:report"],

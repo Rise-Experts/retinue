@@ -103,6 +103,10 @@ pipeline {
     stage('Typecheck') { steps { sh 'npm run typecheck' } }
     stage('Build')     { steps { sh 'npm run build' } }
 
+    // Packs the tarball and tries to import past the exports map from a consumer that has only node_modules.
+    // Needs the build, so it sits here; needs no service container, so it is a one-liner.
+    stage('Package boundary') { steps { sh 'npm run check:consumer' } }
+
     stage('Test') {
       // Carries `npm test`, which is itself the boundary tests, the reachability guard, the script-import guard,
       // the documented-import guard, and the check that this file has not drifted from `ci.yml`.

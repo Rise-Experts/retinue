@@ -35,6 +35,7 @@
     "check:reachability": "node scripts/check-reachability.mjs",
     "check:scripts": "node scripts/check-script-imports.mjs",
     "check:docs": "node scripts/check-doc-imports.mjs",
+    "check:consumer": "node scripts/check-consumer-boundary.mjs",
     "changelog": "node scripts/changelog.mjs",
     "release:check": "node scripts/release-check.mjs",
     "ci:local": "node scripts/ci-local.mjs"

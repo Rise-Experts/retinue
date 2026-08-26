@@ -149,6 +149,13 @@ test with neither ShareFlow/Chorus nor Twenty installed:
 `npm run check:boundaries` enforces all of the above and fails the build on a violation;
 `scripts/check-boundaries.test.mjs` plants one of each and asserts it is caught.
 
+Those rules are about *this* tree. The boundary a consumer meets is a different question, and
+`npm run check:consumer` asks it: `npm pack` the runtime, install the tarball into a directory that knows the
+package only through `node_modules`, then require that every subpath in `exports` loads and typechecks, that a
+deep import into `dist/` or `src/` fails **with `ERR_PACKAGE_PATH_NOT_EXPORTED`** — the boundary refusing it,
+not the file happening to be absent — and that no sources or sourcemaps are shipped. It is what makes the
+separate-repository argument in [`docs/21-platform.md`](docs/21-platform.md) enforceable rather than cultural.
+
 ShareFlow-specific tools, context providers, skills and agents are registered through
 the public interfaces from `shareflow/`, never added to a generic package.
 

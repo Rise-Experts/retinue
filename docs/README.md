@@ -49,6 +49,12 @@ This directory defines the extraction and migration of a reusable AI platform in
 13. [Sessions, threads and session state](13-sessions-and-threads.md)
 14. [Localization (i18n)](14-localization.md)
 15. [User-level memory](15-user-memory.md)
+16. [Load, soak and failure injection](16-load-and-resilience.md)
+17. [Security review](17-security-review.md)
+18. [Data retention](18-data-retention.md)
+19. [Versioning, API surface and deprecation](19-versioning.md)
+20. [CI on our own runner](20-self-hosted-ci.md)
+21. [The platform](21-platform.md)
 
 ## Extraction
 
