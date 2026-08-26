@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 /**
- * CI, on this machine — because the hosted kind has no minutes left.
+ * CI, on this machine.
  *
- * The workflow's jobs failed in two seconds without being assigned a runner: no steps, no logs, just a red cross
- * on every push. So the triggers are commented out and this runs the same commands here. The point is not
- * convenience; it is that a gate nobody runs is a gate that does not exist, and "we will check when CI is back"
- * is how a fortnight of broken commits accumulates.
+ * Written when hosted minutes were exhausted and every job failed in two seconds without being assigned a
+ * runner — no steps, no logs, just a red cross on every push. Hosted CI works again now that the repository is
+ * public, and this still earns its place: a gate nobody runs before pushing is a gate that reports after the
+ * fact, and "CI will tell me" is how a red main branch lasts an afternoon.
  *
  * ## Why the command list is checked rather than trusted
  *
@@ -125,6 +125,45 @@ const jenkinsCommands = () => commandsIn(JENKINSFILE, "groovy");
  * legitimately does more (JUnit publishing, artifact archiving) and that is not drift. What is refused is a
  * command the workflow runs that another definition does not.
  */
+/**
+ * No workflow may run a fork's pull request on a self-hosted runner.
+ *
+ * On a public repository that combination is arbitrary code execution on our own hardware, by design. It was
+ * true of this project for exactly as long as the repository was private, held off by a comment and then by a
+ * `guard` job; both are gone now that hosted runners are free and ephemeral. What stops it coming back is this:
+ * re-adding a self-hosted runner to a `pull_request`-triggered workflow fails the gate, so it becomes a decision
+ * somebody makes deliberately rather than a line that looks like a performance tweak.
+ *
+ * Textual on purpose — no YAML dependency, and the question is coarse enough that a substring is the right
+ * instrument: *any* `self-hosted` in a file that triggers on `pull_request` is the thing to argue about.
+ */
+const forkSafety = () => {
+  const problems = [];
+  for (const path of [WORKFLOW, ".github/workflows/release.yml"]) {
+    let source;
+    try {
+      source = readFileSync(path, "utf8");
+    } catch {
+      continue; // A workflow that does not exist cannot be unsafe; the command check reports a missing WORKFLOW.
+    }
+    const body = source
+      .split("\n")
+      .map((line) => line.replace(/(^|\s)#.*$/, ""))
+      .join("\n");
+    if (/^\s*pull_request:/m.test(body) && /self-hosted/.test(body)) {
+      problems.push(path);
+    }
+  }
+  if (problems.length > 0) {
+    console.error(`✗ ${problems.join(", ")} trigger on pull_request and name a self-hosted runner`);
+    console.error("  on a public repository that runs a fork's pull request on our own hardware, which is");
+    console.error("  arbitrary code execution by design. Use a hosted runner, or gate fork pull requests out");
+    console.error("  and accept that external contributors get no CI.");
+    return false;
+  }
+  return true;
+};
+
 const verify = () => {
   const workflow = workflowCommands();
   /**
@@ -154,6 +193,7 @@ const verify = () => {
       ok = false;
     }
   }
+  if (!forkSafety()) ok = false;
   if (ok) {
     console.log(
       `✓ ${WORKFLOW} (${workflow.size} commands) is covered by scripts/ci-local.mjs and ${JENKINSFILE}` +

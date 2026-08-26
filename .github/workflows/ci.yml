@@ -1,20 +1,22 @@
 name: CI
 
-# Runs on a **self-hosted** runner. The org's hosted-runner minutes are exhausted, and every job here was
-# failing in two seconds without ever being assigned a machine: no steps, no logs, just a red cross on every
-# push. Self-hosted runners are not metered, including on private repositories, so this is the same CI on
-# hardware we already have rather than a different CI.
+# Runs on GitHub-hosted runners. That is not a preference — it is what became possible, and what became
+# necessary, when the repository went public.
 #
-# On a public repository a self-hosted runner runs a fork's pull request on your own machine, which is arbitrary
-# code execution by design. That used to be handled by a comment saying "safe because this repository is
-# private" — which is a property of the repository settings, changeable in two clicks by someone who has not
-# read this file. The `guard` job below now enforces it instead: nothing runs for a pull request that comes from
-# a fork, whatever the repository's visibility is.
+# The history, because it explains every other decision in this file. Hosted minutes were exhausted on a private
+# repository, and every job failed in two seconds without being assigned a machine: no steps, no logs, just a
+# red cross on every push. CI moved to a self-hosted runner, which is not metered. That worked and carried one
+# hazard: on a *public* repository a self-hosted runner executes a fork's pull request on your own hardware, by
+# design. It was held off by a `guard` job that skipped fork pull requests entirely — protection bought by
+# denying external contributors any CI at all.
 #
-# When the repo does go public, hosted minutes cost nothing, and the right move is to drop the self-hosted
-# runner entirely — `runs-on: ubuntu-latest` is ephemeral and isolated, and then the guard is belt-and-braces
-# rather than the only thing standing between a fork and this hardware. Not done here because hosted minutes
-# are exhausted *while* the repo is private, so the switch has to land with the visibility change, not before.
+# Public + hosted resolves both. Minutes are free, `ubuntu-latest` is ephemeral and isolated, and GitHub already
+# withholds secrets from a fork's `pull_request` run — so a fork's PR is safe to build, and now does get built.
+# The guard job is gone with the hazard it guarded.
+#
+# What replaces it is a check rather than a comment: `ci-local.mjs --verify` fails if any workflow that triggers
+# on `pull_request` also names a self-hosted runner. Re-adding one is a decision somebody has to make against a
+# failing gate, not something that quietly reintroduces arbitrary code execution.
 #
 # `npm run ci:local` runs the same commands on a developer machine, and `ci-local.mjs --verify` fails if this
 # file gains a command the local runner does not have — so the two cannot drift.
@@ -37,32 +39,17 @@ on:
         type: string
 
 jobs:
-  # One condition, in one place, that every other job depends on.
-  #
-  # `pull_request` cannot be filtered by fork at the trigger level, so it has to be a job-level `if` — and the
-  # same `if` copied into four jobs is four places to forget it in the fifth. Everything below `needs: [guard]`,
-  # so a skipped guard skips the lot.
-  guard:
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, linux]
-    steps:
-      - name: Why this ran
-        run: |
-          echo "event=${{ github.event_name }} repo=${{ github.repository }}"
-          echo "A pull request from a fork does not reach this runner: it would be arbitrary code execution on"
-          echo "our own hardware. Such a PR gets no CI until a maintainer runs it from a branch in this repo."
-
   build:
-    needs: [guard]
-    runs-on: [self-hosted, linux]
+    runs-on: ubuntu-latest
     services:
       # #105's ACs -- work surviving with no worker, BullMQ's own jobId dedup, and a typed error on an
       # unreachable Redis -- cannot be shown by a fake queue. Without this service those cases skip by
       # name in CI and the guarantees would only ever be verified on someone's laptop.
       redis:
         image: redis:7-alpine
-        # 6479, not 6379. A hosted runner is a fresh machine and 6379 is free by definition; a self-hosted one
-        # is a server that very likely already runs Redis, and a service container binding an occupied port
+        # 6479, not 6379. A hosted runner would be fine with the default, but the Jenkins agent and developer
+        # machines are servers that very likely already run a Redis — and one port per service across all three
+        # is what keeps `RETINUE_TEST_REDIS_URL` a single value. A service container binding an occupied port
         # fails the job with a message about Docker rather than about the clash.
         ports: ["6479:6379"]
         options: >-
@@ -103,15 +90,14 @@ jobs:
   # coordinator and lease-based claim depend on. Required, not advisory — an advisory gate is not a
   # gate, which is the lesson of #20 closing green against "passes the full conformance suite".
   conformance-matrix:
-    needs: [guard]
-    runs-on: [self-hosted, linux]
+    runs-on: ubuntu-latest
     services:
       postgres:
         image: postgres:16
         env:
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: agentkit_test
-        # 5442 for the same reason as Redis's 6479: the server this now runs on probably has a Postgres.
+        # 5442 for the same reason as Redis's 6479: one port per service across hosted CI, Jenkins and laptops.
         ports: ["5442:5432"]
         options: >-
           --health-cmd pg_isready
@@ -159,7 +145,7 @@ jobs:
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'push' &&
        (startsWith(github.ref, 'refs/tags/agentkit@') || startsWith(github.ref, 'refs/tags/react@')))
-    runs-on: [self-hosted, linux]
+    runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
@@ -216,8 +202,7 @@ jobs:
           if-no-files-found: warn
 
   docs:
-    needs: [guard]
-    runs-on: [self-hosted, linux]
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -237,14 +222,13 @@ jobs:
         run: npm run check:domain -- --offline
 
   image:
-    needs: [guard]
     # The image build is the only check that the application layer declares every dependency it
     # imports: the runtime declares its heavy dependencies as optional peers, so inside this repo they
     # resolve by hoisting from the runtime's devDependencies and an under-declared app works anyway.
     # The runtime stage installs with --omit=dev, so there it does not. This job also catches a
     # Dockerfile left pointing at a workspace that no longer exists, which is how it started: #196
     # merged the `server` workspace into the runtime package and the Dockerfile still copied it.
-    runs-on: [self-hosted, linux]
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Build the image
