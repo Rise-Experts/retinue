@@ -1,6 +1,6 @@
 {
   "name": "@retinue/api-service",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -11,7 +11,7 @@
     "clean": "rm -rf dist tsconfig.tsbuildinfo"
   },
   "dependencies": {
-    "@retinue/agentkit": "*",
+    "@retinue/agentkit": "^0.1.0",
     "@nestjs/common": "^11.1.6",
     "@nestjs/core": "^11.1.6",
     "@nestjs/graphql": "^13.1.0",
@@ -35,5 +35,13 @@
     "@nestjs/testing": "^11.1.6",
     "supertest": "^7.1.4",
     "@types/supertest": "^6.0.3"
-  }
+  },
+  "description": "A Nest.js service, not a library. If the Nest module inside it proves out as a reusable integration it becomes its own package under a release process, rather than by being copied out.",
+  "author": "Rise Experts",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Rise-Experts/retinue.git",
+    "directory": "services/api"
+  },
+  "license": "UNLICENSED"
 }

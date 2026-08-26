@@ -1,6 +1,6 @@
 {
   "name": "@retinue/website",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "scripts": {
     "docs:api": "typedoc",
@@ -29,5 +29,13 @@
   },
   "engines": {
     "node": ">=20"
-  }
+  },
+  "description": "The documentation site.",
+  "author": "Rise Experts",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Rise-Experts/retinue.git",
+    "directory": "website"
+  },
+  "license": "UNLICENSED"
 }

@@ -1,8 +1,8 @@
 {
   "name": "@retinue/agentkit",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
-  "description": "Server-side contracts and runtime for the reusable AI platform: core domain, models, agents, tools, MCP, skills, context, HITL and persistence ports.",
+  "description": "A provider-neutral, durable AI agent runtime for TypeScript: agents, tools, approvals, context, knowledge and persistence behind ports.",
   "license": "UNLICENSED",
   "type": "module",
   "main": "./dist/index.js",
@@ -169,5 +169,15 @@
       "optional": true
     }
   },
-  "sideEffects": false
+  "sideEffects": false,
+  "author": "Rise Experts",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Rise-Experts/retinue.git",
+    "directory": "backend"
+  },
+  "homepage": "https://github.com/Rise-Experts/retinue#readme",
+  "bugs": {
+    "url": "https://github.com/Rise-Experts/retinue/issues"
+  }
 }

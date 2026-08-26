@@ -1,9 +1,20 @@
 name: CI
 
+# PAUSED — the org's Actions minutes are exhausted, so every job here fails in about two seconds
+# without ever being assigned a runner: no steps run, no logs are produced, and the only thing a push
+# gets is a red cross that says nothing. That is worse than no CI, because a red mark nobody can act on
+# is a red mark everybody learns to ignore.
+#
+# Nothing else about this file changed. The triggers are the whole of it, so restoring CI once minutes
+# are available is putting `push` and `pull_request` back below.
+#
+# In the meantime `npm run ci:local` runs the same jobs on this machine, and a test asserts it runs
+# every `npm run` command this file does — so the two cannot drift while automation is off.
 on:
-  push:
-    branches: [main]
-  pull_request:
+  # push:
+  #   branches: [main]
+  # pull_request:
+  #
   # Lets CI be re-run against a branch on demand. Added because a push to main landed the ref without
   # firing a run (72b2d35), and there was then no way to get CI to look at that tree at all -- the
   # only options were an empty commit or waiting for the next change to hide it.
