@@ -164,8 +164,11 @@ went into it is one person's shell history.
 
 ### What blocks the first release, and it is a decision
 
-**The repository is private, and npm cannot generate provenance for a publish from a private source
-repository** — GitHub withdrew that in July 2023, for public packages too. npm's trusted publishing (short-lived
+*(Resolved: the repository is public as of 2026-08-26, and CI moved to hosted runners with it. The constraint
+below is kept because it is the reasoning that forced the decision, and because it recurs for anyone forking
+this into a private repository.)*
+
+**npm cannot generate provenance for a publish from a private source repository** — GitHub withdrew that in July 2023, for public packages too. npm's trusted publishing (short-lived
 OIDC credentials instead of a long-lived token) additionally does not support self-hosted runners, which is the
 only kind of runner this project has. So there is no configuration of the release workflow that produces a
 provenance-carrying release while the repository is private.

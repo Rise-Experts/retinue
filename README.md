@@ -41,9 +41,15 @@ npm test
 
 ## CI
 
-`ci.yml` runs on a **self-hosted runner** — the org's hosted minutes are exhausted, and self-hosted runners are
-not metered. Setup, requirements and the security caveat are in [`docs/20-self-hosted-ci.md`](docs/20-self-hosted-ci.md);
-the short version is that the machine needs Docker and outbound HTTPS, nothing inbound.
+`ci.yml` runs on **GitHub-hosted runners**, which are free on a public repository. It ran on a self-hosted
+runner while the repository was private and hosted minutes were exhausted; going public reversed both facts at
+once, and a self-hosted runner on a public repository would execute a fork's pull request on our own hardware.
+`ci-local.mjs --verify` now fails if a `pull_request`-triggered workflow names one.
+
+`Jenkinsfile` describes the same pipeline for a Jenkins server, which is optional and not the package's gate.
+What it adds is **test trends** — "this test has failed 3 of the last 20 builds" — which nothing in the Actions
+UI provides. Setup, the plugin list, the stage-by-stage reasoning and the two hazards are in
+[`docs/20-self-hosted-ci.md`](docs/20-self-hosted-ci.md).
 
 ```bash
 npm run ci:local        # the same commands, on this machine

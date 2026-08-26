@@ -53,7 +53,7 @@ This directory defines the extraction and migration of a reusable AI platform in
 17. [Security review](17-security-review.md)
 18. [Data retention](18-data-retention.md)
 19. [Versioning, API surface and deprecation](19-versioning.md)
-20. [CI on our own runner](20-self-hosted-ci.md)
+20. [CI, and Jenkins on our own server](20-self-hosted-ci.md)
 21. [The platform](21-platform.md)
 22. [Glossary](22-glossary.md)
 
