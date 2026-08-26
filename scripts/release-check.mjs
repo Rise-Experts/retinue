@@ -26,6 +26,9 @@ const STEPS = [
   ["conformance matrix", "npm run conformance:report"],
   ["security review revisit dates", "npm run security:review"],
   ["documentation site", "npm run docs:build"],
+  // After the build, because it reads what the build produced: a release must not ship a docs site whose
+  // canonical links and sitemap name a different host from the config (#203).
+  ["documentation hostname", "npm run check:domain -- --offline"],
 ];
 
 /**

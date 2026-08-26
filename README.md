@@ -190,6 +190,12 @@ matters, and one step in it is a trap:
 
 Steps 1–3 are the cutover; step 4 is cosmetic and is the one that can take the site down.
 
+`npm run check:domain` verifies the result, and needs no argument: it reads `url` from the config and holds
+reality to it. While the config still names the old host it reports the pending state and passes — a check that
+could only ever be red is one people learn to ignore — and it starts enforcing the 301 the moment that line
+changes, with no edit to the check. `-- --offline` runs the half that compares the built output with the config,
+which is what CI runs, because a gate that fails when DNS is slow is a gate people skip.
+
 ### Configuration
 
 Validated at startup: a missing or malformed variable fails the boot with a message naming it, and

@@ -199,6 +199,11 @@ jobs:
         # prebuild installs the workspace (npm --prefix .. ci) so TypeDoc resolves backend deps
         run: npm run build
         working-directory: website
+      # No network: it compares the built output with the config. The networked half of this check is a command
+      # for the #203 cutover, deliberately not a CI step — a gate that fails when DNS is slow is one people
+      # learn to skip.
+      - name: Docs site hostname
+        run: npm run check:domain -- --offline
 
   image:
     # The image build is the only check that the application layer declares every dependency it

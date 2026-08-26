@@ -44,6 +44,9 @@ export const STEPS = [
   ["conformance report", "npm run conformance:report"],
   ["conformance matrix", "npm run conformance:matrix"],
   ["docs site", "npm --prefix website run build"],
+  // Offline: the built output's canonical host must agree with the config. Before #203's cutover it passes
+  // trivially; after it, it is what catches a config change that was never redeployed.
+  ["docs site hostname", "npm run check:domain -- --offline"],
 ];
 
 /** The workflow commands this file deliberately does not run, each with the reason. */
@@ -53,7 +56,11 @@ export const NOT_RUN = new Map([
   ["npm run ci:local", "this script — the workflow invoking it would be recursion"],
 ]);
 
-const NPM_COMMAND = /npm (?:--prefix \S+ run [a-z:]+|run [a-z:]+|test|ci|install)/g;
+// `[a-z:-]` includes the hyphen deliberately. No script name had one until `check:docs-domain` was added as
+// `check:domain`, and without the hyphen a name like `check:docs-domain` would match as the *shorter*
+// `check:docs` — so the drift check would report a command missing that was present. A check that lies about
+// drift is worse than no check, and this one is load-bearing for three pipeline definitions.
+const NPM_COMMAND = /npm (?:--prefix \S+ run [a-z:-]+|run [a-z:-]+|test|ci|install)/g;
 
 const read = (path) => {
   try {
@@ -112,7 +119,17 @@ const jenkinsCommands = () => commandsIn(JENKINSFILE, "groovy");
  */
 const verify = () => {
   const workflow = workflowCommands();
-  const local = new Set(STEPS.map(([, command]) => command));
+  /**
+   * The local steps go through the *same* extractor as the two files.
+   *
+   * They used to be compared as raw strings, which worked only because no step had an argument. The first one
+   * that did — `npm run check:domain -- --offline` — was reported as missing, because the workflow side had
+   * been normalised to `npm run check:domain` and the local side had not. Comparing two things that were
+   * normalised differently is the same defect this check exists to catch, one level up.
+   */
+  const local = new Set(
+    [...STEPS.map(([, command]) => command).join("\n").matchAll(NPM_COMMAND)].map((match) => match[0]),
+  );
   // `npm --prefix website run build` is how the docs job's `working-directory: website` reads from here.
   local.add("npm run build");
   const jenkins = jenkinsCommands();

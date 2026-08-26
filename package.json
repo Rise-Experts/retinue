@@ -37,6 +37,7 @@
     "check:docs": "node scripts/check-doc-imports.mjs",
     "check:consumer": "node scripts/check-consumer-boundary.mjs",
     "check:terminology": "node scripts/check-terminology.mjs",
+    "check:domain": "node scripts/check-docs-domain.mjs",
     "changelog": "node scripts/changelog.mjs",
     "release:check": "node scripts/release-check.mjs",
     "ci:local": "node scripts/ci-local.mjs"

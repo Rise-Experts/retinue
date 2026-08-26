@@ -143,7 +143,13 @@ pipeline {
       }
     }
 
-    stage('Docs') { steps { sh 'npm --prefix website run build' } }
+    stage('Docs') {
+      steps {
+        sh 'npm --prefix website run build'
+        // Offline half only: the built site's canonical host must match the config (#203).
+        sh 'npm run check:domain -- --offline'
+      }
+    }
 
     stage('Image') {
       steps {
