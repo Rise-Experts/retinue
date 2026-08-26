@@ -109,6 +109,7 @@
 
 ### Fixed
 
+- **deploy**: the wrangler configs named a Worker that does not exist ([#203](https://github.com/Rise-Experts/retinue/issues/203)) `3555157a`
 - **capabilities**: remove a gate nothing could call ([#198](https://github.com/Rise-Experts/retinue/issues/198)) `684bb1d3`
 - **example**: four defects that were correct-looking and unobservable ([#178](https://github.com/Rise-Experts/retinue/issues/178)) `3d1525b1`
 - **usage**: restart-safe record ids, and per-person metrics with configurable limits (#174, #175) ([#174](https://github.com/Rise-Experts/retinue/issues/174)) `b7badc61`
@@ -170,6 +171,7 @@
 
 ### Chores
 
+- **changelog**: regenerate `a74ac044`
 - **changelog**: regenerate `887b811b`
 - **changelog**: regenerate `d182b59c`
 - **license**: Apache-2.0, and the consumer check now covers both shipping packages (#184, #189, #192) ([#184](https://github.com/Rise-Experts/retinue/issues/184)) `651be34f`
