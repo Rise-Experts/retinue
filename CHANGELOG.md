@@ -137,6 +137,7 @@
 
 ### Documentation
 
+- **ci**: Jenkins on our own server, written to be learned from ([#193](https://github.com/Rise-Experts/retinue/issues/193)) `0705aeec`
 - **readme**: the docs-site cutover, in the order that does not take it down ([#203](https://github.com/Rise-Experts/retinue/issues/203)) `798c57d9`
 - **release**: the prerelease policy, and the surface statement points at what enforces it (#189, #195) ([#189](https://github.com/Rise-Experts/retinue/issues/189)) `f6166fbe`
 - **terminology**: one word per concept, checked; and the last Agentkit identifiers renamed ([#200](https://github.com/Rise-Experts/retinue/issues/200)) `6e02f29b`
@@ -174,6 +175,7 @@
 
 ### Chores
 
+- **changelog**: regenerate `38d1a31c`
 - **changelog**: regenerate `791a6145`
 - **changelog**: regenerate `492176ba`
 - **license**: MIT, held jointly by Azeem Sarwar and Rise Experts ([#184](https://github.com/Rise-Experts/retinue/issues/184)) `651127d7`
