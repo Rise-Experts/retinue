@@ -134,6 +134,7 @@
 
 ### Documentation
 
+- **terminology**: one word per concept, checked; and the last Agentkit identifiers renamed ([#200](https://github.com/Rise-Experts/retinue/issues/200)) `6e02f29b`
 - **platform**: the boundary decided, and a check that a consumer cannot cross it ([#195](https://github.com/Rise-Experts/retinue/issues/195)) `09733f95`
 - correct two READMEs that understated their packages, add a third, and document the limits work ([#161](https://github.com/Rise-Experts/retinue/issues/161)) `79ffde31`
 - put the citation-rendering section in the frontend spec, not a new file `b66b5bf3`
@@ -165,6 +166,7 @@
 
 ### Chores
 
+- **changelog**: regenerate for 09733f9 `da28c213`
 - **release**: versions, a semver statement, a deprecation policy and a release check ([#189](https://github.com/Rise-Experts/retinue/issues/189)) `2fd81092`
 - **shareflow**: the three cutover decisions, recorded (#128 AC-1, AC-3, AC-6) ([#128](https://github.com/Rise-Experts/retinue/issues/128)) `9149e4ab`
 - scaffold branch for #97 ([#97](https://github.com/Rise-Experts/retinue/issues/97)) `009ea861`
