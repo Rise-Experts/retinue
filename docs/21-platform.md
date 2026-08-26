@@ -34,6 +34,12 @@ conversation worth having and one nobody has voluntarily.
 The cost is honest and should be stated: two repositories, a release cycle between a runtime change and its use,
 and prereleases on `next` to make that bearable (see [19-versioning](19-versioning.md)). Worth paying.
 
+It is also what keeps the licensing simple. The runtime is Apache-2.0 and the platform is proprietary; a
+proprietary product built on a permissive *dependency* is ordinary and needs no argument, whereas one built by
+reaching into that dependency's internals — vendored, forked, or deep-imported — is a question somebody's
+counsel asks at the worst possible moment. The boundary is the answer, which is a second reason to enforce it
+mechanically rather than by convention.
+
 ### What makes it real today
 
 The argument above is worth exactly what enforces it, and until #195 nothing had ever tried a deep import and

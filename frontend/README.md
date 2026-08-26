@@ -56,3 +56,9 @@ npm run build -w @retinue/react   # builds @retinue/agentkit first
 The optional UI component package from specification 06 — chat shell, part renderers,
 question and approval cards, artifact panel. It depends on this package, never the
 reverse, and is deliberately not a mobile dependency.
+
+## Licence
+
+Apache License 2.0 — see [LICENSE](./LICENSE).
+
+Copyright 2026 Rise Experts.

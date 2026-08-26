@@ -302,3 +302,9 @@ member routed into its step's policy.
 
 The package is ESM with `NodeNext` resolution, so relative imports carry an explicit
 `.js` extension even in TypeScript sources.
+
+## Licence
+
+Apache License 2.0 — see [LICENSE](./LICENSE).
+
+Copyright 2026 Rise Experts.

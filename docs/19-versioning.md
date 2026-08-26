@@ -84,16 +84,45 @@ entry a reader does not believe can be checked in one click.
 
 Honest gaps rather than a plan presented as a state:
 
-- **Nothing is published.** Every package is `private: true`, and the npm scope is not claimed yet — see #192's
-  AC-1. The publish itself is #193.
-- **The licence is `UNLICENSED`**, which is a real value meaning "not licensed for public use" and the correct
-  one until somebody chooses otherwise. **Choosing it is a business decision, not an engineering one**, and it
-  has to be made before the first publish: after that, the licence a consumer received cannot be withdrawn from
-  the version they have.
+- **Nothing is published.** Every package is still `private: true`. Both original reasons are gone — the
+  `retinue` npm organisation exists and is ours (confirmed by an authenticated `npm org ls`, not by a 404 on the
+  registry, which proves nothing: a scope can be held by an org with nothing published), and the licence is
+  chosen. What remains is the publish itself, #193 — a pipeline, a provenance identity, and a decision about
+  when. Flipping `private` is then a one-line change somebody should make deliberately.
 - **No provenance, and no published `next` tag.** Both need a registry and a CI publishing identity, which is
   #193. The *policy* for prereleases is below, because it is needed by a decision already taken (the platform
   consumes this package as a published dependency — [21-platform](21-platform.md)) and it does not need a
   registry to be written down.
+
+## The licence
+
+**Apache-2.0**, for `@retinue/agentkit` and `@retinue/react`.
+
+Chosen for the reason a runtime is licensed at all: installing it should need no conversation. Apache-2.0
+carries an explicit patent grant and is the licence an enterprise security review passes without involving a
+lawyer, which matters for a package whose whole purpose is to be adopted. MIT would have been shorter and
+almost equivalent, minus that patent grant — and the grant is precisely what the audience this is aimed at
+checks for.
+
+**It obliges nothing of what is built on top.** The platform ([21-platform](21-platform.md)) lives in its own
+repository, consumes this package as a published dependency, and is proprietary. That is exactly what a
+permissive licence permits, and it is a further reason the boundary in that document is worth *enforcing*
+rather than merely stating: a proprietary product built on a permissive dependency is ordinary; one built by
+vendoring the dependency's internals is a licensing question nobody wants to answer later.
+
+A source-available licence (BUSL, Elastic) was the alternative, and it was rejected on the same reasoning:
+it would protect the platform's revenue by dampening adoption of the runtime, which is the thing REQ-035 exists
+to increase.
+
+The decision is not reversible in the direction that matters. A future version may change licence, but the
+licence a consumer already received cannot be withdrawn from the version they have — so this had to be settled
+before the first publish, and it was.
+
+`LICENSE` is a byte-identical copy of the canonical Apache-2.0 text
+(`sha256 c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4`), in the repository root and in each
+shipping package. In each package, because `npm pack` includes a `LICENSE` from the package directory and knows
+nothing about the root — and `npm run check:consumer` asserts the tarball carries one, since a manifest claiming
+a licence over a tarball with no licence text fails somebody else's compliance review rather than one of ours.
 
 ## Prereleases on `next`
 

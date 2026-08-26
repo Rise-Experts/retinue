@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "description": "Headless React state for a Retinue runtime: subscriptions, typed part reducers and view models.",
-  "license": "UNLICENSED",
+  "license": "Apache-2.0",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -14,7 +14,10 @@
     }
   },
   "files": [
-    "dist"
+    "dist/**/*.js",
+    "dist/**/*.d.ts",
+    "README.md",
+    "!dist/**/*.map"
   ],
   "scripts": {
     "build": "tsc -b",

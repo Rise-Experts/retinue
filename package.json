@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "description": "Reusable AI agent platform — npm-workspaces monorepo (see docs/).",
-  "license": "UNLICENSED",
+  "license": "Apache-2.0",
   "type": "module",
   "workspaces": [
     "backend",

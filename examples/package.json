@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "description": "The reference application. Useful to read and to run; not a library, and its shape is allowed to change with whatever it is demonstrating.",
-  "license": "UNLICENSED",
+  "license": "Apache-2.0",
   "type": "module",
   "main": "./dist/index.js",
   "exports": {

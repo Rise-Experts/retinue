@@ -13,7 +13,7 @@
  */
 
 import { execSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 
 const STEPS = [
   ["typecheck", "npm run typecheck"],
@@ -43,6 +43,20 @@ const manifestChecks = () => {
 
     if (manifest.version === "0.0.0") at("version is still 0.0.0");
     if (!manifest.license) at("no license field");
+    /**
+     * A licence, and the text of it.
+     *
+     * `UNLICENSED` was correct while nobody had chosen; it is `Apache-2.0` since #184, and the field alone is
+     * not enough. A manifest claiming a licence over a tarball carrying no licence text is what fails somebody
+     * else's compliance review rather than ours — so the file has to be there, in the package, not only at the
+     * repository root where `npm pack` will not pick it up.
+     */
+    if (manifest.license === "UNLICENSED") {
+      at("license is UNLICENSED — the licence was chosen in #184 (Apache-2.0); this is a regression");
+    }
+    if (!existsSync(`${dir}/LICENSE`)) {
+      at(`no ${dir}/LICENSE — npm ships one whatever \`files\` says, but only if the package has one`);
+    }
     if (!manifest.description) at("no description");
     if (!manifest.repository) at("no repository field, so npm cannot link the source");
     if (!manifest.author) at("no author");
@@ -60,20 +74,24 @@ const manifestChecks = () => {
    *
    * `private: true` is what stops an accidental publish, and it is deliberate rather than an oversight — see
    * `docs/19-versioning.md`. This check states the reason so that whoever removes it has to have read why it was
-   * there: the npm scope is not claimed (#192 AC-1) and the licence is a business decision nobody has made.
+   * there.
+   *
+   * Both original reasons are now gone: the `retinue` npm organisation exists and is ours (#192 AC-1, confirmed
+   * by an authenticated `npm org ls`, not by a 404 on the registry), and the licence is Apache-2.0 (#184). What
+   * is left is the publish itself — #193 — which is a pipeline, a provenance identity and a decision about when.
+   * So the note names one reason rather than three, and if that reason is also gone, flipping this flag is a
+   * one-line change somebody should make deliberately.
    */
   const notes = [];
   for (const dir of shipping) {
     const manifest = JSON.parse(readFileSync(`${dir}/package.json`, "utf8"));
     if (manifest.private === true) {
       notes.push(
-        `${manifest.name} is private: true, so this check cannot be a publish. Claiming the npm scope (#192 AC-1) ` +
-          `and choosing a licence come first — both are decisions, not steps.`,
+        `${manifest.name} is private: true, so this check cannot be a publish. The scope and the licence are ` +
+          `settled; what remains is #193 — the release pipeline and its provenance identity.`,
       );
     }
-    if (manifest.license === "UNLICENSED") {
-      notes.push(`${manifest.name} is UNLICENSED — correct until somebody chooses, and it must be chosen before a publish.`);
-    }
+
   }
   return { problems, notes };
 };

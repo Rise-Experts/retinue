@@ -43,5 +43,5 @@
     "url": "git+https://github.com/Rise-Experts/retinue.git",
     "directory": "services/api"
   },
-  "license": "UNLICENSED"
+  "license": "Apache-2.0"
 }

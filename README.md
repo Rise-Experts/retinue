@@ -230,3 +230,15 @@ RETINUE_SCHEMA_MODE=auto node node_modules/@retinue/agentkit/dist/server/main.js
 ```
 
 `auto` is idempotent — a second boot applies nothing — but the production default is `off` on purpose.
+
+## Licence
+
+Apache License 2.0 — see [LICENSE](LICENSE). Copyright 2026 Rise Experts.
+
+The runtime is Apache-2.0 so that installing it needs no conversation: it carries an explicit patent grant, and
+it is the licence an enterprise security review passes without involving a lawyer. That is the point of a
+library people are meant to adopt.
+
+It does **not** oblige anything built on top to be open source. The platform (REQ-042, `docs/21-platform.md`)
+lives in its own repository, consumes this package as a published dependency, and is proprietary — which is
+exactly what Apache-2.0 permits, and one of the reasons the boundary in that document is worth enforcing.
