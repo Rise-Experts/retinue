@@ -110,6 +110,7 @@
 
 ### Fixed
 
+- **ci**: the conformance job builds what its tests read ([#193](https://github.com/Rise-Experts/retinue/issues/193)) `0ae82e7c`
 - **deploy**: the wrangler configs named a Worker that does not exist ([#203](https://github.com/Rise-Experts/retinue/issues/203)) `3555157a`
 - **capabilities**: remove a gate nothing could call ([#198](https://github.com/Rise-Experts/retinue/issues/198)) `684bb1d3`
 - **example**: four defects that were correct-looking and unobservable ([#178](https://github.com/Rise-Experts/retinue/issues/178)) `3d1525b1`
@@ -177,6 +178,7 @@
 
 ### Chores
 
+- **changelog**: regenerate `137e6452`
 - **changelog**: regenerate `525807d5`
 - **changelog**: regenerate `63dda644`
 - **changelog**: regenerate `38d1a31c`
