@@ -2,6 +2,7 @@
 
 ### Added
 
+- **release**: a publish happens from a tagged CI release, or it does not happen ([#193](https://github.com/Rise-Experts/retinue/issues/193)) `64150aaf`
 - **docs**: verify the site's hostname, so the #203 cutover is checkable rather than hoped for ([#203](https://github.com/Rise-Experts/retinue/issues/203)) `df560656`
 - **flows**: an agent step is a child run, which finishes teams (#202, #186) ([#202](https://github.com/Rise-Experts/retinue/issues/202)) `4e2b1601`
 - **flows**: durable workflows, and teams as a kind of step (#187, #186) ([#187](https://github.com/Rise-Experts/retinue/issues/187)) `dd64602c`
@@ -171,6 +172,8 @@
 
 ### Chores
 
+- **license**: MIT, held jointly by Azeem Sarwar and Rise Experts ([#184](https://github.com/Rise-Experts/retinue/issues/184)) `651127d7`
+- **changelog**: regenerate `ad53334f`
 - **changelog**: regenerate `a74ac044`
 - **changelog**: regenerate `887b811b`
 - **changelog**: regenerate `d182b59c`
