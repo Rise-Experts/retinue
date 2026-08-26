@@ -18,6 +18,16 @@ Anything reachable only by a deep import is **not** API. That is not a rule stat
 checking that `ERR_PACKAGE_PATH_NOT_EXPORTED` comes back. A consumer cannot accidentally depend on an internal,
 because they cannot reach one.
 
+`npm run check:consumer` (#195) makes the same assertion against the **packed tarball**, from a directory whose
+only knowledge of the package is `node_modules` — which is the state a consumer is actually in, and the one this
+repository's own tests cannot reproduce, because a workspace resolves through a symlink into `backend/` where
+`src/` exists and everything is readable. It also catches an `exports` entry aimed at a file the `files` globs
+dropped: the failure where every test here passes and the package is broken for everyone who installs it.
+
+The specific error code is the guarantee, not the failure. A deep import that throws `ERR_MODULE_NOT_FOUND` was
+stopped by a file being absent, and a file stops being absent the moment somebody adds one — see
+[21-platform](21-platform.md), where a sabotage produced exactly that against a wide-open map.
+
 | Covered | Not covered |
 |---|---|
 | The five root values | Anything under `dist/` reached directly |
@@ -80,7 +90,27 @@ Honest gaps rather than a plan presented as a state:
   one until somebody chooses otherwise. **Choosing it is a business decision, not an engineering one**, and it
   has to be made before the first publish: after that, the licence a consumer received cannot be withdrawn from
   the version they have.
-- **No provenance, no `next` tag.** Both need a registry and a CI publishing identity, which is #193.
+- **No provenance, and no published `next` tag.** Both need a registry and a CI publishing identity, which is
+  #193. The *policy* for prereleases is below, because it is needed by a decision already taken (the platform
+  consumes this package as a published dependency — [21-platform](21-platform.md)) and it does not need a
+  registry to be written down.
+
+## Prereleases on `next`
+
+The platform lives in its own repository and consumes this package as a dependency, which means every runtime
+change it needs is a release. Without prereleases that is either a real version per iteration or a workspace
+shortcut that dissolves the boundary — so `next` is not a convenience, it is what makes the boundary affordable.
+
+- **Version shape:** `0.2.0-next.3` — the version being worked towards, then `-next.<n>`. Not a date and not a
+  commit hash: a consumer reading a lockfile should be able to tell which release a prerelease precedes.
+- **Tag:** published under `next`, never `latest`. `npm install @retinue/agentkit` must never resolve to a
+  prerelease, which is the one mistake in this area that reaches people who never opted in.
+- **Who may depend on one:** our own platform, pinned exactly (`0.2.0-next.3`, not `^`). A caret range over
+  prereleases moves under you between installs.
+- **What it promises:** the gate passed (`npm run release:check`), and nothing else. A prerelease may remove an
+  export that the previous prerelease added. The stable-version rules above start applying at the release.
+- **What it is not for:** shipping a fix to a customer faster. That is a patch release; using `next` for it means
+  the fix arrives with whatever else was mid-flight.
 
 ## What the release path does do
 
