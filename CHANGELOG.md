@@ -148,6 +148,7 @@
 
 ### Tests
 
+- **boundary**: refuse an adapter internal by name, since #192's test steps name one ([#192](https://github.com/Rise-Experts/retinue/issues/192)) `f93eb31b`
 - **capabilities**: all 256 combinations, not six hand-picked ones ([#197](https://github.com/Rise-Experts/retinue/issues/197)) `54ee8c4d`
 - **guard**: a shipped capability must be wired to something ([#170](https://github.com/Rise-Experts/retinue/issues/170)) `7acb1337`
 - **interop**: consume the SSE endpoint with a real graphql-sse client ([#112](https://github.com/Rise-Experts/retinue/issues/112)) `410c4472`
@@ -167,6 +168,8 @@
 
 ### Chores
 
+- **license**: Apache-2.0, and the consumer check now covers both shipping packages (#184, #189, #192) ([#184](https://github.com/Rise-Experts/retinue/issues/184)) `651be34f`
+- **changelog**: regenerate `d1a3f5cd`
 - **changelog**: regenerate `8e466c93`
 - **changelog**: regenerate for 09733f9 `da28c213`
 - **release**: versions, a semver statement, a deprecation policy and a release check ([#189](https://github.com/Rise-Experts/retinue/issues/189)) `2fd81092`
