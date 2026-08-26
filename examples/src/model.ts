@@ -116,12 +116,32 @@ export const examplePricing = (env: Readonly<Record<string, string | undefined>>
   };
 };
 
+/**
+ * Model ids known to accept an image — #185.
+ *
+ * A list, and a conservative one: declaring a modality a model does not have sends an image to a provider that
+ * answers with a 400, and declaring one it does have *wrongly omitted* is worse in a quieter way. This app
+ * previously hardcoded `["text"]` for every model, which meant an uploaded image was always skipped — and the
+ * skip message names the file, so a screenshot called `blue.png` produced an answer of "Blue" from a model that
+ * had never seen it. That is the mistake this list exists to prevent, and it fooled the first live check of the
+ * feature.
+ *
+ * Matched on a prefix because vendors version within a family (`gpt-4o-2024-08-06`), and the modality does not
+ * change across a family's snapshots.
+ */
+const VISION_MODEL_PREFIXES = ["gpt-4o", "gpt-4.1", "gpt-5", "o3", "o4", "claude-3", "claude-4", "claude-opus", "claude-sonnet", "gemini-"] as const;
+
+const modalitiesFor = (modelId: string): readonly ModelDefinition["inputModalities"][number][] => {
+  const id = modelId.toLowerCase();
+  return VISION_MODEL_PREFIXES.some((prefix) => id.startsWith(prefix)) ? ["text", "image"] : ["text"];
+};
+
 export const definitionFor = (input: { readonly provider: string; readonly modelId: string }): ModelDefinition => ({
   provider: input.provider as ModelDefinition["provider"],
   modelId: input.modelId,
   label: `example:${input.modelId}`,
   lifecycle: "generally-available",
-  inputModalities: ["text"],
+  inputModalities: modalitiesFor(input.modelId),
   capabilities: { tools: true, structuredOutput: true, reasoning: false, nativeSearch: false },
   // Generous but finite. A context limit of zero would make the assembler refuse every prompt, and an
   // unbounded one would remove the budgeting the platform does on purpose.

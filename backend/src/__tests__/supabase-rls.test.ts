@@ -151,6 +151,11 @@ const SEEDS: Readonly<Record<string, (tenant: string, principal: string) => stri
         created_at)
      VALUES ('${t}', '${t}-f1', '${t}-c1', 'report.pdf', 'application/pdf', 1024, '${t}/f1',
              'stored', '${p}', now())`,
+  // #185. The bytes, which live in Postgres for a deployment with no object storage — so the isolation case has
+  // to be exercised on the row that actually holds them, not only on the metadata beside it.
+  file_objects: (t) =>
+    `INSERT INTO file_objects (tenant_id, content_key, media_type, byte_size, checksum, bytes)
+     VALUES ('${t}', '${t}/f1', 'image/png', 3, 'deadbeef', decode('414243', 'hex'))`,
 };
 
 /**
@@ -257,8 +262,10 @@ describe("policy coverage is derived from MIGRATIONS, not transcribed", () => {
       expect(RLS_STATEMENTS).toContain(`ALTER TABLE ${table} ENABLE ROW LEVEL SECURITY`);
       expect(RLS_STATEMENTS).toContain(`ALTER TABLE ${table} FORCE ROW LEVEL SECURITY`);
     }
-    // 27 tables as of #175 (`usage_limits`); the count is asserted so a table silently dropping out is visible.
-    expect(TENANT_SCOPED_TABLES).toHaveLength(27);
+    // 28 tables as of #185 (`file_objects`); the count is asserted so a table silently dropping out is visible.
+    // Updating this number is meant to be a moment of thought: it is the one place that notices a policy list
+    // shrinking, which no per-table test can see.
+    expect(TENANT_SCOPED_TABLES).toHaveLength(28);
 
     // #135. `knowledge_chunks` lives behind the optional pgvector migration, so its policies are a separate
     // list applied by whoever ran that migration -- `ALTER TABLE ... ENABLE ROW LEVEL SECURITY` on an absent

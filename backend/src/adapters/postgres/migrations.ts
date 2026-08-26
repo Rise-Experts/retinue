@@ -1274,6 +1274,68 @@ export const MIGRATIONS: readonly Migration[] = [
       `ALTER TABLE runs ALTER COLUMN conversation_id SET NOT NULL`,
     ],
   },
+  {
+    /**
+     * Non-text input, recorded — REQ-036 (#185), AC-4.
+     *
+     * The cost is already right without these columns, because `computeModelCostMinorUnits` charges by whichever
+     * convention the pricing record declares. What they add is *auditability*: a multimodal turn and a text turn
+     * that happened to cost the same are otherwise indistinguishable in the ledger, so "why was this run
+     * expensive" has no answer and a pricing mistake is invisible after the fact.
+     *
+     * Nullable, not `DEFAULT 0`. A zero would mean "no images" and an absent value means "this row was written
+     * before anyone counted" — collapsing them would silently backdate a claim about rows nobody measured.
+     */
+    id: "0027_usage_non_text_input",
+    up: [
+      `ALTER TABLE usage_records ADD COLUMN IF NOT EXISTS image_count integer`,
+      `ALTER TABLE usage_records ADD COLUMN IF NOT EXISTS audio_seconds integer`,
+      // Guarded like every other constraint here: `migrate` re-runs the whole list against a schema provisioned
+      // before the ledger existed, so an unguarded ADD CONSTRAINT fails on the second pass.
+      `DO $$
+       BEGIN
+         IF NOT EXISTS (
+           SELECT 1 FROM pg_constraint WHERE conname = 'usage_records_non_text_non_negative'
+         ) THEN
+           ALTER TABLE usage_records ADD CONSTRAINT usage_records_non_text_non_negative CHECK (
+             (image_count IS NULL OR image_count >= 0) AND (audio_seconds IS NULL OR audio_seconds >= 0)
+           );
+         END IF;
+       END $$`,
+    ],
+    down: [
+      `ALTER TABLE usage_records DROP CONSTRAINT IF EXISTS usage_records_non_text_non_negative`,
+      `ALTER TABLE usage_records DROP COLUMN IF EXISTS audio_seconds`,
+      `ALTER TABLE usage_records DROP COLUMN IF EXISTS image_count`,
+    ],
+  },
+  {
+    /**
+     * File bytes, for a deployment with no object storage — REQ-036 (#185).
+     *
+     * `bytea` and not a large object: `lo_*` needs its own transaction discipline and a separate vacuum story,
+     * and the sizes this store is for are the ones a row holds comfortably. The `byte_size` check is what makes
+     * a row that disagrees with its own bytes impossible rather than merely unlikely.
+     */
+    id: "0028_file_objects",
+    up: [
+      `CREATE TABLE IF NOT EXISTS file_objects (
+        tenant_id    text        NOT NULL,
+        content_key  text        NOT NULL,
+        media_type   text        NOT NULL,
+        byte_size    integer     NOT NULL,
+        checksum     text        NOT NULL,
+        bytes        bytea       NOT NULL,
+        created_at   timestamptz NOT NULL DEFAULT now(),
+        PRIMARY KEY (tenant_id, content_key),
+        CONSTRAINT file_objects_size_matches CHECK (byte_size = octet_length(bytes)),
+        CONSTRAINT file_objects_size_non_negative CHECK (byte_size >= 0)
+      )`,
+      // Reconciliation's second direction — bytes with no metadata — scans by tenant and prefix.
+      `CREATE INDEX IF NOT EXISTS file_objects_tenant_key_idx ON file_objects (tenant_id, content_key)`,
+    ],
+    down: [`DROP TABLE IF EXISTS file_objects`],
+  },
 ];
 
 /**

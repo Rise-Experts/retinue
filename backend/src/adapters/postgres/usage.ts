@@ -38,6 +38,8 @@ type UsageRow = {
   output_tokens: number;
   cached_input_tokens: number;
   reasoning_tokens: number | null;
+  image_count: number | null;
+  audio_seconds: number | null;
   cost_minor_units: number;
   currency: string;
   occurred_at: string | Date;
@@ -60,6 +62,9 @@ const toEvent = (r: UsageRow): UsageEvent => ({
   outputTokens: int(r.output_tokens),
   cachedInputTokens: int(r.cached_input_tokens),
   ...(r.reasoning_tokens === null ? {} : { reasoningTokens: int(r.reasoning_tokens) }),
+  // Null stays absent: "not counted" and "none" are different facts about a row (#185).
+  ...(r.image_count === null || r.image_count === undefined ? {} : { imageCount: int(r.image_count) }),
+  ...(r.audio_seconds === null || r.audio_seconds === undefined ? {} : { audioSeconds: int(r.audio_seconds) }),
   costMinorUnits: int(r.cost_minor_units),
   currency: r.currency,
   occurredAt: iso(r.occurred_at),
@@ -67,6 +72,7 @@ const toEvent = (r: UsageRow): UsageEvent => ({
 
 const USAGE_COLUMNS = `id, tenant_id, principal_id, run_id, conversation_id, step_id, tool_call_id, model_id,
          input_tokens, output_tokens, cached_input_tokens, reasoning_tokens,
+         image_count, audio_seconds,
          cost_minor_units, currency, occurred_at`;
 
 export const createPostgresUsageStore = (sql: SqlExecutor): UsageStore => ({
@@ -77,8 +83,9 @@ export const createPostgresUsageStore = (sql: SqlExecutor): UsageStore => ({
       `INSERT INTO usage_records
          (tenant_id, id, dedupe_key, principal_id, run_id, conversation_id, step_id, tool_call_id, model_id,
           input_tokens, output_tokens, cached_input_tokens, reasoning_tokens,
+          image_count, audio_seconds,
           cost_minor_units, currency, occurred_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::timestamptz)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18::timestamptz)
        ON CONFLICT (tenant_id, dedupe_key) DO NOTHING`,
       [
         tenantId,
@@ -94,6 +101,8 @@ export const createPostgresUsageStore = (sql: SqlExecutor): UsageStore => ({
         event.outputTokens,
         event.cachedInputTokens,
         event.reasoningTokens ?? null,
+        event.imageCount ?? null,
+        event.audioSeconds ?? null,
         event.costMinorUnits,
         event.currency,
         event.occurredAt,

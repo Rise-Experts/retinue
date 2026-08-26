@@ -68,15 +68,30 @@ const { exampleProviders } = await import(pathToFileURL(resolve(import.meta.dirn
  * The API host never subscribes to its own realtime source (the platform host does that), so the source throws
  * rather than being a silent stub: a stub would make a missing subscription look like an idle stream.
  */
-const backend = postgresBackend(sql, {
-  subscribe: () => {
-    throw new Error("the API host does not subscribe; the platform host owns the SSE route");
+/**
+ * The app module's own authorization policy, threaded through — #185.
+ *
+ * The file service refuses to be built without one, deliberately: entitlement to a file is entitlement to its
+ * conversation. Passing a permissive stand-in here would make every attachment in a tenant readable by every
+ * member of it, through this route only, which is the kind of difference nobody finds by reading one file.
+ */
+const { authorization } = await import(pathToFileURL(resolve(import.meta.dirname, "../dist/index.js")).href);
+const backend = postgresBackend(
+  sql,
+  {
+    subscribe: () => {
+      throw new Error("the API host does not subscribe; the platform host owns the SSE route");
+    },
   },
-});
+  undefined,
+  authorization,
+);
 const { port } = await startExampleServer({
   deps,
   authenticate: app.authenticate,
   stores: backend,
+  // Attachments, when the composition has a file store (#185). The memory mode does not.
+  ...(backend.files === undefined ? {} : { files: backend.files }),
   providers: exampleProviders(backend),
   sql,
   port: PORT,

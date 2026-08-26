@@ -135,6 +135,7 @@ schema.
 | `mcp__agentkit-docs__*` | A real MCP server (this repo's own docs, over stdio) imported through the same registry as the first-party tools. |
 | `calculate`, `now`, `parse_csv`, `query_json` | Also from the kit. This app used to carry its own copies of the first two; every application needs them, which is what "the platform ships zero tools" looked like from the inside. |
 | role selector | `viewer` cannot *see* `share_note` in the catalogue, rather than being refused after asking. |
+| an attachment | Upload an image with `POST /api/upload?conversationId=…`, then pass its `fileId` in `/api/message`. The worker resolves it back to bytes through `FileService` at the moment it builds the turn — the same entitlement check `read_attachment` makes, so the modality bridge is not a way around it (#185). |
 | note `n3` | Its body is a prompt-injection payload. Watch the model not comply. |
 
 That last one is the point of the `external`-origin context section: note bodies are written by whoever created
@@ -329,3 +330,31 @@ observe**, which is why none of them failed a test.
 
 `memoryAuthorization` was also removed — an exported policy builder nothing called, kept alive only by an import
 `tsc` had no reason to complain about (`noUnusedLocals` is not set).
+
+## Sending an image
+
+```bash
+CID=conv-demo
+curl -X POST "http://localhost:4000/api/upload?conversationId=$CID" \
+  -H 'x-agentkit-tenant: demo' -H 'x-agentkit-principal: you' -H 'x-agentkit-roles: editor' \
+  -H 'content-type: image/png' -H 'x-filename: shot.png' --data-binary @shot.png
+# → {"fileId":"file_…"}
+
+curl -X POST http://localhost:4000/api/message \
+  -H 'content-type: application/json' \
+  -H 'x-agentkit-tenant: demo' -H 'x-agentkit-principal: you' -H 'x-agentkit-roles: editor' \
+  -d '{"conversationId":"'"$CID"'","text":"What is in this image?","fileIds":["file_…"]}'
+```
+
+Bytes live in Postgres (`createPostgresFileContentStore`), because that is the shape this example actually has:
+the alternatives were in-memory bytes, which the API and the worker cannot share, and Supabase Storage, which
+needs a Supabase project.
+
+**A model that does not accept images gets a named refusal, not a silent drop.** The turn carries a sentence
+saying which attachment was left out and why. That matters more than it sounds: a dropped image nobody mentions
+produces an answer that reads as though the model looked and disagreed.
+
+It is also how the first live check of this feature fooled me. The example used to declare `["text"]` for every
+model, so the image was always skipped — and the skip names the file, so a test image called `blue.png` produced
+"Blue" from a model that never saw it. The fix was in two places: models declare their real modalities, and a
+test image is named `a1.png`.

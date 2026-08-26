@@ -10,6 +10,8 @@ export * from "../documents/index.js";
 export * from "../files/index.js";
 export * from "../files/context.js";
 export * from "../files/read-tool.js";
+// #185: resolving a stored attachment into a turn part, through the mediated read path.
+export * from "../files/turn-parts.js";
 export * from "../artifacts/index.js";
 export * from "../export/index.js";
 export * from "../export/pdf.js";

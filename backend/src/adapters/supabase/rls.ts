@@ -93,9 +93,19 @@ export const TENANT_SCOPED_TABLES: readonly RlsTable[] = [
   // `blobs`, not the SPEC's `blob_refs`: BlobStore stores the value, and the metadata-and-pointer
   // design belongs to FileMetadataStore (#129) / ArtifactStore (#133).
   { table: "blobs" },
-  // #129. The bytes are not in Postgres at all, so this policy covers the metadata only — an object-storage
-  // bucket needs its own access rules, and RLS here says nothing about them.
+  /**
+   * #129, revised by #185.
+   *
+   * This used to say "the bytes are not in Postgres at all, so this policy covers the metadata only". That was
+   * true when the only content stores were in-memory and Supabase Storage. `createPostgresFileContentStore`
+   * changed it: bytes can now live in `file_objects`, in the same database, and a metadata policy that implied
+   * the bytes were somebody else's problem would have been the most reassuring kind of wrong.
+   *
+   * Both are covered now. A Storage bucket still needs its own access rules, and RLS here says nothing about
+   * those — that part of the original comment stands.
+   */
   { table: "files" },
+  { table: "file_objects" },
   { table: "artifacts" },
   { table: "artifact_versions" },
   { table: "artifact_exports" },

@@ -32,8 +32,9 @@ import { resolveExampleModel } from "./model.js";
 import type { ConversationMode } from "./modes.js";
 import type { ContextProvider } from "@retinue/agentkit";
 import type { ExampleStores } from "./stores.js";
-import type { ConversationId, ExecutionContext, PrincipalId, MessageId, MessagePartId, ResolverDeps, RunId, TenantId } from "@retinue/agentkit";
+import type { ConversationId, ExecutionContext, FileId, PrincipalId, MessageId, MessagePartId, ResolverDeps, RunId, TenantId } from "@retinue/agentkit";
 import type { SqlExecutor } from "@retinue/agentkit/adapters/postgres";
+import type { FileService } from "@retinue/agentkit";
 import { createAgentkitHost, type Authenticate } from "@retinue/agentkit/server";
 import { conversationTurns } from "./history.js";
 import {
@@ -65,6 +66,14 @@ export type ExampleServerOptions = {
    * get an honest "unknown" rather than a wrong number.
    */
   readonly sql?: SqlExecutor;
+  /**
+   * The file service, when the composition has one — #185.
+   *
+   * Optional, and its absence is a 501 on the upload route rather than a crash: the single-process memory mode
+   * has no content store the API and the worker share, so it genuinely cannot serve attachments, and saying so
+   * is better than accepting an upload that later reads as missing.
+   */
+  readonly files?: FileService;
   /**
    * The context providers, passed in for the same reason the stores are: the notebook's provider closes over an
    * in-process store, and the memory composition's principal-memory provider closes over a different one.
@@ -216,7 +225,19 @@ export const startExampleServer = async (options: ExampleServerOptions) => {
     // The whole execution context, not just the tenant: the run records the principal and roles it was
     // admitted for (#164), and narrowing this to `{ tenantId }` is what let the identity go missing.
     context: ExecutionContext,
-    input: { readonly conversationId?: string; readonly text: string; readonly mode?: ConversationMode },
+    input: {
+      readonly conversationId?: string;
+      readonly text: string;
+      readonly mode?: ConversationMode;
+      /**
+       * Attachments to send with this turn — #185.
+       *
+       * Ids, not bytes: the file was uploaded through `/api/upload` and lives behind `FileService`, so the turn
+       * references it and the worker resolves it through the same entitlement check. A route that took bytes here
+       * would be a second upload path with its own limits.
+       */
+      readonly fileIds?: readonly string[];
+    },
   ): Promise<{ conversationId: string; runId: string; messageId: string; started: string; mode: ConversationMode }> => {
     /**
      * The quota check, **before** anything is created — #175.
@@ -296,6 +317,22 @@ export const startExampleServer = async (options: ExampleServerOptions) => {
             createdAt: new Date().toISOString(),
             text: input.text,
           },
+          /**
+           * An `image` part per attachment — a **reference**, never bytes (#185).
+           *
+           * The part schema refuses a `data:` URI here on purpose, and this is the reason: a message is durable
+           * and replicated, and a copy of every screenshot inside it is a copy nobody can expire, redact or
+           * count. The worker resolves the id back to bytes through `FileService` at the moment it builds the
+           * turn, which is also the moment the entitlement check happens.
+           */
+          ...(input.fileIds ?? []).map((fileId, index) => ({
+            id: asId<MessagePartId>(`${messageId}-a${index}`),
+            type: "image" as const,
+            schemaVersion: 1 as const,
+            createdAt: new Date().toISOString(),
+            fileId: asId<FileId>(String(fileId).replace(/^file:/, "")),
+            mediaType: "image/png",
+          })),
         ],
         createdAt: new Date().toISOString(),
       },
@@ -424,13 +461,62 @@ export const startExampleServer = async (options: ExampleServerOptions) => {
     if (url.pathname === "/composer.js") return composerAsset(composerPath);
     if (url.pathname === "/composer.js.map") return composerAsset(`${composerPath}.map`);
 
+    /**
+     * Uploading an attachment — #185.
+     *
+     * Raw bytes with the filename and type in headers, rather than multipart: a demo that had to parse multipart
+     * would be demonstrating a parser. What matters here is what happens *after* the bytes land — the upload goes
+     * through `FileService`, so the media-type allow-list, the byte ceiling and the conversation entitlement are
+     * the service's checks and not this route's.
+     */
+    if (url.pathname === "/api/upload" && request.method === "POST") {
+      const context = await options.authenticate(request);
+      if (context === null) return Response.json({ error: "Unauthenticated" }, { status: 401 });
+      const files = options.files;
+      if (files === undefined)
+        return Response.json({ error: "This composition has no file store; attachments are unavailable." }, { status: 501 });
+
+      const conversationId = url.searchParams.get("conversationId");
+      const filename = request.headers.get("x-filename");
+      const mediaType = request.headers.get("content-type");
+      if (!conversationId || !filename || !mediaType)
+        return Response.json({ error: "conversationId, x-filename and content-type are required" }, { status: 400 });
+
+      const body = await request.arrayBuffer();
+      const bytes = new Uint8Array(body);
+      try {
+        const file = await files.upload(context, {
+          conversationId: asId<ConversationId>(conversationId),
+          filename,
+          mediaType,
+          declaredBytes: bytes.byteLength,
+          bytes: (async function* () {
+            yield bytes;
+          })(),
+        });
+        return Response.json({ fileId: String(file.id), filename: file.filename, byteSize: file.byteSize });
+      } catch (thrown) {
+        // The service's own refusal, with its code: "that type is not allowed" and "something broke" are
+        // different answers and a 500 for the first one sends someone reading logs.
+        const error = thrown as { code?: string; message?: string };
+        const status = error.code === "invalid_input" ? 400 : error.code === "forbidden" ? 403 : 500;
+        return Response.json({ error: error.message ?? "upload failed", code: error.code }, { status });
+      }
+    }
+
     if (url.pathname === "/api/message" && request.method === "POST") {
       const context = await options.authenticate(request);
       // The same rejection the GraphQL surface gives. An example route that authenticated more loosely than the
       // platform's would be the example teaching the wrong thing.
       if (context === null) return Response.json({ error: "Unauthenticated" }, { status: 401 });
 
-      const body = (await request.json()) as { conversationId?: string; text?: string; mode?: string };
+      const body = (await request.json()) as {
+        conversationId?: string;
+        text?: string;
+        mode?: string;
+        /** Attachments already uploaded through `/api/upload` — #185. */
+        fileIds?: readonly string[];
+      };
       const text = String(body.text ?? "").trim();
       if (text === "") return Response.json({ error: "text is required" }, { status: 400 });
       // An unrecognised mode is refused rather than ignored. Ignoring it would run the turn under a mode the
@@ -440,7 +526,12 @@ export const startExampleServer = async (options: ExampleServerOptions) => {
 
       try {
         return Response.json(
-          await startTurn(context, { conversationId: body.conversationId, text, mode: body.mode }),
+          await startTurn(context, {
+            conversationId: body.conversationId,
+            text,
+            mode: body.mode,
+            ...(body.fileIds === undefined ? {} : { fileIds: body.fileIds }),
+          }),
         );
       } catch (thrown) {
         /**

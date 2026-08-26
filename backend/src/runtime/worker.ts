@@ -208,6 +208,8 @@ export const createDurableWorker = (deps: DurableWorkerDeps) => {
           outputTokens: event.outputTokens,
           cachedInputTokens: event.cachedInputTokens ?? 0,
           ...(event.reasoningTokens === undefined ? {} : { reasoningTokens: event.reasoningTokens }),
+          ...(event.imageCount === undefined ? {} : { imageCount: event.imageCount }),
+          ...(event.audioSeconds === undefined ? {} : { audioSeconds: event.audioSeconds }),
           costMinorUnits: event.costMinorUnits ?? 0,
           currency: event.currency ?? "USD",
           stepId: event.stepId ?? String(event.sequence),

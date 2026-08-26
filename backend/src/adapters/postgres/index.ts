@@ -37,3 +37,4 @@ export * from "./knowledge.js";
 export * from "./rollups.js";
 export * from "./evaluation.js";
 export * from "./retention.js";
+export * from "./file-content.js";

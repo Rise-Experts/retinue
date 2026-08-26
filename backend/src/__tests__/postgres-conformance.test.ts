@@ -24,6 +24,7 @@ import {
   createPostgresVectorIndex,
   createPostgresArtifactStore,
   createPostgresConversationStore,
+  createPostgresFileContentStore,
   createPostgresFileMetadataStore,
   createPostgresAgentStore,
   createPostgresCheckpointStore,
@@ -67,7 +68,7 @@ import { runEventLogConformance } from "../testing/conformance/run-event-log.js"
 import { checkpointStoreConformance } from "../testing/conformance/checkpoint-store.js";
 import { crossPortInvariants } from "../testing/conformance/invariants.js";
 import { agentStoreConformance, messageStoreConformance } from "../testing/conformance/records.js";
-import { fileMetadataStoreConformance } from "../testing/conformance/files.js";
+import { fileContentStoreConformance, fileMetadataStoreConformance } from "../testing/conformance/files.js";
 import { artifactStoreConformance } from "../testing/conformance/artifacts.js";
 import { artifactExportStoreConformance } from "../testing/conformance/artifact-exports.js";
 import { usageRollupStoreConformance } from "../testing/conformance/rollups.js";
@@ -569,6 +570,16 @@ fileMetadataStoreConformance(() => {
     },
   };
 });
+
+/**
+ * The bytes adapter, held to the same suite as the reference one — #185.
+ *
+ * It exists because a deployment on plain Postgres and Redis could not accept an attachment at all: the only
+ * content stores were in-memory, which the API and the worker do not share, and Supabase Storage, which needs a
+ * Supabase project. Running the same conformance suite is what makes "it behaves like the reference" a fact
+ * rather than a claim about a hundred lines nobody compared.
+ */
+fileContentStoreConformance(() => createPostgresFileContentStore(freshExecutor()));
 
 // ---------------------------------------------------------------------------------------------
 // The registry contract. Not a placeholder — these assertions are what make the matrix's

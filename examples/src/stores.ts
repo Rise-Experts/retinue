@@ -15,9 +15,11 @@
  * reads through the other.
  */
 
-import { createPostgresApprovalGrantStore, createPostgresConversationRunCoordinator, createPostgresIdempotencyStore, createPostgresInteractionStore, createPostgresPrincipalMemoryStore, createPostgresRunEventLog, createPostgresRunStore, createPostgresSkillStore, createPostgresUsageStore, createPostgresConversationStore, createPostgresMessageStore, createPostgresSessionStateStore, createPostgresThreadSummaryStore, createPostgresUsageLimitStore, createPostgresUsageRollupStore } from "@retinue/agentkit/adapters/postgres";
+import { createPostgresApprovalGrantStore, createPostgresConversationRunCoordinator, createPostgresIdempotencyStore, createPostgresInteractionStore, createPostgresPrincipalMemoryStore, createPostgresRunEventLog, createPostgresRunStore, createPostgresSkillStore, createPostgresUsageStore, createPostgresConversationStore, createPostgresMessageStore, createPostgresSessionStateStore, createPostgresThreadSummaryStore, createPostgresUsageLimitStore, createPostgresUsageRollupStore, createPostgresFileContentStore, createPostgresFileMetadataStore } from "@retinue/agentkit/adapters/postgres";
 import type { ApprovalGrantStore, ConversationRunCoordinator, IdempotencyStore, InteractionStore, LiveEventSource, PrincipalMemoryStore, RunEventLog, RunStore, SkillStore, UsageStore, ConversationStore, MessageStore, SessionStateStore, ThreadSummaryStore, UsageLimitStore, UsageRollupStore } from "@retinue/agentkit";
 import type { TransactionRunner, SqlExecutor } from "@retinue/agentkit/adapters/postgres";
+import { createFileService } from "@retinue/agentkit/knowledge";
+import type { AuthorizationPolicy, FileService } from "@retinue/agentkit";
 
 export type ExampleStores = {
   readonly conversations: ConversationStore;
@@ -51,6 +53,14 @@ export type ExampleBackend = ExampleStores & {
   readonly coordinator: ConversationRunCoordinator;
   /** The realtime pair. Redis across processes, a function call within one — the same shape either way. */
   readonly live: LiveEventSource;
+  /**
+   * Attachments — #185.
+   *
+   * Optional, and the optionality is the honest part: the single-process memory mode has no content store the
+   * API and the worker can share, so it has no attachments. A `FileService` constructed over an in-memory
+   * content store would upload in one process and be unreadable in the other, which looks like corruption.
+   */
+  readonly files?: FileService;
 };
 
 /**
@@ -101,6 +111,15 @@ export const postgresBackend = (
    * it to open a pool it does not use. Absent, the coordinator throws when used, which is the honest failure.
    */
   runner?: TransactionRunner,
+  /**
+   * The app's authorization policy, for the file service — #185.
+   *
+   * Passed in rather than defaulted, and there is no permissive fallback: entitlement to a file is entitlement
+   * to its conversation, and a file service constructed without a policy makes every attachment in a tenant
+   * readable by every member of it. Absent means **no attachments**, which is a smaller feature than a broken
+   * one — the worker, which has no reason to serve uploads, is the caller that leaves it out.
+   */
+  authorization?: AuthorizationPolicy,
 ): ExampleBackend => ({
   ...postgresStores(sql),
   runs: createPostgresRunStore(sql),
@@ -124,6 +143,32 @@ export const postgresBackend = (
    */
   coordinator: lazyCoordinator(sql, runner),
   live,
+  /**
+   * The file service, over Postgres for both halves — #185.
+   *
+   * `createPostgresFileContentStore` exists because this is the shape a deployment on plain Postgres and Redis
+   * actually has: the alternatives were in-memory bytes, which two processes cannot share, and Supabase Storage,
+   * which needs a Supabase project. Without one of them the multimodal path was unreachable in practice however
+   * correct it was in principle.
+   *
+   * `authorization` is the app's real policy, not a permissive one: entitlement to a file is entitlement to its
+   * conversation, and the resolver that turns an attachment into an image part reads through this service
+   * precisely so that check cannot be bypassed.
+   */
+  ...(authorization === undefined
+    ? {}
+    : {
+        files: createFileService({
+          metadata: createPostgresFileMetadataStore(sql),
+          content: createPostgresFileContentStore(sql),
+          authorization,
+          limits: {
+            maxBytes: 8 * 1024 * 1024,
+            allowedMediaTypes: ["image/png", "image/jpeg", "image/webp", "image/gif", "application/pdf", "text/plain"],
+            signedUrlSeconds: 300,
+          },
+        }),
+      }),
 });
 
 /**

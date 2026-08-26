@@ -322,6 +322,20 @@ const CAPABILITIES = [
      */
     why: "#188 — two providers offering one name must be refused loudly, not resolved by registration order.",
   },
+  {
+    name: "attachments reaching the model",
+    symbol: "createAttachmentResolver",
+    scope: "host",
+    /**
+     * The capability #185 is about, tracked at the point it was missing.
+     *
+     * `ImagePart`, `FilePart` and `InputModality` all existed and were tested; the bridge to the provider took a
+     * string. So an attachment was stored, authorized, rendered and billed for, and the model was sent a turn
+     * that did not mention it. Tracking the *resolver* rather than the parts is deliberate: parts being present
+     * is what was true the whole time it was broken.
+     */
+    why: "#185 — an attachment the platform accepted must reach the model, through the same file authorization as a tool read.",
+  },
 ];
 
 /**

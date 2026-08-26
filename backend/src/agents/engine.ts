@@ -556,6 +556,9 @@ function* mapChunk(
         outputTokens: chunk.usage.outputTokens,
         cachedInputTokens: chunk.usage.cachedInputTokens,
         ...(chunk.usage.reasoningTokens !== undefined ? { reasoningTokens: chunk.usage.reasoningTokens } : {}),
+        // Counted at the send site (`nonTextCounts`), carried through so the ledger records it (#185).
+        ...(chunk.usage.imageCount !== undefined ? { imageCount: chunk.usage.imageCount } : {}),
+        ...(chunk.usage.audioSeconds !== undefined ? { audioSeconds: chunk.usage.audioSeconds } : {}),
         modelId: resolved.modelId,
         currency: resolved.currency ?? "USD",
         costMinorUnits: resolved.price ? resolved.price(chunk.usage) : 0,

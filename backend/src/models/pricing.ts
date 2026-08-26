@@ -17,14 +17,38 @@ import type { ModelPricing } from "./index.js";
  */
 export const computeModelCostMinorUnits = (
   pricing: ModelPricing,
-  usage: { readonly inputTokens: number; readonly outputTokens: number; readonly cachedInputTokens?: number },
+  usage: {
+    readonly inputTokens: number;
+    readonly outputTokens: number;
+    readonly cachedInputTokens?: number;
+    /** Images sent with the turn — counted from the parts, not from the provider. See `NeutralUsage`. */
+    readonly imageCount?: number;
+    readonly audioSeconds?: number;
+  },
 ): number => {
   const cachedIn = usage.cachedInputTokens ?? 0;
   const freshIn = Math.max(0, usage.inputTokens - cachedIn);
   const perMillion = (tokens: number, price: number): number => (tokens * price) / 1_000_000;
-  return Math.round(
+
+  const tokenCost =
     perMillion(freshIn, pricing.inputPerMillion) +
-      perMillion(cachedIn, pricing.cacheReadPerMillion ?? pricing.inputPerMillion) +
-      perMillion(usage.outputTokens, pricing.outputPerMillion),
+    perMillion(cachedIn, pricing.cacheReadPerMillion ?? pricing.inputPerMillion) +
+    perMillion(usage.outputTokens, pricing.outputPerMillion);
+
+  /**
+   * Non-text input, charged **only** where the provider prices it separately — #185 AC-4.
+   *
+   * The default is `"in-input-tokens"`, which means the image is already inside `inputTokens` and there is
+   * nothing to add. Adding it anyway is the double-bill this branch exists to prevent, and it would not show up
+   * in any test that only ever passes text.
+   */
+  if (pricing.nonTextInput !== "per-unit") return Math.round(tokenCost);
+
+  const images = Math.max(0, usage.imageCount ?? 0);
+  const seconds = Math.max(0, usage.audioSeconds ?? 0);
+  return Math.round(
+    tokenCost +
+      images * (pricing.perImageMinorUnits ?? 0) +
+      seconds * (pricing.perAudioSecondMinorUnits ?? 0),
   );
 };

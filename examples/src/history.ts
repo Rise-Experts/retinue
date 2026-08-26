@@ -14,7 +14,8 @@
  * The fold is not merely redundant now — keeping it would double every assistant turn.
  */
 
-import type { ConversationId, Message, TenantId, TurnMessage } from "@retinue/agentkit";
+import { describeSkipped } from "@retinue/agentkit/knowledge";
+import type { AttachmentResolver, ConversationId, ExecutionContext, InputModality, Message, TenantId, TurnContentPart, TurnMessage } from "@retinue/agentkit";
 import type { ExampleStores } from "./stores.js";
 
 /**
@@ -137,6 +138,58 @@ export const conversationTurns = async (input: {
  * back invites the model to paraphrase provenance in prose.
  */
 export const historyForModel = (turns: readonly ConversationTurn[]): readonly TurnMessage[] =>
-  // `content`, since #185 — a turn carries parts now, and a text turn carries a string. This app sends text
-  // only; an attachment would be resolved through the mediated file path and added here as an image part.
+  // `content`, since #185 — a turn carries parts now, and a text-only turn carries a string.
   turns.map(({ role, content }) => ({ role, content }));
+
+/**
+ * The same turns, with attachments resolved into parts the model can see — #185 AC-1 and AC-3.
+ *
+ * Only the **last** user turn's attachments are resolved, and that is the interesting decision. Resolving every
+ * historical image would re-send every picture on every turn: the cost grows with the conversation, the context
+ * fills with things nobody asked about again, and a fifty-turn thread eventually cannot start. What a model needs
+ * is the attachment belonging to the question it is answering; earlier ones are described in the transcript by
+ * whatever the model said about them at the time.
+ *
+ * Attachments that could not be sent are appended to the turn's own text rather than dropped. A silently missing
+ * screenshot is the worst outcome: the person sees it in the thread, the model never received it, and the answer
+ * reads as though the model looked and disagreed.
+ */
+export const historyForModelWithAttachments = async (
+  turns: readonly ConversationTurn[],
+  options: {
+    readonly resolver: AttachmentResolver;
+    readonly context: ExecutionContext;
+    /** What the resolved model accepts, so a skip can name the file rather than failing the whole turn. */
+    readonly accepts?: readonly InputModality[];
+  },
+): Promise<readonly TurnMessage[]> => {
+  const messages = turns.map(({ role, content }): TurnMessage => ({ role, content }));
+
+  let lastUser = -1;
+  for (let i = turns.length - 1; i >= 0; i -= 1) {
+    if (turns[i]?.role === "user") {
+      lastUser = i;
+      break;
+    }
+  }
+  if (lastUser === -1) return messages;
+
+  const fileIds = (turns[lastUser]?.parts ?? [])
+    .filter((part) => part.type === "image" || part.type === "file")
+    .map((part) => String((part as { fileId?: unknown }).fileId ?? ""))
+    .filter((id) => id !== "");
+  if (fileIds.length === 0) return messages;
+
+  const resolved = await options.resolver.resolve(options.context, {
+    fileIds,
+    ...(options.accepts === undefined ? {} : { accepts: options.accepts }),
+  });
+
+  const note = describeSkipped(resolved.skipped);
+  const text = typeof messages[lastUser]!.content === "string" ? (messages[lastUser]!.content as string) : "";
+  const parts: TurnContentPart[] = [
+    { kind: "text", text: note === null ? text : `${text}\n\n${note}` },
+    ...resolved.parts,
+  ];
+  return messages.map((message, index) => (index === lastUser ? { role: message.role, content: parts } : message));
+};

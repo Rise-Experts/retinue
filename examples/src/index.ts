@@ -33,6 +33,7 @@ import type { AgentkitConfig } from "@retinue/agentkit/server";
 import { createDevAuthenticate } from "./auth.js";
 import type { Authenticate } from "@retinue/agentkit/server";
 import { STANDARD_TOOL_CATEGORIES, createStandardToolProvider } from "@retinue/agentkit/tools";
+import { createAttachmentResolver } from "@retinue/agentkit/knowledge";
 
 /** One authenticator, built the first time a request needs it. */
 let devAuth: Authenticate | undefined;
@@ -52,7 +53,7 @@ import { fileURLToPath } from "node:url";
 import { exampleAgentManifest, exampleContextProviders } from "./agent.js";
 import { EXCLUDED_EFFECTS, MODE_DESCRIPTIONS, type ConversationMode } from "./modes.js";
 import { createModeStore } from "./mode-store.js";
-import { conversationTurns, historyForModel } from "./history.js";
+import { conversationTurns, historyForModel, historyForModelWithAttachments } from "./history.js";
 
 /** One store per process. The tools are a test surface; see the note in `tools.ts`. */
 // The notebook lives in `./store.ts`, so the server shares this one instance rather than a second.
@@ -135,7 +136,14 @@ const ROLES = [
   },
 ] as const;
 
-const authorization = createAuthorizationPolicy({
+/**
+ * Exported since #185, for the app runner.
+ *
+ * The runner builds its own `postgresBackend` for the HTTP routes, and the file service inside it needs this
+ * policy — not a permissive stand-in. Two policies in one deployment is how an attachment ends up readable
+ * through one route and refused through another.
+ */
+export const authorization = createAuthorizationPolicy({
   roles: ROLES as never,
   // Denials to stderr. The platform's own telemetry (#143) is the production answer; here the point is that a
   // refusal is *visible* while driving the example by hand, rather than looking like a tool that did nothing.
@@ -201,6 +209,15 @@ export const closeExampleMcp = async (): Promise<void> => {
   mcpClientSingleton = undefined;
   await client?.close();
 };
+
+/**
+ * The attachment resolver, when there is a file service to read through — #185.
+ *
+ * `undefined` where there is none, which is the memory composition: it has no content store the two processes
+ * share, so it has no attachments. Returning a resolver over nothing would give a turn parts that fail to load.
+ */
+const attachmentResolver = (backend: ExampleBackend) =>
+  backend.files === undefined ? undefined : createAttachmentResolver({ files: backend.files });
 
 const exampleToolProviders = (backend: ExampleBackend) => [
   { id: "example.notes-tools", async listTools() { return buildTools(backend); } },
@@ -623,7 +640,7 @@ const app = {
      * rather than carry a copy — and a copy is how a difference creeps in unnoticed, which is the shape of both
      * #157 and #161.
      */
-    const backend = postgresBackend(sql, createRedisLiveEventSource(new Redis(config.redisUrl)), runner);
+    const backend = postgresBackend(sql, createRedisLiveEventSource(new Redis(config.redisUrl)), runner, authorization);
     const runs = backend.runs;
     const interactions = backend.interactions;
     const grants = backend.grants;
@@ -731,7 +748,11 @@ const app = {
   engine({ sql }: { config: AgentkitConfig; sql: SqlExecutor }) {
     // The worker needs no realtime *source*, so it is absent rather than invented. It also gets no
     // `TransactionRunner`, which is why the backend's coordinator has to be the lazy one — see `stores.ts`.
-    return composeEngine(postgresBackend(sql, { subscribe: () => { throw new Error("the worker does not subscribe"); } } as never));
+    // The worker gets the policy too: it is the process that *reads* an attachment to put it in a turn, so
+    // without a file service here an uploaded image would resolve in the API and vanish in the worker (#185).
+    return composeEngine(
+      postgresBackend(sql, { subscribe: () => { throw new Error("the worker does not subscribe"); } } as never, undefined, authorization),
+    );
   },
 
   buildContext: (run: Run) => buildWorkerContext(run),
@@ -836,6 +857,16 @@ export const composeEngine = (backend: ExampleBackend) => {
             inputTokens: usage.inputTokens,
             outputTokens: usage.outputTokens,
             ...(usage.cachedInputTokens === undefined ? {} : { cachedInputTokens: usage.cachedInputTokens }),
+            /**
+             * Forwarded, or a per-unit provider under-bills every multimodal turn — #185 AC-4.
+             *
+             * Whether these change the figure is the *pricing record's* decision, not this app's:
+             * `computeModelCostMinorUnits` ignores them unless the record says the provider charges separately.
+             * So passing them is free where it does not apply and correct where it does — and dropping them here
+             * would be a silent shortfall that scales with every image anyone sends.
+             */
+            ...(usage.imageCount === undefined ? {} : { imageCount: usage.imageCount }),
+            ...(usage.audioSeconds === undefined ? {} : { audioSeconds: usage.audioSeconds }),
           }),
       }),
       /**
@@ -848,15 +879,32 @@ export const composeEngine = (backend: ExampleBackend) => {
        */
       async loadHistory(context: ExecutionContext): Promise<readonly TurnMessage[]> {
         if (context.conversationId === undefined) return [];
-        return historyForModel(
-          await conversationTurns({
-            stores: backend,
-            tenantId: String(context.tenantId),
-            conversationId: String(context.conversationId),
-            // The compacted form, which is what compaction is for. The page reads the full transcript.
-            compacted: true,
-          }),
-        );
+        const turns = await conversationTurns({
+          stores: backend,
+          tenantId: String(context.tenantId),
+          conversationId: String(context.conversationId),
+          // The compacted form, which is what compaction is for. The page reads the full transcript.
+          compacted: true,
+        });
+        /**
+         * Attachments resolved into parts the model can see — #185 AC-1 and AC-3.
+         *
+         * Through `createAttachmentResolver`, which reads via `FileService`, so an image reaches the model on
+         * exactly the terms `read_attachment` would have given it: the same entitlement check, the same refusal
+         * when the file is not this caller's. Building the parts from the stores here would have been shorter
+         * and would have made the modality bridge a way around file authorization.
+         *
+         * `accepts` comes from the resolved model, so a model without vision produces a *named* skip — "shot.png
+         * is image, which the selected model does not accept" — rather than a refused turn that does not say
+         * which attachment caused it.
+         */
+        const attachments = attachmentResolver(backend);
+        if (attachments === undefined) return historyForModel(turns);
+        return historyForModelWithAttachments(turns, {
+          resolver: attachments,
+          context,
+          accepts: resolved.definition.inputModalities,
+        });
       },
       async buildTools(context: ExecutionContext, manifest: AgentManifest): Promise<readonly ModelTurnTool[]> {
         void manifest;

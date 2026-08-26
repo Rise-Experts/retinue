@@ -65,6 +65,7 @@ export type * from "./principal-memory/index.js";
 export type * from "./files/index.js";
 export type * from "./files/context.js";
 export type * from "./files/read-tool.js";
+export type * from "./files/turn-parts.js";
 export type * from "./documents/index.js";
 export type * from "./artifacts/index.js";
 export type * from "./export/index.js";

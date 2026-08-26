@@ -35,6 +35,14 @@ export type UsageEvent = {
   readonly outputTokens: number;
   readonly cachedInputTokens: number;
   readonly reasoningTokens?: number;
+  /**
+   * Non-text input this turn carried — #185 AC-4.
+   *
+   * Absent means "not counted", not "none". A row written before the count existed and a genuinely text-only
+   * turn are different facts, and a zero would merge them.
+   */
+  readonly imageCount?: number;
+  readonly audioSeconds?: number;
   /** Integer minor units in the tenant's accounting currency. */
   readonly costMinorUnits: number;
   readonly currency: string;

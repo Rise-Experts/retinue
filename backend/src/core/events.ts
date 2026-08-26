@@ -87,6 +87,15 @@ export type UsageUpdatedEvent = EventBase<"usage.updated"> & {
   readonly modelId?: string;
   readonly cachedInputTokens?: number;
   readonly reasoningTokens?: number;
+  /**
+   * Non-text input this step carried — #185 AC-4.
+   *
+   * On the event, not only in the cost, so the ledger can say *why* a step cost what it did. A multimodal turn
+   * and a text turn that happened to price the same are otherwise indistinguishable after the fact, which makes
+   * a pricing mistake invisible.
+   */
+  readonly imageCount?: number;
+  readonly audioSeconds?: number;
   readonly currency?: string;
   /** Stable per-step id so recording is idempotent across a recovery. */
   readonly stepId?: string;

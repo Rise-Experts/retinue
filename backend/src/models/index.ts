@@ -41,6 +41,25 @@ export type ModelPricing = {
   readonly outputPerMillion: number;
   readonly cacheReadPerMillion?: number;
   readonly cacheWritePerMillion?: number;
+  /**
+   * How this provider charges for non-text input — REQ-036 (#185), AC-4.
+   *
+   * The field exists because getting it wrong is a wrong bill in **either** direction, and the two conventions
+   * are indistinguishable from the token counts alone:
+   *
+   * - `"in-input-tokens"` (the default, and what OpenAI does): an image is converted to input tokens by the
+   *   provider and already counted in `inputTokens`. Adding a per-image charge on top **double-bills**.
+   * - `"per-unit"`: images and audio are billed separately, per image or per second, *in addition* to the text
+   *   tokens. Not adding the charge **under-bills**, silently, and the shortfall scales with usage.
+   *
+   * Defaulting to `"in-input-tokens"` is the safe direction for the model catalogue we ship, and it means every
+   * existing pricing record keeps costing exactly what it did.
+   */
+  readonly nonTextInput?: "in-input-tokens" | "per-unit";
+  /** Minor units per image sent. Only consulted when `nonTextInput` is `"per-unit"`. */
+  readonly perImageMinorUnits?: number;
+  /** Minor units per second of audio input. Only consulted when `nonTextInput` is `"per-unit"`. */
+  readonly perAudioSecondMinorUnits?: number;
 };
 
 export type ModelDefinition = {

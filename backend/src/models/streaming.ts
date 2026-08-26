@@ -54,6 +54,24 @@ export const turnText = (message: TurnMessage): string =>
         .join("\n");
 
 /** The modalities a turn actually needs, so a model can be checked against it rather than assumed. */
+/**
+ * What non-text input a turn is carrying — REQ-036 (#185), AC-4.
+ *
+ * Counted, not inferred: one image part is one image. Audio is not counted yet and the field is deliberately
+ * absent rather than zero — a `TurnContentPart` has no duration, so the only honest answer is "this layer does
+ * not know", and a zero would be indistinguishable from a silent audio turn.
+ */
+export const nonTextCounts = (
+  messages: readonly TurnMessage[],
+): { readonly imageCount?: number } => {
+  let images = 0;
+  for (const message of messages) {
+    if (typeof message.content === "string") continue;
+    for (const part of message.content) if (part.kind === "image") images += 1;
+  }
+  return images === 0 ? {} : { imageCount: images };
+};
+
 export const modalitiesOf = (messages: readonly TurnMessage[]): readonly InputModality[] => {
   const found = new Set<InputModality>();
   for (const message of messages) {
@@ -119,6 +137,19 @@ export type NeutralUsage = {
   readonly outputTokens: number;
   readonly cachedInputTokens: number;
   readonly reasoningTokens?: number;
+  /**
+   * Non-text input, counted from what **we sent** rather than from what the provider reported — #185 AC-4.
+   *
+   * Deliberately not read out of the provider's usage object. The AI SDK's neutral usage has no modality
+   * breakdown, and the providers that expose one put it in provider-specific metadata under provider-specific
+   * names — so a platform reading it would work for one vendor and silently report zero for the rest, which is
+   * worse than not reporting at all because it looks like data.
+   *
+   * We know exactly what went out: the turn's parts. Counting there is provider-independent, always available,
+   * and auditable against the transcript — and it is the number a per-image price is charged against anyway.
+   */
+  readonly imageCount?: number;
+  readonly audioSeconds?: number;
 };
 
 /** Provider-neutral stream chunk — the engine maps these to `RunEvent`s. */
@@ -332,6 +363,19 @@ export async function* streamModelTurn(req: ModelTurnRequest): AsyncIterable<Neu
             outputTokens: num(usage.outputTokens),
             cachedInputTokens: num(usage.cachedInputTokens),
             ...(usage.reasoningTokens !== undefined ? { reasoningTokens: num(usage.reasoningTokens) } : {}),
+            /**
+             * Non-text input, counted from the request rather than read from the response — #185 AC-4.
+             *
+             * This is the only place that knows both things at once: what went out, and that the turn has
+             * finished. The provider's usage object has no modality breakdown in the SDK's neutral shape, and
+             * the vendors that expose one bury it under vendor-specific metadata — so reading it there would
+             * work for one provider and silently report zero for the others, which is worse than reporting
+             * nothing because it looks like data.
+             *
+             * Only emitted when there is something to say. A text-only turn carries no `imageCount: 0`, so a
+             * pricing record that charges per image cannot be handed a zero it might treat as "unknown".
+             */
+            ...nonTextCounts(req.messages),
           },
         };
         break;
