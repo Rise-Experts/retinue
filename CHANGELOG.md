@@ -2,6 +2,7 @@
 
 ### Added
 
+- **docs**: verify the site's hostname, so the #203 cutover is checkable rather than hoped for ([#203](https://github.com/Rise-Experts/retinue/issues/203)) `df560656`
 - **flows**: an agent step is a child run, which finishes teams (#202, #186) ([#202](https://github.com/Rise-Experts/retinue/issues/202)) `4e2b1601`
 - **flows**: durable workflows, and teams as a kind of step (#187, #186) ([#187](https://github.com/Rise-Experts/retinue/issues/187)) `dd64602c`
 - **parity**: a capability inventory, so a missing feature cannot read as parity ([#194](https://github.com/Rise-Experts/retinue/issues/194)) `47358636`
@@ -169,6 +170,7 @@
 
 ### Chores
 
+- **changelog**: regenerate `887b811b`
 - **changelog**: regenerate `d182b59c`
 - **license**: Apache-2.0, and the consumer check now covers both shipping packages (#184, #189, #192) ([#184](https://github.com/Rise-Experts/retinue/issues/184)) `651be34f`
 - **changelog**: regenerate `d1a3f5cd`
