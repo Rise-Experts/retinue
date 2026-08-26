@@ -14,7 +14,7 @@
  */
 import { z } from "zod";
 import { asId, type Tool } from "@retinue/agentkit";
-import { defineDelegatingTool } from "@retinue/agentkit";
+import { defineDelegatingTool } from "@retinue/agentkit/tools";
 import {
   CAMPAIGN_CADENCES,
   CAMPAIGN_MEDIA_TYPES,

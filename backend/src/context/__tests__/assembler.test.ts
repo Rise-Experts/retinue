@@ -1,13 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { ExecutionContext } from "../../core/context.js";
 import { asId } from "../../core/ids.js";
-import {
-  assemblePrompt,
-  gatherSections,
-  type ContextBudget,
-  type ContextProvider,
-  type ContextSection,
-} from "../index.js";
+import { assemblePrompt, gatherSections } from "../index.js";
+import { type ContextBudget, type ContextProvider, type ContextSection } from "../index.js";
 
 const budget: ContextBudget = {
   basePolicyTokens: 100,

@@ -2,12 +2,8 @@ import { describe, expect, it } from "vitest";
 import { asId } from "../../core/ids.js";
 import type { SkillId, TenantId } from "../../core/ids.js";
 import { createMemorySkillStore } from "../../adapters/memory/index.js";
-import {
-  createRunSkillTracker,
-  createSkillResolver,
-  validateSkillInput,
-  type SkillVersion,
-} from "../index.js";
+import { type SkillVersion } from "../index.js";
+import { createRunSkillTracker, createSkillResolver, validateSkillInput } from "../index.js";
 
 const T = asId<TenantId>("t1");
 

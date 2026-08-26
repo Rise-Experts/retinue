@@ -14,7 +14,8 @@
  *   threshold can see.
  */
 
-import { compactThread, estimateTokens } from "@retinue/agentkit";
+import { compactThread } from "@retinue/agentkit/context";
+import { estimateTokens } from "@retinue/agentkit/runtime";
 import type { ExampleStores } from "./stores.js";
 import type {
   ConversationId,

@@ -33,13 +33,8 @@ import type { PrincipalMemoryStore } from "../principal-memory/index.js";
 import type { ThreadSummarizer } from "../context/compaction.js";
 import type { CitationEmitter } from "../citations/index.js";
 import type { McpClient, McpConnectionStore } from "../mcp/provider.js";
-import {
-  CAPABILITY_REQUIRES,
-  resolveCapabilities,
-  type Capability,
-  type CapabilityMap,
-  type ProfileName,
-} from "./index.js";
+import { CAPABILITY_REQUIRES } from "./index.js";
+import { resolveCapabilities, type Capability, type CapabilityMap, type ProfileName } from "./index.js";
 
 /**
  * What every runtime needs, capability or not.

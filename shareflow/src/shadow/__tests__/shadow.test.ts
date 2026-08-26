@@ -7,22 +7,10 @@
  * would prove only that the existing tool was wired.
  */
 import { beforeEach, describe, expect, it } from "vitest";
-import {
-  asId,
-  createApprovalGate,
-  createMemoryApprovalGrantStore,
-  createMemoryIdempotencyStore,
-  defineDelegatingTool,
-  type AuthorizationPolicy,
-  type ExecutionContext,
-  type IdempotencyStore,
-  type PrincipalId,
-  type RunId,
-  type SuppressedWrite,
-  type TenantId,
-  type Tool,
-  type ToolResult,
-} from "@retinue/agentkit";
+import { asId, type AuthorizationPolicy, type ExecutionContext, type IdempotencyStore, type PrincipalId, type RunId, type SuppressedWrite, type TenantId, type Tool, type ToolResult } from "@retinue/agentkit";
+import { createApprovalGate } from "@retinue/agentkit/hitl";
+import { createMemoryApprovalGrantStore, createMemoryIdempotencyStore } from "@retinue/agentkit/persistence";
+import { defineDelegatingTool } from "@retinue/agentkit/tools";
 import {
   createShadowRecorder,
   diffShadowRuns,

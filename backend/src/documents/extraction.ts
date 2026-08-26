@@ -25,16 +25,8 @@ import { AgentPlatformError } from "../core/errors.js";
 import type { ExecutionContext } from "../core/context.js";
 import type { BlobRef, FileId, TenantId } from "../core/ids.js";
 import type { BlobStore, FileContentStore, FileExtraction, FileMetadataStore } from "../persistence/index.js";
-import {
-  DEFAULT_EXTRACTION_LIMITS,
-  isExtractionFailure,
-  type DocumentParser,
-  type ExtractedDocument,
-  type ExtractionDispatcher,
-  type ExtractionFailure,
-  type ExtractionLimits,
-  type ExtractionJob,
-} from "./index.js";
+import { DEFAULT_EXTRACTION_LIMITS, isExtractionFailure } from "./index.js";
+import { type DocumentParser, type ExtractedDocument, type ExtractionDispatcher, type ExtractionFailure, type ExtractionJob, type ExtractionLimits } from "./index.js";
 
 export type ExtractionServiceDeps = {
   readonly metadata: FileMetadataStore;

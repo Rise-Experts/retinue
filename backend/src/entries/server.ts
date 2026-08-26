@@ -14,3 +14,11 @@
  */
 
 export * from "../server/index.js";
+/**
+ * The schema and the resolvers, not only the host that serves them.
+ *
+ * A consumer building their own host — a Nest service, say (#201) — needs `typeDefs` and `createResolvers` and
+ * none of `runApiHost`. Putting them here rather than at the root keeps the root at five values, and putting
+ * them anywhere else would mean two imports to serve one API.
+ */
+export * from "../graphql/index.js";

@@ -11,7 +11,8 @@
  * rather than an open API nobody notices.
  */
 
-import { asId, parseExecutionContext } from "@retinue/agentkit";
+import { asId } from "@retinue/agentkit";
+import { parseExecutionContext } from "@retinue/agentkit/runtime";
 import type { ExecutionContext } from "@retinue/agentkit";
 import type { Authenticate } from "@retinue/agentkit/server";
 

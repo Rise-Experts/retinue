@@ -15,7 +15,7 @@
  * can only show the bytes were enclosed.
  */
 
-import { estimateTokens } from "@retinue/agentkit";
+import { estimateTokens } from "@retinue/agentkit/runtime";
 import type { AgentManifest, ContextProvider, ContextSection, ExecutionContext } from "@retinue/agentkit";
 import type { ExampleStore } from "./tools.js";
 

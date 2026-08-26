@@ -11,22 +11,10 @@
  */
 
 import { afterEach, describe, expect, it } from "vitest";
-import {
-  asId,
-  createMemoryConversationStore,
-  createMemoryConversationRunCoordinator,
-  createMemoryEventBus,
-  createMemoryRunEventLog,
-  createMemoryRunStore,
-  createMemoryUsageStore,
-  createResolvers,
-  typeDefs,
-  type ConversationId,
-  type ExecutionContext,
-  type ResolverDeps,
-  type RunEvent,
-  type TenantId,
-} from "../../index.js";
+import { createMemoryConversationRunCoordinator, createMemoryConversationStore, createMemoryRunEventLog, createMemoryRunStore, createMemoryUsageStore } from "../../adapters/memory/index.js";
+import { createResolvers, typeDefs } from "../../graphql/index.js";
+import { asId, type ConversationId, type ExecutionContext, type ResolverDeps, type RunEvent, type TenantId } from "../../index.js";
+import { createMemoryEventBus } from "../../runtime/index.js";
 import { createAgentkitHost, UNAUTHENTICATED } from "../host.js";
 
 const T1 = asId<TenantId>("host-t1");

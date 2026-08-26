@@ -11,13 +11,8 @@
 
 import { AgentPlatformError } from "../core/errors.js";
 import type { SkillStore } from "../persistence/index.js";
-import {
-  SKILL_LIMITS,
-  type SkillCatalogEntry,
-  type SkillResolver,
-  type SkillSource,
-  type SkillVersion,
-} from "./index.js";
+import { type SkillCatalogEntry, type SkillResolver, type SkillSource, type SkillVersion } from "./index.js";
+import { SKILL_LIMITS } from "./index.js";
 
 const invalid = (message: string) =>
   new AgentPlatformError({ code: "invalid_input", message, retryable: false });

@@ -17,7 +17,12 @@
  * - **Not a product UI.** The page is deliberately plain; see `public/index.html`.
  */
 
-import { createAuthorizationPolicy, resolveCapabilities, createDefaultEngine, defineDelegatingTool, EMPTY_RUN_STREAM_STATE, createApprovalGate, createApprovalService, computeModelCostMinorUnits, commitExtractedMemories, asId, assemblePrompt, createCitationEmitter, createPrincipalMemoryProvider, createRunSkillTracker, createSkillResolver, createQuestionService, createQuotaGuard, createStoredLimitResolver, questionPending, createRunApprovals, createToolRegistry, parseExecutionContext, reduceRunEvent } from "@retinue/agentkit";
+import { asId, resolveCapabilities } from "@retinue/agentkit";
+import { assemblePrompt, commitExtractedMemories, createCitationEmitter, createPrincipalMemoryProvider, createRunSkillTracker, createSkillResolver } from "@retinue/agentkit/context";
+import { createApprovalGate, createApprovalService, createAuthorizationPolicy, createQuestionService, createRunApprovals, questionPending } from "@retinue/agentkit/hitl";
+import { EMPTY_RUN_STREAM_STATE, computeModelCostMinorUnits, createDefaultEngine, parseExecutionContext, reduceRunEvent } from "@retinue/agentkit/runtime";
+import { createToolRegistry, defineDelegatingTool } from "@retinue/agentkit/tools";
+import { createQuotaGuard, createStoredLimitResolver } from "@retinue/agentkit/usage";
 import { createBullMqJobDispatcher, createBullMqRunQueue } from "@retinue/agentkit/adapters/bullmq";
 import { createPostgresApprovalGrantStore, createPostgresIdempotencyStore, createPostgresInteractionStore, createPostgresPrincipalMemoryStore, createPostgresRunEventLog, createPostgresSkillStore, createPostgresRunStore, createPostgresSessionStateStore, createPostgresUsageLimitStore, createPostgresUsageRollupStore, createPostgresUsageStore, createPostgresConversationStore } from "@retinue/agentkit/adapters/postgres";
 import { createRedisLiveEventSource } from "@retinue/agentkit/adapters/redis";
@@ -965,7 +970,7 @@ const exampleSystemPrompt = async (
   mode: ConversationMode,
   backend: ExampleBackend,
 ): Promise<string> => {
-  const { gatherSections, renderContextBlock, makeNonce } = await import("@retinue/agentkit");
+  const { gatherSections, renderContextBlock, makeNonce } = await import("@retinue/agentkit/context");
   const { randomBytes } = await import("node:crypto");
   /**
    * The notebook's provider, plus the **platform's** principal-memory provider.

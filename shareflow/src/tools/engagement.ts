@@ -21,7 +21,8 @@
  * Excluded for the same reason `connect_test_account` is (#117).
  */
 import { z } from "zod";
-import { asId, defineDelegatingTool, type Tool } from "@retinue/agentkit";
+import { asId, type Tool } from "@retinue/agentkit";
+import { defineDelegatingTool } from "@retinue/agentkit/tools";
 import {
   COMMENT_REPLY_STATES,
   type CommentReplyReceipt,

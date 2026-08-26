@@ -383,15 +383,27 @@ describe("descriptor and envelope", () => {
 describe("the envelope performs no I/O of its own", () => {
   it("is caught by the boundary checker when it would", async () => {
     const { scan } = await import("../../../../scripts/check-boundaries.mjs");
-    const { writeFile, rm } = await import("node:fs/promises");
-    const { fileURLToPath } = await import("node:url");
-    // An absolute root: the checker resolves roots against the process cwd, which under vitest is the
-    // backend workspace rather than the repository, so the literal "backend" finds nothing.
-    const root = fileURLToPath(new URL("../../../", import.meta.url));
-    const planted = new URL("../planted-violation.ts", import.meta.url);
+    const { mkdtemp, mkdir, writeFile, rm } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
 
+    /**
+     * Planted in a temp tree, not in the real one — and that is a fix rather than a preference.
+     *
+     * This used to write `src/tools/planted-violation.ts` into the actual source tree and delete it in a
+     * `finally`. Vitest runs test files in parallel workers, so `security-audit.test.ts` — which enumerates
+     * every source file and reads each one — could list the planted file and then read it after the `rm`,
+     * failing with `ENOENT` on a file it had just been told existed. Intermittent, unrelated-looking, and in a
+     * security test, which is the worst place to teach someone that a red gate means "run it again".
+     *
+     * The rule is path-based (`workspace === "backend" && dir starts with "tools"`), so a temp directory shaped
+     * like one satisfies it exactly as the real tree does.
+     */
+    const root = await mkdtemp(join(tmpdir(), "retinue-r7-"));
+    const tools = join(root, "backend", "src", "tools");
+    await mkdir(tools, { recursive: true });
     await writeFile(
-      planted,
+      join(tools, "planted-violation.ts"),
       `import { request } from "node:http";\nexport const nope = () => request;\n`,
       "utf8",
     );
@@ -403,7 +415,7 @@ describe("the envelope performs no I/O of its own", () => {
       expect(r7.length).toBeGreaterThan(0);
       expect(r7.some((v) => v.file.includes("planted-violation"))).toBe(true);
     } finally {
-      await rm(planted, { force: true });
+      await rm(root, { recursive: true, force: true });
     }
   });
 

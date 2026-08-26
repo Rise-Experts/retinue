@@ -7,17 +7,8 @@
  * an adapter that puts a secret where free text is allowed, and assert it fails rather than passing it on.
  */
 import { beforeEach, describe, expect, it } from "vitest";
-import {
-  asId,
-  createMemoryIdempotencyStore,
-  type AuthorizationPolicy,
-  type ExecutionContext,
-  type IdempotencyStore,
-  type PrincipalId,
-  type TenantId,
-  type Tool,
-  type ToolResult,
-} from "@retinue/agentkit";
+import { asId, type AuthorizationPolicy, type ExecutionContext, type IdempotencyStore, type PrincipalId, type TenantId, type Tool, type ToolResult } from "@retinue/agentkit";
+import { createMemoryIdempotencyStore } from "@retinue/agentkit/persistence";
 import {
   ACCOUNT_TOOL_FACTORIES,
   ACCOUNT_TOOL_NAMES,

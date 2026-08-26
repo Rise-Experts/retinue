@@ -8,14 +8,8 @@
 
 import { describe, expect, it } from "vitest";
 import { AgentPlatformError } from "../../core/errors.js";
-import {
-  CAPABILITIES,
-  CAPABILITY_REQUIRES as REQUIRES,
-  PROFILES,
-  profileToMap,
-  resolveCapabilities,
-  type CapabilityMap,
-} from "../index.js";
+import { CAPABILITIES, CAPABILITY_REQUIRES as REQUIRES, PROFILES, profileToMap } from "../index.js";
+import { resolveCapabilities, type CapabilityMap } from "../index.js";
 
 const wired = (...names: string[]) => new Set(names);
 const caught = (fn: () => unknown): AgentPlatformError | null => {

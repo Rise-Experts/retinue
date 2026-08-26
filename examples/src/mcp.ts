@@ -19,7 +19,7 @@
  * conversation, and a run that approved `mcp__x__publish` should not silently end up calling something else.
  */
 
-import { createMcpToolProvider, hashToolList, mcpToolName } from "@retinue/agentkit";
+import { createMcpToolProvider, hashToolList, mcpToolName } from "@retinue/agentkit/mcp";
 import type {
   ExecutionContext,
   McpClient,

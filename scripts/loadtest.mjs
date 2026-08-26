@@ -30,7 +30,7 @@ import {
   readEnvelope,
   runLoadStep,
   summarizeLatency,
-} from "@retinue/agentkit";
+} from "@retinue/agentkit/observability";
 import { MIGRATIONS, migrate } from "@retinue/agentkit/adapters/postgres";
 
 const arg = (name, fallback) => {

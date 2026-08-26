@@ -21,7 +21,7 @@
  */
 
 import { readFileSync, writeFileSync } from "node:fs";
-import { evaluateGate, formatGateReport, trendEntryFor } from "@retinue/agentkit";
+import { evaluateGate, formatGateReport, trendEntryFor } from "@retinue/agentkit/observability";
 
 const THRESHOLDS = "evals/thresholds.json";
 const TREND = "evals/trend.json";

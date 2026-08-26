@@ -34,7 +34,8 @@ import type { MessageId, MessagePartId, RunId } from "../core/ids.js";
 import type { CheckpointStore, MessageStore, RunStore } from "../persistence/index.js";
 import type { UsageRecorder } from "../usage/index.js";
 import type { RunCheckpoint } from "./checkpoint.js";
-import { isTerminal, type DistributedLockStore, type Run } from "./index.js";
+import { type DistributedLockStore, type Run } from "./index.js";
+import { isTerminal } from "./index.js";
 import { toPlatformError } from "./retry.js";
 
 /** Stable assistant-message id for a run, so a resumed/recovered run upserts one row, not many. */

@@ -24,7 +24,7 @@ import {
   SECURITY_CHECKS,
   manualChecks,
   overdueAcceptances,
-} from "@retinue/agentkit";
+} from "@retinue/agentkit/observability";
 
 const arg = (name) => {
   const i = process.argv.indexOf(`--${name}`);

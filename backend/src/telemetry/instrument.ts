@@ -19,7 +19,8 @@ import type { RunId, TenantId } from "../core/ids.js";
 import { BOUNDARY_SPANS } from "./spans.js";
 import { createRunMetrics, type RunMetrics } from "./metrics.js";
 import { formatTraceparent, parseTraceparent } from "./trace-context.js";
-import { errorCodeOf, withSpan, type Telemetry } from "./index.js";
+import { type Telemetry } from "./index.js";
+import { errorCodeOf, withSpan } from "./index.js";
 
 /**
  * What a job carries so the worker can continue the trace — AC-1.

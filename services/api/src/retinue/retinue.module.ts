@@ -27,15 +27,9 @@ import type { DynamicModule, OnApplicationShutdown } from "@nestjs/common";
 import { Inject, Injectable } from "@nestjs/common";
 import pg from "pg";
 import { Redis } from "ioredis";
-import {
-  createApprovalGate,
-  createApprovalService,
-  createAuthorizationPolicy,
-  createQuestionService,
-  createQuotaGuard,
-  createStoredLimitResolver,
-  createToolRegistry,
-} from "@retinue/agentkit";
+import { createApprovalGate, createApprovalService, createAuthorizationPolicy, createQuestionService } from "@retinue/agentkit/hitl";
+import { createToolRegistry } from "@retinue/agentkit/tools";
+import { createQuotaGuard, createStoredLimitResolver } from "@retinue/agentkit/usage";
 import {
   createPostgresApprovalGrantStore,
   createPostgresConversationRunCoordinator,

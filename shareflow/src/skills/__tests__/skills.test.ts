@@ -6,15 +6,9 @@
  * fixture cannot demonstrate an absence.
  */
 import { describe, expect, it } from "vitest";
-import {
-  createMemorySkillStore,
-  createRunSkillTracker,
-  createSkillResolver,
-  asId,
-  SKILL_LIMITS,
-  type RunId,
-  type TenantId,
-} from "@retinue/agentkit";
+import { asId, type RunId, type TenantId } from "@retinue/agentkit";
+import { SKILL_LIMITS, createRunSkillTracker, createSkillResolver } from "@retinue/agentkit/context";
+import { createMemorySkillStore } from "@retinue/agentkit/persistence";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";

@@ -6,7 +6,7 @@
  * as* was the one function with no test. It had `principalId: "example-worker", roleIds: ["editor"]` hardcoded.
  */
 
-import { parseExecutionContext } from "@retinue/agentkit";
+import { parseExecutionContext } from "@retinue/agentkit/runtime";
 import type { ExecutionContext, Run } from "@retinue/agentkit";
 
 /**

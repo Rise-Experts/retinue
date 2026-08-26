@@ -29,7 +29,8 @@
  */
 
 import type { EvalCaseResult, EvalRun } from "../persistence/index.js";
-import { compareRuns, type CaseComparison, type ReleaseComparison } from "./index.js";
+import { compareRuns } from "./index.js";
+import { type CaseComparison, type ReleaseComparison } from "./index.js";
 
 /**
  * The committed thresholds.

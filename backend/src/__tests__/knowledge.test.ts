@@ -23,9 +23,11 @@ import {
   chunkDocument,
   chunkId,
   createEmbeddingPipeline,
-  estimateTokens,
   type EmbeddingProvider,
 } from "../knowledge/index.js";
+// From core, which owns it. `knowledge/chunking.ts` used to re-export it as a convenience, which gave one name
+// two subpaths once the surface was split (#199).
+import { estimateTokens } from "../core/tokens.js";
 
 const T1 = asId<TenantId>("tenant-1");
 const ctx = { tenantId: T1 };

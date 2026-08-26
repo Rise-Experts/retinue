@@ -14,7 +14,7 @@ import type { SqlExecutor } from "../entries/adapters-postgres.js";
 
 export type AgentkitWorkerApp = AgentkitApp & {
   readonly engine: (input: { readonly config: AgentkitConfig; readonly sql: SqlExecutor }) => AgentEngine;
-  readonly buildContext: Parameters<typeof import("../index.js").createDurableWorker>[0]["buildContext"];
+  readonly buildContext: Parameters<typeof import("../runtime/worker.js").createDurableWorker>[0]["buildContext"];
   /**
    * What a model costs — #166.
    *
@@ -63,7 +63,17 @@ export const runWorker = async (
    * what it imports is what a reader copies. A single namespace import taught them that everything came from one
    * place, which is exactly the thing that made the package install six provider SDKs.
    */
-  const backend = await import("../index.js");
+  /**
+   * The layer entries, not the root barrel — #199.
+   *
+   * The root is five values now, so `await import("../index.js")` no longer carries `createDurableWorker` or
+   * `createUsageRecorder`. Importing the entries the worker actually needs is also the honest shape: this file
+   * is a *consumer* of the package's public surface, and reaching for a barrel that happened to contain
+   * everything was how it avoided ever saying what it depends on.
+   */
+  const backend = await import("../entries/runtime.js");
+  const workerEntry = await import("../worker/main.js");
+  const usageEntry = await import("../entries/usage.js");
   const pgAdapters = await import("../entries/adapters-postgres.js");
   const queueAdapters = await import("../adapters/bullmq/index.js");
   const redisAdapters = await import("../adapters/redis/index.js");
@@ -115,7 +125,7 @@ export const runWorker = async (
      * Built here, like the checkpoint and message stores, for the same reason: an app module that has to
      * remember is an app module that bills silently the first time someone forgets.
      */
-    usage: backend.createUsageRecorder({
+    usage: usageEntry.createUsageRecorder({
       store: pgAdapters.createPostgresUsageStore(sql),
       // No catalogue means no prices, and `record` writes the tokens regardless.
       pricing: app.pricing ?? { resolve: () => null },
@@ -140,7 +150,7 @@ export const runWorker = async (
     concurrency: config.workerConcurrency,
   });
 
-  const runtime = backend.createWorkerRuntime({
+  const runtime = workerEntry.createWorkerRuntime({
     worker,
     consumer,
     dispatcher,
@@ -148,7 +158,7 @@ export const runWorker = async (
     log: (message, detail) => console.log(JSON.stringify({ event: "worker", message, ...detail })),
   });
   await runtime.start();
-  backend.installSignalHandlers(runtime);
+  workerEntry.installSignalHandlers(runtime);
 
   return {
     shutdown: async () => {

@@ -13,22 +13,10 @@
  */
 
 import { describe, expect, it } from "vitest";
-import {
-  asId,
-  createMemoryConversationRunCoordinator,
-  createMemoryConversationStore,
-  createMemoryEventBus,
-  createMemoryRunEventLog,
-  createMemoryRunStore,
-  createMemoryUsageStore,
-  cursorFromLastEventId,
-  type ConversationId,
-  type ExecutionContext,
-  type ResolverDeps,
-  type RunEvent,
-  type RunId,
-  type TenantId,
-} from "../../index.js";
+import { createMemoryConversationRunCoordinator, createMemoryConversationStore, createMemoryRunEventLog, createMemoryRunStore, createMemoryUsageStore } from "../../adapters/memory/index.js";
+import { cursorFromLastEventId } from "../../graphql/index.js";
+import { asId, type ConversationId, type ExecutionContext, type ResolverDeps, type RunEvent, type RunId, type TenantId } from "../../index.js";
+import { createMemoryEventBus } from "../../runtime/index.js";
 import { createAgentkitHost } from "../host.js";
 
 const T1 = asId<TenantId>("sse-t1");

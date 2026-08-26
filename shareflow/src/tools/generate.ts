@@ -28,7 +28,8 @@
  * needed; the checker decides what leaves.
  */
 import { z } from "zod";
-import { AgentPlatformError, asId, defineDelegatingTool, type Tool } from "@retinue/agentkit";
+import { AgentPlatformError, asId, type Tool } from "@retinue/agentkit";
+import { defineDelegatingTool } from "@retinue/agentkit/tools";
 import { findForbiddenClaims } from "../context/claims.js";
 import {
   type ContentAngle,

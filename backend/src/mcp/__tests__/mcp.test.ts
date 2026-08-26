@@ -3,18 +3,8 @@ import type { ExecutionContext } from "../../core/context.js";
 import { asId } from "../../core/ids.js";
 import type { TenantId } from "../../core/ids.js";
 import { createMemoryMcpConnectionStore } from "../../adapters/memory/index.js";
-import {
-  classifyMcpTool,
-  createMcpToolProvider,
-  detectCatalogDrift,
-  hashToolList,
-  isPrivateHost,
-  mcpToolName,
-  redactConnection,
-  validateEndpoint,
-  type McpClient,
-  type McpServerConnection,
-} from "../index.js";
+import { type McpClient, type McpServerConnection } from "../index.js";
+import { classifyMcpTool, createMcpToolProvider, detectCatalogDrift, hashToolList, isPrivateHost, mcpToolName, redactConnection, validateEndpoint } from "../index.js";
 
 const T = asId<TenantId>("t1");
 const ctx = (tenant: TenantId = T): ExecutionContext => ({

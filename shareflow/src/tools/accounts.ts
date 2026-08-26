@@ -33,7 +33,8 @@
  * is what `get_connection_setup` returns.
  */
 import { z } from "zod";
-import { AgentPlatformError, asId, defineDelegatingTool, type Tool } from "@retinue/agentkit";
+import { AgentPlatformError, asId, type Tool } from "@retinue/agentkit";
+import { defineDelegatingTool } from "@retinue/agentkit/tools";
 import {
   type AccountHealth,
   type ConnectedAccount,

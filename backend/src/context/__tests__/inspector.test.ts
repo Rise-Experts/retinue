@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { assemblePrompt, inspectAssembledPrompt, type ContextBudget, type ContextSection } from "../index.js";
+import { assemblePrompt, inspectAssembledPrompt } from "../index.js";
+import { type ContextBudget, type ContextSection } from "../index.js";
 
 const budget: ContextBudget = {
   basePolicyTokens: 100, userContextTokens: 100, toolTokens: 100, skillTokens: 100, knowledgeTokens: 100, historyTokens: 100,

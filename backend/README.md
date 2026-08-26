@@ -97,14 +97,27 @@ and each wired to nothing.
 
 ## Subpaths
 
-The root exports the runtime and installs `ai` and `zod` — nothing else. Everything with a driver behind it is a
-subpath with an optional peer:
+The root is the **semver boundary**: what is exported from it is API, and what is not exported from it cannot be
+broken. So it is **five values** — it was 392 (#199).
 
 ```ts
-import { createRuntime } from "@retinue/agentkit";
-import { createStandardToolProvider } from "@retinue/agentkit/tools";           // no peer: uses global fetch
-import { createPostgresRunStore } from "@retinue/agentkit/adapters/postgres";  // peer: pg
-import { runApiHost } from "@retinue/agentkit/server";                          // peer: graphql, graphql-yoga
+import { createRuntime, resolveCapabilities, defineAgent, asId, AgentPlatformError } from "@retinue/agentkit";
+```
+
+Every **type** is still exported from the root, by `export type *`, which emits no import. That is what makes the
+cut affordable: a consumer holding an `ExecutionContext` does not have to know which layer defined it, and a type
+cannot be broken by being imported. The split is **types by subject, values by consumer**.
+
+The root's runtime graph now reaches *nothing* — not `ai`, not `zod`. Those are still real dependencies of the
+package, because `./runtime` and `./tools` need them, and they stay `dependencies` rather than peers: a consumer
+who installs this will use at least one subpath and should not have to install two more things to do it.
+
+```ts
+import { createDefaultEngine } from "@retinue/agentkit/runtime";
+import { defineTool, createStandardToolProvider } from "@retinue/agentkit/tools";  // no peer: uses global fetch
+import { createMemoryRunStore } from "@retinue/agentkit/persistence";              // no peer at all
+import { createPostgresRunStore } from "@retinue/agentkit/adapters/postgres";      // peer: pg
+import { typeDefs, createResolvers } from "@retinue/agentkit/server";              // peer: graphql, graphql-yoga
 ```
 
 `src/entries/README.md` lists them all, including why there is no `./testing` yet.

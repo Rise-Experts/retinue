@@ -47,7 +47,7 @@ import type {
  * Re-exported from `persistence`, not defined here. Two layers interpret the field and neither may import the
  * other, so the port that declares `confidence` owns the number that gives it meaning.
  */
-export { LOW_CONFIDENCE_THRESHOLD } from "../persistence/index.js";
+// `LOW_CONFIDENCE_THRESHOLD` is persistence's, and re-exporting it here gave one name two subpaths (#199).
 
 export const LOW_CONFIDENCE_WARNING =
   "The text was recognised with low confidence and may contain errors. Treat figures and names as uncertain.";
@@ -314,4 +314,4 @@ export const recordVisionUsage = async (
 export const isImageMediaType = (mediaType: string): boolean =>
   (IMAGE_MEDIA_TYPES as readonly string[]).includes(mediaType.split(";")[0]?.trim().toLowerCase() ?? "");
 
-export { DEFAULT_VISION_PROMPT, AgentPlatformError };
+export { DEFAULT_VISION_PROMPT };

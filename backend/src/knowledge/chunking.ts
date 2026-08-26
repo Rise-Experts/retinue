@@ -52,7 +52,8 @@ export const DEFAULT_CHUNKING_LIMITS: ChunkingLimits = {
  * Shared with the context assembler on purpose: a chunk sized against one estimate and budgeted against a
  * different one is a chunk that does not fit the budget it was measured for.
  */
-export { estimateTokens } from "../core/tokens.js";
+// `estimateTokens` belongs to core and is reachable at `./runtime`. Re-exporting it here gave one name
+// two subpaths, which #199 makes a rule against rather than a preference.
 
 export type Chunk = {
   readonly index: number;

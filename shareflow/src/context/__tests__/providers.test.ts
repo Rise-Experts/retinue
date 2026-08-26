@@ -6,15 +6,8 @@
  * say nothing about whether an oversized brand profile crowds out the request.
  */
 import { beforeEach, describe, expect, it } from "vitest";
-import {
-  asId,
-  assemblePrompt,
-  gatherSections,
-  type ContextBudget,
-  type ExecutionContext,
-  type PrincipalId,
-  type TenantId,
-} from "@retinue/agentkit";
+import { asId, type ContextBudget, type ExecutionContext, type PrincipalId, type TenantId } from "@retinue/agentkit";
+import { assemblePrompt, gatherSections } from "@retinue/agentkit/context";
 import {
   CONTEXT_PRIORITY,
   FORBIDDEN_CLAIM_CODE,

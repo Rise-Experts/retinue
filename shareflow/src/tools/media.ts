@@ -23,7 +23,8 @@
  * An id the model can only have received from a tool removes that class of forgery entirely.
  */
 import { z } from "zod";
-import { asId, defineDelegatingTool, type Tool } from "@retinue/agentkit";
+import { asId, type Tool } from "@retinue/agentkit";
+import { defineDelegatingTool } from "@retinue/agentkit/tools";
 import {
   type MediaAsset,
   type MediaAssetId,

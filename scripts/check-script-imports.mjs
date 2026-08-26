@@ -158,12 +158,20 @@ for (const [dir, entries] of byDirectory) {
     console.error(`✗ cannot probe imports in ${dir}: ${String(error.message).split("\n")[0]}`);
     process.exit(2);
   }
-  for (const result of results) {
-    const where = entries.find((e) => e.spec === result.spec)?.file ?? dir;
+  results.forEach((result, position) => {
+    /**
+     * By position, not by specifier.
+     *
+     * `entries.find((e) => e.spec === result.spec)` looked right and named the wrong file: three scripts in one
+     * directory each importing `@retinue/agentkit` produced three findings all attributed to whichever came
+     * first. A check whose message points at the wrong file costs more than one that says nothing, because the
+     * reader opens that file and finds it fine. The probe preserves order, so the index is the answer.
+     */
+    const where = entries[position]?.file ?? dir;
     if (result.error) violations.push(`${where}: cannot load "${result.spec}" — ${result.error}`);
     else if (result.missing.length > 0)
       violations.push(`${where}: "${result.spec}" does not export ${result.missing.join(", ")}`);
-  }
+  });
 }
 
 if (violations.length > 0) {

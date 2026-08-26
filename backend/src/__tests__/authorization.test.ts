@@ -1,12 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import {
-  assertToolAuthorized,
-  createAuthorizationPolicy,
-  tenantRlsFilter,
-  type AuditEvent,
-  type ExecutionContext,
-  type ToolDescriptor,
-} from "../index.js";
+import { assertToolAuthorized, createAuthorizationPolicy, tenantRlsFilter } from "../authorization/index.js";
+import { type AuditEvent, type ExecutionContext, type ToolDescriptor } from "../index.js";
 
 const ctx = (roleIds: string[], tenantId = "t1"): ExecutionContext =>
   ({ tenantId, principalId: "p1", roleIds, locale: "en", timezone: "UTC", requestId: "r1" }) as unknown as ExecutionContext;

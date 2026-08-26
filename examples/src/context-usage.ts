@@ -9,7 +9,8 @@
  * Providers are passed in rather than reached for, so this file knows nothing about notebooks or memory.
  */
 
-import { assemblePrompt, estimateTokens, gatherSections, inspectAssembledPrompt, turnText } from "@retinue/agentkit";
+import { assemblePrompt, gatherSections, inspectAssembledPrompt } from "@retinue/agentkit/context";
+import { estimateTokens, turnText } from "@retinue/agentkit/runtime";
 import type { ExampleStores } from "./stores.js";
 import type { ContextBudget, ContextInspection, ContextProvider, ExecutionContext } from "@retinue/agentkit";
 import type { SqlExecutor } from "@retinue/agentkit/adapters/postgres";

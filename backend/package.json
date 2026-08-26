@@ -12,9 +12,41 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
+    "./runtime": {
+      "types": "./dist/entries/runtime.d.ts",
+      "default": "./dist/entries/runtime.js"
+    },
     "./tools": {
       "types": "./dist/entries/tools.d.ts",
       "default": "./dist/entries/tools.js"
+    },
+    "./persistence": {
+      "types": "./dist/entries/persistence.d.ts",
+      "default": "./dist/entries/persistence.js"
+    },
+    "./context": {
+      "types": "./dist/entries/context.d.ts",
+      "default": "./dist/entries/context.js"
+    },
+    "./knowledge": {
+      "types": "./dist/entries/knowledge.d.ts",
+      "default": "./dist/entries/knowledge.js"
+    },
+    "./hitl": {
+      "types": "./dist/entries/hitl.d.ts",
+      "default": "./dist/entries/hitl.js"
+    },
+    "./usage": {
+      "types": "./dist/entries/usage.d.ts",
+      "default": "./dist/entries/usage.js"
+    },
+    "./mcp": {
+      "types": "./dist/entries/mcp.d.ts",
+      "default": "./dist/entries/mcp.js"
+    },
+    "./observability": {
+      "types": "./dist/entries/observability.d.ts",
+      "default": "./dist/entries/observability.js"
     },
     "./providers": {
       "types": "./dist/entries/providers.d.ts",

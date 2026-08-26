@@ -138,22 +138,9 @@ export const createModelRegistry = (config: ModelRegistryConfig): ModelRegistry 
  * failure for Anthropic. It lives behind the `./providers` subpath instead.
  */
 
-/**
- * Cost of a unit of usage, in the pricing currency's minor units. Prices are per-million tokens.
- * Cached input is billed at the cache-read rate when present. This is what feeds usage accounting.
- */
-export const computeModelCostMinorUnits = (
-  pricing: ModelPricing,
-  usage: { readonly inputTokens: number; readonly outputTokens: number; readonly cachedInputTokens?: number },
-): number => {
-  const cachedIn = usage.cachedInputTokens ?? 0;
-  const freshIn = Math.max(0, usage.inputTokens - cachedIn);
-  const perMillion = (tokens: number, price: number): number => (tokens * price) / 1_000_000;
-  return Math.round(
-    perMillion(freshIn, pricing.inputPerMillion) +
-      perMillion(cachedIn, pricing.cacheReadPerMillion ?? pricing.inputPerMillion) +
-      perMillion(usage.outputTokens, pricing.outputPerMillion),
-  );
-};
+// `computeModelCostMinorUnits` moved to `./pricing.ts` (#199): reaching it through this barrel pulled
+// `streaming.js`, and with it the AI SDK, into the in-memory usage adapter. Re-exported here so the models
+// subpath still offers it in one place.
+export { computeModelCostMinorUnits } from "./pricing.js";
 
 export * from "./streaming.js";

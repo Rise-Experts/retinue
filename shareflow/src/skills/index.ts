@@ -13,7 +13,8 @@
  * A skill is instructions and data, never code. There is nothing to execute in this directory, and the
  * body of a skill cannot grant a tool or lower an effect classification.
  */
-import { asId, validateSkillInput, type SkillId, type SkillVersion, SKILL_LIMITS } from "@retinue/agentkit";
+import { asId, type SkillId, type SkillVersion } from "@retinue/agentkit";
+import { SKILL_LIMITS, validateSkillInput } from "@retinue/agentkit/context";
 import { AgentPlatformError } from "@retinue/agentkit";
 import { SHAREFLOW_SKILL_BODIES } from "./content.js";
 

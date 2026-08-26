@@ -3,12 +3,8 @@ import type { ExecutionContext } from "../../core/context.js";
 import { asId } from "../../core/ids.js";
 import type { PrincipalId, TenantId } from "../../core/ids.js";
 import { createMemoryPrincipalMemoryStore } from "../../adapters/memory/index.js";
-import {
-  commitExtractedMemories,
-  createPrincipalMemoryProvider,
-  validateAndDedupe,
-  type PrincipalMemoryEntry,
-} from "../index.js";
+import { type PrincipalMemoryEntry } from "../index.js";
+import { commitExtractedMemories, createPrincipalMemoryProvider, validateAndDedupe } from "../index.js";
 
 const T = asId<TenantId>("t1");
 const P = asId<PrincipalId>("p1");

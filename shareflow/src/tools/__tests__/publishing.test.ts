@@ -13,25 +13,10 @@
  * through decision to a single publish, with no grant involved anywhere.
  */
 import { beforeEach, describe, expect, it } from "vitest";
-import {
-  asId,
-  createApprovalGate,
-  createApprovalService,
-  createMemoryApprovalGrantStore,
-  createMemoryIdempotencyStore,
-  createMemoryInteractionStore,
-  createRunApprovals,
-  createToolRegistry,
-  type ApprovalGate,
-  type AuthorizationPolicy,
-  type ExecutionContext,
-  type IdempotencyStore,
-  type PrincipalId,
-  type RunId,
-  type TenantId,
-  type Tool,
-  type ToolResult,
-} from "@retinue/agentkit";
+import { asId, type ApprovalGate, type AuthorizationPolicy, type ExecutionContext, type IdempotencyStore, type PrincipalId, type RunId, type TenantId, type Tool, type ToolResult } from "@retinue/agentkit";
+import { createApprovalGate, createApprovalService, createRunApprovals } from "@retinue/agentkit/hitl";
+import { createMemoryApprovalGrantStore, createMemoryIdempotencyStore, createMemoryInteractionStore } from "@retinue/agentkit/persistence";
+import { createToolRegistry } from "@retinue/agentkit/tools";
 import {
   PUBLISHING_TOOL_FACTORIES,
   PUBLISHING_TOOL_NAMES,

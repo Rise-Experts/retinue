@@ -28,7 +28,8 @@
  * create and update.
  */
 import { z } from "zod";
-import { asId, defineDelegatingTool, type Tool } from "@retinue/agentkit";
+import { asId, type Tool } from "@retinue/agentkit";
+import { defineDelegatingTool } from "@retinue/agentkit/tools";
 import {
   LEAD_STATUSES,
   type CampaignId,

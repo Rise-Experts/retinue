@@ -68,6 +68,37 @@ const bareSpecifiersFrom = (entry: string): Set<string> => {
   return bare;
 };
 
+/**
+ * Every *file* the graph rooted at `entry` can reach, following relative imports.
+ *
+ * The companion to `bareSpecifiersFrom`: a barrel restored by accident adds no bare specifier, because every
+ * layer is a relative import — so counting packages would stay green while the root loaded the package again.
+ */
+const reachableFiles = (entry: string): Set<string> => {
+  const seen = new Set<string>();
+  const queue = [entry];
+  while (queue.length > 0) {
+    const file = queue.pop()!;
+    if (seen.has(file)) continue;
+    seen.add(file);
+    let code: string;
+    try {
+      code = readFileSync(file, "utf8");
+    } catch {
+      seen.delete(file); // A specifier that does not resolve to a file is not a file this reached.
+      continue;
+    }
+    for (const line of code.split("\n")) {
+      const statement = /^\s*(?:import|export)\b[^;]*?\bfrom\s*["\']([^"\']+)["\']/.exec(line);
+      if (statement?.[1]?.startsWith(".")) queue.push(resolve(dirname(file), statement[1]));
+    }
+    for (const match of code.matchAll(/(?<![\w$.])import\s*\(\s*["\']([^"\']+)["\']\s*\)/g)) {
+      if (match[1]!.startsWith(".")) queue.push(resolve(dirname(file), match[1]!));
+    }
+  }
+  return seen;
+};
+
 const OPTIONAL_PEERS = [
   "pg",
   "ioredis",
@@ -89,23 +120,53 @@ describe("the package root", () => {
     expect(leaked, `the root must not reach: ${leaked.join(", ")}`).toEqual([]);
   });
 
-  it("reaches only ai and zod outside the standard library", () => {
+  it("reaches nothing outside the standard library at all", () => {
     /**
-     * The positive statement, which the negative one above cannot make: a tenth heavy dependency added tomorrow
-     * would pass the leak test simply by not being on its list.
+     * `ai` and `zod` used to be here, and the surface cut (#199) removed even those.
+     *
+     * The root exports five values — `createRuntime`, `resolveCapabilities`, `defineAgent`, `asId` and the
+     * platform error — and none of them needs a model SDK or a schema library. Every type is still exported
+     * from here by `export type *`, which emits no import, so the whole type surface costs nothing.
+     *
+     * Asserted as *empty* rather than as a shrinking list, because that is the strong form: a dependency added
+     * to any of those five files tomorrow fails this immediately, whatever it is. `ai` and `zod` remain real
+     * dependencies of the package — `./runtime` and `./tools` need them — and stay `dependencies` rather than
+     * peers, because a consumer who installs the package will use at least one subpath and should not have to
+     * install two more things to do it.
      */
     const external = [...reachable].filter((s) => !s.startsWith("node:")).sort();
-    expect(external).toEqual(["ai", "zod"]);
+    expect(external).toEqual([]);
   });
 
-  it("still reaches the in-memory adapters, so the package works on install", () => {
-    // They are the only adapters with no dependency of their own, and they are what makes a test, a prototype or
-    // a first look possible without a database. Keeping them in the root is the point of the split, not an
-    // oversight in it.
-    const files = bareSpecifiersFrom(resolve(DIST, "index.js"));
-    expect(files.size).toBeGreaterThan(0);
+  it("reaches no runtime module of its own either", () => {
+    /**
+     * The stronger claim, and the one that would catch a value creeping back onto the root.
+     *
+     * A `export * from "./knowledge/index.js"` restored by accident would not add a *bare* specifier — every
+     * layer is a relative import — so the check above would stay green while the root loaded the whole package
+     * again. Counting the reachable files catches it: five hand-picked exports reach a handful of small
+     * modules, and a barrel reaches a hundred.
+     */
+    const files = reachableFiles(resolve(DIST, "index.js"));
+    expect(files.size).toBeLessThan(20);
+  });
+
+  it("no longer reaches the in-memory adapters, and that is the reversal it looks like", () => {
+    /**
+     * #196 kept them in the root on purpose: "they are the only adapters with no dependency of their own, and
+     * they are what makes the package usable the moment it is installed".
+     *
+     * That reasoning was right and its conclusion does not survive #199, because the root has no store factory
+     * of any kind now — keeping `createMemoryRunStore` while dropping `createPostgresRunStore` would be a root
+     * that exports one adapter and calls it the API. The property it was protecting is intact: `./persistence`
+     * still has no dependency of its own, so a test, a prototype or a first look still needs no database. It
+     * needs one more import.
+     */
     const code = readFileSync(resolve(DIST, "index.js"), "utf8");
-    expect(code).toContain("adapters/memory");
+    expect(code).not.toContain("adapters/memory");
+
+    const persistence = bareSpecifiersFrom(resolve(DIST, "entries/persistence.js"));
+    expect([...persistence].filter((s) => !s.startsWith("node:"))).toEqual([]);
   });
 });
 

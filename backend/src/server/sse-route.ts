@@ -15,16 +15,9 @@
  * of demand would satisfy AC-5 and quietly break AC-6 — a stalled client would accumulate one comment
  * per interval, forever.
  */
-import {
-  asId,
-  cursorFromLastEventId,
-  openRunEventSse,
-  type ConversationId,
-  type ExecutionContext,
-  type LiveEventSource,
-  type ResolverDeps,
-  type RunId,
-} from "../index.js";
+import { asId } from "../index.js";
+import { cursorFromLastEventId, openRunEventSse } from "../graphql/sse.js";
+import type { ConversationId, ExecutionContext, LiveEventSource, ResolverDeps, RunId } from "../index.js";
 import type { Authenticate } from "./host.js";
 
 export type SseRouteOptions = {

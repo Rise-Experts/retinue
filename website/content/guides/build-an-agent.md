@@ -13,7 +13,7 @@ You write `execute(input, context) => data` and throw on failure — the shared 
 is applied for you. The effect classification drives the approval policy.
 
 ```ts
-import { defineTool, toolProvider } from "@retinue/agentkit";
+import { defineTool, toolProvider } from "@retinue/agentkit/tools";
 import { z } from "zod";
 
 const getWeather = defineTool({
@@ -43,7 +43,7 @@ const publishPost = defineTool({
 ## 2. Give the tools to the agent
 
 ```ts
-import { createAgent } from "@retinue/agentkit";
+import { createAgent } from "@retinue/agentkit/providers";
 
 const agent = createAgent({
   manifest: {

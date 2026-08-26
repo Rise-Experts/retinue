@@ -1,14 +1,20 @@
 /**
- * `@retinue/agentkit/tools` — the first-party tool library, and the deterministic functions behind it.
+ * `@retinue/agentkit/tools` — everything about tools.
  *
- * A subpath rather than the package root for the reason every subpath here exists: the root is the semver
- * boundary and should stay small (#199). It needs no optional peer — the tools reach the network through the
- * platform's own egress policy and the global `fetch`, so installing this costs nothing beyond what the runtime
- * already installs.
+ * Three things that used to be in three places:
  *
- * Both halves are exported. The envelopes are what a host registers; the `toolkit/` functions are what an
- * application calls directly when it wants the behaviour without the tool — reading a URL under the same egress
- * policy from its own code, say, rather than through a model.
+ * - **Authoring** — `defineTool` and `defineDelegatingTool`, the envelopes that add authorisation, the approval
+ *   gate and the idempotency key around a deterministic function.
+ * - **Dispatch** — the registry, the catalogue, the meta-tools.
+ * - **The library** (#188) — fifteen first-party tools, and the `toolkit/` functions they delegate to.
+ *
+ * One subpath because they are one subject, and because the alternative — authoring at the root, dispatch behind
+ * a subpath — would mean a tool author importing from two places to write one tool. The root keeps `defineAgent`
+ * and not `defineTool` for the same reason it keeps `createRuntime`: an agent is the thing you declare, and a
+ * tool is a component of one.
+ *
+ * No optional peer: the tools reach the network through the global `fetch` and the platform's own egress policy.
  */
+export * from "../tools/index.js";
 export * from "../tools/library/index.js";
 export * from "../toolkit/index.js";

@@ -12,7 +12,10 @@ import type { ExecutionContext } from "../core/context.js";
 import { estimateTokens } from "../core/tokens.js";
 import { AgentPlatformError } from "../core/errors.js";
 import type { RunId } from "../core/ids.js";
-import { computeModelCostMinorUnits, type ModelRegistry } from "../models/index.js";
+// The pricing module, not the models barrel: the barrel re-exports `streaming.js`, which imports the AI
+// SDK, and this recorder is reached from the in-memory adapters (#199).
+import { computeModelCostMinorUnits } from "../models/pricing.js";
+import type { ModelRegistry } from "../models/index.js";
 import type { UsageStore } from "../persistence/index.js";
 import type {
   CostEstimate,

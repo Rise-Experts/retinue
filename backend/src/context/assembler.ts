@@ -12,14 +12,8 @@
 
 import { AgentPlatformError } from "../core/errors.js";
 import type { ExecutionContext } from "../core/context.js";
-import {
-  PRUNE_ORDER,
-  type ContextBudget,
-  type ContextKind,
-  type ContextProvider,
-  type ContextSection,
-  type PromptPreview,
-} from "./index.js";
+import { PRUNE_ORDER } from "./index.js";
+import { type ContextBudget, type ContextKind, type ContextProvider, type ContextSection, type PromptPreview } from "./index.js";
 
 const BUCKET_FIELD: Readonly<Record<ContextKind, keyof ContextBudget>> = {
   "base-policy": "basePolicyTokens",

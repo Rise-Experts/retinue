@@ -21,7 +21,8 @@
  */
 
 import { BadRequestException, Body, Controller, HttpException, Inject, Post, Req } from "@nestjs/common";
-import { asId, startOrEnqueueRun } from "@retinue/agentkit";
+import { asId } from "@retinue/agentkit";
+import { startOrEnqueueRun } from "@retinue/agentkit/runtime";
 import { randomUUID } from "node:crypto";
 import { RETINUE_AGENT, RETINUE_AUTHENTICATE, RETINUE_MESSAGES, RETINUE_RESOLVER_DEPS } from "../retinue/tokens.js";
 import type { Request as ExpressRequest } from "express";

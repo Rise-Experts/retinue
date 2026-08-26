@@ -1,14 +1,6 @@
 import { describe, expect, it } from "vitest";
-import {
-  deriveCallIdempotencyKey,
-  deriveIdempotencyKey,
-  type AuthorizationPolicy,
-  type RunId,
-  type SessionStateStore,
-  type TenantId,
-  type ToolCallId,
-  type UsageRecorder,
-} from "../index.js";
+import { deriveCallIdempotencyKey, deriveIdempotencyKey } from "../idempotency/index.js";
+import { type AuthorizationPolicy, type RunId, type SessionStateStore, type TenantId, type ToolCallId, type UsageRecorder } from "../index.js";
 
 // ---- In-memory stubs proving each port is implementable with no adapter ----
 

@@ -3,7 +3,8 @@ import type { Message, MessagePart, TextPart } from "../../core/content-parts.js
 import { asId } from "../../core/ids.js";
 import type { ConversationId, MessageId, MessagePartId, TenantId } from "../../core/ids.js";
 import { createMemoryThreadSummaryStore } from "../../adapters/memory/index.js";
-import { compactThread, type ThreadSummarizer } from "../index.js";
+import { compactThread } from "../index.js";
+import { type ThreadSummarizer } from "../index.js";
 
 const T = asId<TenantId>("t1");
 const C = asId<ConversationId>("c1");

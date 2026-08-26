@@ -18,7 +18,7 @@ import { GraphQLModule } from "@nestjs/graphql";
 import { YogaDriver } from "@graphql-yoga/nestjs";
 import type { YogaDriverConfig } from "@graphql-yoga/nestjs";
 import { createGraphQLError } from "graphql-yoga";
-import { createResolvers, typeDefs } from "@retinue/agentkit";
+import { createResolvers, typeDefs } from "@retinue/agentkit/server";
 import { UNAUTHENTICATED } from "@retinue/agentkit/server";
 import { RETINUE_AUTHENTICATE, RETINUE_RESOLVER_DEPS } from "../retinue/tokens.js";
 import type { Authenticate } from "@retinue/agentkit/server";

@@ -146,7 +146,8 @@ export const ATTACHMENT_PROVIDER_ID = "attachments";
  * agreeing by coincidence, and a section sized against one and budgeted against another is a section that does
  * not fit the budget it was measured for.
  */
-export { estimateTokens } from "../core/tokens.js";
+// `estimateTokens` is core's, reachable at `./runtime`. A second export here would be a second home
+// for one name, which #199 rules out.
 
 /**
  * The attachment section for a conversation.

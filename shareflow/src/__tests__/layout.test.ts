@@ -6,16 +6,9 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
-import {
-  asId,
-  defineDelegatingTool,
-  defineTool,
-  createMemoryIdempotencyStore,
-  type ExecutionContext,
-  type PrincipalId,
-  type TenantId,
-  type Tool,
-} from "@retinue/agentkit";
+import { asId, type ExecutionContext, type PrincipalId, type TenantId, type Tool } from "@retinue/agentkit";
+import { createMemoryIdempotencyStore } from "@retinue/agentkit/persistence";
+import { defineDelegatingTool, defineTool } from "@retinue/agentkit/tools";
 import {
   SHAREFLOW_CONTEXT_PROVIDER_IDS,
   SHAREFLOW_TOOL_CATEGORIES,

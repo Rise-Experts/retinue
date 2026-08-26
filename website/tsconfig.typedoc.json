@@ -1,26 +1,88 @@
 {
   "//": "TypeDoc-only config. Resolves @retinue/* imports from SOURCE (not built dist) via paths,",
-  "//2": "so the API reference generates without pre-building the workspace — works in CI, Cloudflare and locally.",
+  "//2": "so the API reference generates without pre-building the workspace \u2014 works in CI, Cloudflare and locally.",
   "//3": "types: node, because the runtime uses `process` and node: builtins. This was [] and worked only because",
   "//4": "a dependency's .d.ts pulled node types in transitively; moving pg out of dependencies (#196) broke that",
   "//5": "chain and the doc build began failing on `process`. Declaring it states what was already relied upon.",
   "compilerOptions": {
     "target": "ES2022",
-    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
+    ],
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "jsx": "react-jsx",
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "types": ["node"],
+    "types": [
+      "node"
+    ],
     "baseUrl": ".",
     "paths": {
-      "@retinue/agentkit": ["../backend/src/index.ts"],
-      "@retinue/react": ["../frontend/src/index.ts"],
-      "@retinue/shareflow": ["../shareflow/src/index.ts"]
+      "@retinue/agentkit": [
+        "../backend/src/index.ts"
+      ],
+      "@retinue/agentkit/runtime": [
+        "../backend/src/entries/runtime.ts"
+      ],
+      "@retinue/agentkit/tools": [
+        "../backend/src/entries/tools.ts"
+      ],
+      "@retinue/agentkit/persistence": [
+        "../backend/src/entries/persistence.ts"
+      ],
+      "@retinue/agentkit/context": [
+        "../backend/src/entries/context.ts"
+      ],
+      "@retinue/agentkit/knowledge": [
+        "../backend/src/entries/knowledge.ts"
+      ],
+      "@retinue/agentkit/hitl": [
+        "../backend/src/entries/hitl.ts"
+      ],
+      "@retinue/agentkit/usage": [
+        "../backend/src/entries/usage.ts"
+      ],
+      "@retinue/agentkit/mcp": [
+        "../backend/src/entries/mcp.ts"
+      ],
+      "@retinue/agentkit/observability": [
+        "../backend/src/entries/observability.ts"
+      ],
+      "@retinue/agentkit/server": [
+        "../backend/src/entries/server.ts"
+      ],
+      "@retinue/agentkit/providers": [
+        "../backend/src/entries/providers.ts"
+      ],
+      "@retinue/agentkit/adapters/postgres": [
+        "../backend/src/entries/adapters-postgres.ts"
+      ],
+      "@retinue/agentkit/adapters/redis": [
+        "../backend/src/entries/adapters-redis.ts"
+      ],
+      "@retinue/agentkit/adapters/bullmq": [
+        "../backend/src/entries/adapters-bullmq.ts"
+      ],
+      "@retinue/agentkit/adapters/otel": [
+        "../backend/src/entries/adapters-otel.ts"
+      ],
+      "@retinue/react": [
+        "../frontend/src/index.ts"
+      ],
+      "@retinue/shareflow": [
+        "../shareflow/src/index.ts"
+      ]
     },
     "noEmit": true
   },
-  "include": ["../backend/src/index.ts", "../frontend/src/index.ts", "../shareflow/src/index.ts"]
+  "include": [
+    "../backend/src/index.ts",
+    "../frontend/src/index.ts",
+    "../shareflow/src/index.ts"
+  ],
+  "//6": "Each published subpath is mapped too: without them the root resolved to src and a subpath to dist, so one type had two identities and every cross-import failed to assign to itself."
 }

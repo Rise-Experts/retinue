@@ -13,7 +13,7 @@
 import { describe, expect, it } from "vitest";
 import { createSchema } from "graphql-yoga";
 import { printSchema } from "graphql";
-import { createResolvers, typeDefs } from "@retinue/agentkit";
+import { createResolvers, typeDefs } from "@retinue/agentkit/server";
 import type { ResolverDeps } from "@retinue/agentkit";
 
 /** Enough shape to build resolvers. Nothing is called: this is about the schema, not about behaviour. */

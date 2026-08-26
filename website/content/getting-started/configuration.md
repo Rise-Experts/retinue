@@ -10,7 +10,7 @@ sidebar_position: 3
 adapter; override only what you need:
 
 ```ts
-import { createAgent } from "@retinue/agentkit";
+import { createAgent } from "@retinue/agentkit/providers";
 
 const agent = createAgent({
   manifest: { id: "assistant", name: "Assistant", instructions: "…", modelPolicy: { role: "smart" } },
@@ -31,14 +31,10 @@ production adapters, and the HITL/usage services — so many runs execute concur
 and a live UI:
 
 ```ts
-import {
-  createDurableWorker,
-  createModelRegistry,
-  createProviderFactory,
-  createToolRegistry,
-  createDefaultEngine,
-  createUsageRecorder,
-} from "@retinue/agentkit";
+import { createProviderFactory } from "@retinue/agentkit/providers";
+import { createDefaultEngine, createDurableWorker, createModelRegistry } from "@retinue/agentkit/runtime";
+import { createToolRegistry } from "@retinue/agentkit/tools";
+import { createUsageRecorder } from "@retinue/agentkit/usage";
 
 const worker = createDurableWorker({
   runs,                  // RunStore (Postgres)

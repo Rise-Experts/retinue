@@ -16,7 +16,8 @@ import { createMemoryEventBus } from "../../runtime/index.js";
 import { createApprovalService, createQuestionService } from "../../hitl/index.js";
 import { createToolRegistry } from "../../tools/index.js";
 import type { QuestionSpec } from "../../hitl/service.js";
-import { createResolvers, typeDefs, type GraphQLContext } from "../index.js";
+import { createResolvers, typeDefs } from "../index.js";
+import { type GraphQLContext } from "../index.js";
 import type { JobDispatcher } from "../../runtime/index.js";
 import type { RunEvent } from "../../core/events.js";
 

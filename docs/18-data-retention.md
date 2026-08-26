@@ -29,7 +29,8 @@ A default exists at all so that an unconfigured deployment prunes *something* ra
 direction should be "an old log was removed" rather than "the disk filled".
 
 ```ts
-import { createPostgresRunEventPruner, cutoffFor, drain, DEFAULT_RUN_EVENT_RETENTION_DAYS } from "@retinue/agentkit";
+import { createPostgresRunEventPruner } from "@retinue/agentkit/adapters/postgres";
+import { cutoffFor, drain, DEFAULT_RUN_EVENT_RETENTION_DAYS } from "@retinue/agentkit/observability";
 
 const pruner = createPostgresRunEventPruner(sql);
 const result = await drain(pruner, {

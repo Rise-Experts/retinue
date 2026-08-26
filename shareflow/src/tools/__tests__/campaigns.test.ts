@@ -5,17 +5,8 @@
  * assert the call the service received — or that it received none.
  */
 import { beforeEach, describe, expect, it } from "vitest";
-import {
-  asId,
-  createMemoryIdempotencyStore,
-  type AuthorizationPolicy,
-  type ExecutionContext,
-  type IdempotencyStore,
-  type PrincipalId,
-  type TenantId,
-  type Tool,
-  type ToolResult,
-} from "@retinue/agentkit";
+import { asId, type AuthorizationPolicy, type ExecutionContext, type IdempotencyStore, type PrincipalId, type TenantId, type Tool, type ToolResult } from "@retinue/agentkit";
+import { createMemoryIdempotencyStore } from "@retinue/agentkit/persistence";
 import {
   CAMPAIGN_TOOL_FACTORIES,
   CAMPAIGN_TOOL_NAMES,
