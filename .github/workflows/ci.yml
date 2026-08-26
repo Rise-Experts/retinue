@@ -5,9 +5,16 @@ name: CI
 # push. Self-hosted runners are not metered, including on private repositories, so this is the same CI on
 # hardware we already have rather than a different CI.
 #
-# Safe *because this repository is private*. On a public repository a self-hosted runner runs a fork's pull
-# request on your own machine, which is arbitrary code execution by design — so if this repo is ever opened,
-# the `pull_request` trigger has to go or the runner has to be ephemeral and isolated.
+# On a public repository a self-hosted runner runs a fork's pull request on your own machine, which is arbitrary
+# code execution by design. That used to be handled by a comment saying "safe because this repository is
+# private" — which is a property of the repository settings, changeable in two clicks by someone who has not
+# read this file. The `guard` job below now enforces it instead: nothing runs for a pull request that comes from
+# a fork, whatever the repository's visibility is.
+#
+# When the repo does go public, hosted minutes cost nothing, and the right move is to drop the self-hosted
+# runner entirely — `runs-on: ubuntu-latest` is ephemeral and isolated, and then the guard is belt-and-braces
+# rather than the only thing standing between a fork and this hardware. Not done here because hosted minutes
+# are exhausted *while* the repo is private, so the switch has to land with the visibility change, not before.
 #
 # `npm run ci:local` runs the same commands on a developer machine, and `ci-local.mjs --verify` fails if this
 # file gains a command the local runner does not have — so the two cannot drift.
@@ -30,7 +37,23 @@ on:
         type: string
 
 jobs:
+  # One condition, in one place, that every other job depends on.
+  #
+  # `pull_request` cannot be filtered by fork at the trigger level, so it has to be a job-level `if` — and the
+  # same `if` copied into four jobs is four places to forget it in the fifth. Everything below `needs: [guard]`,
+  # so a skipped guard skips the lot.
+  guard:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, linux]
+    steps:
+      - name: Why this ran
+        run: |
+          echo "event=${{ github.event_name }} repo=${{ github.repository }}"
+          echo "A pull request from a fork does not reach this runner: it would be arbitrary code execution on"
+          echo "our own hardware. Such a PR gets no CI until a maintainer runs it from a branch in this repo."
+
   build:
+    needs: [guard]
     runs-on: [self-hosted, linux]
     services:
       # #105's ACs -- work surviving with no worker, BullMQ's own jobId dedup, and a typed error on an
@@ -80,6 +103,7 @@ jobs:
   # coordinator and lease-based claim depend on. Required, not advisory — an advisory gate is not a
   # gate, which is the lesson of #20 closing green against "passes the full conformance suite".
   conformance-matrix:
+    needs: [guard]
     runs-on: [self-hosted, linux]
     services:
       postgres:
@@ -128,7 +152,13 @@ jobs:
   # service account -- and the reason is text they had to type. Neither can be defaulted, which is the whole
   # mechanism: an override that could be supplied by automation is an override nobody is accountable for.
   release-gate:
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    # `agentkit@…` / `react@…`, not `v…`. #193 made release tags name their package, because the versions are
+    # independent — and this condition still said `refs/tags/v`, which no tag will ever match again. A gate that
+    # stops firing is worse than one that fails: nothing reports, and the absence looks like nothing to report.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' &&
+       (startsWith(github.ref, 'refs/tags/agentkit@') || startsWith(github.ref, 'refs/tags/react@')))
     runs-on: [self-hosted, linux]
     permissions:
       contents: write
@@ -186,6 +216,7 @@ jobs:
           if-no-files-found: warn
 
   docs:
+    needs: [guard]
     runs-on: [self-hosted, linux]
     steps:
       - uses: actions/checkout@v4
@@ -206,6 +237,7 @@ jobs:
         run: npm run check:domain -- --offline
 
   image:
+    needs: [guard]
     # The image build is the only check that the application layer declares every dependency it
     # imports: the runtime declares its heavy dependencies as optional peers, so inside this repo they
     # resolve by hoisting from the runtime's devDependencies and an under-declared app works anyway.
