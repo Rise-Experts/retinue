@@ -181,47 +181,81 @@ describe("the names line up", () => {
 });
 
 describe("supported combinations", () => {
-  it("constructs every profile, and a few explicit mixes", () => {
-    /**
-     * #196 AC-13. The matrix is 2^8; enumerating it would assert that combinations nobody has thought about
-     * work. So the *supported* set is enumerated — the two profiles and the mixes the docs describe — and
-     * anything else is refused by the cross-check rather than left untested.
-     */
-    const wire = (...names: string[]) =>
-      Object.fromEntries(names.map((n) => [n, store()])) as Record<string, never>;
+  /**
+   * All 256 of them — #197 AC-8.
+   *
+   * This test used to enumerate the two profiles and four hand-picked mixes, arguing that "enumerating the
+   * matrix would assert that combinations nobody has thought about work". That reasoning is backwards for the
+   * surface this actually is. The capability API is **eight independent booleans**, which is what was asked for
+   * and what the profiles are sugar over — so a combination nobody has thought about is not a hypothetical, it
+   * is the one a customer picks on their first afternoon. "A configuration surface nobody exercised is a set of
+   * combinations that happen to compile" is the AC, and six of them is not the surface.
+   *
+   * It is also cheap: 2^8 constructions of small objects, and the whole file still runs in milliseconds. The
+   * argument against was never about cost.
+   */
+  const DEPS = CAPABILITIES.flatMap((name) => CAPABILITY_REQUIRES[name] ?? []);
 
-    const supported: { label: string; input: Parameters<typeof createRuntime>[0] }[] = [
-      { label: "automation", input: { profile: "automation", floor: floor(), stores: wire("usage") } },
-      {
-        label: "assistant",
-        input: {
-          profile: "assistant",
-          floor: floor(),
-          stores: wire("messages", "principalMemory", "summaries", "citations", "interactions", "skills", "usage"),
-          services: wire("summarizer") as never,
-        },
-      },
-      {
-        label: "automation with memory",
-        input: {
-          profile: "automation",
-          capabilities: { memory: "on" },
-          floor: floor(),
-          stores: wire("usage", "principalMemory"),
-        },
-      },
-      {
-        label: "chat without metering",
-        input: {
-          capabilities: { history: "on", questions: "on" },
-          floor: floor(),
-          stores: wire("messages", "interactions"),
-        },
-      },
-    ];
-
-    for (const { label, input } of supported) {
-      expect(() => createRuntime(input), label).not.toThrow();
+  const combinations = (): { on: readonly string[]; off: readonly string[] }[] => {
+    const all: { on: readonly string[]; off: readonly string[] }[] = [];
+    for (let mask = 0; mask < 1 << CAPABILITIES.length; mask += 1) {
+      const on = CAPABILITIES.filter((_, index) => (mask & (1 << index)) !== 0);
+      all.push({ on, off: CAPABILITIES.filter((name) => !on.includes(name)) });
     }
+    return all;
+  };
+
+  it("constructs for every combination of the eight capabilities", () => {
+    for (const { on } of combinations()) {
+      const needed = on.flatMap((name) => CAPABILITY_REQUIRES[name] ?? []);
+      // Wired to exactly what the on-set requires, and nothing else: an extra store would be refused by the
+      // cross-check, which is a different test.
+      const wired = Object.fromEntries(needed.map((dep) => [dep, store()])) as Record<string, never>;
+      const label = on.length === 0 ? "(nothing on)" : on.join("+");
+      expect(
+        () =>
+          createRuntime({
+            capabilities: Object.fromEntries(on.map((name) => [name, "on"])) as never,
+            floor: floor(),
+            stores: wired,
+            services: wired as never,
+          }),
+        label,
+      ).not.toThrow();
+    }
+  });
+
+  it("gates exactly the off ones, in every combination", () => {
+    /**
+     * The half that matters. Constructing proves the declaration is accepted; this proves the *runtime* it
+     * produced draws the line in the same place — an off capability's dependency is unreachable and an on one's
+     * is not. A surface where a flag is accepted and then ignored is worse than one that refuses it.
+     */
+    for (const { on, off } of combinations()) {
+      const needed = on.flatMap((name) => CAPABILITY_REQUIRES[name] ?? []);
+      const wired = Object.fromEntries(needed.map((dep) => [dep, store()])) as Record<string, never>;
+      const runtime = createRuntime({
+        capabilities: Object.fromEntries(on.map((name) => [name, "on"])) as never,
+        floor: floor(),
+        stores: wired,
+        services: wired as never,
+      });
+
+      for (const dep of needed) {
+        expect(() => (runtime.stores as Record<string, unknown>)[dep], `${on.join("+")} → ${dep}`).not.toThrow();
+      }
+      const offDeps = off.flatMap((name) => CAPABILITY_REQUIRES[name] ?? []).filter((dep) => !needed.includes(dep));
+      for (const dep of offDeps) {
+        // Reading it is the gate, so nobody has to remember to check — which is the whole point of the module.
+        expect(() => (runtime.stores as Record<string, unknown>)[dep], `off → ${dep}`).toThrow();
+      }
+    }
+  });
+
+  it("covers every dependency name at least once across the matrix", () => {
+    // A guard on the guard: if `CAPABILITY_REQUIRES` gained a capability with no dependencies, the loops above
+    // would still pass while testing nothing about it.
+    const seen = new Set(combinations().flatMap(({ on }) => on.flatMap((n) => CAPABILITY_REQUIRES[n] ?? [])));
+    expect([...seen].sort()).toEqual([...new Set(DEPS)].sort());
   });
 });

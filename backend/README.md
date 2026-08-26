@@ -122,6 +122,60 @@ import { typeDefs, createResolvers } from "@retinue/agentkit/server";           
 
 `src/entries/README.md` lists them all, including why there is no `./testing` yet.
 
+## Capabilities
+
+Eight booleans, declared and cross-checked against the wiring — REQ-043 (#197).
+
+```ts
+const runtime = createRuntime({
+  profile: "automation",              // or "assistant", or no profile and set them yourself
+  capabilities: { memory: "on" },     // an override, without restating the rest
+  floor: { runs },                    // what every runtime needs
+  stores: { usage, principalMemory },
+});
+```
+
+| Capability | Needs | On means |
+|---|---|---|
+| `history` | `messages` | Prior turns reach the model |
+| `memory` | `principalMemory` | Per-person memory is read and written |
+| `compaction` | `summaries`, `summarizer` | A long thread is condensed rather than refused |
+| `citations` | `citations` | Claims carry provenance |
+| `questions` | `interactions` | A run can park on a question and resume |
+| `skills` | `skills` | Named instruction blocks load on demand |
+| `mcp` | `mcpConnections`, `mcpClient` | Another server's tools are importable |
+| `usage` | `usage` | Spend is metered |
+
+**A declaration that disagrees with the wiring refuses to start**, in both directions and naming every
+mismatch at once. Declared on with nothing wired is the obvious half. Wired but *not* declared is the half that
+matters more: it is how a declaration drifts into a lie, and this repo has found the same defect six times
+(#157, #159, #161, #163, #165, #185) — a capability that existed, passed its tests, and was wired to nothing.
+
+**Off removes the cost.** No store is required, no query is issued, and reading the dependency of an off
+capability throws rather than returning undefined — access is the gate, so no caller has to remember to check.
+
+**Approvals and quotas are not on this list, deliberately.** They have no off switch. An automation that needs no
+human approves through a *policy* that records what it approved, which is auditable; a boolean that removed the
+gate would remove the record with it. That distinction is the difference between "nobody had to approve this" and
+"nobody knows whether anybody approved this".
+
+### The minimum viable configuration
+
+The smallest thing that runs a tool-calling automation — no conversation, no memory, no human in the loop:
+
+```ts
+const runtime = createRuntime({ profile: "automation", floor: { runs }, stores: { usage } });
+```
+
+One store beyond the floor. A run in this configuration has **no `conversationId`** — absent, not invented
+(#198): the conversation-scoped capabilities are unavailable rather than operating on a fabricated id, which is
+what #164 did with `principalId` and why every per-person figure silently read as a machine's.
+
+All 256 combinations of the eight are constructed and gate-checked in `capabilities/__tests__/runtime.test.ts`.
+That test used to enumerate six hand-picked mixes, on the reasoning that the matrix would "assert that
+combinations nobody has thought about work" — which is backwards for a surface of eight independent booleans,
+where the combination nobody thought about is the one a customer picks first.
+
 ## Tools
 
 Fifteen first-party tools, at `@retinue/agentkit/tools`. **Wiring is the toggle** — a tool exists when its
