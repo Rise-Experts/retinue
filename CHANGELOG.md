@@ -164,6 +164,7 @@
 
 ### CI
 
+- hosted runners now that the repo is public, and the fork hazard becomes a check ([#193](https://github.com/Rise-Experts/retinue/issues/193)) `44755dae`
 - a fork's pull request cannot reach the self-hosted runner (#193, prerequisite for going public) ([#193](https://github.com/Rise-Experts/retinue/issues/193)) `ba6db571`
 - a Jenkinsfile for test trends, and a guard so three definitions cannot drift `ffc4e303`
 - run on a self-hosted runner, and a local gate that cannot drift from it `0fb87fdb`
@@ -173,6 +174,7 @@
 
 ### Chores
 
+- **changelog**: regenerate `791a6145`
 - **changelog**: regenerate `492176ba`
 - **license**: MIT, held jointly by Azeem Sarwar and Rise Experts ([#184](https://github.com/Rise-Experts/retinue/issues/184)) `651127d7`
 - **changelog**: regenerate `ad53334f`
