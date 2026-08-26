@@ -128,6 +128,12 @@ jobs:
           path: |
             backend/.conformance/conformance-matrix.json
             backend/.conformance/conformance-matrix.md
+            # The raw run, not only the derived table. The first hosted run of this job failed and the matrix
+            # artifact was entirely green — because the matrix covers port × adapter cells and the failing test
+            # was not one of them, so the only artefact said nothing about the only failure. The JSON reporter
+            # also suppresses per-test output, which is why `conformance:report` now runs `default` alongside it:
+            # a job whose log cannot name what failed is a job that gets re-run instead of read.
+            backend/.conformance/vitest.json
           if-no-files-found: error
 
   # The release gate (#142). REQ-032 requires this to be *required for release* and deliberately not on every
