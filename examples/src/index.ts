@@ -26,7 +26,7 @@ import { createQuotaGuard, createStoredLimitResolver } from "@retinue/agentkit/u
 import { createBullMqJobDispatcher, createBullMqRunQueue } from "@retinue/agentkit/adapters/bullmq";
 import { createPostgresApprovalGrantStore, createPostgresIdempotencyStore, createPostgresInteractionStore, createPostgresPrincipalMemoryStore, createPostgresRunEventLog, createPostgresSkillStore, createPostgresRunStore, createPostgresSessionStateStore, createPostgresUsageLimitStore, createPostgresUsageRollupStore, createPostgresUsageStore, createPostgresConversationStore } from "@retinue/agentkit/adapters/postgres";
 import { createRedisLiveEventSource } from "@retinue/agentkit/adapters/redis";
-import type { ContextBudget, ContextInspection, QuestionSpec, AgentManifest, ExecutionContext, ModelTurnTool, ResolverDeps, Run, Tool, TurnMessage } from "@retinue/agentkit";
+import type { ContextBudget, ContextInspection, QuestionSpec, AgentManifest, ExecutionContext, ModelTurnTool, ResolverDeps, Run, RunId, Tool, TurnMessage } from "@retinue/agentkit";
 import type { SqlExecutor, TransactionRunner } from "@retinue/agentkit/adapters/postgres";
 import { Redis } from "ioredis";
 import type { AgentkitConfig } from "@retinue/agentkit/server";
@@ -236,19 +236,71 @@ export const exampleFlowRunner = (backend: ExampleBackend) => {
   return createFlowRunner({
     definitions: backend.flowDefinitions,
     executions: backend.flowExecutions,
+    // The poll half of waking a parent: correctness does not depend on the notification arriving.
+    runs: backend.runs,
     handler: createExampleFlowHandler({
       registry: exampleRegistry(backend),
-      runAgentTurn: async (_context, input) => {
+      /**
+       * An agent step becomes a child run — #202.
+       *
+       * Three decisions here, each of which had an appealing wrong answer:
+       *
+       * **No conversation.** `ConversationRunCoordinator` claims a *conversation's* single run slot, so a flow
+       * running inside a conversation whose steps also claimed it would deadlock against the conversation's own
+       * turn — the parent holds the slot and waits for a child that can never get it. A conversation-less run
+       * (#198) has no slot to contend for. What the member needs from the thread travels in the prompt, where it
+       * is readable, rather than through a conversation the child does not have.
+       *
+       * **The ceiling is the flow's remainder**, handed over by the interpreter and re-derived per step. Giving
+       * the child its own independent limits is a member that can outspend the team.
+       *
+       * **The row before the job.** A job enqueued before its run row exists points at nothing: the worker claims
+       * it, `claim` matches no run, and the job is silently skipped — the abandoned-run shape #144 found.
+       */
+      startChildRun: async (context, input) => {
+        const runId = asId<RunId>(`run-flow-${input.member ?? "agent"}-${Date.now().toString(36)}`);
         /**
-         * Not wired to the engine yet, and saying so rather than pretending.
+         * The row before the job, always.
          *
-         * A flow's agent step needs a turn run *inside* the flow's run identity, which means threading the
-         * engine's composition through the runner — real work, and #187's ACs are about the engine rather than
-         * about this app's wiring. A stub that returned plausible text would make the flow look like it worked.
+         * A job enqueued before its run row exists points at nothing: the worker claims it, `claim` matches no
+         * run, and the job is silently skipped — the abandoned-run shape #144 found and #155 reproduced by
+         * leaving out the create.
          */
-        throw new Error(
-          `this app runs flow tool steps and human checkpoints; an agent step (${input.agentId}) needs the engine threaded through the runner`,
-        );
+        await backend.runs.create({
+          tenantId: context.tenantId,
+          id: runId,
+          // No `conversationId`, deliberately — see the comment above `startChildRun`.
+          agentId: asId(input.agentId),
+          agentVersion: 1,
+          principalId: context.principalId,
+          roleIds: context.roleIds,
+          /**
+           * The request travels on the **run** — #202.
+           *
+           * A conversation-less run has no history to read, so `input` is the whole of what this member is told.
+           * The alternative was a `Message`, which requires a conversation: the run shape said none was needed
+           * while the storage said its input still needed one.
+           */
+          input: {
+            prompt: input.prompt,
+            ...(input.instructions === undefined ? {} : { instructions: input.instructions }),
+            ...(input.member === undefined ? {} : { member: input.member }),
+          },
+          // From the flow's remainder, re-derived per step, so a member cannot outspend the team.
+          limits: {
+            maxSteps: Math.max(1, input.budgetRemaining.steps),
+            ...(input.budgetRemaining.costMinorUnits === undefined
+              ? {}
+              : { costCeilingMinorUnits: input.budgetRemaining.costMinorUnits }),
+            ...(input.budgetRemaining.wallClockMs === undefined
+              ? {}
+              : { wallClockTimeoutMs: input.budgetRemaining.wallClockMs }),
+          },
+        });
+        await createBullMqJobDispatcher(
+          createBullMqRunQueue({ url: process.env["RETINUE_REDIS_URL"] ?? "" }),
+        ).enqueueRun({ tenantId: context.tenantId, runId });
+        return String(runId);
       },
       askQuestion: async (context, input) => {
         /**
@@ -805,6 +857,34 @@ const app = {
   },
 
   buildContext: (run: Run) => buildWorkerContext(run),
+
+  /**
+   * A settled run wakes whatever flow was waiting for it — #202.
+   *
+   * A factory over `{ config, sql }`, exactly like `engine`, because the hook needs the same composition the
+   * worker was built with. Built once per worker rather than per run: a runner constructed over a stale executor
+   * is the shape that fails after a connection drop, and constructing one per settled run would do that on every
+   * chat turn in the deployment.
+   *
+   * This is the **fast** path only. Correctness lives in the flow runner's poll, which reads the child's state on
+   * every resume — a crash between the child completing and this firing loses the message, and a parent that only
+   * woke on notifications would sit forever with nothing looking again.
+   */
+  onRunSettled({ sql }: { readonly config: AgentkitConfig; readonly sql: SqlExecutor }) {
+    const backend = postgresBackend(
+      sql,
+      { subscribe: () => { throw new Error("the settled-run listener does not subscribe"); } } as never,
+      undefined,
+      authorization,
+    );
+    const runner = exampleFlowRunner(backend);
+    if (runner === undefined) return undefined;
+    return async ({ context, run }: { readonly context: ExecutionContext; readonly run: Run }) => {
+      // `notifyRunFinished` returns null when nothing was waiting for this run, which is the common case: most
+      // runs in this app are chat turns.
+      await runner.notifyRunFinished(context, run.id);
+    };
+  },
 };
 
 /**

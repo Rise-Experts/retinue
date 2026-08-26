@@ -33,9 +33,26 @@ import type { ExecutionContext } from "../core/context.js";
  * a second way of doing them.
  */
 export type FlowEffectHandler = {
+  /**
+   * Run an agent step.
+   *
+   * A handler that creates a **child run** returns `parked-on-run` and the flow waits for it; one that runs a
+   * turn inline returns `ok`. Both are legal, and the first is what #202 is for: a child run earns
+   * checkpointing, recovery, quota admission and its own usage rows, and an inline turn earns none of them.
+   *
+   * `budgetRemaining` is what the flow has left, re-derived per step. A child given its own independent ceiling
+   * is a member that can outspend the team.
+   */
   runAgent(
     context: ExecutionContext,
-    input: { readonly agentId: string; readonly prompt: string; readonly instructions?: string; readonly idempotencyKey: string },
+    input: {
+      readonly agentId: string;
+      readonly prompt: string;
+      readonly instructions?: string;
+      readonly idempotencyKey: string;
+      readonly budgetRemaining: { readonly steps: number; readonly costMinorUnits?: number; readonly wallClockMs?: number };
+      readonly member?: string;
+    },
   ): Promise<StepOutcome>;
   callTool(
     context: ExecutionContext,
@@ -64,6 +81,19 @@ export type FlowRunnerDeps = {
   readonly clock?: () => Date;
   readonly idFactory?: () => string;
   /**
+   * How a child run's terminal state is read — #202.
+   *
+   * Optional, and its absence is why `resume` can only *poll* when it is present: a deployment that runs agent
+   * steps inline never parks on a run and needs none of this. Supplied, it is what makes the wake-up correct
+   * rather than dependent on a notification arriving — a crash between the child completing and the parent being
+   * told loses the message, and nothing would ever look again.
+   */
+  readonly runs?: {
+    findById(input: { readonly tenantId: ExecutionContext["tenantId"]; readonly id: string }): Promise<
+      { readonly status: string; readonly error?: { readonly message: string } } | null
+    >;
+  };
+  /**
    * How many effects one call may perform before returning.
    *
    * Not a duplicate of the flow's step budget — that is the flow's own ceiling and this is the *worker's*. A long
@@ -89,6 +119,7 @@ const toStored = (execution: FlowExecution): StoredFlowExecution => ({
   steps: execution.spend.steps,
   execution,
   ...(execution.waitingFor?.kind === "signal" ? { waitingSignal: execution.waitingFor.signal } : {}),
+  ...(execution.waitingFor?.kind === "run" ? { waitingRunId: execution.waitingFor.runId as never } : {}),
   startedAt: execution.startedAt,
   ...(execution.finishedAt === undefined ? {} : { finishedAt: execution.finishedAt }),
 });
@@ -162,9 +193,48 @@ export const createFlowRunner = (deps: FlowRunnerDeps) => {
     }
   };
 
+  /**
+   * Has the child run this execution is parked on finished?
+   *
+   * The poll half of the wake-up. `notifyRunFinished` is the fast path and this is the correct one: a parent that
+   * only ever woke on a notification would sit forever if the process died between the child settling and the
+   * message being sent. Called at the top of `drive`, so any resume — a worker sweep, an operator, a retry —
+   * notices.
+   */
+  const childOutcome = async (context: ExecutionContext, execution: FlowExecution): Promise<StepOutcome | null> => {
+    if (execution.waitingFor?.kind !== "run" || deps.runs === undefined) return null;
+    const child = await deps.runs.findById({ tenantId: context.tenantId, id: execution.waitingFor.runId });
+    if (child === null) {
+      // A parked parent whose child does not exist. Failing is the only honest answer: waiting forever for
+      // something that was never created is the shape of a stuck automation nobody can explain.
+      return { kind: "failed", error: `child run ${execution.waitingFor.runId} does not exist` };
+    }
+    if (child.status === "completed") return { kind: "resumed" };
+    if (child.status === "failed" || child.status === "cancelled") {
+      // Routed through the step's `onFailure`, so a team's `escalate` reaches its manager — #202 AC-6.
+      return { kind: "failed", error: child.error?.message ?? `child run ${child.status}` };
+    }
+    return null;
+  };
+
   const drive = async (context: ExecutionContext, initial: FlowExecution): Promise<RunResult> => {
     let execution = initial;
     const definition = await definitionFor(context, execution);
+
+    // Before anything else: if this execution is parked on a run that has since settled, take that outcome.
+    const settled = await childOutcome(context, execution);
+    if (settled !== null) {
+      const now = clock();
+      const { execution: next } = advance({ definition, execution, outcome: settled, nowMs: now.getTime(), nowIso: now.toISOString() });
+      execution = next;
+      await deps.executions.save({ tenantId: context.tenantId, execution: toStored(execution) });
+      if (execution.status === "completed" || execution.status === "failed" || execution.status === "cancelled") {
+        return { execution, stopped: "settled" };
+      }
+    } else if (execution.waitingFor?.kind === "run") {
+      // Still running. Nothing to do, and saying "waiting" is more useful than driving a step that cannot start.
+      return { execution, stopped: "waiting" };
+    }
 
     for (let performed = 0; performed < slice; performed += 1) {
       const { execution: next, effect } = advance({
@@ -271,6 +341,19 @@ export const createFlowRunner = (deps: FlowRunnerDeps) => {
       await deps.executions.save({ tenantId: context.tenantId, execution: toStored(next) });
       if (next.status === "completed" || next.status === "failed") return { execution: next, stopped: "settled" };
       return drive(context, next);
+    },
+
+    /**
+     * A child run settled — #202.
+     *
+     * The fast path. Correctness does not depend on it: `drive` polls the child's state on every resume, so a
+     * lost notification costs latency rather than a stuck flow. Returns `null` when no execution was waiting for
+     * this run, which is the common case in a deployment where most runs are chat turns.
+     */
+    async notifyRunFinished(context: ExecutionContext, runId: FlowExecution["runId"]): Promise<RunResult | null> {
+      const stored = await deps.executions.waitingOnRun({ tenantId: context.tenantId, runId });
+      if (stored === null) return null;
+      return drive(context, stored.execution as FlowExecution);
     },
 
     /** Everything parked on a signal, so delivering one can wake what was waiting. */

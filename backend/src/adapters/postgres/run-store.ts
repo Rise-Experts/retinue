@@ -24,6 +24,8 @@ type Row = {
   conversation_id: string | null;
   agent_id: string;
   agent_version: number;
+  input: unknown;
+  limits: unknown;
   status: string;
   created_at: string | Date;
   started_at: string | Date | null;
@@ -48,6 +50,13 @@ const toRun = (r: Row): Run => ({
   ...(r.conversation_id === null ? {} : { conversationId: r.conversation_id as ConversationId }),
   agentId: r.agent_id as AgentId,
   agentVersion: r.agent_version,
+  // Absent stays absent: a run with no recorded input is different from one whose input was null.
+  ...(r.input === null || r.input === undefined
+    ? {}
+    : { input: typeof r.input === "string" ? JSON.parse(r.input) : r.input }),
+  ...(r.limits === null || r.limits === undefined
+    ? {}
+    : { limits: (typeof r.limits === "string" ? JSON.parse(r.limits) : r.limits) as Run["limits"] }),
   status: r.status as RunStatus,
   createdAt: iso(r.created_at),
   ...(r.started_at === null ? {} : { startedAt: iso(r.started_at) }),
@@ -79,16 +88,28 @@ export const createPostgresRunStore = (sql: SqlExecutor): RunStore => {
   };
 
   return {
-    async create({ tenantId, id, conversationId, agentId, agentVersion, principalId, roleIds }) {
+    async create({ tenantId, id, conversationId, agentId, agentVersion, principalId, roleIds, input, limits }) {
       const rows = await sql.query<Row>(
         `INSERT INTO runs (tenant_id, id, conversation_id, agent_id, agent_version, status, created_at,
-                           principal_id, role_ids)
-         VALUES ($1, $2, $3, $4, $5, 'queued', now(), $6, $7)
+                           principal_id, role_ids, input, limits)
+         VALUES ($1, $2, $3, $4, $5, 'queued', now(), $6, $7, $8::jsonb, $9::jsonb)
          ON CONFLICT (tenant_id, id) DO NOTHING
          RETURNING *`,
         // `?? null` on the conversation since #198: absent means the run belongs to none, and a
         // fabricated id here would be indistinguishable from a real conversation in every later query.
-        [tenantId, id, conversationId ?? null, agentId, agentVersion, principalId ?? null, roleIds ?? null],
+        // `input` and `limits` since #202: a conversation-less run's request has nowhere else to live, and a
+        // flow's remaining budget has to reach the child it admits.
+        [
+          tenantId,
+          id,
+          conversationId ?? null,
+          agentId,
+          agentVersion,
+          principalId ?? null,
+          roleIds ?? null,
+          input === undefined ? null : JSON.stringify(input),
+          limits === undefined ? null : JSON.stringify(limits),
+        ],
       );
       const row = rows[0];
       if (!row) throw conflict(`Run ${id} already exists`);

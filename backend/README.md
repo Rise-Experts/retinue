@@ -270,15 +270,33 @@ accounted for unchanged, because it *is* one rather than resembling one.
 A member's tools are an **intersection**, never a union: a member cannot reach a tool the delegating context could
 not, and the delegation tool itself is always stripped — a member that could delegate would be a manager.
 
-### What is not wired yet
+### An agent step is a child run
 
-**An agent step needs a child run.** The engine takes a `Run`, and giving each agent step one is what earns
-checkpointing, recovery, quota admission and per-agent usage attribution. Calling a model directly from the runner
-would be a second turn implementation with none of those, and it would pass a demo — so the shipped example flow
-uses the step kinds that work end to end and the handler throws a sentence naming what is missing.
+Each agent step creates a `Run` of its own and the flow parks on it (#202). A run rather than an inline model
+call, because a `Run` is what earns checkpointing, recovery, quota admission and its own usage rows — calling a
+model from the runner would be a second turn implementation with none of those, and it would pass a demo.
 
-Tool steps, branches, waits, human checkpoints and terminal steps run end to end today. `npm run flow -w
-@retinue/example-app` drives one against Postgres.
+Three decisions inside that, each with an appealing wrong answer:
+
+- **The child has no conversation.** `ConversationRunCoordinator` claims a *conversation's* single run slot, so a
+  flow inside a conversation whose steps also claimed it would deadlock against the conversation's own turn — the
+  parent holds the slot and waits for a child that can never get it. A conversation-less run (#198) has no slot to
+  contend for, and what the member needs travels in the run's `input`.
+- **The ceiling is the flow's remainder**, re-derived per step. Handing each member the flow's original budget
+  would let every one of them spend the whole thing. Visible live: the first member gets 6 steps, the second 5.
+- **Two ways to wake up, and only one of them is load-bearing.** `onRunSettled` on the worker is the fast path;
+  correctness is a *poll* of the child's state at the top of every resume. A crash between the child completing
+  and the notification being sent loses the message, and a parent that only woke on notifications would sit
+  forever with nothing looking again.
+
+`Run.input` and `Run.limits` exist because of this. #198 made a run able to exist without a conversation, but the
+only place a request could live was a `Message` — and a message requires a conversation. So the run shape said "no
+conversation needed" while the storage said its input still needed one.
+
+`npm run flow -w @retinue/example-app` drives all of it against Postgres: a flow straight through, one parked for
+a person, a reload from storage by something that never held it, the version pin against a published v2, a team
+whose members become child runs with shrinking ceilings, a lost notification recovered by the poll, and a failing
+member routed into its step's policy.
 
 ## Import convention
 

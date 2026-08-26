@@ -146,6 +146,7 @@ type ExecutionRow = {
   steps: number | string;
   execution: unknown;
   waiting_signal: string | null;
+  waiting_run_id: string | null;
   started_at: string | Date;
   finished_at: string | Date | null;
 };
@@ -160,12 +161,13 @@ const toExecution = (row: ExecutionRow): StoredFlowExecution => ({
   steps: int(row.steps),
   execution: typeof row.execution === "string" ? JSON.parse(row.execution) : row.execution,
   ...(row.waiting_signal === null ? {} : { waitingSignal: row.waiting_signal }),
+  ...(row.waiting_run_id === null ? {} : { waitingRunId: row.waiting_run_id as RunId }),
   startedAt: iso(row.started_at),
   ...(row.finished_at === null ? {} : { finishedAt: iso(row.finished_at) }),
 });
 
 const EXECUTION_COLUMNS = `id, flow_id, flow_version, run_id, status, current_step, steps, execution,
-         waiting_signal, started_at, finished_at`;
+         waiting_signal, waiting_run_id, started_at, finished_at`;
 
 export const createPostgresFlowExecutionStore = (sql: SqlExecutor): FlowExecutionStore => ({
   async create({ tenantId, execution }) {
@@ -173,8 +175,8 @@ export const createPostgresFlowExecutionStore = (sql: SqlExecutor): FlowExecutio
       await sql.query(
         `INSERT INTO flow_executions
            (tenant_id, id, flow_id, flow_version, run_id, status, current_step, steps, execution,
-            waiting_signal, started_at, finished_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11::timestamptz, $12::timestamptz)`,
+            waiting_signal, waiting_run_id, started_at, finished_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12::timestamptz, $13::timestamptz)`,
         [
           tenantId,
           execution.id,
@@ -186,6 +188,7 @@ export const createPostgresFlowExecutionStore = (sql: SqlExecutor): FlowExecutio
           execution.steps,
           JSON.stringify(execution.execution),
           execution.waitingSignal ?? null,
+          execution.waitingRunId ?? null,
           execution.startedAt,
           execution.finishedAt ?? null,
         ],
@@ -213,7 +216,7 @@ export const createPostgresFlowExecutionStore = (sql: SqlExecutor): FlowExecutio
     await sql.query(
       `UPDATE flow_executions
           SET status = $3, current_step = $4, steps = $5, execution = $6::jsonb,
-              waiting_signal = $7, finished_at = $9::timestamptz
+              waiting_signal = $7, waiting_run_id = $10, finished_at = $9::timestamptz
         WHERE tenant_id = $1 AND id = $2 AND steps <= $8`,
       [
         tenantId,
@@ -225,6 +228,7 @@ export const createPostgresFlowExecutionStore = (sql: SqlExecutor): FlowExecutio
         execution.waitingSignal ?? null,
         execution.steps,
         execution.finishedAt ?? null,
+        execution.waitingRunId ?? null,
       ],
     );
   },
@@ -247,6 +251,18 @@ export const createPostgresFlowExecutionStore = (sql: SqlExecutor): FlowExecutio
       [tenantId, signal, take(limit)],
     );
     return rows.map(toExecution);
+  },
+
+  async waitingOnRun({ tenantId, runId }) {
+    // `status = 'waiting'` as well as the id: a stale `waiting_run_id` on a running execution is not something a
+    // settled run should resume, because it is not waiting for one.
+    const rows = await sql.query<ExecutionRow>(
+      `SELECT ${EXECUTION_COLUMNS} FROM flow_executions
+        WHERE tenant_id = $1 AND status = 'waiting' AND waiting_run_id = $2
+        LIMIT 1`,
+      [tenantId, runId],
+    );
+    return rows[0] === undefined ? null : toExecution(rows[0]);
   },
 
   async listByFlow({ tenantId, flowId, limit, cursor }): Promise<Page<StoredFlowExecution>> {

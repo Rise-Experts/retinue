@@ -281,5 +281,17 @@ export type FlowExecution = {
   /** Why it stopped, when it stopped for a reason worth reading. */
   readonly detail?: string;
   /** Set while `waiting`: the interaction a checkpoint is parked on, or the signal a wait needs. */
-  readonly waitingFor?: { readonly kind: "human"; readonly interactionId: string } | { readonly kind: "signal"; readonly signal: string } | { readonly kind: "time"; readonly untilMs: number };
+  readonly waitingFor?:
+    | { readonly kind: "human"; readonly interactionId: string }
+    | { readonly kind: "signal"; readonly signal: string }
+    | { readonly kind: "time"; readonly untilMs: number }
+    /**
+     * A child run — #202.
+     *
+     * An agent step is a run of its own, so the flow parks on it. The `runId` is stored rather than held, which
+     * is what makes both wake-up paths work: a notification when the child settles, and a *poll* on resume for
+     * when the notification never arrived. Depending only on the notification would be depending on a message
+     * that a crash between the child completing and the parent being told simply loses.
+     */
+    | { readonly kind: "run"; readonly runId: string; readonly member?: string };
 };

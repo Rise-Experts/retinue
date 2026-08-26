@@ -42,7 +42,23 @@ import type {
  * what makes a host-written workflow undurable in the first place — the thing this module exists to replace.
  */
 export type FlowEffect =
-  | { readonly kind: "run-agent"; readonly agentId: string; readonly prompt: string; readonly instructions?: string; readonly idempotencyKey: string }
+  | {
+      readonly kind: "run-agent";
+      readonly agentId: string;
+      readonly prompt: string;
+      readonly instructions?: string;
+      readonly idempotencyKey: string;
+      /**
+       * What the flow has left to spend — #202 AC-3.
+       *
+       * Handed over rather than left for the handler to work out, and re-derived on every step because the
+       * remainder changes. A child run given its own independent ceiling is a member that can outspend the team,
+       * which is #186 AC-4 defeated by the composition that was supposed to honour it.
+       */
+      readonly budgetRemaining: { readonly steps: number; readonly costMinorUnits?: number; readonly wallClockMs?: number };
+      /** Which team member this step is, so the child run and its usage carry the attribution. */
+      readonly member?: string;
+    }
   | { readonly kind: "run-team"; readonly teamId: string; readonly prompt: string; readonly idempotencyKey: string }
   | { readonly kind: "call-tool"; readonly tool: string; readonly input: Readonly<Record<string, unknown>>; readonly idempotencyKey: string }
   | { readonly kind: "ask-human"; readonly question: string; readonly options?: readonly string[] }
@@ -58,6 +74,14 @@ export type StepOutcome =
   | { readonly kind: "failed"; readonly error: string; readonly costMinorUnits?: number }
   /** A checkpoint was raised and is now parked. Carries what to resume on. */
   | { readonly kind: "parked"; readonly interactionId: string }
+  /**
+   * An agent step became a child run, which is now queued — #202.
+   *
+   * Distinct from `parked` because what resumes it is different: a person answers a `parked` step, and a *run*
+   * finishing resumes this one. Collapsing them would mean the runner could not tell which of the two it was
+   * waiting for, and the poll-on-resume path needs to know there is a run to look at.
+   */
+  | { readonly kind: "parked-on-run"; readonly runId: string; readonly member?: string }
   /** A human answered, or a signal arrived. */
   | { readonly kind: "resumed"; readonly value?: unknown };
 
@@ -206,6 +230,21 @@ export const advance = (input: AdvanceInput): AdvanceResult => {
       };
     }
 
+    if (outcome.kind === "parked-on-run") {
+      return {
+        execution: {
+          ...execution,
+          status: "waiting",
+          waitingFor: {
+            kind: "run",
+            runId: outcome.runId,
+            ...(outcome.member === undefined ? {} : { member: outcome.member }),
+          },
+        },
+        effect: { kind: "settled" },
+      };
+    }
+
     if (outcome.kind === "failed") {
       const policy = step.onFailure ?? DEFAULT_FAILURE_POLICY;
       return handleFailure({ definition, execution, step, policy, error: outcome.error, nowIso, cost: outcome.costMinorUnits ?? 0 });
@@ -285,6 +324,10 @@ export const advance = (input: AdvanceInput): AdvanceResult => {
           prompt: interpolate(step.prompt, execution.state),
           ...(step.instructions === undefined ? {} : { instructions: step.instructions }),
           idempotencyKey: key,
+          budgetRemaining: remaining(definition, execution, nowMs),
+          // The step's name is the member's name in a compiled team, which is what carries attribution through
+          // to the child run and its usage rows.
+          member: step.name,
         },
       };
 
@@ -389,6 +432,29 @@ export const advance = (input: AdvanceInput): AdvanceResult => {
       });
     }
   }
+};
+
+/**
+ * What is left, not what was allowed.
+ *
+ * The child run's ceiling is derived from this, so a member's limits shrink as the flow spends. Handing it the
+ * flow's *original* budget would let each member spend the whole thing.
+ */
+const remaining = (
+  definition: FlowDefinition,
+  execution: FlowExecution,
+  nowMs: number,
+): { steps: number; costMinorUnits?: number; wallClockMs?: number } => {
+  const { budget } = definition;
+  return {
+    steps: Math.max(0, budget.maxSteps - execution.spend.steps),
+    ...(budget.maxCostMinorUnits === undefined
+      ? {}
+      : { costMinorUnits: Math.max(0, budget.maxCostMinorUnits - execution.spend.costMinorUnits) }),
+    ...(budget.maxWallClockMs === undefined
+      ? {}
+      : { wallClockMs: Math.max(0, budget.maxWallClockMs - (nowMs - execution.spend.startedAtMs)) }),
+  };
 };
 
 const budgetExceeded = (definition: FlowDefinition, execution: FlowExecution, nowMs: number): string | null => {

@@ -191,6 +191,33 @@ export type NewRun = {
    */
   readonly principalId?: PrincipalId;
   readonly roleIds?: readonly string[];
+  /**
+   * What this run was asked to do — #202.
+   *
+   * Added because a **conversation-less** run had nowhere to carry its request. #198 made a run able to exist
+   * without a conversation, and a triggered automation or a flow's agent step is exactly that — but the only
+   * place a prompt could live was a `Message`, and `Message.conversationId` is required. So the shape said a run
+   * needs no conversation while the storage said its input does.
+   *
+   * A property of the run rather than a message, which is also the more honest model: a webhook's payload and a
+   * flow step's brief are *the run's input*, not something somebody said in a thread. A run inside a conversation
+   * still reads its history; this is for the runs that have none.
+   */
+  readonly input?: unknown;
+  /**
+   * Per-run ceilings, overriding the agent manifest's — #202 AC-3.
+   *
+   * A flow derives these from what it has left to spend, re-derived per step, so a member cannot outspend the
+   * team. Without them the child would take the manifest's limits, which are a property of the *agent* and
+   * therefore the same for every member of every team — and a team's budget would bound nothing.
+   *
+   * Partial on purpose: a caller narrowing one dimension should not have to restate the rest.
+   */
+  readonly limits?: {
+    readonly maxSteps?: number;
+    readonly costCeilingMinorUnits?: number;
+    readonly wallClockTimeoutMs?: number;
+  };
 };
 
 /**
@@ -1594,6 +1621,13 @@ export interface FlowExecutionStore {
   get(input: TenantScope & { executionId: string }): Promise<StoredFlowExecution | null>;
   /** Executions parked on a signal, so a delivered signal can find what was waiting for it. */
   waitingOnSignal(input: TenantScope & { signal: string; limit?: number }): Promise<readonly StoredFlowExecution[]>;
+  /**
+   * The execution parked on a child run — #202.
+   *
+   * One at most: a run belongs to a single flow step. Returning `null` rather than a list says so, and a caller
+   * that got a list would have to decide what two parents for one child means.
+   */
+  waitingOnRun(input: TenantScope & { runId: RunId }): Promise<StoredFlowExecution | null>;
   /** For the inspector: what has this flow been doing? #187 AC-7. */
   listByFlow(input: TenantScope & PageRequest & { flowId: string }): Promise<Page<StoredFlowExecution>>;
 }
@@ -1610,6 +1644,8 @@ export type StoredFlowExecution = {
   /** The whole execution document, as the flows layer wrote it. */
   readonly execution: unknown;
   readonly waitingSignal?: string;
+  /** The child run this execution is parked on — #202. Indexed, because a settled run has to find its parent. */
+  readonly waitingRunId?: RunId;
   readonly startedAt: string;
   readonly finishedAt?: string;
 };

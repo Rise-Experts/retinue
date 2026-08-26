@@ -61,8 +61,18 @@ describe("runs migration 0002", () => {
         "error",
         "finished_at",
         "id",
+        /**
+         * What the run was asked to do, and what it may spend — #202.
+         *
+         * Both exist because a **conversation-less** run had nowhere to put them. #198 made a run able to exist
+         * without a conversation, and a flow's agent step is one — but the only place a request could live was a
+         * `Message`, which requires a conversation. `limits` overrides the manifest's for this run alone, so a
+         * flow can bound a member from what the flow has left rather than from a property of the agent.
+         */
+        "input",
         "keepalive_at",
         "lease_expires_at",
+        "limits",
         // Who the run is for — #164. Until these existed, a durable worker had nothing to rebuild the caller's
         // identity from and every host invented one.
         "principal_id",

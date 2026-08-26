@@ -16,6 +16,17 @@ export type AgentkitWorkerApp = AgentkitApp & {
   readonly engine: (input: { readonly config: AgentkitConfig; readonly sql: SqlExecutor }) => AgentEngine;
   readonly buildContext: Parameters<typeof import("../runtime/worker.js").createDurableWorker>[0]["buildContext"];
   /**
+   * Called when a run reaches a terminal state — #202.
+   *
+   * On the *worker* app rather than the host's, because only the worker settles runs. Optional and general: a
+   * parent flow waiting on a child run is why it exists, but an audit trail or an outbound webhook would wire the
+   * same hook. Nothing may **depend** on delivery — see `DurableWorkerDeps.onRunSettled`.
+   */
+  readonly onRunSettled?: (input: {
+    readonly config: AgentkitConfig;
+    readonly sql: SqlExecutor;
+  }) => Parameters<typeof import("../runtime/worker.js").createDurableWorker>[0]["onRunSettled"];
+  /**
    * What a model costs — #166.
    *
    * Optional, and its absence costs **cost** and not usage: tokens are recorded either way, because how many
@@ -131,6 +142,14 @@ export const runWorker = async (
       pricing: app.pricing ?? { resolve: () => null },
     }),
     buildContext: app.buildContext,
+    /**
+     * Wake anything waiting on a run that just settled — #202.
+     *
+     * Passed through from the app module rather than assumed: a deployment with no flows has nothing to notify,
+     * and the platform cannot know what a host wants to hear about. Best effort by contract — the flow runner
+     * polls its child's state on every resume, so a lost notification costs latency rather than a stuck flow.
+     */
+    ...(app.onRunSettled === undefined ? {} : { onRunSettled: app.onRunSettled({ config, sql }) }),
     workerId: `worker-${process.pid}`,
   });
 

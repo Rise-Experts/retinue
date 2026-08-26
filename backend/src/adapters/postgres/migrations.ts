@@ -1390,6 +1390,51 @@ export const MIGRATIONS: readonly Migration[] = [
     ],
     down: [`DROP TABLE IF EXISTS flow_executions`, `DROP TABLE IF EXISTS flow_definitions`],
   },
+  {
+    /**
+     * A flow parked on a child run — #202.
+     *
+     * Its own column and its own partial index rather than a lookup inside the `execution` JSON: a settled run
+     * has to find its parent, and that is a hot path on every run completion in a deployment that uses flows.
+     * Scanning jsonb for it would make finishing a run slower for everyone, including deployments with no flows.
+     *
+     * The index is partial on `status = 'waiting'` for the same reason the query is: a stale id on a running
+     * execution is not a parent waiting for anything.
+     */
+    id: "0030_flow_waiting_run",
+    up: [
+      `ALTER TABLE flow_executions ADD COLUMN IF NOT EXISTS waiting_run_id text`,
+      `CREATE INDEX IF NOT EXISTS flow_executions_waiting_run_idx
+         ON flow_executions (tenant_id, waiting_run_id) WHERE status = 'waiting'`,
+    ],
+    down: [
+      `DROP INDEX IF EXISTS flow_executions_waiting_run_idx`,
+      `ALTER TABLE flow_executions DROP COLUMN IF EXISTS waiting_run_id`,
+    ],
+  },
+  {
+    /**
+     * A run's own input and ceilings — #202.
+     *
+     * Both exist because a **conversation-less** run had nowhere to put them. #198 made a run able to exist
+     * without a conversation — which a webhook, a schedule and a flow's agent step all are — but the only place a
+     * request could live was a `Message`, and a message requires a conversation. So the run shape said "no
+     * conversation needed" while the storage said its input still needed one.
+     *
+     * `limits` overrides the agent manifest's for this run only. A flow derives it from what the flow has left,
+     * re-derived per step; without it a child takes the manifest's limits, which are a property of the *agent* and
+     * therefore identical for every member of every team — so a team's budget would bound nothing.
+     */
+    id: "0031_run_input_and_limits",
+    up: [
+      `ALTER TABLE runs ADD COLUMN IF NOT EXISTS input jsonb`,
+      `ALTER TABLE runs ADD COLUMN IF NOT EXISTS limits jsonb`,
+    ],
+    down: [
+      `ALTER TABLE runs DROP COLUMN IF EXISTS limits`,
+      `ALTER TABLE runs DROP COLUMN IF EXISTS input`,
+    ],
+  },
 ];
 
 /**

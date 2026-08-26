@@ -118,6 +118,16 @@ export const createMemoryFlowExecutionStore = (): FlowExecutionStore => {
         .slice(0, Math.max(1, Math.min(limit ?? 50, 500)));
     },
 
+    async waitingOnRun({ tenantId, runId }) {
+      // `status === "waiting"` as well as the id: a stale `waitingRunId` on a running execution must not be
+      // resumed by a run finishing, because it is not waiting for one.
+      return (
+        [...tenantMap(byTenant, String(tenantId)).values()].find(
+          (execution) => execution.status === "waiting" && execution.waitingRunId === runId,
+        ) ?? null
+      );
+    },
+
     async listByFlow({ tenantId, flowId, ...request }) {
       const matching = [...tenantMap(byTenant, String(tenantId)).values()]
         .filter((execution) => execution.flowId === flowId)

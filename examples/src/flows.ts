@@ -118,10 +118,22 @@ export const EXAMPLE_FLOWS: readonly FlowDefinition[] = [TRIAGE_FLOW, RESEARCH_T
  */
 export const createExampleFlowHandler = (deps: {
   readonly registry: ToolRegistry;
-  /** Runs one agent turn and returns its text. Supplied by the app, which owns the engine. */
-  readonly runAgentTurn: (
+  /**
+   * Creates the child run an agent step becomes, enqueues it, and returns its id — #202.
+   *
+   * A run rather than an inline turn, because a `Run` is what earns checkpointing, recovery, quota admission and
+   * its own usage rows. The ceiling comes from the flow's *remaining* budget, so a member cannot outspend the
+   * team; the app supplies the wiring and the flow supplies the number.
+   */
+  readonly startChildRun: (
     context: ExecutionContext,
-    input: { readonly agentId: string; readonly prompt: string; readonly instructions?: string },
+    input: {
+      readonly agentId: string;
+      readonly prompt: string;
+      readonly instructions?: string;
+      readonly member?: string;
+      readonly budgetRemaining: { readonly steps: number; readonly costMinorUnits?: number; readonly wallClockMs?: number };
+    },
   ) => Promise<string>;
   /** Raises a question through the platform's HITL path and returns the interaction it created. */
   readonly askQuestion: (
@@ -131,11 +143,19 @@ export const createExampleFlowHandler = (deps: {
 }): FlowEffectHandler => ({
   async runAgent(context, input) {
     try {
-      const text = await deps.runAgentTurn(context, input);
-      return { kind: "ok", value: text };
+      const runId = await deps.startChildRun(context, {
+        agentId: input.agentId,
+        prompt: input.prompt,
+        ...(input.instructions === undefined ? {} : { instructions: input.instructions }),
+        ...(input.member === undefined ? {} : { member: input.member }),
+        budgetRemaining: input.budgetRemaining,
+      });
+      // `parked-on-run`, not `ok`: the turn has not happened yet. Reporting success here would run the next
+      // member against an answer nobody produced.
+      return { kind: "parked-on-run", runId, ...(input.member === undefined ? {} : { member: input.member }) };
     } catch (error) {
-      // The message only. A flow's stored state is durable and readable, and a stack trace in it is a stack trace
-      // in something a person opens.
+      // The message only. A flow's stored state is durable and read by people, and a stack trace in it is a
+      // stack trace in something someone opens.
       return { kind: "failed", error: (error as Error).message };
     }
   },

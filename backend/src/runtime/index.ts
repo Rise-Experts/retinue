@@ -102,6 +102,14 @@ export type Run = {
   readonly conversationId?: ConversationId;
   readonly agentId: AgentId;
   readonly agentVersion: number;
+  /** What this run was asked to do, for a run with no conversation to read — see `NewRun.input` (#202). */
+  readonly input?: unknown;
+  /** Per-run ceilings from admission, overriding the manifest's — see `NewRun.limits` (#202). */
+  readonly limits?: {
+    readonly maxSteps?: number;
+    readonly costCeilingMinorUnits?: number;
+    readonly wallClockTimeoutMs?: number;
+  };
   readonly status: RunStatus;
   readonly createdAt: string;
   readonly startedAt?: string;

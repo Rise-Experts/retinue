@@ -176,6 +176,33 @@ export function flowExecutionStoreConformance(make: () => FlowExecutionStore): v
       expect(found.map((e) => e.id)).toEqual(["waiting"]);
     });
 
+    it("finds the execution parked on a child run, and only while it is waiting", async () => {
+      // #202. A settled run has to find its parent, and a stale id on a *running* execution is not a parent
+      // waiting for anything — resuming it would advance a flow that is already advancing.
+      const store = make();
+      await store.create({
+        tenantId: T1,
+        execution: execution({ id: "parked", status: "waiting", waitingRunId: asId<RunId>("child-1") }),
+      });
+      await store.create({
+        tenantId: T1,
+        execution: execution({ id: "running", status: "running", waitingRunId: asId<RunId>("child-2") }),
+      });
+
+      expect((await store.waitingOnRun({ tenantId: T1, runId: asId<RunId>("child-1") }))?.id).toBe("parked");
+      expect(await store.waitingOnRun({ tenantId: T1, runId: asId<RunId>("child-2") })).toBeNull();
+      expect(await store.waitingOnRun({ tenantId: T1, runId: asId<RunId>("nobody") })).toBeNull();
+    });
+
+    it("does not resolve another tenant's parked execution by child run", async () => {
+      const store = make();
+      await store.create({
+        tenantId: T1,
+        execution: execution({ status: "waiting", waitingRunId: asId<RunId>("child-1") }),
+      });
+      expect(await store.waitingOnRun({ tenantId: T2, runId: asId<RunId>("child-1") })).toBeNull();
+    });
+
     it("lists a flow's executions, newest first", async () => {
       const store = make();
       await store.create({ tenantId: T1, execution: execution({ id: "old", startedAt: "2026-08-01T00:00:00.000Z" }) });

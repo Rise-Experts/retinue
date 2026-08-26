@@ -107,6 +107,23 @@ export type DurableWorkerDeps = {
    * restart records one turn, not two.
    */
   readonly messages?: MessageStore;
+  /**
+   * Called once, after a run reaches a terminal state and its state is durable — #202.
+   *
+   * Added for a flow parked on a child run, but deliberately general: anything that wants to know a run finished
+   * — an audit, a webhook, a parent flow — wires this rather than polling.
+   *
+   * **Best effort, and that is a decision.** A failure here is reported and swallowed, because the run genuinely
+   * did complete and failing it because a listener threw would be recording a lie. What makes that safe is that
+   * no listener may *depend* on the notification: the flow runner polls its child's state on every resume, so a
+   * lost message costs latency rather than a stuck flow. A hook whose delivery was load-bearing would need a
+   * queue, not a callback.
+   */
+  readonly onRunSettled?: (input: {
+    readonly context: ExecutionContext;
+    readonly run: Run;
+    readonly outcome: "completed" | "failed" | "cancelled";
+  }) => Promise<void> | void;
 };
 
 export type ProcessOutcome = "completed" | "failed" | "cancelled" | "skipped" | "lost" | "paused";
@@ -217,6 +234,31 @@ export const createDurableWorker = (deps: DurableWorkerDeps) => {
       }
     };
     const persist = () => checkpoints.save({ tenantId, checkpoint: toCheckpoint() });
+
+    /**
+     * Tell whoever asked that this run settled.
+     *
+     * Swallowed on failure, with a report. The run completed; failing it because a listener threw would record a
+     * lie about what happened. Safe only because nothing may depend on delivery — the flow runner polls its
+     * child's state on every resume, so a lost notification costs latency rather than a stuck flow.
+     */
+    const notifySettled = async (settled: Run | null, outcome: "completed" | "failed" | "cancelled"): Promise<void> => {
+      if (deps.onRunSettled === undefined || settled === null) return;
+      try {
+        await deps.onRunSettled({ context, run: settled, outcome });
+      } catch (error) {
+        /**
+         * To stderr, because this layer has no telemetry port and inventing a dependency for one log line would
+         * be worse than the line. A listener that throws is a wiring bug in the *host*, and the host is who reads
+         * this — the alternative is silence, which is how a parent flow that never woke becomes unexplainable.
+         */
+        console.error(
+          `[worker] onRunSettled threw for run ${String(settled.id)} (${outcome}); the run is unaffected: ${
+            toPlatformError(error).message
+          }`,
+        );
+      }
+    };
 
     /**
      * Record the assistant's turn — #157. Called on every terminal exit, and only there.
@@ -401,6 +443,7 @@ export const createDurableWorker = (deps: DurableWorkerDeps) => {
         await emit({ type: "run.cancelled" });
         await persist();
         await persistAssistantTurn("cancelled");
+      await notifySettled(cancelled, "cancelled");
         return { run: cancelled, outcome: "cancelled" };
       }
 
@@ -417,6 +460,7 @@ export const createDurableWorker = (deps: DurableWorkerDeps) => {
       await emit({ type: "run.completed" });
       await persist();
       await persistAssistantTurn("completed");
+      await notifySettled(completed, "completed");
       return { run: completed, outcome: "completed" };
     } catch (thrown) {
       if (thrown instanceof ClaimLostError) {
@@ -428,6 +472,7 @@ export const createDurableWorker = (deps: DurableWorkerDeps) => {
       await emit({ type: "run.failed", error });
       await persist();
       await persistAssistantTurn("failed");
+      await notifySettled(failed, "failed");
       return { run: failed, outcome: "failed" };
     } finally {
       // Every exit path: completed, paused, failed, claim lost, or a throw from the engine. A timer
