@@ -27,7 +27,9 @@ import {
   DATA_DISPOSITION,
   PARITY_GATES,
   VERDICTS,
+  CAPABILITY_INVENTORY,
   canRemoveOldRuntime,
+  gateStatus,
   diffShadowRuns,
   evaluateParity,
 } from "../dist/index.js";
@@ -94,7 +96,9 @@ console.log(`parity report — ${pairs.length} shadow pairs across ${Object.keys
  * The first version wrote the keys by hand and spelled one of them `gate-unagreed`, which does not exist — every
  * unagreed gate printed as `?`, the same glyph as "I do not know what this is".
  */
-const SYMBOL = { passed: "✓", failed: "✗", "gate-not-agreed": "✎", "insufficient-sample": "…", "not-measurable": "—" };
+// `incomplete` gets its own glyph since #194: a workflow whose capabilities are not built is not a failure and
+// must not render as one, because the work it asks for is "build it" rather than "find the divergence".
+const SYMBOL = { passed: "✓", failed: "✗", "gate-not-agreed": "✎", "insufficient-sample": "…", "not-measurable": "—", incomplete: "○" };
 for (const verdict of VERDICTS)
   if (SYMBOL[verdict] === undefined) throw new Error(`no symbol for verdict "${verdict}" — add one to SYMBOL`);
 for (const v of evaluation.verdicts) {
@@ -122,8 +126,37 @@ if (!has("removal")) process.exit(evaluation.allMeasurablePassed ? 0 : 1);
  * end of one. Running the second implicitly would make a passing report read as permission to delete.
  */
 const references = flag("references");
+
+/**
+ * The capability inventory — #194.
+ *
+ * Evaluated here rather than taken as a flag, because the whole point is that the count of shadow runs per
+ * capability is *derived*. The shadow data is already loaded; matching tool calls against each entry's
+ * replacement is the same pass.
+ *
+ * The parity gate's hole was that a capability nobody built writes nothing, and a write-set comparison cannot
+ * tell "wrote nothing" from "wrote the same thing" — so a missing feature read as perfect agreement. This is what
+ * closes it, and it blocks rather than warns.
+ */
+const inventory = gateStatus({
+  entries: CAPABILITY_INVENTORY,
+  /**
+   * Which tools each shadow run called, from the **old** side of the pair.
+   *
+   * The old side, deliberately: coverage asks "did shadow traffic exercise this capability", and traffic is what
+   * the old runtime did. Reading the new side would count a capability as covered whenever the replacement
+   * happened to run, including on the runs where the old one did something else entirely.
+   */
+  shadowRuns: pairs.map((pair) => ({
+    toolsCalled: (pair.old?.writes ?? []).map((w) => w?.tool).filter((t) => typeof t === "string"),
+  })),
+});
+console.log(`\ninventory: ${inventory.status}`);
+for (const problem of inventory.problems) console.log(`  - ${problem.capability}: ${problem.problem}`);
+
 const check = canRemoveOldRuntime({
   evaluation,
+  inventory,
   ...(flag("signed-off-by") === undefined ? {} : { signedOffBy: flag("signed-off-by") }),
   dataDispositionDecided: DATA_DISPOSITION.decision !== null,
   // Passed through only when given. Defaulting it to 0 would be the "did not look equals clean" mistake that

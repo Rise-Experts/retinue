@@ -333,3 +333,40 @@ needs shadow data from a deployment running both runtimes, which does not exist 
 `npm test` in this workspace runs `tsc -b` first. That is deliberate: this package value-imports
 `@retinue/agentkit`, whose entry point is `dist/`, so `vitest run` on its own tests whatever was last
 built — see the note in `vitest.config.ts`.
+
+## The capability inventory
+
+`src/inventory/` — REQ-041 ([#194](https://github.com/Rise-Experts/retinue/issues/194)).
+
+#128's parity gate compares **write sets** between the two runtimes. A capability the new runtime does not
+implement writes **nothing**, and comparing nothing against nothing gives an identical-write rate of 100%. So the
+strongest form of that defect was never a failing gate — it was a *passing* one, on a workflow nobody had built.
+
+The inventory makes coverage a precondition of comparison rather than a conclusion from it:
+
+| | |
+|---|---|
+| `missing` or `partial` | The workflow's verdict becomes **`incomplete`** — its own value, not a `failed`, because "we did not build it" and "it diverged" ask for different work from different people. No rate is computed, because the rate is the thing that lies |
+| `dropped` | Needs a name, a date and a reason, as data. A capability removed silently is a customer's workflow removed silently |
+| `shadowRuns` | **Counted**, from the shadow data, by matching tool calls against each entry's replacement. Never supplied — an entry's author is the person most likely to believe their capability is covered, and a number they can write is a number that says what they expect |
+| zero shadow runs | Cannot contribute to a passing gate. An untested replacement contributes nothing to parity |
+| scheduled, triggered, webhook | Carry their own `coverageEvidence`, because nobody shadows 03:00 and a webhook arrives when a third party decides. Requiring shadow runs of these would be requiring the impossible and then calling its absence a defect |
+
+`canRemoveOldRuntime` blocks on an inventory that was never evaluated, for the same reason it blocks on an unrun
+reference scan: **"I did not look" must never be worth the same as "there is nothing there."**
+
+### What it says today
+
+`incomplete`. Three capabilities are genuinely not built, and all three are ones normal traffic would never have
+revealed:
+
+- **the scheduled publish itself** — `schedule_post` records the intent; the job that fires at 03:00 lives in
+  `social_integgration` and nothing here replaces it. No shadow run happens at 03:00 either, so this workflow
+  would have compared nothing against nothing forever.
+- **the inbound comment webhook** — arrives when a platform decides, so no shadow run produces one.
+- **the nightly metrics refresh** — same shape.
+
+Everything else is `implemented` with a behavioural test against the old contract. That is a weaker claim than
+parity and is meant to be: `implemented` means "a replacement exists and is tested against the old tool's
+observable contract", and the gate adds "and shadow traffic exercised it". No deployment runs both runtimes yet,
+so the second half is unearned by construction — which is why the file cannot assert it.

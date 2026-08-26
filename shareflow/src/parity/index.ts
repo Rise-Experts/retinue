@@ -9,10 +9,12 @@
  * So what ships is the machinery that refuses.
  */
 import type { ParityReport } from "../shadow/index.js";
+import type { CapabilityEntry, InventoryGate } from "../inventory/index.js";
 import { PARITY_GATES, gateFor, type ParityGate } from "./gates.js";
 
 export * from "./gates.js";
 export * from "./cutover.js";
+export * from "../inventory/index.js";
 
 /** A gate's outcome for one workflow. */
 export const VERDICTS = [
@@ -24,6 +26,18 @@ export const VERDICTS = [
   "insufficient-sample",
   /** Shadow data cannot decide this workflow at all. */
   "not-measurable",
+  /**
+   * The inventory says a capability this workflow needs is not built — #194 AC-2.
+   *
+   * Its own verdict, and not a `failed`, because the two ask for different work from different people: `failed`
+   * means the new runtime did something different, and `incomplete` means it did nothing because there is
+   * nothing there. Collapsing them loses the only piece of information a reviewer needs to act.
+   *
+   * It also cannot be a `passed`, which is what it *was* before this existed: a capability the new runtime does
+   * not implement writes nothing, and a write-set comparison cannot tell "wrote nothing" from "wrote the same
+   * thing". A missing feature read as perfect agreement.
+   */
+  "incomplete",
 ] as const;
 
 export type Verdict = (typeof VERDICTS)[number];
@@ -72,12 +86,22 @@ export const evaluateAgainstGate = (
 export const evaluateWorkflow = (
   workflow: string,
   reports: readonly ParityReport[],
-): WorkflowVerdict => evaluate(workflow, gateFor(workflow), reports);
+  /**
+   * The capabilities this workflow needs, from the inventory — #194 AC-2.
+   *
+   * Optional so every existing caller keeps compiling, and its absence is *not* treated as "nothing missing":
+   * `canRemoveOldRuntime` blocks on an unevaluated inventory separately, which is where "I did not look" is
+   * refused. Supplied here, a `missing` or `partial` capability turns the verdict `incomplete` **before** any
+   * rate is computed — because the rate is the thing that lies.
+   */
+  capabilities: readonly CapabilityEntry[] = [],
+): WorkflowVerdict => evaluate(workflow, gateFor(workflow), reports, capabilities);
 
 const evaluate = (
   workflow: string,
   gate: ParityGate | undefined,
   reports: readonly ParityReport[],
+  capabilities: readonly CapabilityEntry[] = [],
 ): WorkflowVerdict => {
   const sampleSize = reports.length;
   if (gate === undefined) {
@@ -116,6 +140,26 @@ const evaluate = (
       ...base,
       verdict: "gate-not-agreed",
       detail: `the gate for "${workflow}" is still proposed — a threshold has to be agreed before results are visible, so this cannot pass until someone signs it`,
+    };
+  }
+
+  /**
+   * Before the numbers — #194 AC-2, and the order is the fix.
+   *
+   * A capability the new runtime does not implement produces no writes, so every shadow run for it compares
+   * "nothing" against "nothing" and the identical-write rate reads **100%**. Computing the rate first and then
+   * checking coverage would mean reporting a pass and a warning about the same workflow, and one of those two
+   * numbers is a lie. So the coverage check comes first and the rate is never computed.
+   */
+  const notBuilt = capabilities.filter((c) => c.status === "missing" || c.status === "partial");
+  if (notBuilt.length > 0) {
+    return {
+      ...base,
+      verdict: "incomplete",
+      detail:
+        `${notBuilt.length} capability(ies) this workflow needs are not built: ` +
+        `${notBuilt.map((c) => `${c.capability} (${c.status})`).join(", ")}. ` +
+        `A capability that writes nothing cannot be distinguished from one that agrees, so no rate is computed`,
     };
   }
 
@@ -210,6 +254,14 @@ export const canRemoveOldRuntime = (input: {
    * unmeasured metric both landed on.
    */
   readonly remainingReferences?: number;
+  /**
+   * The capability inventory's verdict — #194 AC-6.
+   *
+   * Blocks when omitted, for the same reason `remainingReferences` does: an inventory nobody ran is not an
+   * inventory with nothing in it. The parity gate's hole was that a missing capability produces no writes and
+   * therefore no divergence, so passing gates alone were never evidence of coverage.
+   */
+  readonly inventory?: InventoryGate;
 }): RemovalCheck => {
   const blockers: string[] = [];
   for (const workflow of input.evaluation.blocking) {
@@ -230,6 +282,17 @@ export const canRemoveOldRuntime = (input: {
     blockers.push(
       "the historical Agno conversation data question is unanswered — AC-6 requires it migrated or declared out of scope in writing",
     );
+  }
+  if (input.inventory === undefined) {
+    blockers.push(
+      "the capability inventory has not been evaluated — #194 AC-6: passing gates are not evidence of coverage, because a capability nobody built writes nothing and a write-set comparison cannot tell that from agreement",
+    );
+  } else if (input.inventory.status === "incomplete") {
+    // Every problem, not a count: a reviewer fixing one wants to know whether there are three more, and the
+    // problems are individually actionable in a way "incomplete" is not.
+    for (const problem of input.inventory.problems) {
+      blockers.push(`inventory — ${problem.capability} ${problem.problem}`);
+    }
   }
   if (input.remainingReferences === undefined) {
     // "I did not look" is not evidence, and it must not be worth the same as "there are none". Sabotage

@@ -234,6 +234,19 @@ describe("evaluating a workflow", () => {
 });
 
 /** AC-4 — the enforcement. */
+/**
+ * A complete inventory, so the tests below stay about the blocker each one names — #194.
+ *
+ * `canRemoveOldRuntime` blocks on an unevaluated inventory now, which is correct and which made every test here
+ * fail with a second blocker they were not written about. Supplying a complete one keeps each test's assertion
+ * exact: one blocker, the one it is testing.
+ */
+const completeInventory = {
+  status: "complete" as const,
+  problems: [] as { capability: string; problem: string }[],
+  unexercised: [] as string[],
+};
+
 describe("the removal gate", () => {
   const passing = { verdicts: [], allMeasurablePassed: true, unmeasurable: [], blocking: [] };
 
@@ -249,6 +262,7 @@ describe("the removal gate", () => {
 
   it("still refuses when the gates pass but nobody has signed", () => {
     const check = canRemoveOldRuntime({
+      inventory: completeInventory,
       evaluation: passing,
       dataDispositionDecided: true,
       remainingReferences: 0,
@@ -260,7 +274,7 @@ describe("the removal gate", () => {
   });
 
   it("still refuses when signed but the data question is open", () => {
-    const check = canRemoveOldRuntime({ evaluation: passing, signedOffBy: "a.person" });
+    const check = canRemoveOldRuntime({ inventory: completeInventory, evaluation: passing, signedOffBy: "a.person" });
     expect(check.allowed).toBe(false);
     expect(check.blockers.join()).toMatch(/historical Agno conversation data/);
   });
@@ -268,6 +282,7 @@ describe("the removal gate", () => {
   it("treats an empty signature as no signature", () => {
     expect(
       canRemoveOldRuntime({
+        inventory: completeInventory,
         evaluation: passing,
         signedOffBy: "   ",
         dataDispositionDecided: true,
@@ -278,6 +293,7 @@ describe("the removal gate", () => {
 
   it("refuses while an unmeasurable workflow has had no explicit decision", () => {
     const check = canRemoveOldRuntime({
+      inventory: completeInventory,
       evaluation: { ...passing, unmeasurable: ["analytics"] },
       signedOffBy: "a.person",
       dataDispositionDecided: true,
@@ -290,6 +306,7 @@ describe("the removal gate", () => {
 
   it("allows removal only when everything is satisfied", () => {
     const check = canRemoveOldRuntime({
+      inventory: completeInventory,
       evaluation: passing,
       signedOffBy: "a.person",
       dataDispositionDecided: true,
@@ -300,6 +317,7 @@ describe("the removal gate", () => {
 
   it("blocks again if references remain after a removal attempt", () => {
     const check = canRemoveOldRuntime({
+      inventory: completeInventory,
       evaluation: passing,
       signedOffBy: "a.person",
       dataDispositionDecided: true,
@@ -315,6 +333,7 @@ describe("the removal gate", () => {
     // carried no behavioural weight at all. Now an unrun scan blocks, matching #124's fail-soft search and
     // #125's unmeasured metric.
     const notRun = canRemoveOldRuntime({
+      inventory: completeInventory,
       evaluation: passing,
       signedOffBy: "a.person",
       dataDispositionDecided: true,
