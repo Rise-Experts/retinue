@@ -14,11 +14,23 @@
  * that erases at compile time would make a source-level check disagree with reality.
  */
 
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const DIST = resolve(import.meta.dirname, "../../dist");
+
+/**
+ * This file asserts things about the **build**, so a missing build is a precondition failure rather than a
+ * result. Without it, three tests across two files fail with messages about a missing module, and the one that
+ * asserts the root reaches *nothing* passes — because an absent graph reaches nothing. One explicit failure
+ * naming the command is worth more than three implicit ones pointing elsewhere.
+ */
+describe("the build these tests read", () => {
+  it("exists", () => {
+    expect(existsSync(resolve(DIST, "index.js")), "run `npm run build` first: these tests read dist/").toBe(true);
+  });
+});
 
 /** Every bare specifier the graph rooted at `entry` can reach, following relative imports only. */
 const bareSpecifiersFrom = (entry: string): Set<string> => {

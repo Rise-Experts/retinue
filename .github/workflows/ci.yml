@@ -111,6 +111,16 @@ jobs:
           node-version: 20
       - name: Install
         run: npm install
+      # Build, for the same reason the `build` job does it before `npm test`: three tests in this suite read the
+      # *built* package — `public-surface` imports it in a child node through the `exports` map, and
+      # `root-import-weight` walks the graph from `dist/index.js`. Without a build they fail with three confusing
+      # messages about a missing module.
+      #
+      # This job had therefore been incapable of passing since those tests landed, and nobody knew: hosted
+      # minutes were exhausted and no self-hosted runner was ever registered, so it had not run. Going public is
+      # what surfaced it. A job that cannot pass and never runs is indistinguishable from a job that passes.
+      - name: Build
+        run: npm run build
       - name: Conformance suite (real PostgreSQL)
         env:
           RETINUE_TEST_PG_URL: postgres://postgres:postgres@localhost:5442/agentkit_test
