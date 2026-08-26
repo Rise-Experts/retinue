@@ -17,7 +17,7 @@ import { createMemoryConversationRunCoordinator, createMemoryConversationStore, 
 import { cursorFromLastEventId } from "../../graphql/index.js";
 import { asId, type ConversationId, type ExecutionContext, type ResolverDeps, type RunEvent, type RunId, type TenantId } from "../../index.js";
 import { createMemoryEventBus } from "../../runtime/index.js";
-import { createAgentkitHost } from "../host.js";
+import { createRetinueHost } from "../host.js";
 
 const T1 = asId<TenantId>("sse-t1");
 const T2 = asId<TenantId>("sse-t2");
@@ -49,7 +49,7 @@ const build = async (options: { readonly keepAliveMs?: number; readonly seedTena
     live: bus.live,
   } satisfies ResolverDeps;
 
-  const host = createAgentkitHost({
+  const host = createRetinueHost({
     deps,
     authenticate: (request) => {
       const tenant = request.headers.get("x-tenant");
@@ -194,7 +194,7 @@ describe("authorisation", () => {
 
   it("honours a finer entitlement callback, also with 404", async () => {
     const { deps } = await build();
-    const host = createAgentkitHost({
+    const host = createRetinueHost({
       deps,
       authenticate: () => executionFor(T1),
       sse: {

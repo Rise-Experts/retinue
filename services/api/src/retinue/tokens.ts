@@ -21,7 +21,7 @@ export const RETINUE_AGENT = Symbol("RETINUE_AGENT");
 /**
  * How a request becomes an `ExecutionContext`.
  *
- * **No default, deliberately** — the same rule as `AgentkitApp.authenticate`. A permissive fallback would serve
+ * **No default, deliberately** — the same rule as `RetinueApp.authenticate`. A permissive fallback would serve
  * an open API to anyone who forgot to provide one, and a service that refuses to start is a much better failure
  * than one that starts and trusts everybody. `RetinueModule.forRoot` requires it, so "forgot to provide one" is
  * a type error rather than a security incident.

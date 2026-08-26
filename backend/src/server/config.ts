@@ -13,7 +13,7 @@
 import { readEnv } from "../core/env.js";
 import type { SchemaMode } from "../entries/adapters-postgres.js";
 
-export type AgentkitConfig = {
+export type RetinueConfig = {
   readonly databaseUrl: string;
   readonly redisUrl: string;
   /** How the schema is provisioned at boot. `off` in production, so managed migrations stay in control. */
@@ -53,7 +53,7 @@ export type Env = Readonly<Record<string, string | undefined>>;
  * from one boot, not discover them across three deploys. That is what "fail fast with a precise
  * message" is actually worth.
  */
-export const loadConfig = (env: Env): AgentkitConfig => {
+export const loadConfig = (env: Env): RetinueConfig => {
   const problems: string[] = [];
   const variables: string[] = [];
 
@@ -132,7 +132,7 @@ export const loadConfig = (env: Env): AgentkitConfig => {
     schemaMode: rawSchemaMode as SchemaMode,
     port,
     workerConcurrency,
-    logLevel: rawLogLevel as AgentkitConfig["logLevel"],
+    logLevel: rawLogLevel as RetinueConfig["logLevel"],
   };
 };
 

@@ -1,7 +1,7 @@
 /**
  * The example's `authenticate` — #155, AC-6.
  *
- * `AgentkitApp.authenticate` has no default on purpose: the server refuses to start without one, because a
+ * `RetinueApp.authenticate` has no default on purpose: the server refuses to start without one, because a
  * permissive fallback would serve an open API to anyone who forgot to set it. An *example* is the most dangerous
  * place to undermine that, since example code is what people copy.
  *

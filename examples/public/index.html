@@ -1,15 +1,15 @@
 <!doctype html>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Assistant · agentkit</title>
+<title>Assistant · Retinue</title>
 <!--
-  A chat assistant over @agentkit (#155).
+  A chat assistant over @retinue/agentkit (#155).
 
   No framework, and one bundled file: the composer (#179). Everything about the *platform* — streaming, approvals,
   questions, modes, citations, compaction — is still plain readable script in here, so what you see is the
   runtime's behaviour rather than a bundler's. The exception is the text input, which is Tiptap, because a
   suggestion menu and a real placeholder over `contenteditable` is a few hundred lines of caret arithmetic that
-  would tell you nothing about @agentkit. Its source is `src/composer/`, built by `npm run build`.
+  would tell you nothing about @retinue/agentkit. Its source is `src/composer/`, built by `npm run build`.
 
   This is also the first place the runtime's streaming, approval and question paths are driven by a person at all
   — the frontend components' tests use `renderToStaticMarkup`, so there is no DOM and no clicks, and a handler

@@ -177,7 +177,7 @@ make usage unattributable and a leak unbounded in blast radius.
 automation loses it on deploy — and deploys are frequent, which makes this the rule most likely to be broken by
 something that works in testing.
 
-**Bypass approval.** A flow that publishes routes through the approval envelope, whatever the builder draws. The
+**Bypass approval.** A flow that publishes routes through the approval gate, whatever the builder draws. The
 builder is a way to write a definition; it is not a way to be exempt from one.
 
 ---

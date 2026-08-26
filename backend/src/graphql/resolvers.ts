@@ -308,4 +308,4 @@ export const createResolvers = (deps: ResolverDeps) => {
   };
 };
 
-export type AgentkitResolvers = ReturnType<typeof createResolvers>;
+export type RetinueResolvers = ReturnType<typeof createResolvers>;

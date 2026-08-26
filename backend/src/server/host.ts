@@ -51,7 +51,7 @@ export type HostOptions = {
 /** Thrown when a request carries no usable identity. Surfaces as a GraphQL error, not a crash. */
 export const UNAUTHENTICATED = "UNAUTHENTICATED";
 
-export const createAgentkitHost = (options: HostOptions) => {
+export const createRetinueHost = (options: HostOptions) => {
   // Passed through untouched. AC-5 is "no business logic was added to the resolver layer", and the
   // strongest form of that is a host that adds no resolver of its own — asserted in the tests.
   const resolvers = createResolvers(options.deps);
@@ -168,4 +168,4 @@ export const createAgentkitHost = (options: HostOptions) => {
   });
 };
 
-export type AgentkitHost = ReturnType<typeof createAgentkitHost>;
+export type RetinueHost = ReturnType<typeof createRetinueHost>;

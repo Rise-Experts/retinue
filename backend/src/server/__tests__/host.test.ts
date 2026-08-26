@@ -15,7 +15,7 @@ import { createMemoryConversationRunCoordinator, createMemoryConversationStore, 
 import { createResolvers, typeDefs } from "../../graphql/index.js";
 import { asId, type ConversationId, type ExecutionContext, type ResolverDeps, type RunEvent, type TenantId } from "../../index.js";
 import { createMemoryEventBus } from "../../runtime/index.js";
-import { createAgentkitHost, UNAUTHENTICATED } from "../host.js";
+import { createRetinueHost, UNAUTHENTICATED } from "../host.js";
 
 const T1 = asId<TenantId>("host-t1");
 const T2 = asId<TenantId>("host-t2");
@@ -75,7 +75,7 @@ const countingResolvers = (deps: ResolverDeps) => {
 };
 
 const post = async (
-  host: ReturnType<typeof createAgentkitHost>,
+  host: ReturnType<typeof createRetinueHost>,
   body: Readonly<Record<string, unknown>>,
   headers: Readonly<Record<string, string>> = {},
 ) => {
@@ -97,7 +97,7 @@ afterEach(async () => {
 describe("serving a request end to end", () => {
   it("creates a conversation through a mutation and reads it back", async () => {
     const { deps } = buildDeps();
-    const host = createAgentkitHost({ deps, authenticate: () => executionFor(T1) });
+    const host = createRetinueHost({ deps, authenticate: () => executionFor(T1) });
 
     const created = await post(host, {
       query: `mutation { createConversation(id: "host-c-1", title: "first thread") { id title version } }`,
@@ -116,7 +116,7 @@ describe("serving a request end to end", () => {
 
   it("serves the schema the library ships, not a copy", async () => {
     const { deps } = buildDeps();
-    const host = createAgentkitHost({ deps, authenticate: () => executionFor(T1) });
+    const host = createRetinueHost({ deps, authenticate: () => executionFor(T1) });
     // The SDL is the library's export. A host that redefined it would drift the moment the library
     // added a field.
     expect(typeDefs).toContain("type Conversation");
@@ -148,7 +148,7 @@ describe("unauthenticated requests", () => {
       },
     };
 
-    const host = createAgentkitHost({ deps: watched, authenticate: () => null });
+    const host = createRetinueHost({ deps: watched, authenticate: () => null });
     const refused = await post(host, { query: `query { conversations(limit: 10) { items { id } } }` });
     expect(refused.response.status).toBe(401);
     // "Refused" and "refused before any resolver ran" are different claims, and only the second is
@@ -157,7 +157,7 @@ describe("unauthenticated requests", () => {
 
     // The same query with a valid identity does reach the dep — otherwise the zero above would prove
     // nothing more than that the query was malformed.
-    const allowed = createAgentkitHost({ deps: watched, authenticate: () => executionFor(T1) });
+    const allowed = createRetinueHost({ deps: watched, authenticate: () => executionFor(T1) });
     const ok = await post(allowed, { query: `query { conversations(limit: 10) { items { id } } }` });
     expect(ok.json.errors).toBeUndefined();
     expect(depCalls).toBe(1);
@@ -165,7 +165,7 @@ describe("unauthenticated requests", () => {
 
   it("returns an UNAUTHENTICATED code rather than a generic failure", async () => {
     const { deps } = buildDeps();
-    const host = createAgentkitHost({ deps, authenticate: () => null });
+    const host = createRetinueHost({ deps, authenticate: () => null });
     const result = await post(host, { query: `query { conversations(limit: 10) { items { id } } }` });
     expect(result.response.status).toBe(401);
     expect(result.json.errors?.[0]?.extensions?.["code"]).toBe(UNAUTHENTICATED);
@@ -173,7 +173,7 @@ describe("unauthenticated requests", () => {
 
   it("refuses when authenticate resolves to null asynchronously too", async () => {
     const { deps } = buildDeps();
-    const host = createAgentkitHost({ deps, authenticate: async () => null });
+    const host = createRetinueHost({ deps, authenticate: async () => null });
     const result = await post(host, { query: `{ conversations(limit: 1) { items { id } } }` });
     expect(result.response.status).toBe(401);
   });
@@ -184,7 +184,7 @@ describe("request context", () => {
   it("executes in exactly the requesting tenant's context, with no default to fall back to", async () => {
     const { deps } = buildDeps();
     // One store, two tenants, and the identity taken purely from the request.
-    const host = createAgentkitHost({
+    const host = createRetinueHost({
       deps,
       authenticate: (request) => {
         const tenant = request.headers.get("x-tenant");
@@ -230,7 +230,7 @@ describe("subscriptions", () => {
     await eventLog.append({ tenantId: T1, event: event(1, "run.queued") });
     await eventLog.append({ tenantId: T1, event: event(2, "run.started") });
 
-    const host = createAgentkitHost({ deps, authenticate: () => executionFor(T1) });
+    const host = createRetinueHost({ deps, authenticate: () => executionFor(T1) });
     const response = await host.fetch("http://localhost/graphql", {
       method: "POST",
       headers: { "content-type": "application/json", accept: "text/event-stream" },

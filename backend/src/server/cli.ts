@@ -11,9 +11,9 @@
  * deployment, while the command itself stays the same everywhere.
  */
 import { boot } from "./boot.js";
-import { createAgentkitHost, type Authenticate } from "./host.js";
+import { createRetinueHost, type Authenticate } from "./host.js";
 import { createHealthRoutes, postgresProbe, redisProbe, schemaProbe } from "./health.js";
-import { loadConfig, type AgentkitConfig } from "./config.js";
+import { loadConfig, type RetinueConfig } from "./config.js";
 import type { ResolverDeps } from "../index.js";
 import type { SqlExecutor } from "../entries/adapters-postgres.js";
 
@@ -23,16 +23,16 @@ import type { SqlExecutor } from "../entries/adapters-postgres.js";
  * `authenticate` has no default on purpose. A permissive default would serve an open API to anyone who
  * forgot to set it, and that is a worse failure than refusing to start.
  */
-export type AgentkitApp = {
+export type RetinueApp = {
   readonly authenticate: Authenticate;
-  readonly deps: (input: { readonly config: AgentkitConfig; readonly sql: SqlExecutor }) => Promise<ResolverDeps> | ResolverDeps;
+  readonly deps: (input: { readonly config: RetinueConfig; readonly sql: SqlExecutor }) => Promise<ResolverDeps> | ResolverDeps;
   /** Optional liveness/readiness extras beyond Postgres, Redis and the schema version. */
-  readonly redis?: (config: AgentkitConfig) => { ping(): Promise<string> };
+  readonly redis?: (config: RetinueConfig) => { ping(): Promise<string> };
 };
 
 export const APP_MODULE_VARIABLE = "RETINUE_APP_MODULE";
 
-const loadApp = async (env: Readonly<Record<string, string | undefined>>): Promise<AgentkitApp> => {
+const loadApp = async (env: Readonly<Record<string, string | undefined>>): Promise<RetinueApp> => {
   const specifier = env[APP_MODULE_VARIABLE];
   if (specifier === undefined || specifier.trim() === "") {
     throw new Error(
@@ -41,7 +41,7 @@ const loadApp = async (env: Readonly<Record<string, string | undefined>>): Promi
         `serve an open API to anyone who forgot to set this.`,
     );
   }
-  const loaded = (await import(specifier)) as { default?: AgentkitApp };
+  const loaded = (await import(specifier)) as { default?: RetinueApp };
   const app = loaded.default;
   if (app === undefined || typeof app.authenticate !== "function" || typeof app.deps !== "function") {
     throw new Error(`${specifier} must default-export { authenticate, deps }`);
@@ -71,7 +71,7 @@ export const runApiHost = async (
   const probes = [postgresProbe(sql), schemaProbe(createSchemaManager(sql))];
   if (app.redis) probes.push(redisProbe(app.redis(config)));
 
-  const yoga = createAgentkitHost({
+  const yoga = createRetinueHost({
     deps,
     authenticate: app.authenticate,
     sse: { enabled: true },

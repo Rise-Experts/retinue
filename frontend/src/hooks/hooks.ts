@@ -1,6 +1,6 @@
 /**
  * Headless React hooks — `docs/06` → Headless React package. Thin wrappers over the framework-free
- * reducers (`../reducers`) and the injected `AgentkitClient`. No product styling, no transport
+ * reducers (`../reducers`) and the injected `RetinueClient`. No product styling, no transport
  * assumptions. `useRunSubscription` drives the ordering buffer + run reducer, so a reconnect (via
  * `resumeFrom`) misses or duplicates no part, and exposes the live `retry` indicator derived from
  * `run.retry-pending`.
@@ -8,20 +8,20 @@
 
 import { createContext, createElement, useCallback, useContext, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import type { AgentkitClient, ApprovalDecision } from "../client.js";
+import type { RetinueClient, ApprovalDecision } from "../client.js";
 import { createRunProjector, type RunView } from "../reducers.js";
 import { shapeContextPanel, type ContextPanelData } from "../context-inspector.js";
 import type { ConversationSummary, Message, MessagePart, PlatformError } from "../types/index.js";
 
-const ClientContext = createContext<AgentkitClient | null>(null);
+const ClientContext = createContext<RetinueClient | null>(null);
 
 /** Provides the transport client to the hooks. */
-export const AgentkitProvider = (props: { client: AgentkitClient; children: ReactNode }): ReactNode =>
+export const RetinueProvider = (props: { client: RetinueClient; children: ReactNode }): ReactNode =>
   createElement(ClientContext.Provider, { value: props.client }, props.children);
 
-export const useAgentkitClient = (): AgentkitClient => {
+export const useRetinueClient = (): RetinueClient => {
   const client = useContext(ClientContext);
-  if (!client) throw new Error("useAgentkitClient must be used within an <AgentkitProvider>");
+  if (!client) throw new Error("useRetinueClient must be used within an <RetinueProvider>");
   return client;
 };
 
@@ -31,7 +31,7 @@ const toPlatformError = (e: unknown): PlatformError =>
     : { code: "internal", message: e instanceof Error ? e.message : String(e), retryable: false };
 
 export const useConversations = (input?: { includeArchived?: boolean }) => {
-  const client = useAgentkitClient();
+  const client = useRetinueClient();
   const [items, setItems] = useState<readonly ConversationSummary[]>([]);
   const [cursor, setCursor] = useState<string | undefined>(undefined);
   const [hasMore, setHasMore] = useState(false);
@@ -64,7 +64,7 @@ export const useConversations = (input?: { includeArchived?: boolean }) => {
 };
 
 export const useRunSubscription = (input: { runId: string; conversationId: string; resumeFrom?: { lastSequence: number } }) => {
-  const client = useAgentkitClient();
+  const client = useRetinueClient();
   const [view, setView] = useState<RunView>(() => createRunProjector(input.resumeFrom?.lastSequence ?? 0).view());
   const [connected, setConnected] = useState(false);
 
@@ -97,7 +97,7 @@ export const usePendingInteraction = (input: { runId: string; parts: readonly Me
 };
 
 export const useSendMessage = (input: { conversationId: string }) => {
-  const client = useAgentkitClient();
+  const client = useRetinueClient();
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<PlatformError | undefined>(undefined);
   const send = useCallback(
@@ -118,8 +118,8 @@ export const useSendMessage = (input: { conversationId: string }) => {
   return { send, sending, error };
 };
 
-const useMutation = <A extends unknown[]>(fn: (client: AgentkitClient, ...args: A) => Promise<void>) => {
-  const client = useAgentkitClient();
+const useMutation = <A extends unknown[]>(fn: (client: RetinueClient, ...args: A) => Promise<void>) => {
+  const client = useRetinueClient();
   const [busy, setBusy] = useState(false);
   const run = useCallback(
     async (...args: A) => {
@@ -152,7 +152,7 @@ export const useCancelRun = () => {
 
 /** Fetches and shapes the context inspection for a conversation/run for the Context panel (#39). */
 export const useSessionContext = (input: { conversationId: string; runId?: string }) => {
-  const client = useAgentkitClient();
+  const client = useRetinueClient();
   const [data, setData] = useState<ContextPanelData | undefined>(undefined);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<PlatformError | undefined>(undefined);
@@ -185,7 +185,7 @@ export const useSessionContext = (input: { conversationId: string; runId?: strin
 };
 
 export const useConversation = (input: { conversationId: string }) => {
-  const client = useAgentkitClient();
+  const client = useRetinueClient();
   const [messages, setMessages] = useState<readonly Message[]>([]);
   const [loading, setLoading] = useState(true);
   const cursorRef = useRef<string | undefined>(undefined);

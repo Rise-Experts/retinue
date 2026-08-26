@@ -12,11 +12,11 @@ dependency; the same framework-free reducers back React Native.
 
 ## Hooks
 
-Wrap your app in `AgentkitProvider` with a client that implements the transport-agnostic
-`AgentkitClient` (GraphQL, SSE, or a test double), then use the hooks:
+Wrap your app in `RetinueProvider` with a client that implements the transport-agnostic
+`RetinueClient` (GraphQL, SSE, or a test double), then use the hooks:
 
 ```tsx
-import { AgentkitProvider, useRunSubscription, useSendMessage } from "@retinue/react";
+import { RetinueProvider, useRunSubscription, useSendMessage } from "@retinue/react";
 
 function Chat({ conversationId, runId }: { conversationId: string; runId: string }) {
   const { parts, status, retry, connected } = useRunSubscription({ runId, conversationId });

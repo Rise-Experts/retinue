@@ -6,7 +6,7 @@
  * fails with a message about the variable rather than a connection error that names nothing useful.
  */
 import { provisionSchema, type SchemaMode, type SqlExecutor } from "../entries/adapters-postgres.js";
-import { loadConfig, type AgentkitConfig, type Env } from "./config.js";
+import { loadConfig, type RetinueConfig, type Env } from "./config.js";
 
 export type StartupLog = {
   readonly event: string;
@@ -16,13 +16,13 @@ export type StartupLog = {
 export type BootOptions = {
   readonly env: Env;
   /** Built after configuration validates, so a bad variable never opens a connection. */
-  readonly connect: (config: AgentkitConfig) => Promise<{ readonly sql: SqlExecutor }>;
+  readonly connect: (config: RetinueConfig) => Promise<{ readonly sql: SqlExecutor }>;
   readonly log?: (entry: StartupLog) => void;
   readonly version?: string;
 };
 
 export type BootResult = {
-  readonly config: AgentkitConfig;
+  readonly config: RetinueConfig;
   readonly sql: SqlExecutor;
   readonly schema: { readonly mode: SchemaMode; readonly applied: readonly string[] };
 };

@@ -29,7 +29,7 @@ import { createRedisLiveEventSource } from "@retinue/agentkit/adapters/redis";
 import type { ContextBudget, ContextInspection, QuestionSpec, AgentManifest, ExecutionContext, ModelTurnTool, ResolverDeps, Run, RunId, Tool, TurnMessage } from "@retinue/agentkit";
 import type { SqlExecutor, TransactionRunner } from "@retinue/agentkit/adapters/postgres";
 import { Redis } from "ioredis";
-import type { AgentkitConfig } from "@retinue/agentkit/server";
+import type { RetinueConfig } from "@retinue/agentkit/server";
 import { createDevAuthenticate } from "./auth.js";
 import type { Authenticate } from "@retinue/agentkit/server";
 import { STANDARD_TOOL_CATEGORIES, createStandardToolProvider } from "@retinue/agentkit/tools";
@@ -732,7 +732,7 @@ const app = {
     resolve: (modelId: string) => (modelId === resolveExampleModel().modelId ? examplePricing() : null),
   },
 
-  deps({ config, sql, runner }: { config: AgentkitConfig; sql: SqlExecutor; runner?: TransactionRunner }): ResolverDeps {
+  deps({ config, sql, runner }: { config: RetinueConfig; sql: SqlExecutor; runner?: TransactionRunner }): ResolverDeps {
     /**
      * The Postgres composition, assembled once — #155 AC-7.
      *
@@ -846,7 +846,7 @@ const app = {
     };
   },
 
-  engine({ sql }: { config: AgentkitConfig; sql: SqlExecutor }) {
+  engine({ sql }: { config: RetinueConfig; sql: SqlExecutor }) {
     // The worker needs no realtime *source*, so it is absent rather than invented. It also gets no
     // `TransactionRunner`, which is why the backend's coordinator has to be the lazy one — see `stores.ts`.
     // The worker gets the policy too: it is the process that *reads* an attachment to put it in a turn, so
@@ -870,7 +870,7 @@ const app = {
    * every resume — a crash between the child completing and this firing loses the message, and a parent that only
    * woke on notifications would sit forever with nothing looking again.
    */
-  onRunSettled({ sql }: { readonly config: AgentkitConfig; readonly sql: SqlExecutor }) {
+  onRunSettled({ sql }: { readonly config: RetinueConfig; readonly sql: SqlExecutor }) {
     const backend = postgresBackend(
       sql,
       { subscribe: () => { throw new Error("the settled-run listener does not subscribe"); } } as never,

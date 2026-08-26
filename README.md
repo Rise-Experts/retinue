@@ -66,12 +66,17 @@ left alone on purpose, because renaming them is a *migration* rather than an edi
 | `x-agentkit-tenant`, `x-agentkit-principal`, `x-agentkit-roles` | Request headers are a wire contract. Every caller sends them today; renaming breaks them at the same moment the server starts expecting the new spelling |
 | `schema_migrations` ids, `agentkit_example` schema | Applied migrations are recorded by id, and the schema name is where the data physically is. Both are what an existing database already contains |
 | `mcp__agentkit-docs__*` tool ids | Tool ids appear in stored run history and in approval grants. Renaming them orphans grants that name the old id |
-| `AgentkitConfig`, `AgentkitApp`, `createAgentkitHost` | Exported type and function names, so renaming them is a breaking API change. It belongs with the rest of the public-surface work, not smuggled into a package rename |
 | `docs.agentkit.riseexperts.de` | Live DNS and a live Cloudflare project — a cutover with a redirect to arrange |
 | `agentkit-test-pg`, `agentkit-test-redis`, `agentkit-test-pgvector` | Local container names on developer machines. Renaming them orphans running containers and their volumes |
 
 `RETINUE_*` variables fall back to their `AGENTKIT_*` spelling and warn once per variable, so an
 existing deployment keeps booting; the fallback goes away in the next minor release.
+
+The exported identifiers that still said `Agentkit` — `AgentkitConfig`, `AgentkitApp`, `createAgentkitHost`,
+`AgentkitHost`, `AgentkitWorkerApp`, `AgentkitResolvers`, and `@retinue/react`'s `AgentkitClient`,
+`AgentkitProvider` and `useAgentkitClient` — were renamed to `Retinue*` in #200. They were deferred out of the
+package rename because they are public API and a breaking change; they are renamed *now* for the same reason,
+since nothing is published yet and after the first publish it costs a major version and a migration guide.
 
 ## The release gate
 

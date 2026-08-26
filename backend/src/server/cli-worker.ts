@@ -7,13 +7,13 @@
  * execute.
  */
 import { boot } from "./boot.js";
-import { APP_MODULE_VARIABLE, type AgentkitApp } from "./cli.js";
-import { loadConfig, type AgentkitConfig } from "./config.js";
+import { APP_MODULE_VARIABLE, type RetinueApp } from "./cli.js";
+import { loadConfig, type RetinueConfig } from "./config.js";
 import type { AgentEngine, PricingResolver, ResolverDeps } from "../index.js";
 import type { SqlExecutor } from "../entries/adapters-postgres.js";
 
-export type AgentkitWorkerApp = AgentkitApp & {
-  readonly engine: (input: { readonly config: AgentkitConfig; readonly sql: SqlExecutor }) => AgentEngine;
+export type RetinueWorkerApp = RetinueApp & {
+  readonly engine: (input: { readonly config: RetinueConfig; readonly sql: SqlExecutor }) => AgentEngine;
   readonly buildContext: Parameters<typeof import("../runtime/worker.js").createDurableWorker>[0]["buildContext"];
   /**
    * Called when a run reaches a terminal state — #202.
@@ -23,7 +23,7 @@ export type AgentkitWorkerApp = AgentkitApp & {
    * same hook. Nothing may **depend** on delivery — see `DurableWorkerDeps.onRunSettled`.
    */
   readonly onRunSettled?: (input: {
-    readonly config: AgentkitConfig;
+    readonly config: RetinueConfig;
     readonly sql: SqlExecutor;
   }) => Parameters<typeof import("../runtime/worker.js").createDurableWorker>[0]["onRunSettled"];
   /**
@@ -52,7 +52,7 @@ export const runWorker = async (
         `{ authenticate, deps, engine, buildContext }.`,
     );
   }
-  const app = ((await import(specifier)) as { default?: AgentkitWorkerApp }).default;
+  const app = ((await import(specifier)) as { default?: RetinueWorkerApp }).default;
   if (app === undefined || typeof app.engine !== "function") {
     throw new Error(`${specifier} must default-export an \`engine\` for the worker command`);
   }

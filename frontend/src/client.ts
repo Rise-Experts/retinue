@@ -1,7 +1,7 @@
 /**
  * Transport-agnostic client contract — `docs/06`. The headless hooks depend only on this interface,
  * never on a concrete transport, so the same hooks run over GraphQL, SSE, or a test double. A host
- * provides an implementation (e.g. a GraphQL client) through `AgentkitProvider`.
+ * provides an implementation (e.g. a GraphQL client) through `RetinueProvider`.
  */
 
 import type { ApprovalDecision } from "@retinue/agentkit";
@@ -11,7 +11,7 @@ export type { ApprovalDecision };
 
 export type Paged<T> = { readonly items: readonly T[]; readonly nextCursor?: string };
 
-export interface AgentkitClient {
+export interface RetinueClient {
   listConversations(input: { includeArchived?: boolean; cursor?: string }): Promise<Paged<ConversationSummary>>;
   listMessages(input: { conversationId: string; cursor?: string }): Promise<Paged<Message>>;
   sendMessage(input: { conversationId: string; text: string }): Promise<{ runId: string }>;

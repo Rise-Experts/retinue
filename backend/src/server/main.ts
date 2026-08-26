@@ -12,7 +12,7 @@
  * entrypoint refuses to start without one rather than quietly serving an open API.
  */
 import { createServer } from "node:http";
-import { createAgentkitHost, type Authenticate } from "./host.js";
+import { createRetinueHost, type Authenticate } from "./host.js";
 import type { ResolverDeps } from "../index.js";
 
 export type MainOptions = {
@@ -27,7 +27,7 @@ export const DEFAULT_PORT = 4000;
 export const startServer = async (options: MainOptions) => {
   const port = options.port ?? Number(process.env["PORT"] ?? DEFAULT_PORT);
   const log = options.log ?? ((message: string) => console.log(message));
-  const yoga = createAgentkitHost({ deps: options.deps, authenticate: options.authenticate });
+  const yoga = createRetinueHost({ deps: options.deps, authenticate: options.authenticate });
 
   const server = createServer(yoga);
   await new Promise<void>((resolve) => server.listen(port, resolve));

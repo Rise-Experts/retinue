@@ -35,7 +35,7 @@ import type { ExampleStores } from "./stores.js";
 import type { ConversationId, ExecutionContext, FileId, PrincipalId, MessageId, MessagePartId, ResolverDeps, RunId, TenantId } from "@retinue/agentkit";
 import type { SqlExecutor } from "@retinue/agentkit/adapters/postgres";
 import type { FileService } from "@retinue/agentkit";
-import { createAgentkitHost, type Authenticate } from "@retinue/agentkit/server";
+import { createRetinueHost, type Authenticate } from "@retinue/agentkit/server";
 import { conversationTurns } from "./history.js";
 import {
   CONVERSATION_MODES,
@@ -87,7 +87,7 @@ export type ExampleServerOptions = {
 const runIdFor = (messageId: string): RunId => asId<RunId>(`run-${messageId}`);
 
 export const startExampleServer = async (options: ExampleServerOptions) => {
-  const host = createAgentkitHost({
+  const host = createRetinueHost({
     deps: options.deps,
     authenticate: options.authenticate,
     // On, deliberately: this *is* a playground, and the reference host turns it off because it is not one.

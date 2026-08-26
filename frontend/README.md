@@ -19,7 +19,7 @@ reader to write again what is already here.
 |---|---|
 | `types` | Re-exports the wire contract from `@retinue/agentkit`, plus client-only view state. Type-only, erased at build time. |
 | `event-buffer` | **Implemented.** Orders and de-duplicates run events across a reconnect. |
-| `hooks` | **Implemented** — all ten: `useAgentkitClient`, `useConversations`, `useConversation`, `useRunSubscription`, `usePendingInteraction`, `useSendMessage`, `useAnswerQuestion`, `useDecideApproval`, `useCancelRun`, `useSessionContext`. |
+| `hooks` | **Implemented** — all ten: `useRetinueClient`, `useConversations`, `useConversation`, `useRunSubscription`, `usePendingInteraction`, `useSendMessage`, `useAnswerQuestion`, `useDecideApproval`, `useCancelRun`, `useSessionContext`. |
 | `client` | The transport port the hooks take. An interface, so the host supplies fetch, SSE or WebSocket and this package assumes none of them. |
 | `reducers` | Run events folded into renderable parts. Pure functions, so the ordering guarantees are testable without a DOM. |
 | `context-inspector` | What the window holds and what is left of it — the view behind the composer's context meter. |

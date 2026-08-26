@@ -7,9 +7,9 @@
  */
 
 import { loadConfig } from "@retinue/agentkit/server";
-import type { AgentkitConfig } from "@retinue/agentkit/server";
+import type { RetinueConfig } from "@retinue/agentkit/server";
 
-export type ServiceConfig = AgentkitConfig & {
+export type ServiceConfig = RetinueConfig & {
   /**
    * The Postgres schema, folded into the connection string.
    *

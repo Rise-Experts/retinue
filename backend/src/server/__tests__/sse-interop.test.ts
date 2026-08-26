@@ -16,7 +16,7 @@ import { describe, expect, it } from "vitest";
 import { createMemoryConversationRunCoordinator, createMemoryConversationStore, createMemoryRunEventLog, createMemoryRunStore, createMemoryUsageStore } from "../../adapters/memory/index.js";
 import { asId, type ConversationId, type ExecutionContext, type ResolverDeps, type RunEvent, type RunId, type TenantId } from "../../index.js";
 import { createMemoryEventBus } from "../../runtime/index.js";
-import { createAgentkitHost } from "../host.js";
+import { createRetinueHost } from "../host.js";
 
 const T1 = asId<TenantId>("interop-t1");
 const CONVO = asId<ConversationId>("interop-c1");
@@ -53,7 +53,7 @@ const build = async () => {
     live: bus.live,
   } satisfies ResolverDeps;
 
-  const host = createAgentkitHost({
+  const host = createRetinueHost({
     deps,
     authenticate: () =>
       ({ tenantId: T1, principalId: asId("interop-p1"), scopes: [] }) as unknown as ExecutionContext,
