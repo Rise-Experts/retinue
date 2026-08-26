@@ -137,6 +137,7 @@
 
 ### Documentation
 
+- **ci**: a first Jenkins pipeline to break on purpose, before the real one `29c5653a`
 - **ci**: Jenkins on our own server, written to be learned from ([#193](https://github.com/Rise-Experts/retinue/issues/193)) `0705aeec`
 - **readme**: the docs-site cutover, in the order that does not take it down ([#203](https://github.com/Rise-Experts/retinue/issues/203)) `798c57d9`
 - **release**: the prerelease policy, and the surface statement points at what enforces it (#189, #195) ([#189](https://github.com/Rise-Experts/retinue/issues/189)) `f6166fbe`
@@ -175,6 +176,7 @@
 
 ### Chores
 
+- **changelog**: regenerate `63dda644`
 - **changelog**: regenerate `38d1a31c`
 - **changelog**: regenerate `791a6145`
 - **changelog**: regenerate `492176ba`
