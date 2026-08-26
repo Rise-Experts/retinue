@@ -2,6 +2,8 @@
 
 ### Added
 
+- **flows**: an agent step is a child run, which finishes teams (#202, #186) ([#202](https://github.com/Rise-Experts/retinue/issues/202)) `4e2b1601`
+- **flows**: durable workflows, and teams as a kind of step (#187, #186) ([#187](https://github.com/Rise-Experts/retinue/issues/187)) `dd64602c`
 - **parity**: a capability inventory, so a missing feature cannot read as parity ([#194](https://github.com/Rise-Experts/retinue/issues/194)) `47358636`
 - **multimodal**: an attachment reaches the model, through the file path ([#185](https://github.com/Rise-Experts/retinue/issues/185)) `3bcaafec`
 - **services**: a Nest.js service serves the platform, from the platform's schema ([#201](https://github.com/Rise-Experts/retinue/issues/201)) `4f7b1b03`
@@ -132,6 +134,7 @@
 
 ### Documentation
 
+- **platform**: the boundary decided, and a check that a consumer cannot cross it ([#195](https://github.com/Rise-Experts/retinue/issues/195)) `09733f95`
 - correct two READMEs that understated their packages, add a third, and document the limits work ([#161](https://github.com/Rise-Experts/retinue/issues/161)) `79ffde31`
 - put the citation-rendering section in the frontend spec, not a new file `b66b5bf3`
 - **site**: developer-platform docs — IA, landing page, search, themes (#50) ([#50](https://github.com/Rise-Experts/retinue/issues/50)) `48777f4f`
@@ -154,12 +157,15 @@
 
 ### CI
 
+- a Jenkinsfile for test trends, and a guard so three definitions cannot drift `ffc4e303`
+- run on a self-hosted runner, and a local gate that cannot drift from it `0fb87fdb`
 - allow CI to be re-run on demand `f358ebc8`
 - **docs**: build @agentkit packages before the site so TypeDoc resolves types `1726e95b`
 - **docs**: deploy site via Cloudflare Workers Static Assets ([#50](https://github.com/Rise-Experts/retinue/issues/50)) `c1446104`
 
 ### Chores
 
+- **release**: versions, a semver statement, a deprecation policy and a release check ([#189](https://github.com/Rise-Experts/retinue/issues/189)) `2fd81092`
 - **shareflow**: the three cutover decisions, recorded (#128 AC-1, AC-3, AC-6) ([#128](https://github.com/Rise-Experts/retinue/issues/128)) `9149e4ab`
 - scaffold branch for #97 ([#97](https://github.com/Rise-Experts/retinue/issues/97)) `009ea861`
 - scaffold branch for #96 ([#96](https://github.com/Rise-Experts/retinue/issues/96)) `6034ba70`
