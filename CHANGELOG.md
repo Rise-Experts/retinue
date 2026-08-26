@@ -134,6 +134,7 @@
 
 ### Documentation
 
+- **readme**: the docs-site cutover, in the order that does not take it down ([#203](https://github.com/Rise-Experts/retinue/issues/203)) `798c57d9`
 - **release**: the prerelease policy, and the surface statement points at what enforces it (#189, #195) ([#189](https://github.com/Rise-Experts/retinue/issues/189)) `f6166fbe`
 - **terminology**: one word per concept, checked; and the last Agentkit identifiers renamed ([#200](https://github.com/Rise-Experts/retinue/issues/200)) `6e02f29b`
 - **platform**: the boundary decided, and a check that a consumer cannot cross it ([#195](https://github.com/Rise-Experts/retinue/issues/195)) `09733f95`
@@ -168,6 +169,7 @@
 
 ### Chores
 
+- **changelog**: regenerate `d182b59c`
 - **license**: Apache-2.0, and the consumer check now covers both shipping packages (#184, #189, #192) ([#184](https://github.com/Rise-Experts/retinue/issues/184)) `651be34f`
 - **changelog**: regenerate `d1a3f5cd`
 - **changelog**: regenerate `8e466c93`
