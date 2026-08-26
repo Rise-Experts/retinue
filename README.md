@@ -39,6 +39,20 @@ npm run build        # before npm test: the release-gate CLI imports the built @
 npm test
 ```
 
+## CI
+
+`ci.yml` runs on a **self-hosted runner** — the org's hosted minutes are exhausted, and self-hosted runners are
+not metered. Setup, requirements and the security caveat are in [`docs/20-self-hosted-ci.md`](docs/20-self-hosted-ci.md);
+the short version is that the machine needs Docker and outbound HTTPS, nothing inbound.
+
+```bash
+npm run ci:local        # the same commands, on this machine
+npm run release:check   # the full gate, plus the manifest checks a release needs
+```
+
+`ci-local.mjs --verify` runs inside `npm test` and fails if `ci.yml` gains a command the local runner lacks, so
+the two cannot drift — which matters most when CI is unavailable and the local gate is all there is.
+
 ## Names that still say `agentkit`
 
 The packages are `@retinue/*` and the environment variables are `RETINUE_*` (#192). Some names were

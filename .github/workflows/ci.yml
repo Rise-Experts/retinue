@@ -1,19 +1,20 @@
 name: CI
 
-# PAUSED — the org's Actions minutes are exhausted, so every job here fails in about two seconds
-# without ever being assigned a runner: no steps run, no logs are produced, and the only thing a push
-# gets is a red cross that says nothing. That is worse than no CI, because a red mark nobody can act on
-# is a red mark everybody learns to ignore.
+# Runs on a **self-hosted** runner. The org's hosted-runner minutes are exhausted, and every job here was
+# failing in two seconds without ever being assigned a machine: no steps, no logs, just a red cross on every
+# push. Self-hosted runners are not metered, including on private repositories, so this is the same CI on
+# hardware we already have rather than a different CI.
 #
-# Nothing else about this file changed. The triggers are the whole of it, so restoring CI once minutes
-# are available is putting `push` and `pull_request` back below.
+# Safe *because this repository is private*. On a public repository a self-hosted runner runs a fork's pull
+# request on your own machine, which is arbitrary code execution by design — so if this repo is ever opened,
+# the `pull_request` trigger has to go or the runner has to be ephemeral and isolated.
 #
-# In the meantime `npm run ci:local` runs the same jobs on this machine, and a test asserts it runs
-# every `npm run` command this file does — so the two cannot drift while automation is off.
+# `npm run ci:local` runs the same commands on a developer machine, and `ci-local.mjs --verify` fails if this
+# file gains a command the local runner does not have — so the two cannot drift.
 on:
-  # push:
-  #   branches: [main]
-  # pull_request:
+  push:
+    branches: [main]
+  pull_request:
   #
   # Lets CI be re-run against a branch on demand. Added because a push to main landed the ref without
   # firing a run (72b2d35), and there was then no way to get CI to look at that tree at all -- the
@@ -30,14 +31,17 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux]
     services:
       # #105's ACs -- work surviving with no worker, BullMQ's own jobId dedup, and a typed error on an
       # unreachable Redis -- cannot be shown by a fake queue. Without this service those cases skip by
       # name in CI and the guarantees would only ever be verified on someone's laptop.
       redis:
         image: redis:7-alpine
-        ports: ["6379:6379"]
+        # 6479, not 6379. A hosted runner is a fresh machine and 6379 is free by definition; a self-hosted one
+        # is a server that very likely already runs Redis, and a service container binding an occupied port
+        # fails the job with a message about Docker rather than about the clash.
+        ports: ["6479:6379"]
         options: >-
           --health-cmd "redis-cli ping"
           --health-interval 10s
@@ -59,7 +63,7 @@ jobs:
         run: npm run build
       - name: Test
         env:
-          RETINUE_TEST_REDIS_URL: redis://localhost:6379
+          RETINUE_TEST_REDIS_URL: redis://localhost:6479
         run: npm test
       - name: Dependency boundaries
         run: npm run check:boundaries
@@ -71,14 +75,15 @@ jobs:
   # coordinator and lease-based claim depend on. Required, not advisory — an advisory gate is not a
   # gate, which is the lesson of #20 closing green against "passes the full conformance suite".
   conformance-matrix:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux]
     services:
       postgres:
         image: postgres:16
         env:
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: agentkit_test
-        ports: ["5432:5432"]
+        # 5442 for the same reason as Redis's 6479: the server this now runs on probably has a Postgres.
+        ports: ["5442:5432"]
         options: >-
           --health-cmd pg_isready
           --health-interval 10s
@@ -93,7 +98,7 @@ jobs:
         run: npm install
       - name: Conformance suite (real PostgreSQL)
         env:
-          RETINUE_TEST_PG_URL: postgres://postgres:postgres@localhost:5432/agentkit_test
+          RETINUE_TEST_PG_URL: postgres://postgres:postgres@localhost:5442/agentkit_test
         run: npm run conformance:report
       - name: Publish matrix
         # always(): a regression must still publish the table, or the job fails without showing
@@ -119,7 +124,7 @@ jobs:
   # mechanism: an override that could be supplied by automation is an override nobody is accountable for.
   release-gate:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux]
     permissions:
       contents: write
     steps:
@@ -176,7 +181,7 @@ jobs:
           if-no-files-found: warn
 
   docs:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -197,7 +202,7 @@ jobs:
     # The runtime stage installs with --omit=dev, so there it does not. This job also catches a
     # Dockerfile left pointing at a workspace that no longer exists, which is how it started: #196
     # merged the `server` workspace into the runtime package and the Dockerfile still copied it.
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux]
     steps:
       - uses: actions/checkout@v4
       - name: Build the image
