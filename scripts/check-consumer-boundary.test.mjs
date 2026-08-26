@@ -18,6 +18,7 @@ import {
   missingTarballEntries,
   PACKAGES,
   REQUIRED_ENTRIES,
+  verifiedNothing,
 } from "./check-consumer-boundary.mjs";
 
 test("importing this module does not run the check", () => {
@@ -74,6 +75,17 @@ test("sources and sourcemaps are refused, compiled output is not", () => {
     "package/",
   ]);
   assert.deepEqual(offenders, ["dist/index.js.map", "dist/index.d.ts.map", "src/index.ts"]);
+});
+
+test("an empty --published run is a failure, not a pass", () => {
+  // The code said the opposite for ten minutes. The per-package 404 skip — needed because the first release is
+  // two tags and the second package does not exist yet — is correct on its own and wrong in aggregate: with
+  // every package skipped it printed "the boundary holds" having examined no artefact at all.
+  assert.equal(verifiedNothing(true, 0), true, "a --published run that checked nothing must fail");
+  assert.equal(verifiedNothing(true, 1), false);
+  // Locally there is nothing to skip: every package is packed from this checkout, so zero means a real problem
+  // that the per-package checks have already reported.
+  assert.equal(verifiedNothing(false, 0), false);
 });
 
 test("every shipping package is covered, and each deep list has both halves of the risk", () => {

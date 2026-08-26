@@ -56,7 +56,15 @@
  * in a temporary directory would need the network, and a gate that fails when the registry is slow is a gate
  * people learn to skip. The symlinks are also honest: they are the same package versions the tarball declares.
  *
- * Usage: node scripts/check-consumer-boundary.mjs [--keep]
+ * ## `--published`
+ *
+ * Same checks, against the tarball the **registry** serves rather than the one `npm pack` builds here — #193
+ * AC-6, "verified by an actual install, not by a build". One code path, because the only honest difference is
+ * where the tarball comes from: `npm pack <name>@<version>` fetches the published artefact, and everything after
+ * that is identical. A separate post-publish script would be a second implementation of the checks that matter
+ * most, run least often.
+ *
+ * Usage: node scripts/check-consumer-boundary.mjs [--keep] [--published]
  * Exit codes: 0 the boundary holds, 1 it does not, 2 the check could not run.
  */
 
@@ -144,6 +152,17 @@ export const missingTarballEntries = (paths) => {
  */
 export const blockedByExports = (outcome) => outcome.code === "ERR_PACKAGE_PATH_NOT_EXPORTED";
 
+/**
+ * Verifying nothing is not passing.
+ *
+ * A rule rather than an inline condition, so it can be tested without a registry. The per-package 404 skip below
+ * is correct on its own and wrong in aggregate: with every package skipped, this printed "the boundary holds"
+ * having examined no artefact at all — success reported for an empty run, which is the failure mode this file
+ * exists to catch, reproduced inside it ten minutes after the skip was added. In `--published` mode a release
+ * has just published something, so at least one package must be there.
+ */
+export const verifiedNothing = (published, checked) => published && checked === 0;
+
 const die = (message) => {
   console.error(`✗ ${message}`);
   process.exit(2);
@@ -163,6 +182,7 @@ const run = (command, args, options = {}) =>
 const main = () => {
   const work = mkdtempSync(join(tmpdir(), "retinue-consumer-"));
   const keep = process.argv.includes("--keep");
+  const published = process.argv.includes("--published");
 
   let ok = true;
   const fail = (message, detail) => {
@@ -223,6 +243,7 @@ const main = () => {
     };
 
     const summaries = [];
+    let checked = 0;
 
     for (const shipped of PACKAGES) {
       const packageDir = join(ROOT, shipped.dir);
@@ -241,12 +262,43 @@ const main = () => {
       }
       const deepImports = shipped.deep.map((path) => `${shipped.name}/${path}`);
 
+      /**
+       * In `--published` mode, a package the registry does not have yet is skipped rather than fatal.
+       *
+       * Because the first release is two tags: `agentkit@0.1.0` publishes the runtime, and this check runs at
+       * the end of *that* workflow — when `@retinue/react@0.1.0` does not exist yet. Failing there would make
+       * the runtime's own release red for a reason that is correct.
+       *
+       * Skipped **loudly**, and only on a 404. Any other failure is fatal: "the registry is unreachable" and
+       * "this version is not published" must not collapse into the same silent pass, or the check reports
+       * success having verified nothing.
+       */
+      if (published) {
+        try {
+          run("npm", ["view", `${shipped.name}@${manifest.version}`, "version"], { cwd: ROOT });
+        } catch (error) {
+          const output = `${error.stdout ?? ""}${error.stderr ?? ""}`;
+          if (!/E404|is not in this registry|No match(ing version)? found/i.test(output)) {
+            die(`npm view ${shipped.name}@${manifest.version} failed for a reason other than 404: ${output.trim()}`);
+          }
+          summaries.push(`${shipped.name}@${manifest.version}: not published yet — skipped`);
+          continue;
+        }
+      }
+
       let packed;
+      // `-w <name>` builds from this workspace; `<name>@<version>` fetches what the registry serves.
+      const packArguments = published
+        ? ["pack", `${shipped.name}@${manifest.version}`, "--pack-destination", work, "--json"]
+        : ["pack", "-w", shipped.name, "--pack-destination", work, "--json"];
       try {
-        const output = run("npm", ["pack", "-w", shipped.name, "--pack-destination", work, "--json"], { cwd: ROOT });
+        const output = run("npm", packArguments, { cwd: ROOT });
         packed = join(work, JSON.parse(output)[0].filename);
       } catch (error) {
-        die(`npm pack ${shipped.name} failed: ${error.stderr || error.message}`);
+        die(
+          `npm pack ${published ? `${shipped.name}@${manifest.version} from the registry` : shipped.name} failed: ` +
+            `${error.stderr || error.message}`,
+        );
       }
 
       const entries = run("tar", ["-tzf", packed]).trim().split("\n");
@@ -351,14 +403,27 @@ const main = () => {
         }
       }
 
+      checked += 1;
       summaries.push(
         `${shipped.name}: ${subpaths.length} subpath(s) load and typecheck, ${deepImports.length} deep imports` +
           ` refused, ${entries.length} files shipped`,
       );
     }
 
+    if (verifiedNothing(published, checked)) {
+      fail(
+        "nothing was verified: no published package matched the versions in this checkout",
+        "the release just published one of them, so either the publish did not take effect or the manifest\n" +
+          "versions are not the ones released. Reporting success here would mean a green release that shipped\n" +
+          "an artefact nobody looked at",
+      );
+    }
+
     if (ok) {
-      console.log(`✓ the boundary holds as installed, with no sources or sourcemaps and a licence in each:`);
+      console.log(
+        `✓ the boundary holds as installed${published ? " from the registry" : ""}, with no sources or` +
+          ` sourcemaps and a licence in each:`,
+      );
       for (const summary of summaries) console.log(`  · ${summary}`);
     }
   } finally {

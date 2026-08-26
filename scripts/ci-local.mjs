@@ -26,6 +26,14 @@ import { execSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 
 const WORKFLOW = ".github/workflows/ci.yml";
+/**
+ * `.github/workflows/release.yml` is deliberately **not** compared.
+ *
+ * This check exists because three definitions describe *one* pipeline and nothing makes them agree. The release
+ * workflow describes a different one, and requiring the Jenkinsfile to cover a publish would be requiring
+ * Jenkins to be able to publish — the opposite of what `scripts/publish-guard.mjs` enforces.
+ */
+
 const JENKINSFILE = "Jenkinsfile";
 
 /**
