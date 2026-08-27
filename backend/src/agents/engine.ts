@@ -25,6 +25,7 @@ import { asId } from "../core/ids.js";
 import type { MessagePart, TextPart, ToolCallPart, ToolResultPart } from "../core/content-parts.js";
 import type {
   ModelDefinition,
+  ModelToolCallOptions,
   ModelTurnRequest,
   ModelTurnTool,
   NeutralStreamChunk,
@@ -45,10 +46,25 @@ import {
   type RetryPolicy,
   type Run,
 } from "../runtime/index.js";
+import { META_TOOLS } from "../tools/index.js";
+// The specific modules rather than `core/index.js`: the barrel pulls in `zod` through `core/validation.ts`,
+// and a subpath's dependency graph is a guarantee this package tests for.
+import { applyTokenBudget, type TokenBudget } from "../core/budget.js";
+import { estimateTokens } from "../core/tokens.js";
 import type { PendingQuestion, RunApprovals } from "../hitl/index.js";
 import { isQuestionPending } from "../hitl/service.js";
 import type { CitationCandidate, CitationEmitter } from "../citations/index.js";
 import type { AgentManifest } from "./index.js";
+
+/**
+ * What one tool costs the model's context.
+ *
+ * A `ModelTurnTool` is not a catalogue entry — it carries the full input schema, because that is what a provider
+ * puts in the request — so this deliberately does *not* reuse `entryTokens`. Using the compact estimate here
+ * would understate a schema-heavy tool by an order of magnitude and produce a budget that never binds.
+ */
+export const turnToolTokens = (tool: ModelTurnTool): number =>
+  estimateTokens(`${tool.name} ${tool.description ?? ""}`) + estimateTokens(JSON.stringify(tool.inputSchema ?? {}));
 
 /** A model resolved for a turn: the opaque handle plus what the engine needs to attribute usage. */
 export type ResolvedModelInfo = {
@@ -93,6 +109,17 @@ export type DefaultEngineDeps = {
    * model call on every turn to moderate it would be making a cost decision that belongs to the host.
    */
   readonly guardrails?: readonly Guardrail[];
+  /**
+   * A ceiling in tokens on the tool list handed to the model — REQ-045 (#204), task #210, AC-3.
+   *
+   * Here rather than only in the registry because *this* is where the tokens are actually spent: the registry's
+   * catalogue is what a client renders, and `buildTools` is what reaches the provider. A budget enforced in one
+   * and not the other would be a budget a deployment believes it has.
+   *
+   * Absent means no ceiling, which stays the default — a runtime that silently withheld tools from a model
+   * nobody had asked it to withhold would be making a correctness decision on the host's behalf.
+   */
+  readonly catalogBudget?: TokenBudget;
   /**
    * The question side of resumption — #163.
    *
@@ -215,7 +242,42 @@ export const createDefaultEngine = (deps: DefaultEngineDeps): AgentEngine => {
       const resolved = deps.resolveModel(manifest, context);
       const system = (await (deps.systemPrompt?.(manifest, context) ?? manifest.instructions)) || undefined;
       const history = await deps.loadHistory(context, run);
-      const declared = deps.buildTools ? await deps.buildTools(context, manifest) : [];
+      const built = deps.buildTools ? await deps.buildTools(context, manifest) : [];
+
+      /**
+       * The budget, applied to the list the model will actually see — AC-3.
+       *
+       * Meta-tools are protected: dropping `find_tools` to save its own ~35 tokens would leave the model with a
+       * shortened list and no way to discover that it was shortened, which is the failure this whole mechanism
+       * exists to prevent.
+       *
+       * `findable` is *derived* rather than configured. Whether truncation is a deferral or an amputation
+       * depends on one fact — is `find_tools` in the model's hands this turn — and asking the host to declare
+       * that separately would let the declaration be wrong.
+       */
+      const budgetOutcome =
+        deps.catalogBudget === undefined
+          ? undefined
+          : applyTokenBudget({
+              items: built,
+              budget: deps.catalogBudget,
+              tokensOf: turnToolTokens,
+              nameOf: (tool) => tool.name,
+              protect: (tool) => (META_TOOLS as readonly string[]).includes(tool.name),
+            });
+      const declared = budgetOutcome?.resident ?? built;
+
+      if (budgetOutcome !== undefined && (budgetOutcome.dropped.length > 0 || budgetOutcome.overBudget)) {
+        yield {
+          type: "catalog.truncated",
+          catalog: "tools",
+          budgetTokens: budgetOutcome.budgetTokens,
+          residentTokens: budgetOutcome.residentTokens,
+          dropped: budgetOutcome.dropped,
+          findable: declared.some((tool) => tool.name === "find_tools"),
+          ...(budgetOutcome.overBudget ? { overBudget: true } : {}),
+        };
+      }
       const maxSteps = manifest.limits?.maxSteps ?? 8;
       const messageId = deriveRunMessageId(run.id) as MessageId;
 
@@ -321,9 +383,29 @@ export const createDefaultEngine = (deps: DefaultEngineDeps): AgentEngine => {
        * interception point at all — and a question raised by one of its tools could not be noticed. The gate
        * decides *approvals*; parking a run on a question is not its business.
        */
+      /**
+       * What each call actually ran, keyed by the provider's call id — task #210.
+       *
+       * `execute_tool` names its target, so the tool the model called and the action performed are two different
+       * things. The wrapper is the only place that knows both, and the events are emitted somewhere else, so the
+       * fact has to be carried across. Without it a `destructive` tool invoked through `execute_tool` appears in
+       * the audit trail as "execute_tool", which is not an answer to the question the trail exists to answer.
+       */
+      const ranByCall = new Map<string, string>();
+
       const tools: readonly ModelTurnTool[] = declared.map((t) => ({
         ...t,
-        execute: async (input: unknown) => {
+        execute: async (input: unknown, options?: ModelToolCallOptions) => {
+          /**
+           * What this call is allowed to tell us — task #210.
+           *
+           * The host's closure is what reaches the registry, so it is the only thing that can know a call
+           * resolved to a different tool. `report` is how it says so, and the map is read where the events are
+           * emitted.
+           */
+          const report = (fact: { readonly ranToolName: string }) => {
+            if (options?.toolCallId !== undefined) ranByCall.set(options.toolCallId, fact.ranToolName);
+          };
           /**
            * A tool call is an output — AC-2.
            *
@@ -367,7 +449,10 @@ export const createDefaultEngine = (deps: DefaultEngineDeps): AgentEngine => {
 
           if (approvals === undefined) {
             try {
-              return collectCitations(await inspectResult(await t.execute(input)), pendingCitations);
+              return collectCitations(
+                await inspectResult(await t.execute(input, { ...(options ?? {}), report })),
+                pendingCitations,
+              );
             } catch (thrown) {
               const parked = questionMarker(thrown, t.name);
               if (parked === null) throw thrown;
@@ -388,6 +473,8 @@ export const createDefaultEngine = (deps: DefaultEngineDeps): AgentEngine => {
               message: `${t.name} needs human approval before it can run. The run is paused; do not retry.`,
             };
           }
+          // The approval path reaches the registry itself, so the fact needs no host cooperation here.
+          if (outcome.result.ranToolName !== undefined) report({ ranToolName: outcome.result.ranToolName });
           if (!outcome.result.ok) {
             // The registry flattens a delegate's throw into a result, so the question arrives here as a code.
             const parked = questionMarker(outcome.result.error, t.name);
@@ -451,7 +538,7 @@ export const createDefaultEngine = (deps: DefaultEngineDeps): AgentEngine => {
               controller.abort();
               return;
             }
-            for (const event of mapChunk(chunk, messageId, resolved, textParts)) {
+            for (const event of mapChunk(chunk, messageId, resolved, textParts, ranByCall)) {
               emitted += 1;
               yield event;
             }
@@ -622,6 +709,8 @@ function* mapChunk(
   messageId: MessageId,
   resolved: ResolvedModelInfo,
   textParts: Map<string, { partId: MessagePartId; text: string }>,
+  /** What each call resolved to, when it was not what the model named — task #210. */
+  ranByCall: Map<string, string> = new Map(),
 ): Generator<EngineEvent> {
   switch (chunk.type) {
     case "text-delta": {
@@ -654,6 +743,7 @@ function* mapChunk(
       return;
     }
     case "tool-result": {
+      const ran = ranByCall.get(chunk.toolCallId);
       const part: ToolResultPart = {
         id: `${chunk.toolCallId}:result` as MessagePartId,
         type: "tool-result",
@@ -661,10 +751,16 @@ function* mapChunk(
         createdAt: new Date(0).toISOString(),
         toolCallId: asId(chunk.toolCallId),
         toolName: chunk.toolName,
+        ...(ran === undefined ? {} : { ranToolName: ran }),
         output: chunk.output,
         truncated: false,
       };
-      yield { type: "tool.completed", toolCallId: asId(chunk.toolCallId), toolName: chunk.toolName };
+      yield {
+        type: "tool.completed",
+        toolCallId: asId(chunk.toolCallId),
+        toolName: chunk.toolName,
+        ...(ran === undefined ? {} : { ranToolName: ran }),
+      };
       yield { type: "part.added", messageId, part };
       return;
     }

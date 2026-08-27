@@ -65,6 +65,24 @@ describe("graphql schema", () => {
   });
 });
 
+describe("graphql — the catalogue's own surface (task #210)", () => {
+  it("declares the truncation report, the toolset and findTools", () => {
+    // Schema-level, because these three are how a *client* learns the catalogue it was handed is partial. A
+    // shortened list rendered with nothing saying it was shortened is the same invisible failure as a silently
+    // truncated tool list, one layer out.
+    for (const decl of ["ToolCatalogTruncation", "TenantToolset", "findTools", "ToolSearchResult"])
+      expect(typeDefs).toContain(decl);
+  });
+
+  it("delegates findTools to the registry, and answers empty when no search is wired", async () => {
+    const { resolvers } = build();
+    const result = await resolvers.Query.findTools({}, { query: "open an issue" }, ctx);
+    // The registry in this harness has no search configured: an empty result, not an error. A client asking for
+    // a capability the deployment did not wire should render nothing, not a failure.
+    expect(result).toEqual({ hits: [], modes: [] });
+  });
+});
+
 describe("graphql resolvers — thin delegation", () => {
   it("create then read a conversation through the resolvers", async () => {
     const { resolvers } = build();

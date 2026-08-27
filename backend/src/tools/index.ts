@@ -54,11 +54,19 @@ export type ToolCatalogEntry = Pick<
   "name" | "label" | "description" | "category" | "effect"
 >;
 
-/** Shared success/error envelope — every tool, including imported ones. */
+/**
+ * Shared success/error envelope — every tool, including imported ones.
+ *
+ * `ranToolName` is set only when the call the model made is not the call that ran: `execute_tool` names its
+ * target, and without this the run event log records the indirection and loses the action. A `destructive` tool
+ * invoked that way would otherwise appear in the audit trail as "execute_tool", which is not an answer to the
+ * question an audit trail exists to answer.
+ */
 export type ToolResult<T = unknown> =
   | {
       readonly ok: true;
       readonly data: T;
+      readonly ranToolName?: string;
       /** Set when the payload was compacted or spilled rather than returned inline. */
       readonly spilledOutputRef?: BlobRef;
       readonly truncated?: boolean;
@@ -66,6 +74,7 @@ export type ToolResult<T = unknown> =
   | {
       readonly ok: false;
       readonly error: PlatformError;
+      readonly ranToolName?: string;
     };
 
 /**
@@ -147,6 +156,7 @@ export interface ToolProvider {
 /** Built-in meta-tools. Always present, never provider-supplied. */
 export const META_TOOLS = [
   "learn_tools",
+  "find_tools",
   "execute_tool",
   "load_skill",
   "ask_questions",
@@ -156,7 +166,9 @@ export const META_TOOLS = [
 
 export type MetaToolName = (typeof META_TOOLS)[number];
 
+export * from "./budget.js";
 export * from "./credentials.js";
+export * from "./find.js";
 export * from "./meta-tools.js";
 export * from "./registry.js";
 export * from "./delegating.js";

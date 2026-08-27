@@ -138,6 +138,61 @@ export type RetrieveInput = {
   readonly mode?: RetrievalMode;
 };
 
+/**
+ * Reciprocal rank fusion, extracted so there is exactly one of it — REQ-045 (#204), task #210, AC-2.
+ *
+ * `find_tools` fuses two signals over tool descriptors and this fuses two signals over knowledge chunks. Those
+ * are the same algorithm with a different corpus, and writing it twice is the shape this repository keeps
+ * finding defects in: the second copy drifts, usually in the tie-break or the normalisation, and the drift
+ * shows up as one ranker being subtly worse with nothing pointing at why.
+ *
+ * Generic over the item and its key. The **key** is what merges an item found by both signals; without it a
+ * chunk in both lists would fuse with itself and score twice.
+ *
+ * Scores come back normalised against the best fused score, because a raw RRF sum means nothing on its own —
+ * `2/61` is not "poor", it is "found first by both signals". Normalising is what lets one relevance floor apply
+ * to any corpus, tools included.
+ */
+export type FusedEntry<T, S extends string> = {
+  readonly item: T;
+  /** 0–1, relative to the best entry in this fusion. Comparable within one query, never across two. */
+  readonly score: number;
+  readonly signals: readonly S[];
+};
+
+export const fuseByRank = <T, S extends string>(input: {
+  readonly lists: readonly { readonly signal: S; readonly items: readonly T[] }[];
+  readonly keyOf: (item: T) => string;
+  /** The rank-fusion constant. Defaults to `RRF_K`; a caller changing it should say why. */
+  readonly k?: number;
+}): readonly FusedEntry<T, S>[] => {
+  const k = input.k ?? RRF_K;
+  const fused = new Map<string, { item: T; key: string; score: number; signals: Set<S> }>();
+
+  for (const list of input.lists) {
+    list.items.forEach((item, rank) => {
+      const key = input.keyOf(item);
+      const increment = 1 / (k + rank + 1);
+      const existing = fused.get(key);
+      if (existing === undefined) fused.set(key, { item, key, score: increment, signals: new Set([list.signal]) });
+      else {
+        existing.score += increment;
+        existing.signals.add(list.signal);
+      }
+    });
+  }
+
+  // Key order breaks ties, so two runs over the same corpus produce the same ranking. A `Map` iteration order
+  // tie-break would depend on which signal happened to return first.
+  const ordered = [...fused.values()].sort((a, b) => (b.score !== a.score ? b.score - a.score : a.key.localeCompare(b.key)));
+  const best = ordered[0]?.score ?? 0;
+  return ordered.map((entry) => ({
+    item: entry.item,
+    score: best === 0 ? 0 : entry.score / best,
+    signals: [...entry.signals],
+  }));
+};
+
 const referenceFor = (chunk: KnowledgeChunk): SourceReference => ({
   sourceType: chunk.sourceType,
   sourceId: chunk.sourceId,
@@ -195,33 +250,19 @@ export const createRetriever = (deps: RetrieverDeps) => {
       if (semantic.length === 0 && lexical.length === 0)
         return { found: false, reason: "no-match", message: NO_RESULT_MESSAGES["no-match"], mode };
 
-      // RRF. Rank, not score: see the note at the top on why adding two incomparable scales fails silently.
-      const fused = new Map<string, { chunk: KnowledgeChunk; score: number; signals: Set<RetrievalMode> }>();
-      const contribute = (hits: readonly { chunk: KnowledgeChunk }[], signal: RetrievalMode) => {
-        hits.forEach((hit, rank) => {
-          const existing = fused.get(hit.chunk.id);
-          const increment = 1 / (RRF_K + rank + 1);
-          if (existing === undefined)
-            fused.set(hit.chunk.id, { chunk: hit.chunk, score: increment, signals: new Set([signal]) });
-          else {
-            existing.score += increment;
-            existing.signals.add(signal);
-          }
-        });
-      };
-      contribute(semantic, "semantic");
-      contribute(lexical, "keyword");
-
-      const ordered = [...fused.values()].sort((a, b) =>
-        b.score !== a.score ? b.score - a.score : a.chunk.id.localeCompare(b.chunk.id),
-      );
-      const best = ordered[0]?.score ?? 0;
-      const candidates: RetrievalHit[] = ordered.map((entry) => ({
-        chunk: entry.chunk,
-        // Normalised against the best fused score, so the floor means the same thing whatever the corpus.
-        score: best === 0 ? 0 : entry.score / best,
-        signals: [...entry.signals],
-        reference: referenceFor(entry.chunk),
+      // RRF, through the shared implementation. Rank, not score: see the note at the top on why adding two
+      // incomparable scales fails silently, and `fuseByRank` on why there is only one of these.
+      const candidates: RetrievalHit[] = fuseByRank<{ chunk: KnowledgeChunk }, RetrievalMode>({
+        lists: [
+          { signal: "semantic", items: semantic },
+          { signal: "keyword", items: lexical },
+        ],
+        keyOf: (hit) => hit.chunk.id,
+      }).map((entry) => ({
+        chunk: entry.item.chunk,
+        score: entry.score,
+        signals: entry.signals,
+        reference: referenceFor(entry.item.chunk),
       }));
 
       const relevant = candidates.filter((hit) => hit.score >= floor);

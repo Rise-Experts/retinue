@@ -126,6 +126,12 @@ export const createResolvers = (deps: ResolverDeps) => {
       async toolCatalog(_: unknown, args: { preloaded: string[]; categories: string[]; excluded: string[] }, ctx: GraphQLContext) {
         return deps.toolRegistry.catalog(ctx.execution, args);
       },
+      async findTools(_: unknown, args: { query: string; limit?: number }, ctx: GraphQLContext) {
+        return deps.toolRegistry.find(ctx.execution, {
+          query: args.query,
+          ...(args.limit === undefined ? {} : { limit: args.limit }),
+        });
+      },
       async usage(_: unknown, args: { runId?: string }, ctx: GraphQLContext) {
         return deps.usage.totals({ tenantId: tid(ctx), ...(args.runId ? { runId: asId<RunId>(args.runId) } : {}) });
       },

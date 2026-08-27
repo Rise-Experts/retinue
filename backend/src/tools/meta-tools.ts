@@ -34,6 +34,18 @@ const meta = (
 
 export const META_TOOL_DESCRIPTORS: Readonly<Record<MetaToolName, ToolDescriptor>> = {
   learn_tools: meta("learn_tools", "Learn tools", "Fetch the full input/output schemas for named tools before using them."),
+  /**
+   * REQ-045 (#204), task #210.
+   *
+   * The description says "not all of them are listed", and that sentence is doing real work: a model that
+   * believes the catalogue it can see is complete will not search, and a budget that dropped fourteen tools
+   * would then behave exactly like fourteen tools that do not exist.
+   */
+  find_tools: meta(
+    "find_tools",
+    "Find tools",
+    "Search for a tool by describing what you need to do. Not all available tools are listed in the catalogue, so search before concluding that something cannot be done. Returns names and descriptions; use learn_tools for a schema.",
+  ),
   execute_tool: meta("execute_tool", "Execute tool", "Run a tool by name with validated input; authorization is rechecked at execution."),
   load_skill: meta("load_skill", "Load skill", "Load a named skill's instructions into context on demand."),
   ask_questions: meta("ask_questions", "Ask questions", "Ask the user consequential questions that cannot be resolved from context or tools."),

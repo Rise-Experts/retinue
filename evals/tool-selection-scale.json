@@ -8,15 +8,23 @@
       "tools": 20,
       "catalogTokens": 811,
       "cases": 26,
-      "passed": 19,
+      "passed": 18,
       "errored": 0,
-      "accuracy": 0.7307692307692307,
-      "msPerCase": 2432,
+      "accuracy": 0.6923076923076923,
+      "msPerCase": 2551,
       "misses": [
         {
-          "id": "ts-001",
-          "title": "Publish means publish tool",
-          "expected": "tool-called publish_post",
+          "id": "ts-002",
+          "title": "Schedule not publish",
+          "expected": "tool-called schedule_post",
+          "called": [
+            "list_attachments"
+          ]
+        },
+        {
+          "id": "ts-009",
+          "title": "Reply tool for comments",
+          "expected": "tool-called reply_to_comment",
           "called": [
             "list_accounts"
           ]
@@ -30,19 +38,20 @@
           ]
         },
         {
-          "id": "ts-017",
-          "title": "Convert media format",
-          "expected": "tool-called convert_media",
-          "called": [
-            "list_attachments"
-          ]
-        },
-        {
           "id": "ts-018",
           "title": "Read source before repurpose",
           "expected": "tool-called read_source",
           "called": [
-            "list_attachments"
+            "list_attachments",
+            "read_document"
+          ]
+        },
+        {
+          "id": "ts-022",
+          "title": "Duplicate vs create",
+          "expected": "tool-called duplicate_draft",
+          "called": [
+            "get_post_metrics"
           ]
         },
         {
@@ -58,7 +67,8 @@
           "title": "Page a long document rather than asking for all of it",
           "expected": "tool-called read_document",
           "called": [
-            "list_attachments"
+            "list_attachments",
+            "read_attachment"
           ]
         },
         {
@@ -74,14 +84,14 @@
       "deltaFromBaseline": 0
     },
     {
-      "size": 50,
-      "tools": 50,
-      "catalogTokens": 2357,
+      "size": 200,
+      "tools": 200,
+      "catalogTokens": 10142,
       "cases": 26,
-      "passed": 18,
+      "passed": 19,
       "errored": 0,
-      "accuracy": 0.6923076923076923,
-      "msPerCase": 3243,
+      "accuracy": 0.7307692307692307,
+      "msPerCase": 4286,
       "misses": [
         {
           "id": "ts-004",
@@ -100,27 +110,25 @@
           ]
         },
         {
-          "id": "ts-010",
-          "title": "Attach media tool",
-          "expected": "tool-called attach_media",
-          "called": [
-            "list_attachments"
-          ]
-        },
-        {
-          "id": "ts-017",
-          "title": "Convert media format",
-          "expected": "tool-called convert_media",
-          "called": [
-            "list_attachments"
-          ]
-        },
-        {
           "id": "ts-018",
           "title": "Read source before repurpose",
           "expected": "tool-called read_source",
           "called": [
-            "list_attachments"
+            "read_document"
+          ]
+        },
+        {
+          "id": "ts-019",
+          "title": "Create attributed lead on request",
+          "expected": "tool-called create_lead",
+          "called": []
+        },
+        {
+          "id": "ts-022",
+          "title": "Duplicate vs create",
+          "expected": "tool-called duplicate_draft",
+          "called": [
+            "get_post_metrics"
           ]
         },
         {
@@ -128,8 +136,7 @@
           "title": "read_document for an attached document, not read_attachment",
           "expected": "tool-called read_document",
           "called": [
-            "list_attachments",
-            "read_attachment"
+            "list_attachments"
           ]
         },
         {
@@ -139,89 +146,9 @@
           "called": [
             "list_attachments"
           ]
-        },
-        {
-          "id": "ts-026",
-          "title": "Do not read bytes when extracted text exists",
-          "expected": "tool-not-called read_attachment",
-          "called": [
-            "list_attachments",
-            "read_attachment"
-          ]
         }
       ],
-      "deltaFromBaseline": -0.0385
-    },
-    {
-      "size": 200,
-      "tools": 200,
-      "catalogTokens": 10142,
-      "cases": 26,
-      "passed": 19,
-      "errored": 0,
-      "accuracy": 0.7307692307692307,
-      "msPerCase": 4532,
-      "misses": [
-        {
-          "id": "ts-009",
-          "title": "Reply tool for comments",
-          "expected": "tool-called reply_to_comment",
-          "called": [
-            "list_accounts"
-          ]
-        },
-        {
-          "id": "ts-010",
-          "title": "Attach media tool",
-          "expected": "tool-called attach_media",
-          "called": [
-            "list_attachments"
-          ]
-        },
-        {
-          "id": "ts-017",
-          "title": "Convert media format",
-          "expected": "tool-called convert_media",
-          "called": [
-            "list_attachments"
-          ]
-        },
-        {
-          "id": "ts-018",
-          "title": "Read source before repurpose",
-          "expected": "tool-called read_source",
-          "called": [
-            "list_attachments"
-          ]
-        },
-        {
-          "id": "ts-023",
-          "title": "read_document for an attached document, not read_attachment",
-          "expected": "tool-called read_document",
-          "called": [
-            "list_attachments",
-            "read_attachment"
-          ]
-        },
-        {
-          "id": "ts-024",
-          "title": "Page a long document rather than asking for all of it",
-          "expected": "tool-called read_document",
-          "called": [
-            "list_attachments"
-          ]
-        },
-        {
-          "id": "ts-026",
-          "title": "Do not read bytes when extracted text exists",
-          "expected": "tool-not-called read_attachment",
-          "called": [
-            "list_attachments",
-            "read_attachment"
-          ]
-        }
-      ],
-      "deltaFromBaseline": 0
+      "deltaFromBaseline": 0.0385
     }
   ]
 }

@@ -18,10 +18,11 @@
  */
 
 import { asId, resolveCapabilities } from "@retinue/agentkit";
+import { budgetSkillCatalogue, truncationNotice } from "@retinue/agentkit/context";
 import { assemblePrompt, commitExtractedMemories, createCitationEmitter, createPrincipalMemoryProvider, createRunSkillTracker, createSkillResolver } from "@retinue/agentkit/context";
 import { createApprovalGate, createApprovalService, createAuthorizationPolicy, createQuestionService, createRunApprovals, questionPending } from "@retinue/agentkit/hitl";
 import { EMPTY_RUN_STREAM_STATE, computeModelCostMinorUnits, createDefaultEngine, parseExecutionContext, reduceRunEvent } from "@retinue/agentkit/runtime";
-import { createToolRegistry, defineDelegatingTool } from "@retinue/agentkit/tools";
+import { createToolRegistry, createToolSearch, defineDelegatingTool } from "@retinue/agentkit/tools";
 import { createQuotaGuard, createStoredLimitResolver } from "@retinue/agentkit/usage";
 import { createBullMqJobDispatcher, createBullMqRunQueue } from "@retinue/agentkit/adapters/bullmq";
 import { createPostgresApprovalGrantStore, createPostgresIdempotencyStore, createPostgresInteractionStore, createPostgresPrincipalMemoryStore, createPostgresRunEventLog, createPostgresSkillStore, createPostgresRunStore, createPostgresSessionStateStore, createPostgresUsageLimitStore, createPostgresUsageRollupStore, createPostgresUsageStore, createPostgresConversationStore } from "@retinue/agentkit/adapters/postgres";
@@ -37,6 +38,34 @@ import { createAttachmentResolver } from "@retinue/agentkit/knowledge";
 import { createFlowRunner } from "@retinue/agentkit/flows";
 import { EXAMPLE_FLOWS, createExampleFlowHandler } from "./flows.js";
 import { exampleToolkits, searchProviderFrom } from "./toolkits.js";
+
+/**
+ * The catalogue controls this app wires — REQ-045 (#204), task #210.
+ *
+ * From the environment because they are a *deployment's* decision, and this file is a deployment. A real
+ * multi-tenant host reads the toolset from a column keyed by tenant; there is one tenant here, so there is one
+ * setting, and the seam is the same either way.
+ *
+ * All three default to off. A budget nobody asked for that silently withheld tools would be exactly the
+ * invisible failure the mechanism exists to make visible.
+ */
+export const exampleCatalogBudget = (): { readonly maxTokens: number } | undefined => {
+  const raw = process.env["RETINUE_CATALOG_BUDGET_TOKENS"];
+  const parsed = raw === undefined ? Number.NaN : Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? { maxTokens: parsed } : undefined;
+};
+
+export const exampleToolset = (): { readonly disabledCategories: readonly string[] } | undefined => {
+  const raw = process.env["RETINUE_DISABLED_TOOL_CATEGORIES"];
+  const categories = (raw ?? "").split(",").map((part) => part.trim()).filter((part) => part !== "");
+  return categories.length === 0 ? undefined : { disabledCategories: categories };
+};
+
+export const exampleSkillCatalogBudget = (): { readonly maxTokens: number } | undefined => {
+  const raw = process.env["RETINUE_SKILL_CATALOGUE_BUDGET_TOKENS"];
+  const parsed = raw === undefined ? Number.NaN : Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? { maxTokens: parsed } : undefined;
+};
 
 /** One authenticator, built the first time a request needs it. */
 let devAuth: Authenticate | undefined;
@@ -443,6 +472,25 @@ export const exampleRegistry = (backend: ExampleBackend) =>
     providers: exampleToolProviders(backend),
     authorization,
     idempotency: backend.idempotency,
+    /**
+     * `find_tools` — task #210. Keyword-only: no `embeddings` is wired, deliberately.
+     *
+     * #221 measured selection accuracy as flat from 20 to 200 tools, so the case for search is context cost
+     * rather than accuracy, and paying an embedding provider per catalogue would be spending money on a problem
+     * this app does not have. The seam is one argument away when a deployment's catalogue is large enough to
+     * need it.
+     */
+    search: createToolSearch(),
+    ...(exampleToolset() === undefined ? {} : { toolsets: { resolve: async () => exampleToolset() as never } }),
+    /**
+     * The client's view of the catalogue is bounded too — task #210, AC-3.
+     *
+     * Two budgets, deliberately: this one bounds what a *client* renders, and the engine's bounds what the model
+     * is given. They are different lists — the model gets preloaded descriptors with schemas, a client gets
+     * compact entries — so one number applied in one place would leave the other unbounded while looking
+     * capped.
+     */
+    ...(exampleCatalogBudget() === undefined ? {} : { catalogBudget: exampleCatalogBudget() as never }),
     // The registry's own fail-closed check. Without it every `policy`/`always` tool is refused, however the
     // envelope was configured — which is what made an approved share still fail (#162).
     approval: approvalGateFor(backend),
@@ -822,6 +870,11 @@ const app = {
       providers: exampleToolProviders(backend),
       authorization,
       idempotency: backend.idempotency,
+      // Search and the tenant's toolset, wired the same way on every path — a catalogue that answered
+      // differently depending on which code path asked would be worse than not having either.
+      search: createToolSearch(),
+      ...(exampleToolset() === undefined ? {} : { toolsets: { resolve: async () => exampleToolset() as never } }),
+      ...(exampleCatalogBudget() === undefined ? {} : { catalogBudget: exampleCatalogBudget() as never }),
       // The registry's own fail-closed check. Without it every `policy`/`always` tool is refused, however the
       // envelope was configured — which is what made an approved share still fail.
       approval: approvalGateFor(backend),
@@ -989,6 +1042,11 @@ export const composeEngine = (backend: ExampleBackend) => {
       providers: exampleToolProviders(backend),
       authorization,
       idempotency: backend.idempotency,
+      // Search and the tenant's toolset, wired the same way on every path — a catalogue that answered
+      // differently depending on which code path asked would be worse than not having either.
+      search: createToolSearch(),
+      ...(exampleToolset() === undefined ? {} : { toolsets: { resolve: async () => exampleToolset() as never } }),
+      ...(exampleCatalogBudget() === undefined ? {} : { catalogBudget: exampleCatalogBudget() as never }),
       // The registry's own fail-closed check. Without it every `policy`/`always` tool is refused, however the
       // envelope was configured — which is what made an approved share still fail.
       approval: approvalGateFor(backend),
@@ -1149,7 +1207,7 @@ export const composeEngine = (backend: ExampleBackend) => {
         const catalog = {
           preloaded: all.preloaded.filter((d) => !blocked.has(String(d.effect))),
         };
-        return catalog.preloaded.map((descriptor) => ({
+        const preloaded = catalog.preloaded.map((descriptor) => ({
           name: descriptor.name,
           description: descriptor.description,
           ...(descriptor.inputSchema === undefined ? {} : { inputSchema: descriptor.inputSchema }),
@@ -1157,7 +1215,99 @@ export const composeEngine = (backend: ExampleBackend) => {
             return registry.execute(context, { name: descriptor.name, input });
           },
         }));
+
+        /**
+         * `find_tools`, handed to the model — task #210, AC-1.
+         *
+         * From `all.meta` rather than typed out, so it appears only when the registry actually has a search
+         * wired. The schema is written here because a meta-tool descriptor carries none: the registry validates
+         * these arguments itself, and a permissive schema would let the SDK stream `{}` — the #155 defect this
+         * file's own comments describe.
+         *
+         * Without this the whole mechanism would be built, tested and unreachable: a budget could drop a tool
+         * and the model would have no way back to it, which is the difference between a deferral and an
+         * amputation.
+         */
+        const find = all.meta.find((entry) => entry.name === "find_tools");
+        const findTool =
+          find === undefined
+            ? []
+            : [
+                {
+                  name: find.name,
+                  description: find.description,
+                  inputSchema: {
+                    type: "object",
+                    properties: {
+                      query: { type: "string", description: "What you are trying to do, in your own words." },
+                      limit: { type: "number", description: "How many tools to return. Default 10." },
+                    },
+                    required: ["query"],
+                  },
+                  async execute(input: unknown) {
+                    return registry.execute(context, { name: "find_tools", input });
+                  },
+                },
+              ];
+
+        /**
+         * `execute_tool` — task #210, and the thing that makes `find_tools` worth having.
+         *
+         * A found tool is by definition not in this turn's list, so without this the model learns a name it
+         * cannot call. It goes through `registry.execute`, so authorization, the toolset, the approval gate and
+         * the idempotency key all apply exactly as they would to a direct call — the indirection is a way to
+         * *reach* a tool, never a way around anything.
+         */
+        const learnTool =
+          find === undefined
+            ? []
+            : [
+                {
+                  name: "learn_tools",
+                  description:
+                    "Fetch the full input schema for tools by name, including ones not listed above. Call this " +
+                    "before running something you found with find_tools, so you know what arguments it takes.",
+                  inputSchema: {
+                    type: "object",
+                    properties: { names: { type: "array", items: { type: "string" } } },
+                    required: ["names"],
+                  },
+                  async execute(input: unknown) {
+                    return registry.execute(context, { name: "learn_tools", input });
+                  },
+                },
+              ];
+
+        const executeTool =
+          find === undefined
+            ? []
+            : [
+                {
+                  name: "execute_tool",
+                  description:
+                    "Run a tool by name, including one not listed above — for example one you found with " +
+                    "find_tools. Approval and permissions apply exactly as they would to a direct call.",
+                  inputSchema: {
+                    type: "object",
+                    properties: {
+                      name: { type: "string", description: "The tool's name." },
+                      input: { type: "object", description: "The tool's arguments, matching its schema." },
+                    },
+                    required: ["name", "input"],
+                  },
+                  async execute(input: unknown, options?: { readonly report?: (fact: { ranToolName: string }) => void }) {
+                    const result = await registry.execute(context, { name: "execute_tool", input });
+                    // So the run event log names the action, not the mechanism — task #210.
+                    if (result.ranToolName !== undefined) options?.report?.({ ranToolName: result.ranToolName });
+                    return result;
+                  },
+                },
+              ];
+
+        return [...preloaded, ...findTool, ...learnTool, ...executeTool];
       },
+      /** A ceiling on the tool list, when this deployment configured one — task #210, AC-3. */
+      ...(exampleCatalogBudget() === undefined ? {} : { catalogBudget: exampleCatalogBudget() as never }),
       // The system prompt goes through the platform's own assembly, so #145's untrusted-content envelope applies
       // to the `external` sections rather than being bypassed by a hand-built string here.
       systemPrompt: async (manifest, context) =>
@@ -1237,7 +1387,19 @@ const exampleSystemPrompt = async (
     assigned: ASSIGNED_SKILLS,
     allowTenantSkills: true,
   });
-  const skillBlock = renderSkillCatalogue(catalogue);
+  /**
+   * The skill catalogue, budgeted — task #210, AC-5.
+   *
+   * The same `applyTokenBudget` the tool catalogue uses, and the notice goes into the prompt itself: a context
+   * provider has no run event stream, so the model is told directly. Which is arguably the better channel —
+   * being told during the turn beats being told in a log afterwards, because the model can act on it.
+   */
+  const skillBudget = exampleSkillCatalogBudget();
+  const budgeted = skillBudget === undefined ? undefined : budgetSkillCatalogue(catalogue, skillBudget);
+  const skillBlock =
+    budgeted === undefined
+      ? renderSkillCatalogue(catalogue)
+      : `${renderSkillCatalogue(budgeted.resident)}${truncationNotice(budgeted)}`;
   const base = [manifest.instructions, modeBlock, skillBlock].filter((part) => part !== "").join("\n\n");
   if (sections.length === 0) return base;
   /**

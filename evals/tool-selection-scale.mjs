@@ -28,7 +28,17 @@
  * well selection works. 20 is therefore the honest baseline: exactly the tools the dataset needs, no distractors.
  * Recorded here because the issue asked for 15 and this is a deviation with a reason.
  *
- * Usage: node evals/tool-selection-scale.mjs [--sizes 20,50] [--cases 5]
+ * ## The budget arm — task #210, AC-6
+ *
+ * `--budget <tokens>` re-runs each size with a ceiling on the resident tool list and `find_tools` in the model's
+ * hands. That is the claim #210 has to make good on: resident tokens bounded *and* accuracy no worse than the
+ * baseline, because a budget that saves tokens by hiding the right tool is not a saving.
+ *
+ * Two numbers matter in that arm and only one of them is accuracy. The other is how often the model *searched* —
+ * a run that scores well without ever calling `find_tools` scored well because the tool it needed happened to
+ * survive the cut, which is luck rather than the mechanism working.
+ *
+ * Usage: node evals/tool-selection-scale.mjs [--sizes 20,50] [--cases 5] [--budget 1200]
  * Writes `evals/tool-selection-scale.json`. Needs RETINUE_MODEL_API_KEY; costs real money (~$1–3 for a full run).
  */
 
@@ -36,11 +46,13 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createAgent } from "@retinue/agentkit/providers";
-import { defineTool } from "@retinue/agentkit/tools";
+import { createToolSearch, defineTool } from "@retinue/agentkit/tools";
 import { estimateTokens } from "@retinue/agentkit/runtime";
 
 const CASES = "evals/cases/tool-selection.json";
 const OUT = "evals/tool-selection-scale.json";
+/** One file per budget, so a second arm never overwrites the first — the curve needs both points. */
+const outBudgeted = (budget) => `evals/tool-selection-scale-budget-${budget}.json`;
 
 /**
  * The tools the dataset expects, with descriptions written to be *plausibly* confusable with each other.
@@ -150,35 +162,67 @@ const main = async () => {
   const limit = Number(arg("--cases", String(cases.length)));
   const chosen = cases.slice(0, limit);
   const sizes = arg("--sizes", "20,50,200").split(",").map(Number);
+  const budgetArg = arg("--budget", undefined);
+  const budget = budgetArg === undefined ? undefined : Number(budgetArg);
 
   const results = [];
   for (const size of sizes) {
-    const specs = [...BASE, ...distractors(Math.max(0, size - BASE.length))].slice(0, Math.max(size, BASE.length));
+    /**
+     * Sorted by name, and this is load-bearing for the budget arm — task #210, AC-6.
+     *
+     * The budget keeps items in the order it is given them. `[...BASE, ...distractors]` puts every tool the
+     * dataset needs at the front, so a ceiling would drop only distractors and the arm would score perfectly
+     * while never exercising `find_tools`. That is a rigged experiment: it measures that the right answer was
+     * kept, not that the mechanism works. Alphabetical order is arbitrary with respect to what the cases need
+     * and identical on every run, which is what makes the number mean something.
+     */
+    const specs = [...BASE, ...distractors(Math.max(0, size - BASE.length))]
+      .slice(0, Math.max(size, BASE.length))
+      .sort(([a], [b]) => a.localeCompare(b));
     const tools = specs.map(toolFrom);
     const tokens = catalogTokens(specs);
     const agent = createAgent({
       manifest: {
         id: "selector",
         name: "Selector",
-        instructions: "Use the available tools to satisfy the request. Prefer the single most specific tool.",
+        instructions:
+          budget === undefined
+            ? "Use the available tools to satisfy the request. Prefer the single most specific tool."
+            : // The budget arm tells the model the list is partial, because it is. Leaving that out would
+              // measure whether a model guesses that it has been given less than everything.
+              "Use the available tools to satisfy the request. Prefer the single most specific tool. Not every " +
+              "tool is listed: if none of the listed tools fits, call find_tools to search for one.",
         modelPolicy: { role: "smart" },
       },
       models: catalogue,
       roleAssignments: { smart: [MODEL], fast: [MODEL] },
       providerCredentials: { openai: { apiKey: process.env.RETINUE_MODEL_API_KEY, ...(process.env.RETINUE_MODEL_BASE_URL ? { baseURL: process.env.RETINUE_MODEL_BASE_URL } : {}) } },
       tools: [providerOf(tools)],
+      ...(budget === undefined ? {} : { catalogBudget: { maxTokens: budget }, toolSearch: createToolSearch() }),
     });
 
     let passed = 0;
     let errored = 0;
     let elapsed = 0;
+    let searched = 0;
     const misses = [];
     for (const testCase of chosen) {
       const started = Date.now();
       let called = [];
       try {
         const result = await agent.run({ conversationId: `scale-${size}-${testCase.id}`, message: testCase.input.message });
-        called = result.parts.filter((p) => p.type === "tool-call").map((p) => p.toolName);
+        /**
+         * What was *called*, and what actually *ran* — task #210.
+         *
+         * A tool reached through `execute_tool` is a `tool-call` named `execute_tool`; the tool it ran is on the
+         * result part as `ranToolName`. Scoring only the call name marks the recovery path as a failure even when
+         * it worked — which is exactly what the first budgeted run reported, and it was the harness, not the
+         * mechanism.
+         */
+        const calls = result.parts.filter((p) => p.type === "tool-call").map((p) => p.toolName);
+        const ran = result.parts.filter((p) => p.type === "tool-result").map((p) => p.ranToolName).filter(Boolean);
+        called = [...new Set([...calls, ...ran])];
+        if (calls.includes("find_tools")) searched += 1;
       } catch (error) {
         errored += 1;
         misses.push({ id: testCase.id, why: `run failed: ${error?.message ?? error}` });
@@ -195,25 +239,42 @@ const main = async () => {
     }
 
     const accuracy = passed / chosen.length;
-    results.push({ size, tools: specs.length, catalogTokens: tokens, cases: chosen.length, passed, errored, accuracy, msPerCase: Math.round(elapsed / chosen.length), misses });
-    console.log(`\n  ${specs.length} tools · catalog ${tokens} tokens · ${passed}/${chosen.length} = ${(accuracy * 100).toFixed(1)}% · ${Math.round(elapsed / chosen.length)} ms/case`);
+    results.push({
+      size,
+      tools: specs.length,
+      catalogTokens: tokens,
+      ...(budget === undefined ? {} : { budgetTokens: budget, searchedCases: searched }),
+      cases: chosen.length,
+      passed,
+      errored,
+      accuracy,
+      msPerCase: Math.round(elapsed / chosen.length),
+      misses,
+    });
+    console.log(
+      `\n  ${specs.length} tools · catalog ${tokens} tokens${budget === undefined ? "" : ` · budget ${budget}`} · ` +
+        `${passed}/${chosen.length} = ${(accuracy * 100).toFixed(1)}%${budget === undefined ? "" : ` · searched in ${searched}`} · ` +
+        `${Math.round(elapsed / chosen.length)} ms/case`,
+    );
   }
 
   const baseline = results[0];
   const report = {
     model: MODEL,
     cases: chosen.length,
+    ...(budget === undefined ? {} : { budgetTokens: budget }),
     note: "Sizes start at 20 because the dataset references 20 distinct tools; 15 cannot contain them all.",
     results: results.map((r) => ({ ...r, deltaFromBaseline: Number((r.accuracy - baseline.accuracy).toFixed(4)) })),
   };
-  writeFileSync(OUT, `${JSON.stringify(report, null, 2)}\n`);
+  // Two files, so the budget arm never overwrites the baseline it is compared against.
+  writeFileSync(budget === undefined ? OUT : outBudgeted(budget), `${JSON.stringify(report, null, 2)}\n`);
 
   console.log(`\n| tools | catalog tokens | accuracy | Δ baseline | ms/case |`);
   console.log(`|---|---|---|---|---|`);
   for (const r of report.results) {
     console.log(`| ${r.tools} | ${r.catalogTokens.toLocaleString()} | ${(r.accuracy * 100).toFixed(1)}% | ${(r.deltaFromBaseline * 100).toFixed(1)} pp | ${r.msPerCase} |`);
   }
-  console.log(`\nwrote ${OUT}`);
+  console.log(`\nwrote ${budget === undefined ? OUT : outBudgeted(budget)}`);
   return 0;
 };
 

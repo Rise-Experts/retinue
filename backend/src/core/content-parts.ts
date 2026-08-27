@@ -67,6 +67,14 @@ export type ToolCallPart = PartBase<"tool-call"> & {
 export type ToolResultPart = PartBase<"tool-result"> & {
   readonly toolCallId: ToolCallId;
   readonly toolName: string;
+  /**
+   * What actually ran, when it differs from `toolName` — task #210.
+   *
+   * `execute_tool` names its target, so the call the model made and the action performed are two different
+   * things. Both are recorded: the first is what the model's own history says it did, and the second is what a
+   * reader needs.
+   */
+  readonly ranToolName?: string;
   /** Populated for inline results. Large results are spilled and referenced instead. */
   readonly output?: unknown;
   /** Authorized reference to an offloaded result, read back via `read_tool_output`. */

@@ -44,6 +44,7 @@ describe("the schema this service serves", () => {
         "conversation",
         "conversationContext",
         "conversations",
+        "findTools",
         "pendingApproval",
         "pendingQuestion",
         "run",

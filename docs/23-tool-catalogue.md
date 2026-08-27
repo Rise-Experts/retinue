@@ -90,7 +90,8 @@ registered tool, and a tool absent from this file is a tool nobody classified.
 | Tool | Category | Effect | Approval | Status |
 |---|---|---|---|---|
 | `learn_tools` | meta | `read` | `never` | **built** |
-| `execute_tool` | meta | `read` | `never` | **built** — the effect of what it runs is re-checked at execution |
+| `find_tools` | meta | `read` | `never` | **built** (#210). Present only when a search is wired, and filtered by the same authorization as discovery |
+| `execute_tool` | meta | `read` | `never` | **built** (#210) — the effect of what it runs is re-checked at execution. This row said "built" for months while nothing implemented it: the descriptor existed, the handler did not, and `find_tools` would have returned a name the model could not call |
 | `load_skill` | meta | `read` | `never` | **built** |
 | `ask_questions` | meta | `read` | `never` | **built** |
 | `request_approval` | meta | `read` | `never` | **built** |
@@ -170,6 +171,22 @@ A deferred item is a decision, not a backlog. Recording the reason is what stops
 - [ ] Errors as the shared result envelope, never a vendor's error shape. A model should not have to learn nine error formats.
 - [ ] A docs page on the one template, and a test that the tool is reachable from the example app — "built, tested and unreachable" has happened six times in this repository.
 - [ ] An entry in this file. `npm run check:catalogue` fails on a registered tool that is not listed.
+
+## Bounding the catalogue — task #210
+
+Three controls, all off by default, and the reason each exists:
+
+| Control | Answers | Where |
+|---|---|---|
+| `catalogBudget` | *how much of this may sit in context* | `ToolRegistryConfig` (the client's view) and `DefaultEngineDeps` (the model's list) — two lists, so one number in one place would leave the other uncapped while looking capped |
+| `find_tools` | *what exists that I was not shown* | `ToolRegistryConfig.search`, filtered by the same authorization as discovery |
+| `execute_tool` | *how do I call what I just found* | The registry, unwrapped onto the ordinary call path so nothing is bypassed |
+| `toolsets` | *does this tenant want this category at all* | `ToolRegistryConfig.toolsets`, applied **before** authorization |
+
+Truncation is never silent: a `catalog.truncated` run event names every dropped tool, the budget that bound, and
+whether `find_tools` was in the model's hands — the difference between a deferral and an amputation. The skill
+catalogue gets the same budget through the same code, with its notice rendered into the prompt because a context
+provider has no event stream.
 
 ## Built so far
 

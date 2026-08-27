@@ -43,6 +43,15 @@ export const SPAN_FOR_RUN_EVENT: Readonly<Record<RunEventType, string>> = {
   // Its own span, not `run.step`: a guardrail verdict is the boundary of a decision somebody will need to find
   // later — "what stopped this turn" is the question a trace gets opened to answer.
   "guardrail.verdict": "guardrail.inspect",
+  /**
+   * Its own span, and the reason is a rule this repository enforces: a span shares its first word with its
+   * event unless it is deliberately folded into `run.step`.
+   *
+   * `context.compact` was the first choice — dropping tools to fit a budget is the same *kind* of act as
+   * dropping history to fit one — and `telemetry.test.ts` rejected it. Correctly: an operator searching traces
+   * for why a turn was short of tools would not find it filed under context compaction.
+   */
+  "catalog.truncated": "catalog.truncate",
 };
 
 /**

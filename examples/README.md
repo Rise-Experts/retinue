@@ -106,6 +106,9 @@ Everything is in `.env` at the repository root; `.env.example` documents each va
 | `RETINUE_REDIS_URL` | Include a database number (`/9`) if the Redis is shared. |
 | `RETINUE_SCHEMA_MODE` | `off`, so booting never migrates. Migration is a command you run on purpose. |
 | `RETINUE_EXAMPLE_DEV_AUTH` | Must be `1`. There is no implicit way to enable header auth. |
+| `RETINUE_CATALOG_BUDGET_TOKENS` | Unset. A ceiling on the tool list; what does not fit is dropped and named in a `catalog.truncated` run event. Measured cost at 200 tools: see `docs/24`, and read it before turning this on |
+| `RETINUE_DISABLED_TOOL_CATEGORIES` | Unset. Comma-separated categories this tenant does not want — the cheaper way to shrink a catalogue, because it removes near-duplicates rather than arbitrary tools |
+| `RETINUE_SKILL_CATALOGUE_BUDGET_TOKENS` | Unset. The same ceiling for the skill catalogue; the notice goes into the prompt |
 
 ### The model needs tool calling
 

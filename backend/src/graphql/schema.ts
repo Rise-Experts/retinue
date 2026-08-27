@@ -54,10 +54,47 @@ export const typeDefs = /* GraphQL */ `
     effect: String!
   }
 
+  """
+  What was withheld from a catalogue, and why — REQ-045 (#204), task #210.
+
+  Present only when a budget bound. A client rendering a shortened list with nothing saying it was shortened
+  is the same invisible failure the run event exists to prevent, one layer out.
+  """
+  type ToolCatalogTruncation {
+    budgetTokens: Int!
+    residentTokens: Int!
+    dropped: [String!]!
+    "Whether find_tools is wired, which is the difference between a deferral and a removal."
+    findable: Boolean!
+    "True when the protected set alone exceeds the budget: a misconfiguration, not the mechanism working."
+    overBudget: Boolean!
+  }
+
+  "The tenant's category switches as they were applied — task #210, AC-4."
+  type TenantToolset {
+    enabledCategories: [String!]
+    disabledCategories: [String!]
+  }
+
   type ToolCatalog {
     preloaded: [JSON!]!
     discoverable: [ToolCatalogEntry!]!
     meta: [ToolCatalogEntry!]!
+    truncation: ToolCatalogTruncation
+    toolset: TenantToolset
+  }
+
+  "A tool found by describing a need — task #210, AC-1. Filtered by the same authorization as discovery."
+  type ToolSearchHit {
+    entry: ToolCatalogEntry!
+    score: Float!
+    signals: [String!]!
+  }
+
+  type ToolSearchResult {
+    hits: [ToolSearchHit!]!
+    "The signals actually used. Keyword-only when no embedding provider is wired."
+    modes: [String!]!
   }
 
   type UsageTotals {
@@ -218,6 +255,13 @@ export const typeDefs = /* GraphQL */ `
     conversation(id: ID!): Conversation
     run(id: ID!): Run
     toolCatalog(preloaded: [String!]!, categories: [String!]!, excluded: [String!]!): ToolCatalog!
+    """
+    Search the catalogue by describing what you need — task #210, AC-1.
+
+    Returns nothing at all when no search is configured, rather than failing: a client asking for a capability
+    the deployment did not wire should render an empty result, not an error dialog.
+    """
+    findTools(query: String!, limit: Int): ToolSearchResult!
     usage(runId: ID): UsageTotals!
     """
     Consumption and cost by period, with breakdowns and quota state (#140).

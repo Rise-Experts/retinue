@@ -73,4 +73,5 @@ export interface SkillResolver {
   }): Promise<SkillVersion>;
 }
 
+export * from "./catalogue.js";
 export * from "./resolver.js";

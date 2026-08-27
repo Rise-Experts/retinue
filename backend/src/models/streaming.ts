@@ -91,13 +91,33 @@ export const modalitiesOf = (messages: readonly TurnMessage[]): readonly InputMo
   return [...found];
 };
 
+/**
+ * What the provider tells us about a call it is making.
+ *
+ * Only the id, and only because a wrapper needs a key: an execution that resolved to a *different* tool than the
+ * one the model named — `execute_tool` — has to be able to say which call it was, or the run event log records
+ * the indirection and loses the action.
+ */
+export type ModelToolCallOptions = {
+  readonly toolCallId?: string;
+  /**
+   * Report what actually ran, when it is not the tool the model named.
+   *
+   * Best effort by construction: the platform's execution path knows the fact and the *host's* `execute` closure
+   * is the only thing standing between the two, so a host that does not call this leaves the field absent. Absent
+   * therefore means "nobody reported an indirection", not "there was none" — which is why the run event log keeps
+   * the model's own tool name as the primary record and treats this as an addition to it.
+   */
+  readonly report?: (fact: { readonly ranToolName: string }) => void;
+};
+
 /** A tool the model may call this turn. `execute` is the platform's guarded execution path. */
 export type ModelTurnTool = {
   readonly name: string;
   readonly description?: string;
   /** Zod schema or JSON-schema object; a permissive object schema is used when absent. */
   readonly inputSchema?: unknown;
-  execute(input: unknown): Promise<unknown>;
+  execute(input: unknown, options?: ModelToolCallOptions): Promise<unknown>;
 };
 
 export type ModelTurnRequest = {
@@ -193,7 +213,11 @@ const toToolSet = (tools: readonly ModelTurnTool[]): ToolSet => {
         : isJsonSchema(t.inputSchema)
           ? jsonSchema(t.inputSchema as Parameters<typeof jsonSchema>[0])
           : jsonSchema({ type: "object", additionalProperties: true }),
-      execute: (input: unknown) => t.execute(input),
+      // The options are *forwarded*, not dropped. Without the call id a wrapper cannot attribute what it ran,
+      // which is how a tool executed through `execute_tool` became an unattributable entry in the audit trail.
+      // The options are *forwarded*, not dropped. Without the call id a wrapper cannot attribute what it ran,
+      // which is how a tool executed through `execute_tool` became an unattributable entry in the audit trail.
+      execute: (input: unknown, options: { toolCallId?: string }) => t.execute(input, { toolCallId: options?.toolCallId }),
     });
   }
   return set;

@@ -28,7 +28,8 @@ import type { AuthorizationPolicy } from "../authorization/index.js";
 import { gatherSections, type ContextProvider } from "../context/index.js";
 import { randomBytes } from "node:crypto";
 import { makeNonce, renderContextBlock } from "../security/prompt-safety.js";
-import { createToolRegistry, type ToolProvider } from "../tools/index.js";
+import { createToolRegistry, type ToolProvider, type ToolSearch, type ToolsetResolver } from "../tools/index.js";
+import type { TokenBudget } from "../core/budget.js";
 import { createDurableWorker, type AgentEngine, type ProcessOutcome, type Run } from "../runtime/index.js";
 import {
   createMemoryCheckpointStore,
@@ -87,6 +88,17 @@ export type CreateAgentConfig = {
    * add.
    */
   readonly guardrails?: readonly Guardrail[];
+  /**
+   * Search over the catalogue, which is what makes `find_tools` exist — REQ-045 (#204), task #210.
+   *
+   * Absent means no `find_tools`. Wire it with `createToolSearch()` for keyword search, or pass an
+   * `EmbeddingProvider` to it for hybrid — and see `tools/find.ts` on why keyword-only is the honest default.
+   */
+  readonly toolSearch?: ToolSearch;
+  /** A ceiling in tokens on the tool list handed to the model — task #210, AC-3. Absent means no ceiling. */
+  readonly catalogBudget?: TokenBudget;
+  /** A tenant's category switches, applied before authorization — task #210, AC-4. */
+  readonly toolsets?: ToolsetResolver;
   readonly tenantId?: string;
   /** Test/advanced seam: override how a manifest resolves to a model (e.g. a mock model). */
   readonly resolveModel?: (manifest: AgentManifest, context: ExecutionContext) => ResolvedModelInfo;
@@ -134,7 +146,13 @@ export const createAgent = (config: CreateAgentConfig) => {
   });
   const providerFactory: ProviderFactory = createProviderFactory({ credentials: config.providerCredentials ?? {} });
   const authorization = config.authorization ?? allowAllAuthorization();
-  const toolRegistry = createToolRegistry({ providers: config.tools ?? [], authorization });
+  const toolRegistry = createToolRegistry({
+    providers: config.tools ?? [],
+    authorization,
+    ...(config.toolSearch === undefined ? {} : { search: config.toolSearch }),
+    ...(config.toolsets === undefined ? {} : { toolsets: config.toolsets }),
+    ...(config.catalogBudget === undefined ? {} : { catalogBudget: config.catalogBudget }),
+  });
 
   const resolveModel: NonNullable<CreateAgentConfig["resolveModel"]> =
     config.resolveModel ??
@@ -151,6 +169,7 @@ export const createAgent = (config: CreateAgentConfig) => {
   const contextProviders = config.contextProviders ?? [];
   const engine = config.engine ?? createDefaultEngine({
     ...(config.guardrails === undefined ? {} : { guardrails: config.guardrails }),
+    ...(config.catalogBudget === undefined ? {} : { catalogBudget: config.catalogBudget }),
     async loadManifest() {
       return manifest; // single-manifest embedded agent
     },
@@ -202,23 +221,106 @@ export const createAgent = (config: CreateAgentConfig) => {
     },
     ...(config.tools && config.tools.length > 0
       ? {
+          /**
+           * The tools this turn, through the registry rather than around it — task #210.
+           *
+           * This used to gather the providers itself and filter them with `authorization.filterTools`, which was
+           * a second copy of what the registry does: no duplicate-name check, and — once tenant toolsets existed
+           * — no toolset either, so a switched-off category was hidden everywhere except in the list actually
+           * handed to the model.
+           */
           buildTools: async (context: ExecutionContext) => {
-            const resolvedTools: { name: string; description?: string; inputSchema?: unknown; execute: (i: unknown) => Promise<unknown> }[] = [];
-            const gathered = (await Promise.all((config.tools ?? []).map((p) => p.listTools(context)))).flat();
-            const permitted = new Set((await authorization.filterTools(context, gathered.map((t) => t.descriptor))).map((d) => d.name));
-            for (const t of gathered) {
-              if (!permitted.has(t.descriptor.name)) continue;
-              resolvedTools.push({
-                name: t.descriptor.name,
-                description: t.descriptor.description,
-                inputSchema: t.descriptor.inputSchema,
+            const descriptors = await toolRegistry.listAuthorized(context);
+            const resolvedTools: { name: string; description?: string; inputSchema?: unknown; execute: (i: unknown) => Promise<unknown> }[] =
+              descriptors.map((descriptor) => ({
+                name: descriptor.name,
+                description: descriptor.description,
+                inputSchema: descriptor.inputSchema,
                 execute: async (input: unknown) => {
-                  const result = await toolRegistry.execute(context, { name: t.descriptor.name, input });
+                  const result = await toolRegistry.execute(context, { name: descriptor.name, input });
+                  if (!result.ok) throw new AgentPlatformError(result.error);
+                  return result.data;
+                },
+              }));
+
+            /**
+             * `find_tools`, when a search is wired — task #210, AC-1.
+             *
+             * Its schema is written here because a meta-tool descriptor carries none, and a model handed a
+             * permissive schema streams `{}` for every call. The registry validates the arguments itself.
+             */
+            /**
+             * `execute_tool`, alongside search — task #210.
+             *
+             * Without it `find_tools` is a dead end: the tool it names is not in this turn's list (that is why
+             * it had to be searched for), so the model learns a name it cannot call. Added whenever search or a
+             * budget is configured, which are exactly the cases where the list is partial.
+             */
+            if (config.toolSearch !== undefined || config.catalogBudget !== undefined) {
+              resolvedTools.push({
+                name: "execute_tool",
+                description:
+                  "Run a tool by name — including one that is not listed here, for example one you found with " +
+                  "find_tools. Authorization and approval apply exactly as they would to a direct call.",
+                inputSchema: {
+                  type: "object",
+                  properties: {
+                    name: { type: "string", description: "The tool's name." },
+                    input: { type: "object", description: "The tool's arguments, matching its schema." },
+                  },
+                  required: ["name", "input"],
+                },
+                execute: async (input: unknown, options?: { readonly report?: (fact: { ranToolName: string }) => void }) => {
+                  const result = await toolRegistry.execute(context, { name: "execute_tool", input });
+                  // What actually ran, so the run event log names the action rather than the mechanism.
+                  if (result.ranToolName !== undefined) options?.report?.({ ranToolName: result.ranToolName });
                   if (!result.ok) throw new AgentPlatformError(result.error);
                   return result.data;
                 },
               });
             }
+
+            if (config.toolSearch !== undefined || config.catalogBudget !== undefined) {
+              resolvedTools.push({
+                name: "learn_tools",
+                description:
+                  "Fetch the full input schemas for tools by name — including ones not listed here. Call this " +
+                  "before running a tool you found with find_tools, so you know what arguments it takes.",
+                inputSchema: {
+                  type: "object",
+                  properties: { names: { type: "array", items: { type: "string" } } },
+                  required: ["names"],
+                },
+                execute: async (input: unknown) => {
+                  const result = await toolRegistry.execute(context, { name: "learn_tools", input });
+                  if (!result.ok) throw new AgentPlatformError(result.error);
+                  return result.data;
+                },
+              });
+            }
+
+            if (config.toolSearch !== undefined) {
+              resolvedTools.push({
+                name: "find_tools",
+                description:
+                  "Search for a tool by describing what you need to do. Not all available tools are listed, so " +
+                  "search before concluding that something cannot be done. Run what you find with execute_tool.",
+                inputSchema: {
+                  type: "object",
+                  properties: {
+                    query: { type: "string", description: "What you are trying to do, in your own words." },
+                    limit: { type: "number", description: "How many tools to return. Default 10." },
+                  },
+                  required: ["query"],
+                },
+                execute: async (input: unknown) => {
+                  const result = await toolRegistry.execute(context, { name: "find_tools", input });
+                  if (!result.ok) throw new AgentPlatformError(result.error);
+                  return result.data;
+                },
+              });
+            }
+
             return resolvedTools;
           },
         }

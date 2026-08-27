@@ -23,6 +23,9 @@ import { assertToolAuthorized, type AuthorizationPolicy } from "../authorization
 import { deriveIdempotencyKey, type IdempotencyStore } from "../idempotency/index.js";
 import type { BlobStore } from "../persistence/index.js";
 import { META_TOOL_DESCRIPTOR_LIST } from "./meta-tools.js";
+import { applyTokenBudget, type TokenBudget } from "../core/budget.js";
+import { entryTokens } from "./budget.js";
+import type { ToolSearch, ToolSearchOutcome } from "./find.js";
 import type {
   OneTimeApprovalRef,
   ShadowRecorder,
@@ -60,6 +63,44 @@ const compact = (d: ToolDescriptor): ToolCatalogEntry => ({
 });
 
 const invalidInput = (message: string): PlatformError => ({ code: "invalid_input", message, retryable: false });
+
+/** The registry's own meta-tools, which a model may not target through `execute_tool`. */
+const META_ONLY = new Set(["execute_tool", "find_tools", "learn_tools", "read_tool_output"]);
+
+/**
+ * `execute_tool({ name, input })` → the call it names. Anything else passes through untouched.
+ *
+ * Refuses to target another meta-tool: `execute_tool` calling itself is an unbounded recursion a model can start
+ * with one call, and the others have their own entry points. One level of indirection is the feature; a stack of
+ * it is a way to hide what a call actually was from every log that records the outer name.
+ */
+export type ExecuteToolRequest = {
+  name: string;
+  input: unknown;
+  idempotencyKey?: string;
+  toolCallId?: string;
+  approval?: OneTimeApprovalRef;
+};
+
+export const unwrapExecuteTool = (
+  request: ExecuteToolRequest,
+): ExecuteToolRequest | { readonly error: PlatformError } => {
+  if (request.name !== "execute_tool") return request;
+  const asked = (request.input ?? {}) as { name?: unknown; input?: unknown; idempotencyKey?: unknown };
+  if (typeof asked.name !== "string" || asked.name.trim() === "")
+    return { error: invalidInput("execute_tool needs the name of the tool to run.") };
+  if (META_ONLY.has(asked.name))
+    return { error: invalidInput(`execute_tool cannot call ${asked.name}; call it directly.`) };
+  return {
+    name: asked.name,
+    input: asked.input,
+    ...(typeof asked.idempotencyKey === "string" ? { idempotencyKey: asked.idempotencyKey } : {}),
+    // The *outer* call's identity is kept: the tool call the model made is the one the run event log records,
+    // and rewriting it here would make a transcript disagree with the model's own history.
+    ...(request.toolCallId === undefined ? {} : { toolCallId: request.toolCallId }),
+    ...(request.approval === undefined ? {} : { approval: request.approval }),
+  };
+};
 /** A wiring problem, not a caller problem: retrying the identical call cannot help. */
 const capabilityUnavailable = (message: string): PlatformError => ({
   code: "capability_unavailable",
@@ -68,6 +109,46 @@ const capabilityUnavailable = (message: string): PlatformError => ({
 });
 const requiresKey = (effect: ToolDescriptor["effect"], requires: boolean): boolean =>
   requires || effect === "external-write" || effect === "destructive";
+
+/**
+ * What a tenant has switched on — REQ-045 (#204), task #210, AC-4.
+ *
+ * Authorization answers *may this principal use this tool*. Nothing answered *does this tenant want it at all*,
+ * and without the second question a catalogue is only ever as small as its largest customer: every tenant pays
+ * the context cost of every integration anybody wired.
+ *
+ * Categories rather than names, deliberately. A tenant switching off `communication` should not have to name
+ * five Slack tools and then miss the sixth when it ships.
+ */
+export type TenantToolset = {
+  /** An allow-list. Present means *only* these categories, which is the safer shape for a tenant opting in. */
+  readonly enabledCategories?: readonly string[];
+  /** A deny-list, applied after any allow-list. */
+  readonly disabledCategories?: readonly string[];
+};
+
+/**
+ * Resolves a tenant's toolset. A port, because where this lives is a deployment's decision — a column, a
+ * settings service, a static map.
+ */
+export interface ToolsetResolver {
+  resolve(context: ExecutionContext): Promise<TenantToolset>;
+}
+
+/**
+ * Categories a tenant may not switch off.
+ *
+ * `meta` is the model's route back to everything else. A tenant that disabled it would have an agent that cannot
+ * learn a schema or search the catalogue — which is not a smaller toolset, it is a broken one.
+ */
+export const UNDISABLEABLE_CATEGORIES: readonly string[] = ["meta"];
+
+/** Whether a category survives a tenant's toolset. Exported because the filtering is worth testing directly. */
+export const categoryEnabled = (toolset: TenantToolset, category: string): boolean => {
+  if (UNDISABLEABLE_CATEGORIES.includes(category)) return true;
+  if (toolset.enabledCategories !== undefined && !toolset.enabledCategories.includes(category)) return false;
+  return !(toolset.disabledCategories ?? []).includes(category);
+};
 
 export type ToolPolicyView = {
   readonly preloaded: readonly string[];
@@ -82,6 +163,28 @@ export type ToolCatalog = {
   readonly discoverable: readonly ToolCatalogEntry[];
   /** Always-present meta-tools. */
   readonly meta: readonly ToolCatalogEntry[];
+  /**
+   * Present only when a budget bound — REQ-045 (#204), task #210, AC-3.
+   *
+   * On the catalogue as well as in the run event log, because the two have different readers: the event is for
+   * whoever reviews the run afterwards, and this is for the client rendering the catalogue *now*. A UI showing
+   * a shortened list with no indication it was shortened is the same invisible failure in a different place.
+   */
+  readonly truncation?: {
+    readonly budgetTokens: number;
+    readonly residentTokens: number;
+    readonly dropped: readonly string[];
+    readonly findable: boolean;
+    readonly overBudget: boolean;
+  };
+  /**
+   * The tenant's toolset as it was applied — AC-4's "visible in the capability declaration".
+   *
+   * This catalogue *is* the declaration a client reads: it is the only place the platform states what an agent
+   * can do. A tenant setting that silently narrowed it, with nothing in the answer saying so, would be
+   * indistinguishable from tools that were never built.
+   */
+  readonly toolset?: TenantToolset;
 };
 
 /** Structural approval check (satisfied by the HITL `ApprovalGate`) — kept structural to avoid a
@@ -168,10 +271,46 @@ export type ToolRegistryConfig = {
    * than performed, the same fail-closed rule as the envelope's.
    */
   readonly shadow?: ShadowRecorder;
+  /**
+   * Search over the catalogue, which is what makes `find_tools` exist — AC-1.
+   *
+   * Absent means no `find_tools` in the catalogue at all, rather than one that always answers "not configured".
+   * Wiring is the toggle, the same rule the tool library already follows for `web_search`.
+   */
+  readonly search?: ToolSearch;
+  /** A tenant's category switches, applied *before* authorization filtering — AC-4. */
+  readonly toolsets?: ToolsetResolver;
+  /**
+   * A ceiling in tokens on the discoverable catalogue — AC-3.
+   *
+   * Applies to the compact entries only. Preloaded tools are an explicit instruction from the host and are not
+   * silently withdrawn; a host that preloads more than its own budget is told so through `overBudget` rather
+   * than having its instruction quietly reversed.
+   */
+  readonly catalogBudget?: TokenBudget;
 };
 
 export interface ToolRegistry {
   catalog(context: ExecutionContext, policy: ToolPolicyView): Promise<ToolCatalog>;
+  /**
+   * Search the catalogue — AC-1.
+   *
+   * Filtered by the same authorization policy as discovery, which is not a nicety: an unfiltered search is an
+   * enumeration oracle. A principal who cannot see `github_merge_pull_request` in the catalogue but can confirm
+   * it exists by searching for "merge" has learned what the deployment does, and hiding a tool from discovery
+   * while making it findable is worse than not hiding it, because it looks like it was hidden.
+   */
+  find(context: ExecutionContext, input: { readonly query: string; readonly limit?: number }): Promise<ToolSearchOutcome>;
+  /**
+   * Every tool this caller may use, with schemas — the list `buildTools` should hand a model.
+   *
+   * Exists because the embedded facade was doing this itself: gathering providers, flattening, and filtering by
+   * authorization, in its own copy of the four lines this registry already owns. The copy had no duplicate-name
+   * check and no tenant toolset, so a category a tenant had switched off was invisible in the catalogue, absent
+   * from `find_tools`, refused at execution — and *still handed to the model*, which would then call it and be
+   * refused. One implementation, and this is it.
+   */
+  listAuthorized(context: ExecutionContext): Promise<readonly ToolDescriptor[]>;
   learn(context: ExecutionContext, names: readonly string[]): Promise<readonly ToolDescriptor[]>;
   execute(
     context: ExecutionContext,
@@ -254,7 +393,20 @@ export const createToolRegistry = (config: ToolRegistryConfig): ToolRegistry => 
       }
     }
 
-    const usable = all.filter((t) => !duplicated.has(t.descriptor.name));
+    /**
+     * The tenant's toolset, applied **before** authorization — AC-4.
+     *
+     * Order matters and this is the order the AC asks for. A tool a tenant switched off is not a tool the
+     * principal is unauthorized for: it does not exist for that tenant, so it must not reach the authorization
+     * policy, must not appear in a policy's audit of what it filtered, and must not be findable.
+     */
+    const toolset = config.toolsets === undefined ? undefined : await config.toolsets.resolve(context);
+    const wanted =
+      toolset === undefined
+        ? all.filter((t) => !duplicated.has(t.descriptor.name))
+        : all.filter((t) => !duplicated.has(t.descriptor.name) && categoryEnabled(toolset, t.descriptor.category));
+
+    const usable = wanted;
     const descriptors = usable.map((t) => t.descriptor);
     const permitted = new Set((await config.authorization.filterTools(context, descriptors)).map((d) => d.name));
     return usable.filter((t) => permitted.has(t.descriptor.name));
@@ -263,7 +415,24 @@ export const createToolRegistry = (config: ToolRegistryConfig): ToolRegistry => 
   const findAuthorized = async (context: ExecutionContext, name: string): Promise<Tool | null> =>
     (await authorizedTools(context)).find((t) => t.descriptor.name === name) ?? null;
 
-  return {
+  /**
+   * One implementation, reached two ways: `registry.find` for a host, and `execute("find_tools")` for a model.
+   *
+   * `find_tools` is not authorized as a tool in its own right, and that is deliberate: like every other
+   * meta-tool it is part of the interface rather than a capability a role grants. What *is* authorized is
+   * everything it can return — the corpus is the caller's own authorized tool list — so the worst a principal
+   * with no tools can learn from it is that they have none.
+   */
+  const runFind = async (
+    context: ExecutionContext,
+    input: { readonly query: string; readonly limit?: number },
+  ): Promise<ToolSearchOutcome> => {
+    if (config.search === undefined) return { hits: [], modes: [] };
+    const tools = (await authorizedTools(context)).map((t) => t.descriptor);
+    return config.search.search({ query: input.query, tools, limit: input.limit ?? 10 });
+  };
+
+  const api: ToolRegistry = {
     async catalog(context, policy) {
       const excluded = new Set(policy.excluded);
       const preloadNames = new Set(policy.preloaded);
@@ -276,7 +445,62 @@ export const createToolRegistry = (config: ToolRegistryConfig): ToolRegistry => 
         if (preloadNames.has(d.name) || preloadCategories.has(d.category)) preloaded.push(d);
         else discoverable.push(compact(d));
       }
-      return { preloaded, discoverable, meta: META_TOOL_DESCRIPTOR_LIST.map(compact) };
+
+      /**
+       * `find_tools` is advertised only when a search is wired.
+       *
+       * The alternative — a permanent descriptor that fails at execution — costs the model a call to discover
+       * and reads in a transcript exactly like a broken platform.
+       */
+      const meta = META_TOOL_DESCRIPTOR_LIST.filter(
+        (d) => d.name !== "find_tools" || config.search !== undefined,
+      ).map(compact);
+
+      const toolset = config.toolsets === undefined ? undefined : await config.toolsets.resolve(context);
+
+      if (config.catalogBudget === undefined)
+        return {
+          preloaded,
+          discoverable,
+          meta,
+          ...(toolset === undefined ? {} : { toolset }),
+        };
+
+      // Preloaded entries and the meta-tools are charged against the budget but never dropped: they are the
+      // host's own instruction and the model's route back to what was withheld.
+      const fixed =
+        preloaded.reduce((total, d) => total + entryTokens(compact(d)), 0) +
+        meta.reduce((total, entry) => total + entryTokens(entry), 0);
+      const outcome = applyTokenBudget({
+        items: discoverable,
+        budget: { maxTokens: Math.max(0, config.catalogBudget.maxTokens - fixed) },
+        tokensOf: entryTokens,
+        nameOf: (entry) => entry.name,
+      });
+
+      return {
+        preloaded,
+        discoverable: outcome.resident,
+        meta,
+        ...(toolset === undefined ? {} : { toolset }),
+        ...(outcome.dropped.length === 0 && !outcome.overBudget
+          ? {}
+          : {
+              truncation: {
+                budgetTokens: config.catalogBudget.maxTokens,
+                residentTokens: outcome.residentTokens + fixed,
+                dropped: outcome.dropped,
+                findable: config.search !== undefined,
+                overBudget: outcome.residentTokens + fixed > config.catalogBudget.maxTokens,
+              },
+            }),
+      };
+    },
+
+    find: runFind,
+
+    async listAuthorized(context) {
+      return (await authorizedTools(context)).map((t) => t.descriptor);
     },
 
     async learn(context, names) {
@@ -285,7 +509,79 @@ export const createToolRegistry = (config: ToolRegistryConfig): ToolRegistry => 
       return (await authorizedTools(context)).map((t) => t.descriptor).filter((d) => wanted.has(d.name));
     },
 
-    async execute(context, input) {
+    async execute(context, outer) {
+      /**
+       * `execute_tool`, unwrapped before anything else — task #210.
+       *
+       * Without this, `find_tools` finds a tool the model **cannot call**: a truncated tool list means the name
+       * it just learned is not in its own tool set, so search would return an answer and leave the model stuck.
+       * That is the difference between a deferral and an amputation, and it was missing — `execute_tool` has been
+       * in `META_TOOLS` since the registry was written and nothing implemented it.
+       *
+       * Unwrapping rather than dispatching: the inner call then goes through *every* check below — authorization,
+       * the toolset, the approval gate, validation, idempotency, the shadow recorder — because it is the same
+       * code path. A separate branch that called the tool directly would be a way around all of them, reachable
+       * by name from a model.
+       */
+      if (outer.name === "execute_tool") {
+        const unwrapped = unwrapExecuteTool(outer);
+        if ("error" in unwrapped) return { ok: false, error: unwrapped.error };
+        /**
+         * Re-entered through the public surface, and tagged once on the way out.
+         *
+         * Re-entering rather than falling through with a rewritten argument: the inner call then passes every
+         * check below exactly as a direct call would — authorization, the tenant's toolset, the approval gate,
+         * validation, idempotency, the shadow recorder — because it *is* a direct call. A fall-through would work
+         * today and become a bypass the first time somebody adds a check above this line.
+         *
+         * `ranToolName` is attached here, in the one place the indirection is known. The audit trail's question
+         * is "what was done", and `execute_tool` is not an answer to it.
+         */
+        const inner = await api.execute(context, unwrapped);
+        return { ...inner, ranToolName: unwrapped.name };
+      }
+      const input = outer;
+
+      /**
+       * `learn_tools`, handled here — task #210, and the leg that was missing.
+       *
+       * `find_tools` returns names and descriptions. A model that then calls the tool through `execute_tool` has
+       * to guess its arguments, and in the 200-tool measurement it did exactly that: searched, found the right
+       * tool, and called it wrongly or not at all. Search without schemas is a dead end, and the descriptor for
+       * `learn_tools` had been in `META_TOOLS` since the registry was written with nothing implementing it.
+       */
+      if (input.name === "learn_tools") {
+        const asked = (input.input ?? {}) as { names?: unknown };
+        const names = Array.isArray(asked.names) ? asked.names.filter((n): n is string => typeof n === "string") : [];
+        if (names.length === 0)
+          return { ok: false, error: invalidInput("learn_tools needs `names`: the tools whose schemas you want.") };
+        // Authorized only, like discovery and like search — an unauthorized name is silently unlearnable.
+        return { ok: true, data: { tools: await api.learn(context, names) } };
+      }
+
+      /**
+       * `find_tools`, handled here rather than by a provider — AC-1.
+       *
+       * It has to be the registry: the corpus *is* the registry's authorized tool list, and a provider-supplied
+       * search tool would either need the registry passed into it (a construction cycle) or its own idea of what
+       * exists, which is the second implementation AC-2 forbids.
+       */
+      if (input.name === "find_tools") {
+        if (config.search === undefined)
+          return {
+            ok: false,
+            error: capabilityUnavailable(
+              "find_tools is not available: no tool search is configured (see ToolRegistryConfig.search).",
+            ),
+          };
+        const asked = (input.input ?? {}) as { query?: unknown; limit?: unknown };
+        if (typeof asked.query !== "string" || asked.query.trim() === "")
+          return { ok: false, error: invalidInput("find_tools needs a query describing what you are trying to do.") };
+        const limit = typeof asked.limit === "number" && asked.limit > 0 ? Math.min(Math.floor(asked.limit), 25) : 10;
+        const outcome = await runFind(context, { query: asked.query, limit });
+        return { ok: true, data: outcome };
+      }
+
       const tool = await findAuthorized(context, input.name);
       // Not found OR not authorized → both reject; execution is never a way around discovery filtering.
       if (!tool) {
@@ -430,6 +726,8 @@ export const createToolRegistry = (config: ToolRegistryConfig): ToolRegistry => 
       return { ok: true, data: value };
     },
   };
+
+  return api;
 
   /** Spill an oversize success payload to blob storage and reference it. */
   async function maybeSpill(context: ExecutionContext, result: ToolResult): Promise<ToolResult> {

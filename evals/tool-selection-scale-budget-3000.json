@@ -1,0 +1,126 @@
+{
+  "model": "gpt-4o",
+  "cases": 26,
+  "budgetTokens": 3000,
+  "note": "Sizes start at 20 because the dataset references 20 distinct tools; 15 cannot contain them all.",
+  "results": [
+    {
+      "size": 200,
+      "tools": 200,
+      "catalogTokens": 10142,
+      "budgetTokens": 3000,
+      "searchedCases": 14,
+      "cases": 26,
+      "passed": 14,
+      "errored": 0,
+      "accuracy": 0.5384615384615384,
+      "msPerCase": 5630,
+      "misses": [
+        {
+          "id": "ts-001",
+          "title": "Publish means publish tool",
+          "expected": "tool-called publish_post",
+          "called": [
+            "find_tools",
+            "learn_tools"
+          ]
+        },
+        {
+          "id": "ts-002",
+          "title": "Schedule not publish",
+          "expected": "tool-called schedule_post",
+          "called": []
+        },
+        {
+          "id": "ts-005",
+          "title": "Account health tool",
+          "expected": "tool-called list_accounts",
+          "called": [
+            "archive_accounts"
+          ]
+        },
+        {
+          "id": "ts-006",
+          "title": "Research over invent",
+          "expected": "tool-called search_web",
+          "called": [
+            "find_tools",
+            "export_web"
+          ]
+        },
+        {
+          "id": "ts-009",
+          "title": "Reply tool for comments",
+          "expected": "tool-called reply_to_comment",
+          "called": [
+            "find_tools",
+            "learn_tools"
+          ]
+        },
+        {
+          "id": "ts-011",
+          "title": "Validate before schedule",
+          "expected": "tool-called validate_post",
+          "called": [
+            "find_tools",
+            "learn_tools"
+          ]
+        },
+        {
+          "id": "ts-013",
+          "title": "Update existing draft",
+          "expected": "tool-called update_post",
+          "called": [
+            "find_tools"
+          ]
+        },
+        {
+          "id": "ts-018",
+          "title": "Read source before repurpose",
+          "expected": "tool-called read_source",
+          "called": [
+            "find_tools"
+          ]
+        },
+        {
+          "id": "ts-020",
+          "title": "List destinations",
+          "expected": "tool-called list_accounts",
+          "called": [
+            "broadcast_accounts"
+          ]
+        },
+        {
+          "id": "ts-023",
+          "title": "read_document for an attached document, not read_attachment",
+          "expected": "tool-called read_document",
+          "called": [
+            "archive_attachments",
+            "broadcast_attachments",
+            "dispatch_attachments",
+            "draft_attachments",
+            "export_attachments",
+            "import_attachments"
+          ]
+        },
+        {
+          "id": "ts-024",
+          "title": "Page a long document rather than asking for all of it",
+          "expected": "tool-called read_document",
+          "called": [
+            "broadcast_attachments"
+          ]
+        },
+        {
+          "id": "ts-025",
+          "title": "list_attachments when the file is not named",
+          "expected": "tool-called list_attachments",
+          "called": [
+            "archive_attachments"
+          ]
+        }
+      ],
+      "deltaFromBaseline": 0
+    }
+  ]
+}

@@ -30,6 +30,7 @@ export const RUN_EVENT_TYPES = [
   "usage.updated",
   "context.compacted",
   "guardrail.verdict",
+  "catalog.truncated",
 ] as const;
 
 export type RunEventType = (typeof RUN_EVENT_TYPES)[number];
@@ -72,6 +73,14 @@ export type PartEvent = EventBase<"part.added" | "part.updated"> & {
 export type ToolEvent = EventBase<"tool.started" | "tool.completed" | "tool.failed"> & {
   readonly toolCallId: ToolCallId;
   readonly toolName: string;
+  /**
+   * The tool that actually ran, when the model called `execute_tool` — task #210.
+   *
+   * Absent on `tool.started`, because at that point nothing has resolved the target yet. Present on completion
+   * and failure, where it is the difference between an audit trail that names an action and one that names a
+   * mechanism.
+   */
+  readonly ranToolName?: string;
 };
 
 export type InteractionEvent = EventBase<
@@ -129,6 +138,44 @@ export type GuardrailVerdictEvent = EventBase<"guardrail.verdict"> & {
   readonly threw?: boolean;
 };
 
+/**
+ * A catalogue did not fit its budget, and what was left out — REQ-045 (#204), task #210, AC-3 and AC-5.
+ *
+ * This event *is* the guarantee. A truncated tool list is invisible from inside a run: the model is not told a
+ * tool was withheld, so it never calls it, and the transcript reads exactly like a run where the model chose
+ * not to. Every other failure at least looks like a failure; this one looks like a decision. So the names go in
+ * the log, in full, and #210's AC-7 is a test that deleting this event fails the build.
+ *
+ * Names, not a count. "14 tools were dropped" tells a reader that something happened and nothing about whether
+ * it mattered; `github_merge_pull_request` tells them immediately.
+ */
+export type CatalogTruncatedEvent = EventBase<"catalog.truncated"> & {
+  /**
+   * Which catalogue. One event rather than two, because the fact is the same fact and a reader asking "what was
+   * withheld from this turn" should not have to know there are two mechanisms.
+   */
+  readonly catalog: "tools" | "skills";
+  readonly budgetTokens: number;
+  readonly residentTokens: number;
+  /** Every dropped tool, by name. */
+  readonly dropped: readonly string[];
+  /**
+   * Whether the model can still get to what was dropped.
+   *
+   * `find_tools` makes a truncated tool catalogue a *deferral*; without it the same event describes a permanent
+   * removal, and a reader cannot tell which from the names alone. There is no `find_skills`, so a truncated
+   * skill catalogue is always `false` today — which is a fact worth having in the log rather than a field to
+   * leave off.
+   */
+  readonly findable: boolean;
+  /**
+   * Set when the protected set alone exceeds the budget — a misconfiguration, not the mechanism working.
+   *
+   * A deployment in this state believes it capped its context and has not.
+   */
+  readonly overBudget?: boolean;
+};
+
 export type RunEvent =
   | RunLifecycleEvent
   | RunFailedEvent
@@ -138,7 +185,8 @@ export type RunEvent =
   | InteractionEvent
   | UsageUpdatedEvent
   | ContextCompactedEvent
-  | GuardrailVerdictEvent;
+  | GuardrailVerdictEvent
+  | CatalogTruncatedEvent;
 
 /** Fan-out port. Adapters: Supabase Realtime, Redis pub/sub, in-memory for tests. */
 export interface RealtimePublisher {
