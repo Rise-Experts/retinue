@@ -13,6 +13,7 @@
 
 ### Fixed
 
+- **tools**: the sandbox kills the process group, and returns when the process dies `46311ca6`
 - **shareflow**: the inventory's instruction column, and two claims that were strings ([#190](https://github.com/Rise-Experts/retinue/issues/190)) `47cb7474`
 
 ### Documentation
@@ -28,6 +29,7 @@
 
 ### Chores
 
+- **changelog**: regenerate `18f22bde`
 - **changelog**: regenerate `c9b1f192`
 - **changelog**: regenerate `2bc05c15`
 - **changelog**: regenerate `090da5c9`
