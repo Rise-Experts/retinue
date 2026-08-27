@@ -344,9 +344,30 @@ export const createDefaultEngine = (deps: DefaultEngineDeps): AgentEngine => {
             // A redacted call runs with the redaction, not with what the model typed.
             if (decision.value.kind === "tool-call") input = decision.value.input;
           }
+          /**
+           * What a tool hands back is inspected too — AC-3.
+           *
+           * A tool result is content entering the model's context from outside the tenant, and it is the
+           * likeliest source of personal data in a run: a document read by a tool contains whatever the document
+           * contains. Checking arguments and not results would guard the direction data leaves and ignore the
+           * direction it arrives.
+           *
+           * A refusal replaces the result rather than throwing, for the same reason as above: the model is told
+           * why and can say so, instead of the run dying where the person cannot see the cause.
+           */
+          const inspectResult = async (output: unknown): Promise<unknown> => {
+            if (guardrails.length === 0) return output;
+            const decision = await applyOutputGuardrails(guardrails, { kind: "tool-result", toolName: t.name, output }, context);
+            pendingVerdicts.push(...decision.records);
+            if (decision.outcome === "refused") {
+              return { refused: true, guardrail: decision.by, code: decision.code, message: decision.message };
+            }
+            return decision.value.kind === "tool-result" ? decision.value.output : output;
+          };
+
           if (approvals === undefined) {
             try {
-              return collectCitations(await t.execute(input), pendingCitations);
+              return collectCitations(await inspectResult(await t.execute(input)), pendingCitations);
             } catch (thrown) {
               const parked = questionMarker(thrown, t.name);
               if (parked === null) throw thrown;
@@ -376,7 +397,7 @@ export const createDefaultEngine = (deps: DefaultEngineDeps): AgentEngine => {
             }
             throw new AgentPlatformError(outcome.result.error);
           }
-          return collectCitations(outcome.result.data, pendingCitations);
+          return collectCitations(await inspectResult(outcome.result.data), pendingCitations);
         },
       }));
 

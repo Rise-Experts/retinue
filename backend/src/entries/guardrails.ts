@@ -9,3 +9,5 @@
  * Nothing here imports a provider or a store, so declaring the capability costs a consumer no dependency.
  */
 export * from "../guardrails/index.js";
+export * from "../guardrails/pii.js";
+export * from "../guardrails/moderation.js";

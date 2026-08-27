@@ -40,14 +40,21 @@ export type GuardrailInput = {
 };
 
 /**
- * Anything leaving the model.
+ * Every boundary crossing that is not the turn's own input.
  *
- * A tool call is here rather than in its own hook because it *is* an output — the model has produced something
- * that acts on the world — and a separate hook would let a guardrail author cover one and forget the other.
+ * Three kinds, one hook, deliberately. A separate hook per kind lets an author implement two of three and have a
+ * gap they did not choose — and the gap would be in whichever kind was added last, which is the one nobody
+ * remembers. The union forces the `switch` to be written.
+ *
+ * `tool-result` is here even though a tool produced it rather than the model: it is content *entering* the
+ * model's context from outside the tenant, and it is the likeliest source of personal data in a whole run — a
+ * document read by a tool contains what the document contains. Inspecting the arguments and not the results
+ * would check the direction data leaves and ignore the direction it arrives.
  */
 export type GuardrailOutput =
   | { readonly kind: "message"; readonly text: string }
-  | { readonly kind: "tool-call"; readonly toolName: string; readonly input: unknown };
+  | { readonly kind: "tool-call"; readonly toolName: string; readonly input: unknown }
+  | { readonly kind: "tool-result"; readonly toolName: string; readonly output: unknown };
 
 export type GuardrailVerdict<T> =
   | { readonly kind: "pass" }
@@ -71,7 +78,7 @@ export interface Guardrail {
 /** One line of the audit trail. Carries no inspected value, by construction. */
 export type GuardrailRecord = {
   readonly guardrail: string;
-  readonly subject: "input" | "message" | "tool-call";
+  readonly subject: "input" | "message" | "tool-call" | "tool-result";
   readonly outcome: GuardrailOutcome;
   /** For a redaction: the fields or entity types touched. Never their contents. */
   readonly what?: readonly string[];
@@ -95,7 +102,8 @@ const REFUSED_BY_THROW = "guardrail_failed";
 
 const subjectOf = (value: unknown): GuardrailRecord["subject"] => {
   if (typeof value === "object" && value !== null && "kind" in value) {
-    return (value as { kind: string }).kind === "tool-call" ? "tool-call" : "message";
+    const kind = (value as { kind: string }).kind;
+    return kind === "tool-call" || kind === "tool-result" ? kind : "message";
   }
   return "input";
 };

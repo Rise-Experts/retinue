@@ -179,9 +179,21 @@ describe("tool arguments are inspected — AC-2", () => {
         deps(callsATool, { guardrails: [strip], buildTools: async () => [{ name: "http_write", description: "write", execute: async () => ({ ok: true }) }] }),
       ),
     );
-    const verdicts = events.filter((e) => e.type === "guardrail.verdict");
-    expect(verdicts).toHaveLength(1);
-    // And it carries no value: the token must not be recoverable from the audit trail.
+    const verdicts = events.filter((e) => e.type === "guardrail.verdict") as unknown as { subject: string; outcome: string }[];
+    /**
+     * **Two**, and that is the point rather than an accident.
+     *
+     * This asserted one until #212 added tool-*result* inspection. A tool call now crosses the boundary twice —
+     * arguments out, result back in — and both are inspected, because a document read by a tool contains
+     * whatever the document contains. Loosening this to "at least one" would have hidden the second crossing;
+     * naming both is what makes a future regression on either side fail here.
+     */
+    expect(verdicts.map((v) => v.subject)).toEqual(["tool-call", "tool-result"]);
+    expect(verdicts[0]?.outcome).toBe("redacted");
+    // The result guardrail has no opinion on results, so it passes — and a pass is still recorded, so "nothing
+    // ran" stays distinguishable from "ran and allowed it".
+    expect(verdicts[1]?.outcome).toBe("pass");
+    // And neither carries a value: the token must not be recoverable from the audit trail.
     expect(JSON.stringify(verdicts)).not.toContain("sk-live-1");
   });
 });

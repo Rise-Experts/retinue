@@ -119,7 +119,7 @@ export type ContextCompactedEvent = EventBase<"context.compacted"> & {
  */
 export type GuardrailVerdictEvent = EventBase<"guardrail.verdict"> & {
   readonly guardrail: string;
-  readonly subject: "input" | "message" | "tool-call";
+  readonly subject: "input" | "message" | "tool-call" | "tool-result";
   readonly outcome: "pass" | "redacted" | "refused";
   /** For a redaction: the fields or entity types touched. Never their contents. */
   readonly what?: readonly string[];
