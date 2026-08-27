@@ -56,6 +56,7 @@ This directory defines the extraction and migration of a reusable AI platform in
 20. [CI, and Jenkins on our own server](20-self-hosted-ci.md)
 21. [The platform](21-platform.md)
 22. [Glossary](22-glossary.md)
+23. [Tool catalogue](23-tool-catalogue.md)
 
 ## Extraction
 
