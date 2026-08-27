@@ -1,6 +1,6 @@
 {
   "name": "@retinue/tools-search",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Web-search provider adapters for a Retinue agent: Brave, Tavily, Serper and SearXNG behind one contract.",
   "license": "MIT",
   "type": "module",
@@ -27,7 +27,7 @@
     "prepublishOnly": "node ../../scripts/publish-guard.mjs"
   },
   "peerDependencies": {
-    "@retinue/agentkit": "^0.1.0"
+    "@retinue/agentkit": "^0.2.0"
   },
   "devDependencies": {
     "@retinue/agentkit": "*",

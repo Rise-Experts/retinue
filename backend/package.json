@@ -1,6 +1,6 @@
 {
   "name": "@retinue/agentkit",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "A provider-neutral, durable AI agent runtime for TypeScript: agents, tools, approvals, context, knowledge and persistence behind ports.",
   "license": "MIT",
   "type": "module",

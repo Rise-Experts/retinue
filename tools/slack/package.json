@@ -1,6 +1,6 @@
 {
   "name": "@retinue/tools-slack",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Slack tools for a Retinue agent: read channels and history, post messages and replies \u2014 gated and idempotent.",
   "license": "MIT",
   "type": "module",
@@ -27,7 +27,7 @@
     "prepublishOnly": "node ../../scripts/publish-guard.mjs"
   },
   "peerDependencies": {
-    "@retinue/agentkit": "^0.1.0"
+    "@retinue/agentkit": "^0.2.0"
   },
   "devDependencies": {
     "@retinue/agentkit": "*",
