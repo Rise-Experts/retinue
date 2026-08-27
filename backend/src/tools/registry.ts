@@ -187,6 +187,27 @@ export type ToolCatalog = {
   readonly toolset?: TenantToolset;
 };
 
+/**
+ * Loads a skill body by name — the execution half of `load_skill`.
+ *
+ * Kept structural (no `skills` import) so `tools` does not depend on `skills`. Returns `null` for a name the
+ * tenant does not have, so an unknown skill is a message rather than a throw.
+ */
+export interface SkillBodyLoader {
+  load(
+    context: ExecutionContext,
+    name: string,
+  ): Promise<{ readonly name: string; readonly version: number; readonly instructions: string } | null>;
+}
+
+/**
+ * How many distinct skills one run may pull into context.
+ *
+ * Mirrors `SKILL_LIMITS.maxLoadedPerRun`, duplicated rather than imported for the same layering reason as
+ * `SkillBodyLoader`. A test asserts the two agree, so the copy cannot drift silently.
+ */
+export const MAX_SKILLS_LOADED_PER_RUN = 5;
+
 /** Structural approval check (satisfied by the HITL `ApprovalGate`) — kept structural to avoid a
  * tools→hitl dependency. Returns false when the tool needs approval and the call carries neither a
  * standing grant nor a valid one-time approval. */
@@ -278,6 +299,19 @@ export type ToolRegistryConfig = {
    * Wiring is the toggle, the same rule the tool library already follows for `web_search`.
    */
   readonly search?: ToolSearch;
+  /**
+   * Loads a named skill's body, when the deployment has skills — task #244.
+   *
+   * Structural rather than importing `SkillResolver`, for the reason `ApprovalCheck` is structural: `tools` must
+   * not depend on `skills`. `createSkillBodyLoader` in `skills/` adapts a resolver to this shape.
+   *
+   * Wiring is the toggle. `load_skill` has been in `META_TOOLS` since the registry was written with **nothing
+   * implementing it** — the third instance of that exact pattern after `execute_tool` and `learn_tools` (#210).
+   * A model handed the descriptor would call it, get "Unknown tool load_skill", and a transcript reader would
+   * see a broken platform. So the descriptor is now advertised only when this is wired, which is the rule
+   * `find_tools` already follows.
+   */
+  readonly skills?: SkillBodyLoader;
   /** A tenant's category switches, applied *before* authorization filtering — AC-4. */
   readonly toolsets?: ToolsetResolver;
   /**
@@ -406,7 +440,19 @@ export const createToolRegistry = (config: ToolRegistryConfig): ToolRegistry => 
         ? all.filter((t) => !duplicated.has(t.descriptor.name))
         : all.filter((t) => !duplicated.has(t.descriptor.name) && categoryEnabled(toolset, t.descriptor.category));
 
-    const usable = wanted;
+    /**
+     * The running agent's exclusions — task #244.
+     *
+     * Here, alongside the tenant toolset and before authorization, for the same reason: an excluded tool does not
+     * exist for this agent, so it must not reach the authorization policy, must not appear in what a policy
+     * audits, and must not be findable by `find_tools`.
+     *
+     * `excluded` only. `preloaded` and `categories` decide which tools carry full schemas up front, which is a
+     * question about the *catalogue* and is answered in `catalog()`; they are not a permission and must not
+     * remove anything here.
+     */
+    const excludedByAgent = new Set(context.agentToolPolicy?.excluded ?? []);
+    const usable = excludedByAgent.size === 0 ? wanted : wanted.filter((t) => !excludedByAgent.has(t.descriptor.name));
     const descriptors = usable.map((t) => t.descriptor);
     const permitted = new Set((await config.authorization.filterTools(context, descriptors)).map((d) => d.name));
     return usable.filter((t) => permitted.has(t.descriptor.name));
@@ -432,6 +478,16 @@ export const createToolRegistry = (config: ToolRegistryConfig): ToolRegistry => 
     return config.search.search({ query: input.query, tools, limit: input.limit ?? 10 });
   };
 
+  /**
+   * Skills already pulled into context, per run — the ceiling for `load_skill`.
+   *
+   * Per registry instance and keyed by run id. In a multi-process deployment a run is claimed by one worker at a
+   * time (the lease), so a per-process tally is the right scope; it is a *context* ceiling, and context is
+   * per-turn anyway. A run that migrates to another worker after a crash starts its tally again, which is the
+   * correct direction: the new attempt's context is empty.
+   */
+  const skillsLoadedPerRun = new Map<string, Set<string>>();
+
   const api: ToolRegistry = {
     async catalog(context, policy) {
       const excluded = new Set(policy.excluded);
@@ -453,7 +509,11 @@ export const createToolRegistry = (config: ToolRegistryConfig): ToolRegistry => 
        * and reads in a transcript exactly like a broken platform.
        */
       const meta = META_TOOL_DESCRIPTOR_LIST.filter(
-        (d) => d.name !== "find_tools" || config.search !== undefined,
+        (d) =>
+          (d.name !== "find_tools" || config.search !== undefined) &&
+          // Same rule, same reason: a descriptor that fails at execution costs the model a call to discover and
+          // reads in a transcript exactly like a broken platform — #244.
+          (d.name !== "load_skill" || config.skills !== undefined),
       ).map(compact);
 
       const toolset = config.toolsets === undefined ? undefined : await config.toolsets.resolve(context);
@@ -550,6 +610,50 @@ export const createToolRegistry = (config: ToolRegistryConfig): ToolRegistry => 
        * tool, and called it wrongly or not at all. Search without schemas is a dead end, and the descriptor for
        * `learn_tools` had been in `META_TOOLS` since the registry was written with nothing implementing it.
        */
+      /**
+       * `load_skill` — task #244, and the third meta-tool that was advertised with nothing behind it.
+       *
+       * Handled in the registry for the reason `find_tools` is: the model reaches it as a tool, so it has to go
+       * through the same surface. A per-run ceiling bounds what one run may pull into context — a model that
+       * loads every skill it can see has undone the whole point of a catalogue plus on-demand bodies.
+       *
+       * **Only when a loader is wired**, and unlike `find_tools` this branch does not refuse when it is not — it
+       * falls through to provider dispatch. `find_tools` has to be the registry's (its corpus *is* the registry's
+       * authorized list), but `load_skill` can perfectly well be a provider tool, and the reference host had one
+       * before this existed. Intercepting the name unconditionally broke it: a host with a working `load_skill`
+       * got `capability_unavailable` because *this* registry had no resolver. The built-in is a default, not a
+       * claim on the name.
+       */
+      if (input.name === "load_skill" && config.skills !== undefined) {
+        const asked = (input.input ?? {}) as { name?: unknown };
+        if (typeof asked.name !== "string" || asked.name.trim() === "")
+          return { ok: false, error: invalidInput("load_skill needs `name`: the skill whose instructions you want.") };
+        const runKey = context.runId ?? "no-run";
+        const loaded = skillsLoadedPerRun.get(runKey) ?? new Set<string>();
+        // Counted per distinct name, so re-loading one already in context is free rather than spending the
+        // ceiling twice on the same content.
+        if (!loaded.has(asked.name) && loaded.size >= MAX_SKILLS_LOADED_PER_RUN)
+          return {
+            ok: false,
+            error: capabilityUnavailable(
+              `this run has already loaded ${MAX_SKILLS_LOADED_PER_RUN} skills, which is the ceiling. ` +
+                `Already loaded: ${[...loaded].join(", ")}.`,
+            ),
+          };
+        const skill = await config.skills.load(context, asked.name);
+        if (skill === null)
+          return {
+            ok: false,
+            error: invalidInput(
+              `No skill named "${asked.name}" is available to this tenant. The skills you can load are listed in ` +
+                "your context.",
+            ),
+          };
+        loaded.add(skill.name);
+        skillsLoadedPerRun.set(runKey, loaded);
+        return { ok: true, data: { name: skill.name, version: skill.version, instructions: skill.instructions } };
+      }
+
       if (input.name === "learn_tools") {
         const asked = (input.input ?? {}) as { names?: unknown };
         const names = Array.isArray(asked.names) ? asked.names.filter((n): n is string => typeof n === "string") : [];

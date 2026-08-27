@@ -237,8 +237,25 @@ export const createDefaultEngine = (deps: DefaultEngineDeps): AgentEngine => {
   const streamTurn = deps.streamTurn ?? streamModelTurn;
 
   return {
-    async *run({ run, context, signal }: EngineRunInput): AsyncIterable<EngineEvent> {
-      const manifest = await deps.loadManifest({ agentId: run.agentId, version: run.agentVersion, context });
+    async *run({ run, context: hostContext, signal }: EngineRunInput): AsyncIterable<EngineEvent> {
+      const manifest = await deps.loadManifest({
+        agentId: run.agentId,
+        version: run.agentVersion,
+        context: hostContext,
+      });
+      /**
+       * The agent's tool policy, put on the context for everything downstream — task #244.
+       *
+       * The engine is the only layer that holds both halves: the manifest (per agent) and the registry (per
+       * deployment). Rather than threading the policy through `buildTools`, tool execution, `execute_tool` and
+       * every delegating tool, it travels on the context — which a model cannot write to, so `excluded` cannot
+       * be widened from inside a turn. `ExecutionContext.shadow` is the precedent and the same argument.
+       *
+       * Scoped **once, here**, and used everywhere below. A host-supplied context that already carried a policy
+       * is overridden by the manifest's: the manifest is what the run's `agentVersion` pins, so a stored
+       * definition — not the caller — decides what this agent may reach.
+       */
+      const context: ExecutionContext = { ...hostContext, agentToolPolicy: manifest.toolPolicy };
       const resolved = deps.resolveModel(manifest, context);
       /**
        * A structured agent needs a model that can do it — task #243 AC-3.
@@ -286,7 +303,23 @@ export const createDefaultEngine = (deps: DefaultEngineDeps): AgentEngine => {
               budget: deps.catalogBudget,
               tokensOf: turnToolTokens,
               nameOf: (tool) => tool.name,
-              protect: (tool) => (META_TOOLS as readonly string[]).includes(tool.name),
+              /**
+               * Protected: meta-tools, and whatever the agent declared preloaded — task #244.
+               *
+               * `toolPolicy.preloaded` and `toolPolicy.categories` say "these are loaded up front; everything
+               * else is discovered lazily". In this architecture *resident* is what "loaded up front" means, so
+               * the honest interpretation of both fields is that a budget may not drop them. With no budget
+               * configured every tool is resident anyway and the fields are a no-op — correct, and the reason
+               * they cannot be enforced anywhere else.
+               *
+               * Note this cannot make a tool appear: an excluded tool never reaches `built` (the registry
+               * removed it), and naming an excluded tool as preloaded does not resurrect it. Exclusion is a
+               * permission and residency is a budget; the permission wins.
+               */
+              protect: (tool) =>
+                (META_TOOLS as readonly string[]).includes(tool.name) ||
+                (manifest.toolPolicy?.preloaded ?? []).includes(tool.name) ||
+                (tool.category !== undefined && (manifest.toolPolicy?.categories ?? []).includes(tool.category)),
             });
       const declared = budgetOutcome?.resident ?? built;
 

@@ -74,4 +74,5 @@ export interface SkillResolver {
 }
 
 export * from "./catalogue.js";
+export * from "./context.js";
 export * from "./resolver.js";

@@ -58,7 +58,45 @@ holds every field of this type, so the table below is enforced rather than asser
 | `modelPolicy` | Read by `resolveModel`. |
 | `limits` | Enforced — step ceiling, output-token ceiling as the *lower* of agent and model definition, temperature, retries. |
 | `responseFormat` | **Honoured** ([#243](https://github.com/Rise-Experts/retinue/issues/243)). See below. |
-| `toolPolicy`, `skillPolicy`, `authorizationPolicyId`, `contextProviderIds` | **Not yet interpreted** — declared, and read by nothing. [#244](https://github.com/Rise-Experts/retinue/issues/244) decides per field whether an interpreter ships or the field is removed. Until then, setting them has no effect: notably `toolPolicy.excluded` is **not** an enforced exclusion. Use a `TenantToolset` for that. |
+| `toolPolicy` | **Honoured** ([#244](https://github.com/Rise-Experts/retinue/issues/244)). `excluded` is a permission enforced on every path; `preloaded`/`categories` are protected from a catalogue budget. |
+| `skillPolicy` | **Honoured** — `assigned` and `allowTenantSkills` gate both the catalogue section and `load_skill`. |
+| `contextProviderIds` | **Honoured** — a selection, in order. Empty means every wired provider; an unknown id is an error. |
+| `authorizationPolicyId` | **Honoured** — selects a registered policy. An unregistered id refuses rather than falling back. |
+
+### The four policy fields, and what each decision was
+
+All four were declared and read by nothing through 0.2.0. `check:reachability` now holds every field, so none of
+this can silently regress.
+
+**`toolPolicy` — interpreted.** `excluded` reads as a security control, so it is one: it travels on
+`ExecutionContext` (which a model cannot write to, so it cannot be widened from inside a turn) and is applied in
+the registry's authorized-tool set, before authorization. That single point covers discovery, `find_tools`,
+`learn_tools`, direct execution, `execute_tool` and delegating tools — an exclusion enforced only where the
+catalogue is built is bypassed by the first caller who already knows the tool's name.
+
+`preloaded` and `categories` say "loaded up front; everything else discovered lazily". *Resident* is what that
+means here, so they are protected from the catalogue budget. With no budget configured every tool is resident
+anyway and the fields are a no-op. They cannot make a tool appear: exclusion is a permission and residency is a
+budget, and the permission wins.
+
+**`skillPolicy` — interpreted.** The subsystem was complete and unreachable: `SkillResolver.listCatalog` already
+took `{ assigned, allowTenantSkills }` verbatim, the store had adapters under a conformance suite, and
+`ContextKind`/`ContextBudget` reserved a `skills` bucket for a section nothing produced. Wiring a resolver now
+adds that section and makes `load_skill` real — which had been in `META_TOOLS` since the registry was written
+with nothing implementing it, the third instance after `execute_tool` and `learn_tools`. The same policy gates
+loading as well as listing: one that filtered the list but not the load would be no policy at all.
+
+**`contextProviderIds` — interpreted.** An empty list means *every* wired provider rather than none, because
+`defineAgent` defaults it to `[]` and reading empty as "no context" would silently strip memory and attachments
+from every agent already written. A named id nothing supplies is an error, because the alternative is an
+assistant that quietly remembers nothing — indistinguishable from a model choosing not to use its memory.
+
+**`authorizationPolicyId` — interpreted, as a selector.** A registered map is required for any id other than
+`"default"`; an unregistered id **refuses**. The reading it had — an agent asking for a narrow policy and
+silently getting allow-all — is the worst available, and failing at construction is loud and cheap. The platform
+does not check that a named policy is narrower than another: a policy is an interface the host implements, and
+composing two into an intersection would mean second-guessing a deployment's own authorization. What is
+guaranteed is that the policy an agent named is the policy it got, or the run does not start.
 
 ### Structured output
 

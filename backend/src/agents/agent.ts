@@ -40,6 +40,11 @@ import { createMemoryConversationStore } from "../adapters/memory/index.js";
 import { createMemoryEventBus } from "../runtime/index.js";
 import { createMemoryMessageStore } from "../adapters/memory/message-store.js";
 import type { Guardrail } from "../guardrails/index.js";
+import {
+  createSkillBodyLoader,
+  createSkillCatalogueProvider,
+  type SkillResolver,
+} from "../skills/index.js";
 import { createDefaultEngine, type ResolvedModelInfo } from "./engine.js";
 import type { AgentManifest } from "./index.js";
 import {
@@ -48,6 +53,95 @@ import {
   defineAgent,
   type AgentManifestInput,
 } from "./define.js";
+
+/**
+ * The policy this agent runs under — task #244, the interpreter for `authorizationPolicyId`.
+ *
+ * The field was declared and read by nothing, so an agent naming `"restricted"` ran under whatever the host had
+ * wired — very possibly the permissive default. Three rules, and the third is the one that matters:
+ *
+ * 1. A map is supplied and contains the id → that policy.
+ * 2. No map, and the id is `defineAgent`'s `"default"` → the single wired policy, or the permissive default.
+ *    This is the normal case and stays a one-liner.
+ * 3. **Any other combination is an error.** An id the deployment cannot honour must never fall through to the
+ *    permissive default: an agent asking to run under a narrow policy and silently getting allow-all is the
+ *    worst possible reading of this field, and it is the reading it had. Failing at construction is loud, early
+ *    and cheap.
+ *
+ * Note the platform does not check that a named policy is *narrower* than any other. It cannot: a policy is an
+ * interface the host implements, and composing two of them into an intersection would mean second-guessing a
+ * deployment's own authorization. What the platform guarantees is that the policy an agent named is the policy
+ * it got, or the run does not start.
+ */
+export const selectAuthorization = (
+  config: Pick<CreateAgentConfig, "authorization" | "authorizationPolicies">,
+  manifest: Pick<AgentManifest, "authorizationPolicyId" | "id">,
+): AuthorizationPolicy => {
+  const id = manifest.authorizationPolicyId ?? "default";
+  const named = config.authorizationPolicies;
+  if (named !== undefined) {
+    const chosen = named[id];
+    if (chosen !== undefined) return chosen;
+    throw new AgentPlatformError({
+      code: "capability_unavailable",
+      message:
+        `agent "${manifest.id}" runs under authorization policy "${id}" and no such policy is registered ` +
+        `(registered: ${Object.keys(named).map((k) => `"${k}"`).join(", ") || "none"}). Refusing rather than ` +
+        "falling back — an agent that asked for a narrow policy and silently got a permissive one is the " +
+        "failure this field exists to prevent.",
+      retryable: false,
+    });
+  }
+  if (id !== "default")
+    throw new AgentPlatformError({
+      code: "capability_unavailable",
+      message:
+        `agent "${manifest.id}" runs under authorization policy "${id}" and none is registered. Pass ` +
+        "`authorizationPolicies: { \"" +
+        id +
+        "\": … }`, or leave the manifest's `authorizationPolicyId` at \"default\".",
+      retryable: false,
+    });
+  return config.authorization ?? allowAllAuthorization();
+};
+
+/**
+ * The providers this agent asked for, in the order it asked — task #244.
+ *
+ * `AgentManifest.contextProviderIds` was declared and read by nothing, so a manifest naming two of four wired
+ * providers got all four, and naming none got all of them too. Two decisions make the field meaningful without
+ * making it a trap:
+ *
+ * - **An empty list means every wired provider**, not none. `defineAgent` defaults it to `[]`, so treating empty
+ *   as "no context" would silently strip the memory, notes and attachments from every agent already written
+ *   against the default. The field is a *selection*, and no selection means no narrowing.
+ * - **A named id that is not wired is an error**, not a silent omission. The failure it prevents is the one worth
+ *   preventing: an agent whose manifest asks for `principal-memory`, a typo or a missing wire, and an assistant
+ *   that quietly remembers nothing. That reads exactly like a model that chose not to use its memory.
+ *
+ * Order follows the manifest, because section order is prompt order and the manifest is where an author can see
+ * and control it.
+ */
+export const selectContextProviders = (
+  wired: readonly ContextProvider[],
+  manifest: Pick<AgentManifest, "contextProviderIds" | "id">,
+): readonly ContextProvider[] => {
+  const asked = manifest.contextProviderIds ?? [];
+  if (asked.length === 0) return wired;
+  const byId = new Map(wired.map((p) => [p.id, p]));
+  const missing = asked.filter((id) => !byId.has(id));
+  if (missing.length > 0)
+    throw new AgentPlatformError({
+      code: "capability_unavailable",
+      message:
+        `agent "${manifest.id}" asks for context provider(s) ${missing.map((m) => `"${m}"`).join(", ")} and ` +
+        `nothing wired supplies them (wired: ${wired.map((p) => `"${p.id}"`).join(", ") || "none"}). An agent ` +
+        "that silently runs without the context it declared is indistinguishable from a model choosing not to " +
+        "use it.",
+      retryable: false,
+    });
+  return asked.map((id) => byId.get(id)!);
+};
 
 /** Permissive policy used by the embedded facade when a caller wires tools but no authorization. */
 const allowAllAuthorization = (): AuthorizationPolicy => ({
@@ -81,6 +175,15 @@ export type CreateAgentConfig = {
   readonly randomHex?: (bytes: number) => string;
   readonly authorization?: AuthorizationPolicy;
   /**
+   * Named policies a manifest may select with `authorizationPolicyId` — task #244.
+   *
+   * Absent is the normal case: one `authorization` (or the permissive default), and every manifest carrying
+   * `defineAgent`'s `"default"`. Supplying a map is how a deployment runs several agents under different
+   * policies — a customer-facing agent under a narrow one, an internal agent under a wider one — without the
+   * host having to build a separate registry per agent.
+   */
+  readonly authorizationPolicies?: Readonly<Record<string, AuthorizationPolicy>>;
+  /**
    * Checks to run before the model sees a turn and before anything leaves it — REQ-046 (#205), AC-5.
    *
    * Here so a host can add one without composing the runtime by hand: this facade exists to be the short path,
@@ -99,6 +202,14 @@ export type CreateAgentConfig = {
   readonly catalogBudget?: TokenBudget;
   /** A tenant's category switches, applied before authorization — task #210, AC-4. */
   readonly toolsets?: ToolsetResolver;
+  /**
+   * A skill resolver — task #244, and what makes `manifest.skillPolicy` mean something.
+   *
+   * Wiring is the toggle, the rule `toolSearch` already follows. Supplying one adds a skills catalogue section
+   * to the prompt (names and descriptions, filtered by the manifest's `assigned`/`allowTenantSkills`) and makes
+   * `load_skill` real; omitting it means neither is advertised.
+   */
+  readonly skills?: SkillResolver;
   readonly tenantId?: string;
   /** Test/advanced seam: override how a manifest resolves to a model (e.g. a mock model). */
   readonly resolveModel?: (manifest: AgentManifest, context: ExecutionContext) => ResolvedModelInfo;
@@ -145,13 +256,28 @@ export const createAgent = (config: CreateAgentConfig) => {
     roles: config.roleAssignments ?? DEFAULT_ROLE_ASSIGNMENTS,
   });
   const providerFactory: ProviderFactory = createProviderFactory({ credentials: config.providerCredentials ?? {} });
-  const authorization = config.authorization ?? allowAllAuthorization();
+  const authorization = selectAuthorization(config, manifest);
+  /**
+   * Skills, when a resolver is wired — #244.
+   *
+   * Both halves read the *same* policy, and that is the point: `createSkillBodyLoader` re-derives the catalogue
+   * before loading, so `assigned` and `allowTenantSkills` gate loading as well as listing. A policy that
+   * filtered the list but not the load would be no policy at all — a model that guessed a name would get it.
+   */
+  const skillPolicy = {
+    assigned: manifest.skillPolicy?.assigned ?? [],
+    allowTenantSkills: manifest.skillPolicy?.allowTenantSkills ?? false,
+  };
+  const skillLoader =
+    config.skills === undefined ? undefined : createSkillBodyLoader({ resolver: config.skills, policy: skillPolicy });
+
   const toolRegistry = createToolRegistry({
     providers: config.tools ?? [],
     authorization,
     ...(config.toolSearch === undefined ? {} : { search: config.toolSearch }),
     ...(config.toolsets === undefined ? {} : { toolsets: config.toolsets }),
     ...(config.catalogBudget === undefined ? {} : { catalogBudget: config.catalogBudget }),
+    ...(skillLoader === undefined ? {} : { skills: skillLoader }),
   });
 
   const resolveModel: NonNullable<CreateAgentConfig["resolveModel"]> =
@@ -166,7 +292,12 @@ export const createAgent = (config: CreateAgentConfig) => {
       };
     });
 
-  const contextProviders = config.contextProviders ?? [];
+  const contextProviders = [
+    ...(config.contextProviders ?? []),
+    ...(config.skills === undefined
+      ? []
+      : [createSkillCatalogueProvider({ resolver: config.skills, policy: skillPolicy })]),
+  ];
   const engine = config.engine ?? createDefaultEngine({
     ...(config.guardrails === undefined ? {} : { guardrails: config.guardrails }),
     ...(config.catalogBudget === undefined ? {} : { catalogBudget: config.catalogBudget }),
@@ -189,7 +320,7 @@ export const createAgent = (config: CreateAgentConfig) => {
            * assembly, so content cannot learn the delimiter from a previous turn.
            */
           systemPrompt: async (m: AgentManifest, context: ExecutionContext) => {
-            const sections = await gatherSections(context, contextProviders);
+            const sections = await gatherSections(context, selectContextProviders(contextProviders, m));
             if (sections.length === 0) return m.instructions;
             const ctxText = renderContextBlock(sections, makeNonce(config.randomHex ?? defaultRandomHex));
             return `${m.instructions}\n\n# Context\n${ctxText}`;
@@ -235,6 +366,9 @@ export const createAgent = (config: CreateAgentConfig) => {
               descriptors.map((descriptor) => ({
                 name: descriptor.name,
                 description: descriptor.description,
+                // Carried through so the engine can honour `toolPolicy.categories` without reaching back into
+                // the registry for a descriptor it already handed over — #244.
+                category: descriptor.category,
                 inputSchema: descriptor.inputSchema,
                 execute: async (input: unknown) => {
                   const result = await toolRegistry.execute(context, { name: descriptor.name, input });

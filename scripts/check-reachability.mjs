@@ -450,13 +450,6 @@ const DECLARED_TYPES = [
       version: "Identity. A run records `agentVersion` so editing an agent never rewrites history; the manifest's copy is written, not interpreted.",
       name: "Display. Rendered by a host and returned over GraphQL.",
       description: "Display. Same.",
-      toolPolicy: {
-        defect: "No interpreter ships anywhere, including the reference host. `excluded` reads as a security control and enforces nothing",
-        issue: 244,
-      },
-      skillPolicy: { defect: "No interpreter ships anywhere", issue: 244 },
-      authorizationPolicyId: { defect: "No interpreter ships anywhere", issue: 244 },
-      contextProviderIds: { defect: "No interpreter ships anywhere", issue: 244 },
     },
   },
 ];

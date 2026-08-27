@@ -122,7 +122,7 @@ import { buildWorkerContext } from "./worker-context.js";
 import { MAX_MEMORY_ENTRIES, NoteNotFound, createExampleTools } from "./tools.js";
 import { exampleStore } from "./store.js";
 import { exampleProviders } from "./providers.js";
-import { ASSIGNED_SKILLS, EXAMPLE_SKILLS, renderSkillCatalogue } from "./skills.js";
+import { EXAMPLE_SKILLS, renderSkillCatalogue } from "./skills.js";
 import { DOCS_MCP_SERVER_ID, DOCS_MCP_TOOLS, createDocsMcpClient, createDocsMcpProvider } from "./mcp.js";
 import { fileURLToPath } from "node:url";
 import { exampleAgentManifest, exampleContextProviders } from "./agent.js";
@@ -849,8 +849,8 @@ const buildTools = (backend: ExampleBackend): readonly Tool[] => {
         const name = str((input as { name?: unknown }).name);
         const catalogue = await skillResolver(backend).listCatalog({
           tenantId: context.tenantId,
-          assigned: ASSIGNED_SKILLS,
-          allowTenantSkills: true,
+          // From the manifest, not a literal — task #244. Two copies of a policy is one copy too many.
+          ...exampleAgentManifest.skillPolicy,
         });
         const entry = catalogue.find((e) => e.name === name);
         // Named rather than silent: a model that asked for a skill it cannot have should learn which ones it can,
@@ -1471,8 +1471,8 @@ const exampleSystemPrompt = async (
    */
   const catalogue = await skillResolver(backend).listCatalog({
     tenantId: context.tenantId,
-    assigned: ASSIGNED_SKILLS,
-    allowTenantSkills: true,
+    // From the manifest, not a literal — task #244.
+    ...exampleAgentManifest.skillPolicy,
   });
   /**
    * The skill catalogue, budgeted — task #210, AC-5.

@@ -41,6 +41,31 @@ export type ExecutionContext = {
    * it is shadow and has nowhere to record the suppression is refused, not performed.
    */
   readonly shadow?: boolean;
+  /**
+   * The running agent's tool policy — task #244.
+   *
+   * On the context for the same reason `shadow` is, and the argument is the one at the top of this file: context
+   * identity is constructed by the host, and **nothing originating in a tool argument, a skill body or an MCP
+   * tool description may reach these fields.** A model must never be able to widen `excluded`, and the only way
+   * to guarantee that is for the policy to travel on the one object a model cannot write to.
+   *
+   * The engine sets it from `AgentManifest.toolPolicy` before it builds tools, so every path that reaches the
+   * registry — a direct call, `execute_tool`, a delegating tool — sees the same policy. That breadth is the
+   * point: `toolPolicy.excluded` reads as a security control, and a control enforced only where the catalogue is
+   * built is bypassed by the first caller who already knows the tool's name.
+   *
+   * Structural (three name lists) rather than importing `ToolPolicyView`, because `core` must not depend on
+   * `tools`. The same choice `ApprovalCheck` makes to avoid a tools→hitl dependency.
+   *
+   * Absent means no agent-level policy — every authorized tool is available. That is the right default here, and
+   * it is the *safe* direction unlike `shadow`: a missing policy grants nothing that authorization has not
+   * already granted, whereas a missing `shadow` flag publishes.
+   */
+  readonly agentToolPolicy?: {
+    readonly preloaded: readonly string[];
+    readonly categories: readonly string[];
+    readonly excluded: readonly string[];
+  };
 };
 
 /**

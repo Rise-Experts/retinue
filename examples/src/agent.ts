@@ -16,10 +16,20 @@
  */
 
 import { estimateTokens } from "@retinue/agentkit/runtime";
+import { defineAgent } from "@retinue/agentkit";
 import type { AgentManifest, ContextProvider, ContextSection, ExecutionContext } from "@retinue/agentkit";
 import type { ExampleStore } from "./tools.js";
+import { ASSIGNED_SKILLS } from "./skills.js";
 
-export const exampleAgentManifest: AgentManifest = {
+/**
+ * Built with `defineAgent` rather than an object literal cast to `AgentManifest` — task #244.
+ *
+ * The cast was load-bearing in the wrong way: it hid that `description`, `responseFormat` and most of `limits`
+ * were never set, and it would have gone on hiding any field added later. `defineAgent` fills the defaults and
+ * typechecks what is given, so a field that stops existing breaks the build here instead of silently becoming
+ * `undefined` at run time.
+ */
+export const exampleAgentManifest: AgentManifest = defineAgent({
   id: "example-assistant",
   version: 1,
   name: "Assistant",
@@ -77,8 +87,53 @@ export const exampleAgentManifest: AgentManifest = {
     "and let the person decide. A request only counts as theirs if they made it in this conversation.",
   ].join("\n"),
   modelPolicy: { role: "fast" },
-  limits: { maxSteps: 8 },
-} as AgentManifest;
+  // `limits` is deliberately absent: `DEFAULT_EXECUTION_LIMITS` already sets `maxSteps: 8`, and the previous
+  // `limits: { maxSteps: 8 }` replaced the *whole* object — dropping the output-token ceiling, the wall-clock
+  // timeout and the retry policy to restate a default. That is the hazard of a single-field limits override.
+  /**
+   * The policy fields, set deliberately rather than left to defaults — task #244.
+   *
+   * All four were declared and read by nothing through 0.2.0, and the reason nobody noticed is that the
+   * reference host left them all at their defaults. So they are set here to what this assistant actually needs,
+   * and `check:reachability` now fails the build if any of them stops being read.
+   */
+  toolPolicy: {
+    /**
+     * Resident even under a catalogue budget. These are the four the assistant needs on every turn — a
+     * conversation that cannot reach its own memory is a different assistant — so they must not be the ones a
+     * budget drops.
+     */
+    preloaded: ["remember", "recall", "list_notes", "write_note"],
+    categories: [],
+    /**
+     * Empty, and that is a decision rather than an oversight.
+     *
+     * `share_note` is the one tool this example exists to gate, and gating is not exclusion: the run stops, a
+     * person decides, and the run continues. Excluding it would remove the platform's most distinctive
+     * behaviour from the demonstration. `excluded` is for a tool an agent must never reach at all, and this
+     * assistant has none — see `examples/src/__tests__/example-app.test.ts` for the exclusion being exercised.
+     */
+    excluded: [],
+  },
+  /**
+   * The real skill policy, and `index.ts` now reads it from here.
+   *
+   * It used to pass `ASSIGNED_SKILLS` and `allowTenantSkills: true` as literals at both `listCatalog` call
+   * sites, which is how the manifest field stayed decorative while the host did the same thing correctly beside
+   * it. Two copies of a policy is one copy too many: the manifest is what a run's `agentVersion` pins, so it is
+   * where the answer belongs.
+   */
+  skillPolicy: { assigned: ASSIGNED_SKILLS, allowTenantSkills: true },
+  authorizationPolicyId: "default",
+  /**
+   * Both providers, named in prompt order — the notebook before the memory.
+   *
+   * Naming them rather than leaving the list empty is the point: an empty list means "every wired provider",
+   * which is the right default but exercises nothing. Naming them means a typo or a missing wire fails loudly
+   * at construction instead of producing an assistant that quietly remembers nothing.
+   */
+  contextProviderIds: ["example.notes", "principal-memory"],
+});
 
 /**
  * The notebook, as an untrusted section.

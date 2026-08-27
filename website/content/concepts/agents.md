@@ -34,13 +34,22 @@ type AgentManifest = {
 };
 ```
 
-:::warning Four of these fields are declared and not yet interpreted
+## What the policy fields do
 
-`toolPolicy`, `skillPolicy`, `authorizationPolicyId` and `contextProviderIds` are read by nothing today. Setting
-them has no effect — in particular **`toolPolicy.excluded` is not an enforced exclusion**; use a tenant toolset
-for that. This is tracked as [#244](https://github.com/Rise-Experts/retinue/issues/244), which decides per field
-whether an interpreter ships or the field is removed, and `check:reachability` now fails the build if a fifth
-one joins them quietly.
+Every field on the manifest is read by something, and `check:reachability` fails the build if one stops being.
+
+| Field | Effect |
+|---|---|
+| `toolPolicy.excluded` | A **permission**. The tool is unreachable — absent from the catalogue and from `find_tools`, unlearnable, and refused if called by name or through `execute_tool`. |
+| `toolPolicy.preloaded` / `.categories` | Protected from a catalogue budget, so a bounded catalogue drops something else first. A no-op when no budget is set. |
+| `skillPolicy.assigned` / `.allowTenantSkills` | Which skills appear in the catalogue section — and which `load_skill` will load. Both, not just the listing. |
+| `contextProviderIds` | A selection, in order. **Empty means every wired provider**; a named id nothing supplies is an error at construction. |
+| `authorizationPolicyId` | Selects a policy from the ones the host registered. An unregistered id refuses — it never falls back to a permissive default. |
+
+:::tip Exclusion is not the same as gating
+
+`excluded` means the agent can never reach the tool. To let it call a tool *with a person's approval*, leave it
+in and give it an approval policy — the run stops, someone decides, and the run continues.
 
 :::
 

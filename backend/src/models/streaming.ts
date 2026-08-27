@@ -118,6 +118,14 @@ export type ModelTurnTool = {
   /** Zod schema or JSON-schema object; a permissive object schema is used when absent. */
   readonly inputSchema?: unknown;
   execute(input: unknown, options?: ModelToolCallOptions): Promise<unknown>;
+  /**
+   * The tool's category, when the caller knows it — task #244.
+   *
+   * Optional and never sent to the provider. It exists so a caller can express a policy *about* categories —
+   * `AgentManifest.toolPolicy.categories` names the ones that must stay resident when the catalogue is bounded —
+   * without the engine having to reach back into the registry for a descriptor it was already handed.
+   */
+  readonly category?: string;
 };
 
 export type ModelTurnRequest = {
