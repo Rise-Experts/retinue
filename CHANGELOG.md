@@ -2,6 +2,7 @@
 
 ### Added
 
+- **tools**: the toolkit pattern, proven with GitHub — and the check that made it enforceable ([#214](https://github.com/Rise-Experts/retinue/issues/214)) `ae30130c`
 - **guardrails**: PII and moderation in the box, and the corpus that found a defect in one ([#212](https://github.com/Rise-Experts/retinue/issues/212)) `e2dfebf6`
 - **guardrails**: a port for checks we do not ship, enforced where it cannot be walked past ([#211](https://github.com/Rise-Experts/retinue/issues/211)) `c1b0164e`
 
@@ -16,6 +17,7 @@
 
 ### Chores
 
+- **changelog**: regenerate `2bc05c15`
 - **changelog**: regenerate `090da5c9`
 - **changelog**: regenerate `78ddd97f`
 - **changelog**: regenerate `cf55d7c5`
