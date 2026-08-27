@@ -13,6 +13,7 @@
 
 ### Fixed
 
+- **image**: the container carries the toolkits, and a check that says so ([#214](https://github.com/Rise-Experts/retinue/issues/214)) `d49a022c`
 - **tools**: the sandbox kills the process group, and returns when the process dies `46311ca6`
 - **shareflow**: the inventory's instruction column, and two claims that were strings ([#190](https://github.com/Rise-Experts/retinue/issues/190)) `47cb7474`
 
@@ -29,6 +30,7 @@
 
 ### Chores
 
+- **changelog**: regenerate `7f828132`
 - **changelog**: regenerate `18f22bde`
 - **changelog**: regenerate `c9b1f192`
 - **changelog**: regenerate `2bc05c15`
