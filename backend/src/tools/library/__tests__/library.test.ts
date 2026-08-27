@@ -10,6 +10,9 @@
  *    description, and `http_request` cannot send a mutating method, because its schema has no field for one.
  */
 
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { STANDARD_TOOL_NAMES, createStandardToolProvider } from "../index.js";
 import { createToolRegistry } from "../../registry.js";
@@ -90,6 +93,10 @@ describe("wiring is the toggle", () => {
 
   it("lists every declared name across a fully wired provider", async () => {
     const query = (async () => []) as never;
+    // A real directory pair for the filesystem tools, and a sandbox that runs nothing: this test is about the
+    // *list*, and a tool that cannot be built is what it exists to catch.
+    const root = mkdtempSync(join(tmpdir(), "retinue-library-read-"));
+    const writable = mkdtempSync(join(tmpdir(), "retinue-library-write-"));
     const wired = await names(
       {
         deps,
@@ -99,6 +106,9 @@ describe("wiring is the toggle", () => {
         knowledge: { retriever: { retrieve: async () => ({ found: false, reason: "no-match", message: "", mode: "hybrid" }) }, authSubjects: () => [] },
         files: {} as never,
         documents: {} as never,
+        filesystem: { root, writableRoot: writable },
+        sandbox: { id: "test", run: async () => ({ ok: true, exitCode: 0, stdout: "", stderr: "", truncated: false, durationMs: 0 }) },
+        shellEnabled: () => true,
       },
       { ...context, conversationId: "c1" } as ExecutionContext,
     );

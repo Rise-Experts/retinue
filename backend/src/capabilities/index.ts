@@ -47,6 +47,7 @@ export const CAPABILITIES = [
   "mcp",
   "usage",
   "guardrails",
+  "shell",
 ] as const;
 
 export type Capability = (typeof CAPABILITIES)[number];
@@ -73,6 +74,15 @@ export const CAPABILITY_REQUIRES: Readonly<Record<Capability, readonly string[]>
   // A guardrail set, supplied by the host. Declaring the capability without wiring one is refused at
   // construction — which is the point: "guardrails: on" must mean a check exists, not that somebody intended one.
   guardrails: ["guardrails"],
+  /**
+   * A sandbox for `shell_exec` — REQ-047 (#206), task #215.
+   *
+   * The only capability whose *absence* is a security property rather than a missing feature. `shell_exec` is
+   * arbitrary code execution with a natural-language trigger, so it takes two switches: a sandbox wired, and this
+   * declared. Declaring it with no sandbox is refused at construction, and wiring a sandbox without declaring it
+   * leaves the tool present and refusing — which is the safe direction of the two.
+   */
+  shell: ["sandbox"],
 };
 
 const OFF: CapabilityMap = Object.freeze(
@@ -100,6 +110,9 @@ export const PROFILES = {
     // would be a profile that refuses to construct until somebody supplies one, which is a poor default for a
     // named starting point.
     guardrails: "off",
+    // Off in both profiles, and this one should never be otherwise: no named starting point gets to decide that
+    // an application can run shell commands.
+    shell: "off",
   },
   /**
    * A headless automation: no conversation, no person, no recall.
@@ -117,6 +130,7 @@ export const PROFILES = {
     mcp: "off",
     usage: "on",
     guardrails: "off",
+    shell: "off",
   },
 } as const satisfies Readonly<Record<string, CapabilityMap>>;
 

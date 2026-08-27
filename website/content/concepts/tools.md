@@ -67,6 +67,28 @@ The same budget applies to the **skill catalogue**, where the notice goes into t
 provider has no run event stream, and telling the model during the turn is what lets it say "there may be a
 skill for this" instead of reporting that none exists.
 
+## Running commands, and why it takes two switches
+
+`shell_exec` is the only tool whose blast radius is not described by its schema, and its trigger is natural
+language — including language the model merely *read*, in a document or an issue body. Without isolation it is a
+remote code execution endpoint reachable by anyone who can get text in front of the agent.
+
+So it needs **both** a `Sandbox` wired and the `shell` capability declared. Everywhere else in Retinue wiring is
+the toggle; this is the one place a second switch earns its keep, because "somebody wired a sandbox for a test and
+forgot" must not silently mean the agent can run commands on a machine. Declaring the capability without a sandbox
+is refused at construction — a boot failure, not a tool that quietly declines.
+
+The container adapter runs one throwaway container per command: no network at all, a read-only filesystem apart
+from a `/scratch` tmpfs, memory and swap capped together, all capabilities dropped, not root, no TTY, a wall-clock
+timeout, output capped with the truncation reported, and the exit code in the envelope rather than inferred from
+the output. `createLocalSandbox` provides the timeout and the output cap and **none** of the isolation, which is
+why it throws unless a deployment writes `allowUnsafeLocalExecution: true`.
+
+Gating is by **effect**: `shell_exec` is `destructive`, so the approval gate always fires. It is tempting to
+inspect the command instead — refuse `rm -rf`, allow `ls` — and that is a losing game. `find . -delete`, `dd`,
+`python -c`, a base64 pipeline: any list of dangerous shapes is a list somebody gets around, and worse, it feels
+like protection. A classification cannot be evaded by rephrasing.
+
 ## Result envelope
 
 Every tool returns a shared success/error envelope; errors carry a stable code, retryability,

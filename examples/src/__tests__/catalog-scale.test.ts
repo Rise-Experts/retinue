@@ -8,7 +8,16 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 import { asId, type ExecutionContext } from "@retinue/agentkit";
-import { exampleRegistry, exampleCatalogBudget, exampleToolset, exampleSkillCatalogBudget } from "../index.js";
+import {
+  exampleCapabilities,
+  exampleCatalogBudget,
+  exampleRegistry,
+  exampleSkillCatalogBudget,
+  exampleToolset,
+} from "../index.js";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { asExampleBackend } from "../memory-composition.js";
 import { createMemoryBackend } from "../memory-app.js";
 
@@ -23,6 +32,12 @@ const context: ExecutionContext = {
 };
 
 const backend = () => asExampleBackend(createMemoryBackend());
+
+/** Every tool name the app's own registry offers this context — preloaded and discoverable. */
+const namesFor = async (b: ReturnType<typeof backend>) => {
+  const catalogue = await exampleRegistry(b).catalog(context, { preloaded: [], categories: [], excluded: [] });
+  return [...catalogue.preloaded.map((d) => d.name), ...catalogue.discoverable.map((e) => e.name)];
+};
 
 const original = new Map<string, string | undefined>();
 const setEnv = (values: Readonly<Record<string, string | undefined>>) => {
@@ -136,5 +151,74 @@ describe("the budget binds on the app's own catalogue", () => {
     setEnv({ RETINUE_CATALOG_BUDGET_TOKENS: undefined });
     const catalogue = await exampleRegistry(backend()).catalog(context, { preloaded: [], categories: [], excluded: [] });
     expect(catalogue.truncation).toBeUndefined();
+  });
+});
+
+describe("the filesystem tools and the sandbox are reachable from the app — task #215", () => {
+  it("adds the read tools when a root is configured, and only then", async () => {
+    const root = mkdtempSync(join(tmpdir(), "retinue-example-files-"));
+    setEnv({ RETINUE_FILES_ROOT: undefined });
+    const without = await namesFor(backend());
+    expect(without).not.toContain("fs_read");
+
+    setEnv({ RETINUE_FILES_ROOT: root });
+    const withRoot = await namesFor(backend());
+    for (const name of ["fs_read", "fs_list", "fs_search"]) expect(withRoot, name).toContain(name);
+    // The write tool needs the second root: reads without writes is the common case and the safer default.
+    expect(withRoot).not.toContain("fs_write");
+
+    setEnv({ RETINUE_FILES_WRITABLE_ROOT: mkdtempSync(join(tmpdir(), "retinue-example-scratch-")) });
+    expect(await namesFor(backend())).toContain("fs_write");
+  });
+
+  it("refuses an escape through the app's own registry", async () => {
+    const root = mkdtempSync(join(tmpdir(), "retinue-example-files2-"));
+    writeFileSync(join(root, "inside.txt"), "readable\n");
+    setEnv({ RETINUE_FILES_ROOT: root });
+    const registry = exampleRegistry(backend());
+
+    const inside = await registry.execute(context, { name: "fs_read", input: { path: "inside.txt" }, toolCallId: "c-in" });
+    expect(inside.ok && (inside.data as { content?: string }).content).toContain("readable");
+
+    const outside = await registry.execute(context, {
+      name: "fs_read",
+      input: { path: "../../etc/passwd" },
+      toolCallId: "c-out",
+    });
+    // A returned refusal, not a throw: the model can act on "that path is outside the root".
+    expect(outside.ok).toBe(true);
+    expect(outside.ok && (outside.data as { kind?: string }).kind).toBe("forbidden");
+  });
+
+  it("needs both switches before shell_exec exists at all", async () => {
+    setEnv({ RETINUE_SANDBOX_IMAGE: undefined, RETINUE_SHELL: undefined });
+    expect(await namesFor(backend())).not.toContain("shell_exec");
+
+    // An image alone is not enough. Somebody who set one variable gets no shell tool, not a half-wired one.
+    setEnv({ RETINUE_SANDBOX_IMAGE: "redis:7-alpine" });
+    expect(await namesFor(backend())).not.toContain("shell_exec");
+
+    setEnv({ RETINUE_SHELL: "1" });
+    expect(await namesFor(backend())).toContain("shell_exec");
+  });
+
+  it("refuses to boot when shell is declared without a sandbox — the point of the declaration", () => {
+    /**
+     * `resolveCapabilities` will not return a runtime whose declaration and wiring disagree, and this is the one
+     * capability where that is a security property rather than a diagnostic. A tool that quietly refused at the
+     * first call would leave a deployment believing it had shell access it does not, or worse, the reverse.
+     */
+    setEnv({ RETINUE_SANDBOX_IMAGE: undefined, RETINUE_SHELL: "1" });
+    expect(() => exampleCapabilities()).toThrow(/shell/);
+
+    setEnv({ RETINUE_SANDBOX_IMAGE: "redis:7-alpine" });
+    expect(exampleCapabilities().shell).toBe("on");
+  });
+
+  it("keeps shell off, and unwired, when nobody asked for it", () => {
+    // Both halves: the declaration says off, and the sandbox is not built — so the capability check cannot
+    // complain about something wired and undeclared, which it rightly would.
+    setEnv({ RETINUE_SANDBOX_IMAGE: "redis:7-alpine", RETINUE_SHELL: undefined });
+    expect(exampleCapabilities().shell).toBe("off");
   });
 });

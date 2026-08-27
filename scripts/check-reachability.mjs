@@ -128,6 +128,20 @@ const CAPABILITIES = [
     why: "#163 — approvals had a resume path and questions had none, so the model asked again.",
   },
   {
+    name: "filesystem tools",
+    symbol: "filesystem:",
+    scope: "host",
+    file: "examples/src/index.ts",
+    why: "#215 — fs_read/fs_list/fs_search exist only when a root is wired, and a scope nothing supplies is three tools nobody can reach.",
+  },
+  {
+    name: "sandbox for shell_exec",
+    symbol: "createDockerSandbox",
+    scope: "host",
+    file: "examples/src/index.ts",
+    why: "#215 — shell_exec needs a sandbox wired *and* the shell capability declared; a port with no adapter in any host is a tool that can never run.",
+  },
+  {
     name: "usage recording",
     symbol: "createUsageRecorder",
     scope: "entrypoint",

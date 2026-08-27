@@ -23,6 +23,7 @@ import { assemblePrompt, commitExtractedMemories, createCitationEmitter, createP
 import { createApprovalGate, createApprovalService, createAuthorizationPolicy, createQuestionService, createRunApprovals, questionPending } from "@retinue/agentkit/hitl";
 import { EMPTY_RUN_STREAM_STATE, computeModelCostMinorUnits, createDefaultEngine, parseExecutionContext, reduceRunEvent } from "@retinue/agentkit/runtime";
 import { createToolRegistry, createToolSearch, defineDelegatingTool } from "@retinue/agentkit/tools";
+import { createDockerSandbox } from "@retinue/agentkit/tools";
 import { createQuotaGuard, createStoredLimitResolver } from "@retinue/agentkit/usage";
 import { createBullMqJobDispatcher, createBullMqRunQueue } from "@retinue/agentkit/adapters/bullmq";
 import { createPostgresApprovalGrantStore, createPostgresIdempotencyStore, createPostgresInteractionStore, createPostgresPrincipalMemoryStore, createPostgresRunEventLog, createPostgresSkillStore, createPostgresRunStore, createPostgresSessionStateStore, createPostgresUsageLimitStore, createPostgresUsageRollupStore, createPostgresUsageStore, createPostgresConversationStore } from "@retinue/agentkit/adapters/postgres";
@@ -60,6 +61,48 @@ export const exampleToolset = (): { readonly disabledCategories: readonly string
   const categories = (raw ?? "").split(",").map((part) => part.trim()).filter((part) => part !== "");
   return categories.length === 0 ? undefined : { disabledCategories: categories };
 };
+
+/**
+ * The filesystem this app exposes, if any — REQ-047 (#206), task #215.
+ *
+ * Two directories, and they must be different: the read root is material the assistant may cite, and the
+ * writable root is where its own output lands. One directory for both is how a corpus a model cites becomes a
+ * corpus a model wrote.
+ *
+ * Off by default. A file tool pointed at a default directory would be a tool reading whatever happened to be in
+ * the process's working tree.
+ */
+export const exampleFilesystem = (): { readonly root: string; readonly writableRoot?: string } | undefined => {
+  const root = process.env["RETINUE_FILES_ROOT"];
+  if (root === undefined || root === "") return undefined;
+  const writableRoot = process.env["RETINUE_FILES_WRITABLE_ROOT"];
+  return writableRoot === undefined || writableRoot === "" ? { root } : { root, writableRoot };
+};
+
+/**
+ * The sandbox for `shell_exec` — task #215.
+ *
+ * A container image, or nothing. There is deliberately no way to select the local adapter from the environment:
+ * running commands on the runtime's host is a decision that belongs in code somebody reviewed, not in a variable
+ * somebody copied from a colleague's `.env`.
+ */
+export const exampleSandbox = () => {
+  const image = process.env["RETINUE_SANDBOX_IMAGE"];
+  if (image === undefined || image === "") return undefined;
+  /**
+   * The declaration gates the wiring, not the other way round.
+   *
+   * `resolveCapabilities` refuses a runtime that wired something it did not declare — a good rule, and it made
+   * "image set, `RETINUE_SHELL` unset" a boot failure, which is a hostile way to greet somebody who set one
+   * variable. So the app follows its own declaration: no declaration, no sandbox, no tool. The other direction
+   * stays a boot failure, and that is the one that matters: `RETINUE_SHELL=1` with no image refuses to start
+   * rather than serving an agent whose shell tool silently declines.
+   */
+  return exampleShellDeclared() ? createDockerSandbox({ image }) : undefined;
+};
+
+/** Whether this deployment declared the second of `shell_exec`'s two switches. */
+export const exampleShellDeclared = (): boolean => process.env["RETINUE_SHELL"] === "1";
 
 export const exampleSkillCatalogBudget = (): { readonly maxTokens: number } | undefined => {
   const raw = process.env["RETINUE_SKILL_CATALOGUE_BUDGET_TOKENS"];
@@ -130,6 +173,23 @@ const WRITE_TOOLS = ["write_note", "share_note"] as const;
 const KIT_WRITE_TOOLS = ["http_write"] as const;
 
 /**
+ * The filesystem reads — task #215. Both roles, like the web reads.
+ *
+ * Reading a file inside the configured root is the same kind of act as fetching a URL: the control is the root,
+ * not a role. `fs_write` and `shell_exec` are a different matter and sit with the writes below.
+ */
+const KIT_FS_READ_TOOLS = ["fs_read", "fs_list", "fs_search"] as const;
+
+/**
+ * `fs_write` and `shell_exec` — `editor` only, and both gated.
+ *
+ * `shell_exec` is granted here deliberately, for the same reason `github_merge_pull_request` is: a destructive
+ * tool no role may call is a gate nothing exercises. It is still off unless a sandbox is wired *and* the `shell`
+ * capability declared, which is two more switches than a grant.
+ */
+const KIT_DANGEROUS_TOOLS = ["fs_write", "shell_exec"] as const;
+
+/**
  * The integration toolkits' reads — #214.
  *
  * Granted to both roles: reading a public repository or a channel the bot is in is the same kind of act as
@@ -172,6 +232,8 @@ export const ROLE_TOOL_NAMES: readonly string[] = [
   ...KIT_READ_TOOLS,
   ...WRITE_TOOLS,
   ...KIT_WRITE_TOOLS,
+  ...KIT_FS_READ_TOOLS,
+  ...KIT_DANGEROUS_TOOLS,
   ...TOOLKIT_READ_TOOLS,
   ...TOOLKIT_WRITE_TOOLS,
   ...DOCS_MCP_TOOLS,
@@ -191,6 +253,8 @@ const ROLES = [
       ...KIT_READ_TOOLS,
       ...WRITE_TOOLS,
       ...KIT_WRITE_TOOLS,
+      ...KIT_FS_READ_TOOLS,
+      ...KIT_DANGEROUS_TOOLS,
       ...TOOLKIT_READ_TOOLS,
       ...TOOLKIT_WRITE_TOOLS,
       ...DOCS_MCP_TOOLS,
@@ -204,7 +268,7 @@ const ROLES = [
     ],
     // No `write_note`, no `share_note`. `viewer` cannot *see* them in the catalogue, so the model never offers
     // something the person cannot do — which is a better experience than a refusal after asking.
-    tools: [...FIRST_PARTY_TOOLS, ...KIT_READ_TOOLS, ...TOOLKIT_READ_TOOLS, ...DOCS_MCP_TOOLS],
+    tools: [...FIRST_PARTY_TOOLS, ...KIT_READ_TOOLS, ...KIT_FS_READ_TOOLS, ...TOOLKIT_READ_TOOLS, ...DOCS_MCP_TOOLS],
   },
 ] as const;
 
@@ -409,6 +473,20 @@ const exampleToolProviders = (backend: ExampleBackend) => [
   createStandardToolProvider({
     deps: { authorization, idempotency: backend.idempotency, approvals: approvalGateFor(backend) },
     http: {},
+    /**
+     * The filesystem tools, when a root is configured — task #215.
+     *
+     * `fs_read`, `fs_list` and `fs_search` appear together; `fs_write` needs the second root as well. Path
+     * scoping, the symlink refusal and the byte ceiling are the toolkit's, not this app's.
+     */
+    ...(exampleFilesystem() === undefined ? {} : { filesystem: exampleFilesystem() as never }),
+    /**
+     * `shell_exec`, and both of its switches — task #215.
+     *
+     * The sandbox is one; the `shell` capability declaration is the other, read at the call. A deployment that
+     * wired an image for a test and forgot must not thereby have an agent that runs commands.
+     */
+    ...(exampleSandbox() === undefined ? {} : { sandbox: exampleSandbox() as never, shellEnabled: exampleShellDeclared }),
     // A search provider from `@retinue/tools-search` when one is configured, and no `web_search` otherwise
     // (#214). Note that the toolkit contributes a *provider*, not a tool: five vendors are five values of one
     // parameter, so switching from Brave to Tavily changes an environment variable and nothing else.
@@ -1017,6 +1095,14 @@ export const exampleCapabilities = () =>
       // The docs MCP server is composed per role rather than in the base runtime, so it is off here and the
       // declaration stays true of *this* configuration rather than of what the app could do.
       mcp: "off",
+      /**
+       * `shell` — task #215, and the one capability whose declaration is a security decision.
+       *
+       * From the environment, and `resolveCapabilities` refuses to return a runtime whose declaration and wiring
+       * disagree: declaring this with no sandbox image is a **boot failure**, not a tool that quietly refuses at
+       * the first call. That is the whole value of the capability declaration existing.
+       */
+      shell: exampleShellDeclared() ? "on" : "off",
     },
     wired: new Set([
       "messages",
@@ -1027,6 +1113,7 @@ export const exampleCapabilities = () =>
       "interactions",
       "skills",
       "usage",
+      ...(exampleSandbox() === undefined ? [] : ["sandbox"]),
     ]),
   });
 

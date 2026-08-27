@@ -43,3 +43,23 @@ export type { CsvResult, JsonQueryResult, ReadOnlyQuery, SchemaResult, SqlResult
 
 export { MAX_EXPRESSION_CHARS, calculate, currentTime } from "./compute.js";
 export type { CalculationResult, TimeResult } from "./compute.js";
+
+export {
+  MAX_ENTRIES,
+  MAX_FILE_BYTES,
+  MAX_MATCHES,
+  MAX_SEARCHED_FILES,
+  contains,
+  createFileReader,
+} from "./files.js";
+export type { FileEntry, FileFailure, FileList, FileMatch, FileRead, FileReader, FileScope, FileSearch, FileWrite } from "./files.js";
+
+export {
+  DEFAULT_MEMORY_MB,
+  DEFAULT_TIMEOUT_MS,
+  MAX_OUTPUT_BYTES,
+  createDockerSandbox,
+  createLocalSandbox,
+  dockerArgs,
+} from "./sandbox.js";
+export type { DockerSandboxConfig, LocalSandboxConfig, Sandbox, SandboxRequest, SandboxResult } from "./sandbox.js";

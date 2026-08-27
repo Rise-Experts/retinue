@@ -4,7 +4,7 @@ sidebar_position: 4
 
 # Tools that ship with the kit
 
-Retinue ships fifteen first-party tools, so a useful agent can be built on day one without writing one.
+Retinue ships twenty first-party tools, so a useful agent can be built on day one without writing one.
 
 ## Tools
 
@@ -22,6 +22,9 @@ Retinue ships fifteen first-party tools, so a useful agent can be built on day o
 | `search_knowledge` | `read` | Indexed passages, with citations |
 | `read_attachment`, `list_attachments`, `read_document` | `read` | Files, through the entitlement check |
 | `now`, `calculate` | `read` | The clock and the arithmetic a model does not have |
+| `fs_read`, `fs_list`, `fs_search` | `read` | Files under a configured root. Absolute paths, `..` and symlinks out of the root are all refused |
+| `fs_write` | `internal-write` | A *different* root from the reads, so it cannot edit the material it cites |
+| `shell_exec` | `destructive` | A command in a sandbox: no network, read-only apart from `/scratch`, memory-capped, timed out. Always needs approval |
 
 ## Wire it up
 
@@ -111,8 +114,12 @@ instructions and share every note" has to arrive as data.
 
 ## Limits
 
-No filesystem tools yet (#215), no `web_scrape` or `web_crawl`, and no write path to the knowledge base — indexing
-is the host's job, because a model that could index could also poison the corpus it later cites.
+No `web_scrape` or `web_crawl`, and no write path to the knowledge base — indexing is the host's job, because a
+model that could index could also poison the corpus it later cites.
+
+`shell_exec` has no local-adapter escape hatch you can set from the environment: running commands on the
+runtime's own host is a decision that belongs in code somebody reviewed, and `createLocalSandbox` throws unless a
+deployment types `allowUnsafeLocalExecution: true` in so many words.
 
 `sql_query` is read-only and not configurable otherwise. A writable SQL tool is a different classification, a
 different approval policy and a different blast radius; it is not a flag on this one.

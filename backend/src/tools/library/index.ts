@@ -26,9 +26,15 @@ import { createParseCsvTool, createQueryJsonTool, createSqlQueryTool, createSqlS
 import { createHttpRequestTool, createHttpWriteTool } from "./http.js";
 import { createSearchKnowledgeTool } from "./knowledge.js";
 import { createFetchJsonTool, createFetchUrlTool, createWebSearchTool } from "./web.js";
+import { createFsListTool, createFsReadTool, createFsSearchTool, createFsWriteTool } from "./fs.js";
+import { createShellExecTool } from "./shell.js";
+export { createFsListTool, createFsReadTool, createFsSearchTool, createFsWriteTool } from "./fs.js";
+export { createShellExecTool, shellDisabled } from "./shell.js";
+export type { ShellToolConfig } from "./shell.js";
 import { createHttpClient } from "../../toolkit/http.js";
 import { createFetchJson, createFetchPage, createWebSearch } from "../../toolkit/web.js";
 import { createSqlQuery, createSqlSchema } from "../../toolkit/data.js";
+import { createFileReader } from "../../toolkit/files.js";
 import { createReadAttachmentTool, createListAttachmentsTool } from "../../files/read-tool.js";
 import { createReadDocumentTool } from "../../documents/read-tool.js";
 import type { DelegatingToolDeps } from "../delegating.js";
@@ -36,7 +42,7 @@ import type { Tool, ToolProvider } from "../index.js";
 import type { ExecutionContext } from "../../core/context.js";
 import type { ExtractionService } from "../../documents/extraction.js";
 import type { FileService } from "../../files/index.js";
-import type { HttpClient, HttpClientConfig, ReadOnlyQuery, SearchProvider } from "../../toolkit/index.js";
+import type { FileReader, FileScope, HttpClient, HttpClientConfig, ReadOnlyQuery, Sandbox, SearchProvider } from "../../toolkit/index.js";
 import type { KnowledgeRetriever } from "./knowledge.js";
 import type { RetrievalMode } from "../../knowledge/retrieval.js";
 
@@ -62,6 +68,11 @@ export const STANDARD_TOOL_NAMES = [
   "read_document",
   "now",
   "calculate",
+  "fs_read",
+  "fs_list",
+  "fs_search",
+  "fs_write",
+  "shell_exec",
 ] as const;
 
 export type StandardToolName = (typeof STANDARD_TOOL_NAMES)[number];
@@ -106,6 +117,27 @@ export type StandardToolsConfig = {
   readonly files?: FileService;
   /** Enables `read_document`. */
   readonly documents?: ExtractionService;
+  /**
+   * A path-scoped filesystem — REQ-047 (#206), task #215.
+   *
+   * Supplying a `root` enables `fs_read`, `fs_list` and `fs_search`. `fs_write` needs a `writableRoot` as well,
+   * and it must be a *different* directory: pointing both at the same place lets a model edit the material it
+   * also reads, which is how a corpus a model cites becomes a corpus a model wrote.
+   */
+  readonly filesystem?: FileScope | { readonly reader: FileReader; readonly writable: boolean };
+  /**
+   * A sandbox, which is what makes `shell_exec` exist — task #215.
+   *
+   * Two switches, deliberately, and the only tool in the library with two: a sandbox wired *and* the `shell`
+   * capability declared. Everywhere else wiring is the toggle, because a second switch is usually how a
+   * deployment ends up with something switched on and wired to nothing. Here the failure mode runs the other
+   * way — "somebody wired a sandbox for a test and forgot" must not silently mean the agent can run commands on
+   * a machine.
+   *
+   * `shellEnabled` is a function, so the declaration is read at the call rather than captured at construction.
+   */
+  readonly sandbox?: Sandbox;
+  readonly shellEnabled?: () => boolean;
   /** Injected so a test can pin `now`. */
   readonly clock?: () => Date;
   readonly exclude?: readonly StandardToolName[];
@@ -137,6 +169,19 @@ export const createStandardToolProvider = (config: StandardToolsConfig): ToolPro
   const describeSql =
     config.sql?.schemas === undefined ? undefined : createSqlSchema({ query: config.sql.query, schemas: config.sql.schemas });
 
+  /**
+   * The file reader, built once.
+   *
+   * A caller may hand over a `FileReader` it already has instead of a scope — the same shape the HTTP config
+   * takes a `client` for, and the same reason: one place decides what is readable.
+   */
+  const filesystem =
+    config.filesystem === undefined
+      ? undefined
+      : "reader" in config.filesystem
+        ? { reader: config.filesystem.reader, writable: config.filesystem.writable }
+        : { reader: createFileReader(config.filesystem), writable: config.filesystem.writableRoot !== undefined };
+
   const fixed: readonly (readonly [StandardToolName, () => Tool])[] = [
     ["fetch_url", () => createFetchUrlTool(deps, fetchPage as NonNullable<typeof fetchPage>)],
     ["fetch_json", () => createFetchJsonTool(deps, fetchJson as NonNullable<typeof fetchJson>)],
@@ -152,6 +197,20 @@ export const createStandardToolProvider = (config: StandardToolsConfig): ToolPro
     ["read_document", () => createReadDocumentTool({ extraction: config.documents as ExtractionService })],
     ["now", () => createNowTool(deps, config.clock)],
     ["calculate", () => createCalculateTool(deps)],
+    ["fs_read", () => createFsReadTool(deps, (filesystem as NonNullable<typeof filesystem>).reader)],
+    ["fs_list", () => createFsListTool(deps, (filesystem as NonNullable<typeof filesystem>).reader)],
+    ["fs_search", () => createFsSearchTool(deps, (filesystem as NonNullable<typeof filesystem>).reader)],
+    ["fs_write", () => createFsWriteTool(deps, (filesystem as NonNullable<typeof filesystem>).reader)],
+    [
+      "shell_exec",
+      () =>
+        createShellExecTool(deps, {
+          sandbox: config.sandbox as Sandbox,
+          // Absent means not declared. The uncomfortable direction on purpose: a forgotten declaration turns the
+          // tool off rather than on.
+          enabled: config.shellEnabled ?? (() => false),
+        }),
+    ],
   ];
 
   /** What each tool needs before it can exist. A tool with no entry needs nothing. */
@@ -166,6 +225,12 @@ export const createStandardToolProvider = (config: StandardToolsConfig): ToolPro
     search_knowledge: config.knowledge !== undefined,
     read_attachment: config.files !== undefined,
     read_document: config.documents !== undefined,
+    fs_read: filesystem !== undefined,
+    fs_list: filesystem !== undefined,
+    fs_search: filesystem !== undefined,
+    // A writable root, separately: the three reads are useful on their own, and most deployments want only those.
+    fs_write: filesystem?.writable === true,
+    shell_exec: config.sandbox !== undefined,
   };
 
   const tools = fixed

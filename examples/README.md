@@ -109,6 +109,10 @@ Everything is in `.env` at the repository root; `.env.example` documents each va
 | `RETINUE_CATALOG_BUDGET_TOKENS` | Unset. A ceiling on the tool list; what does not fit is dropped and named in a `catalog.truncated` run event. Measured cost at 200 tools: see `docs/24`, and read it before turning this on |
 | `RETINUE_DISABLED_TOOL_CATEGORIES` | Unset. Comma-separated categories this tenant does not want — the cheaper way to shrink a catalogue, because it removes near-duplicates rather than arbitrary tools |
 | `RETINUE_SKILL_CATALOGUE_BUDGET_TOKENS` | Unset. The same ceiling for the skill catalogue; the notice goes into the prompt |
+| `RETINUE_FILES_ROOT` | Unset. A directory the assistant may read, list and search. Everything outside it is refused, symlinks included |
+| `RETINUE_FILES_WRITABLE_ROOT` | Unset, and it must be a **different** directory from the read root. Enables `fs_write` |
+| `RETINUE_SANDBOX_IMAGE` | Unset. A local container image with a shell — `redis:7-alpine` will do. Only takes effect with `RETINUE_SHELL=1` |
+| `RETINUE_SHELL` | Unset. `1` declares the `shell` capability. Set without an image, the app **refuses to boot** — which is the point of a declaration |
 
 ### The model needs tool calling
 

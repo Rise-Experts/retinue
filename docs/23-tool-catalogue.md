@@ -72,11 +72,11 @@ Extensions of what exists. Nothing here needs a vendor account, so nothing here 
 | `now` | general | `read` | `never` | no | **built** |
 | `calculate` | general | `read` | `never` | no | **built** |
 | `web_search` | web | `read` | `policy` | no | **built**; real providers ship in `@retinue/tools-search` (#214) |
-| `fs_read` | files | `read` | `never` | no | #215 |
-| `fs_list` | files | `read` | `never` | no | #215 |
-| `fs_search` | files | `read` | `never` | no | #215 |
-| `fs_write` | files | `internal-write` | `policy` | no | #215 — scoped to the writable root, never the source tree |
-| `shell_exec` | code | `destructive` | `always` | yes | #215 — sandbox only; the in-process adapter refuses in production |
+| `fs_read` | files | `read` | `never` | no | **built** (#215). Path-scoped; an absolute path, a `..` escape and a symlink out of the root are all refused, and the refusal does not depend on whether the target exists |
+| `fs_list` | files | `read` | `never` | no | **built** (#215) |
+| `fs_search` | files | `read` | `never` | no | **built** (#215). Literal-text search, bounded in files and matches, reporting when a ceiling stopped it |
+| `fs_write` | files | `internal-write` | `policy` | no | **built** (#215) — a *different* root from the reads, so a model cannot edit the material it also cites |
+| `shell_exec` | code | `destructive` | `always` | yes | **built** (#215). Two switches: a `Sandbox` wired **and** the `shell` capability declared. The local adapter throws unless a deployment types `allowUnsafeLocalExecution: true` |
 | `file_generate` | files | `internal-write` | `never` | no | CSV/Markdown/PDF to an artifact; the renderers exist |
 | `sleep` | general | `read` | `never` | no | Bounded by the run's step ceiling, not by the model's patience |
 | `think` | general | `read` | `never` | no | A scratchpad that structures reasoning without a side effect |
@@ -172,6 +172,30 @@ A deferred item is a decision, not a backlog. Recording the reason is what stops
 - [ ] A docs page on the one template, and a test that the tool is reachable from the example app — "built, tested and unreachable" has happened six times in this repository.
 - [ ] An entry in this file. `npm run check:catalogue` fails on a registered tool that is not listed.
 
+## The sandbox is a port, not a tool — task #215
+
+`shell_exec` is the only tool in the package whose blast radius is not described by its schema, and its trigger is
+natural language — including language the model merely *read*. What makes it defensible is `Sandbox`:
+
+| Guarantee | Why it is not optional |
+|---|---|
+| No network | A command that can reach the network can exfiltrate anything it can read, and the egress policy does not apply inside a container |
+| Read-only root, one writable tmpfs | A command that can write to the image can install a persistent foothold |
+| Memory **and swap** capped together | A memory cap alone pushes the pressure onto the host's disk |
+| Wall-clock timeout | `sleep 999` must end as a *timeout*, not as an empty success |
+| Dropped capabilities, no new privileges, not root | Defence in depth behind the read-only filesystem |
+| Output capped, truncation reported | Silent truncation makes a model believe it saw the whole answer |
+| Exit code in the envelope | Inferring success from output text is guessing |
+
+Every one of those is a flag in `dockerArgs`, and the tests assert the **argv** rather than only running a
+command: a test that checked output would pass just as well with `--network=none` missing. The isolation
+guarantees are then exercised for real against a local image — no network, read-only root, a killed timeout and an
+OOM reported as `memory`.
+
+**Gating is by effect, never by reading the command.** No refusing `rm -rf`, no allow-list of binaries: `find .
+-delete`, `dd`, `python -c` and a base64 pipeline are all the same command wearing a different hat, and any list
+of dangerous shapes is a list somebody gets around while *feeling* like protection.
+
 ## Bounding the catalogue — task #210
 
 Three controls, all off by default, and the reason each exists:
@@ -190,7 +214,7 @@ provider has no event stream.
 
 ## Built so far
 
-**31** tools across four packages: 21 in `@retinue/agentkit`, 6 in `@retinue/tools-github`, 4 in
+**37** tools across four packages: 27 in `@retinue/agentkit`, 6 in `@retinue/tools-github`, 4 in
 `@retinue/tools-slack`, and 0 in `@retinue/tools-search` — which ships four providers for a contract that already
 exists. `npm run check:catalogue` reads every one of those packages, so a toolkit landing with an unclassified
 tool is a failing build; it also requires each `tools/*` package to export its own `*_TOOL_NAMES` and
