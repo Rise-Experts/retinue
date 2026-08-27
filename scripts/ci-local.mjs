@@ -57,6 +57,8 @@ export const STEPS = [
   ["docs site hostname", "npm run check:domain -- --offline"],
   // After the build, because the built output is the only honest answer to "does this URL exist" — task #217.
   ["llms.txt links", "npm run check:llms"],
+  // After the build too: the external-asset half of this reads the built output — task #218, AC-7.
+  ["brand tokens and contrast", "npm run check:brand"],
 ];
 
 /** The workflow commands this file deliberately does not run, each with the reason. */

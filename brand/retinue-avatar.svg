@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="Retinue">
+  <!--
+    The organisation avatar — REQ-049 (#208), task #218, AC-5.
+
+    npm shows an avatar on every package page, and there is no per-package icon: the avatar belongs to the
+    organisation. It wants a raster, and it renders the image on both light and dark chrome, so this sets the mark
+    on its own navy ground rather than on transparency.
+
+    A 512 square wrapper rather than the mark file itself: the mark's viewBox is 64 units, and a rasteriser asked
+    for 512 renders it at its intrinsic size in the corner of a 512 canvas. Authoring the square is what makes the
+    output the same on any tool.
+
+    Rasterise this file to 512 and commit the PNG; the recipe is in the task's issue comment. Not a build step,
+    because the only rasteriser on the machine that produced it is macOS-only.
+  -->
+  <rect width="512" height="512" rx="112" fill="#234b7e" />
+  <g transform="translate(96 96) scale(5)">
+    <circle cx="32" cy="32" r="10.5" fill="#ffffff" />
+    <g fill="#7aa6d8">
+      <circle cx="39.5" cy="52.7" r="3.6" />
+      <circle cx="52.7" cy="39.5" r="4.2" />
+      <circle cx="51.1" cy="21.0" r="4.6" />
+      <circle cx="35.8" cy="10.3" r="4.2" />
+      <circle cx="17.9" cy="15.1" r="3.6" />
+    </g>
+  </g>
+</svg>

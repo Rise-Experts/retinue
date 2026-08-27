@@ -20,18 +20,32 @@
   judging an assistant's answers has to be pleasant enough to read them in.
 -->
 <style>
+  /**
+   * The brand's own tokens — REQ-049 (#208), task #218, AC-6.
+   *
+   * This page used to have its own palette: a different blue, a different grey, a different near-black. It is the
+   * first thing anybody evaluating the platform actually looks at, and it looked like a different product. The
+   * colours below are `brand/tokens.json` verbatim; the semantic names stay, because a stylesheet full of
+   * `--retinue-navy` reads worse than one that says what the colour is *for*.
+   *
+   * Type is the same pairing as the documentation site: a transitional serif for headings, the system sans for
+   * everything else, and no web font — nothing here loads from a host we do not control.
+   */
   :root {
-    --bg:#fbfbfc; --panel:#fff; --fg:#16171a; --muted:#6b6f76; --faint:#9aa0a6;
-    --line:#e6e7ea; --accent:#2f6feb; --accent-soft:#eef3fe;
-    --me:#2f6feb; --me-fg:#fff; --bot:#f3f4f6;
-    --warn:#9a6200; --warn-bg:#fff8e6; --warn-line:#f0d9a0; --err:#b4232a; --ok:#1a7f45;
-    --radius:14px; --shadow:0 1px 2px rgba(16,17,26,.06), 0 8px 24px rgba(16,17,26,.05);
+    --bg:#f4f7fb; --panel:#ffffff; --fg:#111a24; --muted:#5b6b7d; --faint:#8798a9;
+    --line:#dfe7f1; --accent:#234b7e; --accent-soft:#f4f7fb;
+    --me:#234b7e; --me-fg:#ffffff; --bot:#f4f7fb;
+    --warn:#8a5a00; --warn-bg:#fdf6e8; --warn-line:#e8d6a8; --err:#a3232a; --ok:#1a7f45;
+    --display:"Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+    --body:system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --radius:14px; --shadow:0 1px 2px rgba(17,26,36,.06), 0 8px 24px rgba(17,26,36,.05);
   }
   @media (prefers-color-scheme: dark) {
     :root {
-      --bg:#0f1012; --panel:#16181c; --fg:#e9eaec; --muted:#9ba1a9; --faint:#6c737c;
-      --line:#24272d; --accent:#5b8dff; --accent-soft:#1a2233;
-      --me:#3f6fd8; --me-fg:#fff; --bot:#1d2025;
+      /* Designed, not inverted: the navy is 2.2:1 on this ground, so the accent is the palette's sky tone. */
+      --bg:#111a24; --panel:#1b2733; --fg:#e6edf5; --muted:#a9b8c8; --faint:#7d8fa1;
+      --line:#27364a; --accent:#7aa6d8; --accent-soft:#1b2733;
+      --me:#3a6fb0; --me-fg:#ffffff; --bot:#1b2733;
       --warn:#e0ab4a; --warn-bg:#2a2113; --warn-line:#4a3a1a; --err:#f07178; --ok:#5cc98c;
       --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.3);
     }
@@ -40,14 +54,16 @@
   html, body { height:100%; }
   body {
     margin:0; background:var(--bg); color:var(--fg);
-    font:15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif;
+    font:15px/1.6 var(--body);
     display:grid; grid-template-columns:264px minmax(0,1fr);
   }
   @media (max-width:820px) { body { grid-template-columns:1fr; } aside { display:none; } }
 
   /* ---------------------------------------------------------------- sidebar */
   aside { background:var(--panel); border-right:1px solid var(--line); display:flex; flex-direction:column; min-height:0; }
-  .brand { padding:18px 18px 12px; font-weight:600; letter-spacing:-.01em; display:flex; align-items:center; gap:9px; }
+  .brand { padding:18px 18px 12px; font-family:var(--display); font-weight:600; font-size:17px; letter-spacing:-.01em;
+           display:flex; align-items:center; gap:9px; }
+  .brand svg { width:20px; height:20px; flex:none; }
   .dot { width:9px; height:9px; border-radius:50%; background:var(--ok); box-shadow:0 0 0 3px color-mix(in srgb, var(--ok) 20%, transparent); }
   .dot.off { background:var(--faint); box-shadow:none; }
   .newchat { margin:0 14px 12px; padding:9px 12px; border:1px solid var(--line); border-radius:10px;
@@ -340,7 +356,21 @@
 </style>
 
 <aside>
-  <div class="brand"><span class="dot" id="health"></span> Assistant</div>
+  <!--
+    The mark, inline rather than an <img>: one fewer request, and it cannot 404. Five dots at 20px is the smallest
+    the mark reads at — see `usage.mark` in brand/tokens.json.
+  -->
+  <div class="brand">
+    <svg viewBox="0 0 64 64" role="img" aria-label="Retinue">
+      <circle cx="32" cy="32" r="10.5" fill="var(--accent)" />
+      <g fill="#4f81bd">
+        <circle cx="39.5" cy="52.7" r="3.6" /><circle cx="52.7" cy="39.5" r="4.2" />
+        <circle cx="51.1" cy="21.0" r="4.6" /><circle cx="35.8" cy="10.3" r="4.2" />
+        <circle cx="17.9" cy="15.1" r="3.6" />
+      </g>
+    </svg>
+    <span class="dot" id="health"></span> Assistant
+  </div>
   <button class="newchat" id="new">＋  New conversation</button>
   <div class="side-h">Conversations</div>
   <div class="convs" id="convs"></div>

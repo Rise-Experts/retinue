@@ -8,6 +8,14 @@ const config: Config = {
   baseUrl: "/",
   organizationName: "Rise-Experts",
   projectName: "retinue",
+  /**
+   * The mark in the browser tab — REQ-049 (#208), task #218.
+   *
+   * An SVG rather than an `.ico`: every browser that matters has supported it since 2020, it stays sharp on a
+   * retina tab strip at any size, and it is 759 bytes. It is *not* the brand mark scaled down — see the comment
+   * in the file for why five dots become three at 16px.
+   */
+  favicon: "img/favicon.svg",
   onBrokenLinks: "warn",
   onBrokenMarkdownLinks: "warn",
 
@@ -65,6 +73,19 @@ const config: Config = {
   ],
 
   themeConfig: {
+    /**
+     * The social preview — task #218, AC-3.
+     *
+     * Without this a shared link renders as a grey rectangle with a URL in it, which is the first impression a
+     * link in a Slack channel makes. Committed as a PNG rather than generated at build time, because the only
+     * rasteriser on the machine that produced it is macOS-only and a build step that works on one developer's
+     * machine is a build step that breaks CI.
+     */
+    image: "img/og-retinue.png",
+    metadata: [
+      { name: "twitter:card", content: "summary_large_image" },
+      { name: "theme-color", content: "#234b7e" },
+    ],
     colorMode: {
       defaultMode: "light",
       respectPrefersColorScheme: true,
@@ -72,6 +93,8 @@ const config: Config = {
     },
     navbar: {
       title: "Retinue",
+      // The mark, at a size where its open sweep is still legible — see brand/tokens.json's `usage.mark`.
+      logo: { alt: "Retinue", src: "img/retinue-mark.svg", width: 28, height: 28 },
       items: [
         { type: "docSidebar", sidebarId: "docs", position: "left", label: "Docs" },
         { to: "/api/", label: "API", position: "left" },

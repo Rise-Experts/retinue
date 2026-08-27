@@ -45,7 +45,8 @@
     "release:check": "node scripts/release-check.mjs",
     "ci:local": "node scripts/ci-local.mjs",
     "check:template": "node scripts/check-doc-template.mjs",
-    "check:llms": "node scripts/check-llms.mjs"
+    "check:llms": "node scripts/check-llms.mjs",
+    "check:brand": "node scripts/check-brand.mjs"
   },
   "devDependencies": {
     "typescript": "^5"

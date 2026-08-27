@@ -1,20 +1,181 @@
+/**
+ * The brand, applied — REQ-049 (#208), task #218.
+ *
+ * Every colour here comes from `brand/tokens.json`, and `npm run check:brand` fails if this file stops mentioning
+ * one of them: a token file nothing reads is a document, and the stylesheet drifts from it in the first hurry.
+ * The same check measures every documented pair against WCAG's formula, so the ratios below are computed rather
+ * than believed.
+ *
+ * **Both themes are designed, not inverted.** The navy is 8.83:1 on paper and 2.2:1 on the dark ground — an
+ * inversion would have produced an unreadable site that looked deliberate. The dark primary is a lighter tone of
+ * the same hue, chosen for its ratio.
+ *
+ * **No web font.** A Google Fonts stylesheet is a third party learning every reader's IP address and a page whose
+ * type shifts when their CDN is slow, and `check:brand` fails on any external asset host. The pairing is a system
+ * one — a transitional serif for display, the system sans for body — which is a real pairing and one fewer
+ * request than any alternative.
+ */
+
 :root {
-  --ifm-color-primary: #234b7e;
+  /* Palette — brand/tokens.json */
+  --retinue-navy: #234b7e;
+  --retinue-blue: #4f81bd;
+  --retinue-sky: #7aa6d8;
+  --retinue-ink: #111a24;
+  --retinue-paper: #ffffff;
+  --retinue-slate: #5b6b7d;
+  --retinue-wash: #f4f7fb;
+  --retinue-dusk-ink: #e6edf5;
+  --retinue-dusk-wash: #1b2733;
+
+  /* Type — a serif for display, the system sans for body, and a real fallback at every step */
+  --retinue-display: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+  --retinue-body: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --retinue-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+
+  --ifm-color-primary: var(--retinue-navy);
   --ifm-color-primary-dark: #1f4471;
   --ifm-color-primary-darker: #1d4069;
   --ifm-color-primary-darkest: #183557;
   --ifm-color-primary-light: #27528b;
   --ifm-color-primary-lighter: #295693;
   --ifm-color-primary-lightest: #2e60a4;
-  --ifm-code-font-size: 95%;
+
+  --ifm-background-color: var(--retinue-paper);
+  --ifm-font-color-base: var(--retinue-ink);
+  --ifm-heading-color: var(--retinue-navy);
+  --ifm-font-family-base: var(--retinue-body);
+  --ifm-heading-font-family: var(--retinue-display);
+  --ifm-font-family-monospace: var(--retinue-mono);
+  --ifm-code-font-size: 92%;
+  --ifm-code-background: var(--retinue-wash);
+  --ifm-table-stripe-background: var(--retinue-wash);
+  --ifm-blockquote-color: var(--retinue-slate);
+  --ifm-blockquote-border-color: var(--retinue-blue);
+  --ifm-toc-border-color: #dfe7f1;
+
+  /* Running text near 68 characters. The default in a wide window is nearly twice that. */
+  --ifm-container-width-xl: 1280px;
 }
 
 [data-theme="dark"] {
-  --ifm-color-primary: #7aa6d8;
+  --ifm-color-primary: var(--retinue-sky);
   --ifm-color-primary-dark: #5f93cf;
   --ifm-color-primary-darker: #5289ca;
   --ifm-color-primary-darkest: #3a6fb0;
   --ifm-color-primary-light: #95b9e1;
   --ifm-color-primary-lighter: #a2c2e5;
   --ifm-color-primary-lightest: #c9dcf0;
+
+  --ifm-background-color: var(--retinue-ink);
+  --ifm-background-surface-color: var(--retinue-dusk-wash);
+  --ifm-font-color-base: var(--retinue-dusk-ink);
+  --ifm-heading-color: var(--retinue-sky);
+  --ifm-code-background: var(--retinue-dusk-wash);
+  --ifm-table-stripe-background: var(--retinue-dusk-wash);
+  --ifm-blockquote-color: #a9b8c8;
+  --ifm-toc-border-color: #27364a;
+}
+
+/**
+ * Headings in the display face, with the weight pulled back.
+ *
+ * A serif at 700 next to system-sans body text reads as two documents stapled together; 600 on the large sizes
+ * and 500 below them keeps one voice. `text-wrap: balance` stops a two-word orphan on a wrapped heading, which is
+ * the most visible typographic flaw on a documentation page.
+ */
+.markdown h1,
+.markdown h2,
+.markdown h3,
+.markdown h4 {
+  font-family: var(--retinue-display);
+  text-wrap: balance;
+  letter-spacing: -0.005em;
+}
+
+.markdown h1 {
+  font-weight: 600;
+  font-size: 2.25rem;
+}
+
+.markdown h2 {
+  font-weight: 600;
+  font-size: 1.75rem;
+  margin-top: 2.5rem;
+}
+
+.markdown h3 {
+  font-weight: 500;
+  font-size: 1.375rem;
+}
+
+/* Prose has a measure. A line of 140 characters is a line the eye loses on the way back. */
+.markdown > p,
+.markdown > ul,
+.markdown > ol,
+.markdown > blockquote {
+  max-width: 68ch;
+}
+
+/**
+ * Tables are how most of this documentation says what it means, so they get real attention.
+ *
+ * `tabular-nums` because half of them line up numbers, and proportional digits in a column look broken in a way
+ * readers notice without being able to say why.
+ */
+.markdown table {
+  display: table;
+  width: 100%;
+  font-variant-numeric: tabular-nums;
+}
+
+.markdown table thead tr {
+  background: var(--retinue-wash);
+  border-bottom: 2px solid var(--ifm-toc-border-color);
+}
+
+[data-theme="dark"] .markdown table thead tr {
+  background: var(--retinue-dusk-wash);
+}
+
+.markdown table th {
+  font-family: var(--retinue-body);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--retinue-slate);
+}
+
+[data-theme="dark"] .markdown table th {
+  color: #a9b8c8;
+}
+
+/* Wide content scrolls inside its own box; the page never scrolls sideways. */
+.markdown table,
+.markdown pre {
+  overflow-x: auto;
+}
+
+/* The mark carries the header, at a size where its open sweep is still legible. */
+.navbar__logo {
+  height: 1.75rem;
+}
+
+.navbar__title {
+  font-family: var(--retinue-display);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+/* A callout's left edge is the accent, which is the one place the blue does structural work. */
+.alert {
+  border-left: 3px solid var(--retinue-blue);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
 }

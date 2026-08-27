@@ -1,11 +1,14 @@
-# Reusable AI Platform Packages
+<img src="https://raw.githubusercontent.com/Rise-Experts/retinue/main/brand/retinue-mark.svg" alt="Retinue" width="72" />
 
-TypeScript implementation of the specifications in [`docs/`](docs/README.md).
+# Retinue — reusable AI platform packages
+
+TypeScript implementation of the specifications in [`docs/`](docs/README.md). The palette, type pairing and usage
+rules are in [`brand/tokens.json`](brand/tokens.json), measured by `npm run check:brand`.
 
 | Folder | Package | Runs where |
 |---|---|---|
 | [`backend/`](backend) | `@retinue/agentkit` | Server: runtime, tools, MCP, skills, context, HITL, persistence adapters. **The root is five values and every type** — everything else is behind one of fifteen documented subpaths (#199), and the root's runtime graph reaches nothing at all |
-| [`backend/src/tools/library/`](backend/src/tools/library) | `@retinue/agentkit/tools` | Fifteen first-party tools — web fetch and search, HTTP, CSV, JSON, read-only SQL, knowledge search, attachments, time and arithmetic. No optional peer: they reach the network through the platform's own egress policy |
+| [`backend/src/tools/library/`](backend/src/tools/library) | `@retinue/agentkit/tools` | Twenty first-party tools — web fetch and search, HTTP, CSV, JSON, read-only SQL, knowledge search, attachments, path-scoped files, a sandboxed shell, time and arithmetic. No optional peer: they reach the network through the platform's own egress policy |
 | [`backend/src/server/`](backend/src/server) | `@retinue/agentkit/server` | The reference GraphQL host: Yoga, the SSE endpoint, configuration and health probes. A subpath rather than its own package since #196 — one install, and the boundary is enforced by path (rules R12/R13) rather than by package name |
 | [`services/api/`](services/api) | `@retinue/api-service` | A Nest.js service serving the platform's schema through Nest's container — the second consumer, and the one that tests whether the package can be wired more than one way |
 | [`examples/`](examples) | `@retinue/example-app` | The reference application: what a deployment's own app module looks like |
@@ -14,6 +17,7 @@ TypeScript implementation of the specifications in [`docs/`](docs/README.md).
 | [`tools/slack/`](tools/slack) | `@retinue/tools-slack` | Integration: four Slack tools. Reads the response envelope rather than the HTTP status, because Slack answers `200` with `ok: false` |
 | [`tools/search/`](tools/search) | `@retinue/tools-search` | Integration: **no tools** — four search providers behind the one `web_search` the runtime already ships. One contract, several providers |
 | [`shareflow/`](shareflow) | `@retinue/shareflow` | The ShareFlow integration: its tools, context providers, skills and agent manifests. Depends on `backend`; nothing generic depends on it |
+| [`brand/`](brand) | — | The marks, and the palette and type as tokens |
 | [`docs/`](docs) | — | The specifications these packages implement |
 
 ## Status

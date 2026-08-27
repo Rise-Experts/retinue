@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Retinue">
+  <!--
+    A principal, and the retinue around it.
+
+    The sweep is deliberately open — 200°, not a closed ring. A closed ring of dots is a loading spinner, and
+    every multi-agent product already ships one. The gap makes it a retinue attending someone rather than a
+    circle of nodes, and it is also the honest picture: a team is assembled around a person, not a topology.
+
+    Sizes peak at the centre of the sweep so the eye reads an arrangement rather than a scatter.
+  -->
+  <circle cx="32" cy="32" r="10.5" fill="#234b7e" />
+  <g fill="#4f81bd">
+    <circle cx="39.5" cy="52.7" r="3.6" />
+    <circle cx="52.7" cy="39.5" r="4.2" />
+    <circle cx="51.1" cy="21.0" r="4.6" />
+    <circle cx="35.8" cy="10.3" r="4.2" />
+    <circle cx="17.9" cy="15.1" r="3.6" />
+  </g>
+</svg>

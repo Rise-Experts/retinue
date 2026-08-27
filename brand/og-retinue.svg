@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 1200" width="1200" height="1200">
+  <!--
+    The social preview — REQ-049 (#208), task #218.
+    
+    The design is 1200×630, the canvas is 1200×1200, and the content sits in the middle band. That is not a
+    design decision: the only SVG rasteriser available on the machine that produced this (`qlmanage`) scales to
+    fit a *square* thumbnail, so a 1200×630 source came out zoomed and cropped through the middle of the wordmark.
+    Authoring square and cropping the middle 630 rows gives the intended layout on any rasteriser.
+    
+    Regenerate by rasterising this file to a 1200 square with `qlmanage -t -s 1200`, then cropping the middle
+    630 rows with `sips -c 630 1200`. Both are in the task's issue comment in full; they are not repeated here,
+    because an XML comment cannot contain two hyphens in a row and `sips` takes a flag that does.
+    
+    The PNG is committed rather than built, because `qlmanage` is macOS-only and a build step that works on one
+    developer's machine is a build step that breaks CI.
+  -->
+  <rect width="1200" height="1200" fill="#111a24" />
+  <g transform="translate(0 285)">
+    <rect x="0" y="0" width="1200" height="630" fill="#111a24" />
+    <rect x="0" y="0" width="1200" height="6" fill="#4f81bd" />
+    <!--
+      The mark's own geometry, scaled. Not redrawn: the first attempt moved the dots by hand and closed the
+      sweep, which turns a retinue attending someone into the loading spinner every multi-agent product ships.
+      The open gap is the mark's one distinguishing feature.
+    -->
+    <g transform="translate(80 90) scale(2.1)">
+      <circle cx="32" cy="32" r="10.5" fill="#7aa6d8" />
+      <g fill="#4f81bd">
+        <circle cx="39.5" cy="52.7" r="3.6" />
+        <circle cx="52.7" cy="39.5" r="4.2" />
+        <circle cx="51.1" cy="21.0" r="4.6" />
+        <circle cx="35.8" cy="10.3" r="4.2" />
+        <circle cx="17.9" cy="15.1" r="3.6" />
+      </g>
+    </g>
+    <text x="96" y="380" fill="#e6edf5" font-family="Iowan Old Style, Palatino, Georgia, serif" font-size="96" font-weight="600">Retinue</text>
+    <text x="96" y="448" fill="#7aa6d8" font-family="system-ui, -apple-system, Segoe UI, Helvetica, Arial, sans-serif" font-size="34">A reusable AI agent platform for TypeScript</text>
+    <text x="96" y="530" fill="#8798a9" font-family="system-ui, -apple-system, Segoe UI, Helvetica, Arial, sans-serif" font-size="24">Durable runs · classified tools · human-in-the-loop · permission-aware retrieval</text>
+  </g>
+</svg>
