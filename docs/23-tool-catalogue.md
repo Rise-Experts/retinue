@@ -121,31 +121,89 @@ tool.
 ## Wave 3 — token or OAuth · sibling packages
 
 Each is a `credentialRef`. Every write is `external-write` or `destructive`, gated and idempotent, because these
-reach systems other people depend on.
+reach systems other people depend on. Auth is per vendor and **both modes are supported where the vendor supports
+both** — a token pasted in, or an OAuth flow the package performs
+([REQ-063, #259](https://github.com/Rise-Experts/retinue/issues/259)).
 
-| Package | Tools | Category | Notes |
+Names are vendor-prefixed throughout. That is not cosmetic: [#210](https://github.com/Rise-Experts/retinue/issues/210)
+measured that a plausible resident near-duplicate beats searching for the right tool, and a deployment wiring two
+trackers has two of everything. `jira_create_issue` and `linear_create_issue` are distinguishable; `create_issue`
+twice is not.
+
+### Specified per tool
+
+These have a per-tool contract — effect, approval and failure behaviour — in the issue named. The counts are what
+the package will export, not an estimate.
+
+| Package | Tools | Category | Issue |
 |---|---|---|---|
-| `tools-github` | `github_search_code`, `github_get_file`, `github_list_issues`, `github_create_issue`, `github_comment`, `github_merge_pull_request` | project | **Built** (#214). Token auth needs no OAuth plumbing; a GitHub App is the upgrade path. `github_merge_pull_request` is `destructive`. Names are vendor-prefixed — the convention the whole catalogue follows, and the reason `check:effects` inspects the second name segment as well as the first |
-| `tools-slack` | `slack_list_channels`, `slack_read_history`, `slack_post_message`, `slack_reply_in_thread` | communication | **Built** (#214). Slack answers `200` with `ok: false`, so the envelope is read and not the status — the mistake the integration exists to not make. `upload_file` deferred: multipart to a second host. Most useful with triggers (REQ-042 piece 3) |
-| `tools-email` | `send_email`, `list_messages`, `read_message` | communication | SMTP, Resend, AWS SES behind one contract. `send_email` is `external-write`, `always` |
-| `tools-google` | Drive, Sheets, Calendar, Gmail, Slides | productivity | Four consent surfaces in one vendor; scope sprawl is the cost driver, not the API |
-| `tools-jira` | `search_issues`, `create_issue`, `transition`, `comment` | project | API token per-user works today; OAuth 3LO for multi-tenant |
-| `tools-linear` | `search_issues`, `create_issue`, `update_issue` | project | |
-| `tools-notion` | `search`, `read_page`, `create_page`, `append_block` | project | |
-| `tools-confluence` | `search`, `read_page`, `create_page` | project | |
-| `tools-tasks` | Todoist, Trello, ClickUp behind one task contract | project | Three vendors, one shape. If the shape does not fit all three, that is a finding and they split |
-| `tools-zendesk` | `search_articles`, `create_ticket`, `comment_ticket` | crm | |
-| `tools-salesforce` | `query`, `create_record`, `update_record` | crm | |
-| `tools-shopify` | `list_products`, `list_orders`, `update_product` | crm | |
-| `tools-discord` | `read_channel`, `post_message` | communication | |
-| `tools-telegram` | `send_message`, `read_updates` | communication | |
-| `tools-meta` | WhatsApp `send_message`/`send_template`, Instagram `publish`/`read_insights` | communication | Vendor app review is the deployer's, not ours. Template approval is a WhatsApp concept the tool must expose rather than hide |
-| `tools-x` | `post`, `search`, `read_mentions` | communication | |
-| `tools-reddit` | `search`, `read_thread`, `post` | communication | |
-| `tools-meetings` | Zoom, Webex, Cal.com behind one scheduling contract | productivity | |
-| `tools-aws` | `invoke_lambda`, `send_email` (SES), `s3_read`, `s3_write` | cloud | |
-| `tools-azure` | `blob_read`, `blob_write` | cloud | "Azure" is a dozen products; two, deliberately |
-| `tools-gitlab` | mirror of `tools-github`'s shape | project | Built after GitHub, from the same contract |
+| `tools-github` | `github_add_labels`, `github_add_project_item`, `github_close_issue`, `github_close_pull_request`, `github_create_branch`, `github_create_file`, `github_create_project`, `github_create_pull_request`, `github_create_release`, `github_delete_file`, `github_dispatch_workflow`, `github_get_commit`, `github_get_issue`, `github_get_project`, `github_get_pull_request`, `github_get_release`, `github_get_workflow_run`, `github_get_workflow_run_logs`, `github_list_branches`, `github_list_commits`, `github_list_directory`, `github_list_labels`, `github_list_milestones`, `github_list_projects`, `github_list_pull_requests`, `github_list_releases`, `github_list_tags`, `github_list_workflow_runs`, `github_remove_label`, `github_remove_project_item`, `github_reopen_issue`, `github_rerun_workflow`, `github_review_pull_request`, `github_search_issues`, `github_search_pull_requests`, `github_set_project_field`, `github_update_file`, `github_update_issue`, `github_update_pull_request`, `github_write_file` · **built:** `github_search_code`, `github_get_file`, `github_list_issues`, `github_create_issue`, `github_comment`, `github_merge_pull_request` | project | [#223](https://github.com/Rise-Experts/retinue/issues/223) |
+| `tools-slack` | **4**, all built · `slack_list_channels`, `slack_read_history`, `slack_post_message`, `slack_reply_in_thread`. Slack answers `200` with `ok: false`, so the envelope is read and not the status. `upload_file` deferred: multipart to a second host | communication | [#214](https://github.com/Rise-Experts/retinue/issues/214) |
+| `tools-jira` | **8** · `jira_search_issues`, `jira_get_issue`, `jira_list_projects`, `jira_list_transitions`, `jira_create_issue`, `jira_update_issue`, `jira_transition_issue`, `jira_comment` | project | [#225](https://github.com/Rise-Experts/retinue/issues/225) |
+| `tools-confluence` | **6** · `confluence_search`, `confluence_get_page`, `confluence_list_spaces`, `confluence_create_page`, `confluence_update_page`, `confluence_comment` | project | [#225](https://github.com/Rise-Experts/retinue/issues/225) |
+| `tools-linear` | **7** · `linear_search_issues`, `linear_get_issue`, `linear_list_teams`, `linear_list_states`, `linear_create_issue`, `linear_update_issue`, `linear_comment` | project | [#226](https://github.com/Rise-Experts/retinue/issues/226) |
+| `tools-notion` | **7** · `notion_search`, `notion_get_page`, `notion_query_database`, `notion_create_page`, `notion_update_page`, `notion_append_blocks`, `notion_comment` | project | [#226](https://github.com/Rise-Experts/retinue/issues/226) |
+| `tools-meta` | **10** · `whatsapp_list_templates`, `whatsapp_send_template`, `whatsapp_send_message`, `whatsapp_send_media`, `whatsapp_mark_read`, `instagram_get_account`, `instagram_list_media`, `instagram_get_media`, `instagram_publish_media`, `instagram_reply_comment` | communication | [#229](https://github.com/Rise-Experts/retinue/issues/229) |
+| `tools-x` | **6** · `x_search_posts`, `x_get_post`, `x_get_user`, `x_list_user_posts`, `x_post`, `x_delete_post` (`destroys`) | communication | [#230](https://github.com/Rise-Experts/retinue/issues/230) |
+| `tools-reddit` | **6** · `reddit_search`, `reddit_get_post`, `reddit_list_subreddit`, `reddit_get_user`, `reddit_submit_post`, `reddit_comment` | communication | [#230](https://github.com/Rise-Experts/retinue/issues/230) |
+| `tools-discord` | **7** · `discord_list_channels`, `discord_read_messages`, `discord_get_message`, `discord_send_message`, `discord_reply_message`, `discord_add_reaction`, `discord_create_thread` | communication | [#231](https://github.com/Rise-Experts/retinue/issues/231) |
+| `tools-telegram` | **6** · `telegram_get_chat`, `telegram_send_message`, `telegram_send_media`, `telegram_edit_message`, `telegram_delete_message` (`destroys`), `telegram_pin_message` | communication | [#231](https://github.com/Rise-Experts/retinue/issues/231) |
+| `tools-google` | `calendar_create_event`, `calendar_delete_event`, `calendar_find_free_time`, `calendar_get_event`, `calendar_list_events`, `calendar_update_event`, `gmail_create_draft`, `gmail_get_message`, `gmail_get_thread`, `gmail_list_labels`, `gmail_modify_labels`, `gmail_reply_message`, `gmail_search_messages`, `gmail_send_message`, `docs_append_text`, `docs_create_document`, `docs_get_document`, `drive_create_folder`, `drive_get_file`, `drive_move_file`, `drive_search_files`, `drive_share_file`, `drive_upload_file`, `sheets_add_sheet`, `sheets_append_rows`, `sheets_get_values`, `sheets_list_sheets`, `sheets_update_values` | productivity | [#234](https://github.com/Rise-Experts/retinue/issues/234), [#235](https://github.com/Rise-Experts/retinue/issues/235) |
+| `tools-azure` | `azure_get_metrics`, `azure_get_resource`, `azure_list_activity_log`, `azure_list_resource_groups`, `azure_list_resources`, `azure_list_subscriptions`, `azure_query_logs`, `azure_restart_resource`, `azure_tag_resource` | cloud | [#236](https://github.com/Rise-Experts/retinue/issues/236) |
+| `tools-scrape` | **3** · `web_scrape`, `web_scrape_batch`, `web_crawl` | web | [#238](https://github.com/Rise-Experts/retinue/issues/238) |
+| `tools-browser` | **6** · `browser_navigate`, `browser_read`, `browser_click`, `browser_type`, `browser_screenshot`, `browser_close` | web | [#239](https://github.com/Rise-Experts/retinue/issues/239) |
+| `tools-email` | **4** · `email_send`, `email_compose_preview`, `email_get_status`, `email_list_sent` | communication | [#241](https://github.com/Rise-Experts/retinue/issues/241) |
+
+**163 tools specified across 16 packages**, of which 10 are built — every one named above, so
+`npm run check:catalogue` counts 206 catalogued tools and the gap to the total below is exactly the sketched
+packages that have no contract yet.
+
+One discrepancy surfaced while enumerating: [#223](https://github.com/Rise-Experts/retinue/issues/223) is titled
+*"38 more"* and its tables specify **40**. The names above are what the issue actually contains; whoever
+implements it should trust the tables and correct the title.
+
+### Sketched, not yet specified
+
+The shape is decided; the per-tool contract is not. Each needs the same treatment as the rows above before it is
+built — an issue with a tool table, effects and failure behaviour. Listing an estimate here rather than inventing
+tool names is the honest version: a name written down without a contract behind it is a name somebody will
+implement differently.
+
+| Package | Category | Shape | Rough |
+|---|---|---|---|
+| `tools-gitlab` | project | Mirror of `tools-github`'s contract, built from the same one | ~20 |
+| `tools-tasks` | project | Todoist, Trello, ClickUp behind one task contract. If the shape does not fit all three, that is a finding and they split | ~6 |
+| `tools-zendesk` | crm | Article search, ticket create, ticket comment | ~5 |
+| `tools-salesforce` | crm | SOQL query, record create, record update | ~5 |
+| `tools-shopify` | crm | Product list, order list, product update | ~6 |
+| `tools-meetings` | productivity | Zoom, Webex, Cal.com behind one scheduling contract | ~5 |
+| `tools-aws` | cloud | Read-first like `tools-azure`: S3 read/write, Lambda invoke, CloudWatch query | ~8 |
+| `tools-research` | knowledge | Wikipedia, arXiv, PubMed, Hacker News. A composition over `web_search` and `web_scrape`, so it waits for both — see [#237](https://github.com/Rise-Experts/retinue/issues/237) | ~3 |
+| `tools-finance` | finance | `stock_quote`, `stock_fundamentals` | 2 |
+| `tools-weather` | general | `weather_forecast` | 1 |
+| `tools-maps` | general | `place_search` | 1 |
+| `tools-media` | media | `image_generate`, `speech_generate`, `transcribe`, `video_generate`. The audio two need a runtime modality first — [REQ-062, #257](https://github.com/Rise-Experts/retinue/issues/257) | 4 |
+
+**~66 more across 12 packages.**
+
+### Auth model per package
+
+Both modes where the vendor offers both. This table is what
+[#260](https://github.com/Rise-Experts/retinue/issues/260)'s per-toolkit declaration encodes, and what decides
+whether an unconnected tool can pause a run for consent ([#264](https://github.com/Rise-Experts/retinue/issues/264))
+or must simply fail.
+
+| Auth | Packages |
+|---|---|
+| Token only — no login URL, so a missing credential fails rather than pausing | `tools-telegram` (bot token), `tools-discord` (bot token), `tools-notion` (integration token), `tools-linear` (API key) |
+| Token **or** OAuth — a tenant chooses | `tools-github` (PAT / GitHub App / OAuth), `tools-jira` and `tools-confluence` (API token / OAuth 3LO), `tools-gitlab`, `tools-shopify` |
+| OAuth required | `tools-google`, `tools-azure`, `tools-meta`, `tools-x`, `tools-reddit`, `tools-zendesk`, `tools-salesforce`, `tools-meetings` |
+| API key, no per-user identity | Every wave 2 package: `tools-search`, `tools-scrape`, `tools-browser`, `tools-research`, `tools-finance`, `tools-weather`, `tools-maps`, `tools-media`, `tools-email` |
+
+Two of the OAuth-required ones need a **tenant's own app** rather than the deployment's, and it is not a
+preference: Meta's app review is per app and a shared app's approved use case may not cover a customer's, and X's
+access tier is per app so a customer paying for a higher tier gains nothing from a shared one. That is why
+[#263](https://github.com/Rise-Experts/retinue/issues/263) exists.
 
 ## Deferred, with the reason
 
@@ -231,10 +289,41 @@ long tail below is now addition rather than design.
 
 ## Counting honestly
 
-**24** tools in wave 1, **13** contracts in wave 2, **21** packages in wave 3 — call it **~120 tools** at v1
-against the reference list's 588, with about 120 of the difference removed by the one-contract rule and most of
-the rest either deferred with a reason or reclassified as an adapter for a port that already exists.
+The full inventory, which is the answer to "what tools do we need":
 
-At the measured ~35 tokens per catalog entry, 120 tools is **~4,200 tokens** resident — which is still too much
-to carry on every turn, and is why REQ-045 ([#204](https://github.com/Rise-Experts/retinue/issues/204)) is a
-prerequisite for this REQ rather than a companion to it.
+| | Tools | Built |
+|---|---|---|
+| **Wave 1** — no third-party auth, in `@retinue/agentkit` | 24 | 20 |
+| **Meta** — the machinery | 7 | 7 |
+| **Wave 2** — API key only, sibling packages | 12 | 0 |
+| **Wave 3, specified** — 16 packages with a per-tool contract | 163 | 10 |
+| **Wave 3, sketched** — 12 packages needing a spec first | ~66 | 0 |
+| **Total** | **~272** | **37** |
+
+Wave 2 counts **12**, not the 13 contracts its own table lists: `web_search` is a wave 1 tool and is counted
+there. `@retinue/tools-search` ships four providers for it and exports no tool of its own — which is the
+one-contract rule applied to itself, and the reason the built column reads 0 for a package that is finished.
+
+That is more than double the **~120** this document estimated before wave 3 was specified per tool, and the
+increase is almost entirely `tools-github` (6 → 44) and `tools-google` (5 surfaces → 28 tools). Both grew for the
+same reason: "search issues, create issue, comment" describes a *demo*, and what people actually do on GitHub is
+review pull requests, manage labels and milestones, and work with releases and workflows
+([#222](https://github.com/Rise-Experts/retinue/issues/222) exists because that gap was pointed out).
+
+At the measured ~35 tokens per catalog entry, 272 tools is **~9,500 tokens** resident if a deployment loaded them
+all — and no deployment should. Two measured findings decide what to do about that, and they point the same way:
+
+- Selection accuracy is **flat** from 20 to 200 tools (73.1% → 73.1%), so size is not a quality problem
+  (`docs/24`).
+- A catalogue **budget** costs 19-23 points of accuracy at 200 tools, because a plausible resident near-duplicate
+  beats searching. So truncation is the wrong lever.
+
+What is left is **per-tenant toolsets** — a deployment wires the four or five packages its customers use, and the
+confusable neighbours are absent rather than merely unranked. A tenant with GitHub, Slack, Google and one tracker
+carries ~90 tools, not 272. That is the number to design against.
+
+The remaining cost of a large catalogue is tokens, not accuracy — 12.5× at 200 tools — and the fix for that is
+prompt caching, which does not exist yet
+([REQ-058, #246](https://github.com/Rise-Experts/retinue/issues/246)). The catalogue and system prompt are
+byte-identical across every turn of a conversation, which is exactly the input caching exists for.
+

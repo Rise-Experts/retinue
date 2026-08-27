@@ -120,6 +120,49 @@ runs, and an audit record of every resolution.
 Must not: put a token anywhere a flow definition, a tool input, a trace or a log can reach. The resolution
 happens at the point of use, against a reference.
 
+#### Amendment: the runtime half of connections moved into the package — REQ-063 ([#259](https://github.com/Rise-Experts/retinue/issues/259))
+
+The paragraph above assigns all of this to the platform. That is now split, and the reason is a fact that was not
+true when it was written: **the package ships eight toolkits and none of them is usable by a second tenant.**
+Every one takes a `credentialRef`, and the only resolver that ships is a static map — so a deployment supports
+one tenant per toolkit, configured at boot. Eight more toolkits are specified in the integrations milestone. A
+platform that does not exist yet cannot be what unblocks them.
+
+So the line moves, and it moves along the seam that was already there:
+
+| Belongs to the package | Belongs to the platform |
+|---|---|
+| The `ConnectionStore` port and its adapters | The connect button, and the screen listing what a tenant has connected |
+| The `SecretCipher` seam and encryption at rest | The consent copy and the scope explanations a person reads |
+| The OAuth flow — authorize, callback, exchange, refresh, revoke | Which providers a tenant is *offered*, and the catalogue that decides |
+| Per-tool auth-mode and scope declarations | Reminders, expiry warnings, connection health in a dashboard |
+
+The test of the split: the package must be able to complete an OAuth flow and run a tool with no platform
+present, and the platform must add no credential storage of its own. Anything that fails the first half is
+under-scoped here; anything that fails the second is the second implementation this document's decision 2
+already forbids.
+
+**What does not change.** The security requirements in the paragraph above are the specification for the package
+work — not a softer version of it. Three of them shaped the design directly:
+
+- *"encryption at rest with a key the application database cannot decrypt on its own"* is why the recommendation
+  in [#261](https://github.com/Rise-Experts/retinue/issues/261) is a `SecretCipher` seam encrypting in the
+  application, with Supabase Vault as one implementation of it rather than the foundation. A `pgcrypto` design
+  keyed from a column in the same database fails this sentence, and a Vault-only design fails it for every
+  deployment not on Supabase.
+- *"revocation that takes effect on in-flight runs"* is a harder property than revoking at the provider, because
+  a run holding a resolved credential in a local scope has already passed the store. It is an acceptance
+  criterion, not an implementation detail.
+- *"an audit record of every resolution"* means the resolver is an audited call site, which is a change to
+  `CredentialResolver` and therefore belongs with [#260](https://github.com/Rise-Experts/retinue/issues/260)'s
+  breaking change rather than after it.
+
+One capability was added that this section did not anticipate: a run that needs a connection it does not have
+**pauses and asks**, returning a login URL the way an approval gate returns a decision request, and resuming
+when consent completes. That is the runtime's HITL machinery rather than a platform feature, which is a second
+reason the flow has to live in the package — see
+[#264](https://github.com/Rise-Experts/retinue/issues/264).
+
 ### 3. Triggers
 
 Schedule, webhook, connected-account event. Each is an authenticated, rate-limited, replay-protected entry point
