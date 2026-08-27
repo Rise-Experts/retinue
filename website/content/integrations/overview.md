@@ -104,7 +104,33 @@ and the type forbids overriding them — so a write cannot be declared as a read
 ```ts
 import { confirms, defineTool, destroys } from "@retinue/agentkit/tools";
 
-const read = defineTool({ name: "vendor_get_thing", effect: "read", /* … */ });
-const write = confirms({ name: "vendor_post_thing", /* … */ });
-const gone = destroys({ name: "vendor_delete_thing", /* … */ });
+const schema = { type: "object", properties: { id: { type: "string" } }, required: ["id"] };
+
+// `read` — runs without asking.
+const getThing = defineTool({
+  name: "vendor_get_thing",
+  description: "Read one thing by id.",
+  category: "vendor",
+  effect: "read",
+  inputSchema: schema,
+  execute: async (input: { id: string }) => ({ id: input.id }),
+});
+
+// `external-write`, `always`, idempotency key — all three, and the type forbids overriding any of them.
+const postThing = confirms({
+  name: "vendor_post_thing",
+  description: "Create a thing.",
+  category: "vendor",
+  inputSchema: schema,
+  execute: async (input: { id: string }) => ({ created: input.id }),
+});
+
+// `destructive`. Same gate, and a name that says so.
+const deleteThing = destroys({
+  name: "vendor_delete_thing",
+  description: "Delete a thing permanently.",
+  category: "vendor",
+  inputSchema: schema,
+  execute: async (input: { id: string }) => ({ deleted: input.id }),
+});
 ```

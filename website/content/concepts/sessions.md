@@ -50,3 +50,10 @@ frontend can show it.
 | Compaction | on when history exceeds the budget |
 
 Next: **[Human-in-the-loop](human-in-the-loop)**.
+
+## Where this is specified
+
+This page is the shape of the thing. The specification is where the decisions and their reasons live — read it
+when you need to know *why* something behaves the way it does, or what was considered and rejected.
+
+- [Sessions and threads](/specifications/sessions-and-threads)

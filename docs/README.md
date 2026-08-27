@@ -58,6 +58,7 @@ This directory defines the extraction and migration of a reusable AI platform in
 22. [Glossary](22-glossary.md)
 23. [Tool catalogue](23-tool-catalogue.md)
 24. [Tool selection at scale](24-tool-selection-at-scale.md)
+25. [The integration page template](25-doc-page-template.md)
 
 ## Extraction
 

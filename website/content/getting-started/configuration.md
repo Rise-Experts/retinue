@@ -1,5 +1,5 @@
 ---
-sidebar_position: 3
+sidebar_position: 5
 ---
 
 # Configuration
@@ -13,16 +13,31 @@ adapter; override only what you need:
 import { createAgent } from "@retinue/agentkit/providers";
 
 const agent = createAgent({
-  manifest: { id: "assistant", name: "Assistant", instructions: "…", modelPolicy: { role: "smart" } },
-  models,                // your model catalog (defaults to a small Anthropic catalog)
-  roleAssignments,       // which model ids back "fast" / "smart"
-  providerCredentials,   // per-provider keys (BYO keys), e.g. { anthropic: { apiKey } }
-  tools,                 // ToolProvider[]
-  contextProviders,      // ContextProvider[] (memory, retrieval, …)
-  authorization,         // AuthorizationPolicy (defaults to allow-all in embedded)
-  tenantId,
+  manifest: {
+    id: "assistant",
+    name: "Assistant",
+    instructions: "Be concise.",
+    modelPolicy: { role: "smart" },
+  },
+  tenantId: "acme",
+  providerCredentials: { openai: { apiKey: process.env.OPENAI_API_KEY ?? "" } },
+  roleAssignments: { smart: ["gpt-4o"], fast: ["gpt-4o-mini"] },
 });
 ```
+
+Everything else has a default that works:
+
+| Option | Default | Override when |
+|---|---|---|
+| `models` | a small built-in catalog | You have your own model list, pricing or residency constraints |
+| `roleAssignments` | maps `smart`/`fast` to the built-in catalog | You changed `models` |
+| `providerCredentials` | read from the environment by the provider factory | You hold keys somewhere else |
+| `tools` | none | Always, eventually — see [your first tool](first-tool) |
+| `contextProviders` | none | You want memory or retrieval in the prompt |
+| `authorization` | allow-all | More than one kind of user |
+| `guardrails` | none | You need input or output checks — see [Guardrails](../concepts/guardrails) |
+| `toolSearch` / `catalogBudget` / `toolsets` | off | Your catalogue is large; read [the measurement](/specifications/tool-selection-at-scale) first |
+| `tenantId` | `"default"` | Always, in anything multi-tenant |
 
 ## Server profile ("AgentOS")
 
@@ -31,19 +46,50 @@ production adapters, and the HITL/usage services — so many runs execute concur
 and a live UI:
 
 ```ts
-import { createProviderFactory } from "@retinue/agentkit/providers";
-import { createDefaultEngine, createDurableWorker, createModelRegistry } from "@retinue/agentkit/runtime";
-import { createToolRegistry } from "@retinue/agentkit/tools";
-import { createUsageRecorder } from "@retinue/agentkit/usage";
+import { asId, defineAgent } from "@retinue/agentkit";
+import type { AgentId, ResolvedModel, Run } from "@retinue/agentkit";
+import { createDefaultEngine, createDurableWorker, createMemoryEventBus } from "@retinue/agentkit/runtime";
+import {
+  createMemoryCheckpointStore,
+  createMemoryRunEventLog,
+  createMemoryRunStore,
+} from "@retinue/agentkit/persistence";
+
+const bus = createMemoryEventBus();
 
 const worker = createDurableWorker({
-  runs,                  // RunStore (Postgres)
-  checkpoints,           // CheckpointStore
-  eventLog,              // RunEventLog (catch-up on reconnect)
-  publisher,             // RealtimePublisher (Supabase Realtime / Redis)
-  engine: createDefaultEngine({ /* loadManifest, resolveModel, loadHistory, buildTools */ }),
-  buildContext,          // build the ExecutionContext from your auth
-  workerId: process.env.HOSTNAME!,
+  // The in-memory adapters here so this compiles as written. A deployment swaps in the Postgres ones from
+  // `@retinue/agentkit/adapters/postgres` — same ports, no change to any agent or tool.
+  runs: createMemoryRunStore(),
+  checkpoints: createMemoryCheckpointStore(),
+  eventLog: createMemoryRunEventLog(),
+  publisher: bus.publisher,
+  engine: createDefaultEngine({
+    // `defineAgent` fills in the manifest's defaults — response format, tool policy, limits. A hand-written
+    // manifest has to supply every field, which is a lot of typing to say "the usual".
+    loadManifest: async () =>
+      defineAgent({
+        // Branded ids: `asId<AgentId>` rather than a bare string, so a conversation id cannot be passed where an
+        // agent id belongs. The compiler is the only thing that catches that swap.
+        id: asId<AgentId>("assistant"),
+        name: "Assistant",
+        instructions: "Be concise.",
+        modelPolicy: { role: "smart" },
+      }),
+    resolveModel: () => ({ model: {} as ResolvedModel, modelId: "gpt-4o" }),
+    loadHistory: async () => [],
+  }),
+  buildContext: (run: Run) => ({
+    tenantId: run.tenantId,
+    principalId: asId("system"),
+    roleIds: [],
+    locale: "en",
+    timezone: "UTC",
+    requestId: asId(`req-${run.id}`),
+    conversationId: run.conversationId,
+    runId: run.id,
+  }),
+  workerId: process.env.HOSTNAME ?? "worker-1",
 });
 
 // A BullMQ processor calls worker.process({ tenantId, runId }) for each queued run.

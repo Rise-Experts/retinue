@@ -52,3 +52,10 @@ changing an embedding model supports versioned re-indexing.
 - Removing a source removes its searchable content.
 
 See the **[API Reference](/api/)** for the exact interfaces.
+
+## Where this is specified
+
+This page is the shape of the thing. The specification is where the decisions and their reasons live — read it
+when you need to know *why* something behaves the way it does, or what was considered and rejected.
+
+- [Knowledge and documents](/specifications/knowledge-and-documents)

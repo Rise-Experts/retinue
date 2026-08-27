@@ -126,6 +126,13 @@ export const PACKAGES = [
   },
 ];
 
+/**
+ * Documentation whose samples are instructions rather than illustrations — task #217.
+ *
+ * See the note at the call site for why this is a list and not "every page under `website/content`".
+ */
+export const DOC_SAMPLE_ROOTS = ["website/content/getting-started", "website/content/integrations"];
+
 /** What npm ships whatever `files` says, and what a published package is unusable without. */
 export const REQUIRED_ENTRIES = ["LICENSE", "README.md", "package.json"];
 
@@ -298,6 +305,7 @@ const main = () => {
 
     const summaries = [];
     const readmeSummary = [];
+    const docsSummary = [];
     let checked = 0;
 
     for (const shipped of PACKAGES) {
@@ -498,6 +506,53 @@ const main = () => {
       );
     }
 
+    /**
+     * The documentation's samples, typechecked the same way the READMEs are — REQ-048 (#207), task #217, AC-1.
+     *
+     * "Code that runs as written" is a claim, and this is the only thing that makes it one. A doc sample that no
+     * longer compiles is worse than no sample: it teaches an API that does not exist, and the reader concludes
+     * the package is broken rather than the page.
+     *
+     * **Scoped to the pages a newcomer follows**, and the scope is a decision rather than an omission. The
+     * getting-started path and the integration pages are read as instructions — somebody pastes them into a
+     * project. Concept pages illustrate a shape with a fragment: they legitimately reference a `deps` the reader
+     * has already built, and rewriting them to compile standalone would make them worse to read. What keeps
+     * *those* honest is `check:docs`, which resolves every import specifier in every page.
+     */
+    for (const dir of DOC_SAMPLE_ROOTS) {
+      const root = join(ROOT, dir);
+      if (!existsSync(root)) {
+        fail(`${dir} does not exist, so its samples were not checked`, "a moved directory silently checks nothing");
+        continue;
+      }
+      for (const page of readdirSync(root).filter((name) => name.endsWith(".md")).sort()) {
+        const markdown = readFileSync(join(root, page), "utf8");
+        const blocks = codeBlocks(markdown);
+        if (blocks.length === 0) continue;
+        docsSummary.push(`${dir.replace("website/content/", "")}/${page}: ${blocks.length}`);
+        /**
+         * **Cumulatively**, because that is how the page is read.
+         *
+         * A tutorial's second block uses the `agent` its first block created. Typechecking each block alone
+         * reported "cannot find name 'agent'" on eight correct samples — the false-positive shape that gets a
+         * check deleted rather than fixed. Concatenating is also the stronger test: it is the file a reader ends
+         * up with, so a block that redeclares a name or contradicts an earlier one now fails, and it should.
+         */
+        let cumulative = "";
+        blocks.forEach((block, index) => {
+          cumulative = cumulative === "" ? block.code : `${cumulative}\n${block.code}`;
+          const name = `doc-${page.replace(/\.md$/, "")}-${index}`;
+          const outcome = typecheck(name, cumulative, block.lang, ["node"]);
+          if (!outcome.ok) {
+            fail(
+              `${dir}/${page} does not typecheck up to sample #${index + 1}`,
+              outcome.output.trim() || "no compiler output",
+            );
+          }
+        });
+      }
+    }
+
     if (verifiedNothing(published, checked)) {
       fail(
         "nothing was verified: no published package matched the versions in this checkout",
@@ -514,6 +569,7 @@ const main = () => {
       );
       for (const summary of summaries) console.log(`  · ${summary}`);
       for (const summary of readmeSummary) console.log(`  · README ${summary}`);
+      for (const summary of docsSummary) console.log(`  · docs ${summary} sample(s) typecheck`);
     }
   } finally {
     if (keep) console.log(`\n  kept: ${work}`);

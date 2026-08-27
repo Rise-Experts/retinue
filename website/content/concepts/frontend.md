@@ -49,3 +49,10 @@ An unopinionated component set (`ChatShell`, `MessageList`, `Composer`, `RetryIn
 `className` so your app owns the look, and all text goes through an injected translator.
 
 See **[GraphQL & transports](../getting-started/configuration)** for wiring a client.
+
+## Where this is specified
+
+This page is the shape of the thing. The specification is where the decisions and their reasons live — read it
+when you need to know *why* something behaves the way it does, or what was considered and rejected.
+
+- [GraphQL and frontend](/specifications/graphql-and-frontend)

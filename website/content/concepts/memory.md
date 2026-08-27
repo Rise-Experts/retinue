@@ -53,3 +53,11 @@ reasoning/tool detail first, **compacts** older history into a summary rather th
 and **fails loudly** if critical instructions can't fit — never silent truncation.
 
 Next: **[Sessions & threads](sessions)**.
+
+## Where this is specified
+
+This page is the shape of the thing. The specification is where the decisions and their reasons live — read it
+when you need to know *why* something behaves the way it does, or what was considered and rejected.
+
+- [User memory](/specifications/user-memory)
+- [Knowledge and documents](/specifications/knowledge-and-documents)

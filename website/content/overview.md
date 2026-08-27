@@ -27,19 +27,37 @@ actually bite in production:
 - **Reusability** — ports-and-adapters throughout, a headless React client, and two runtime
   profiles (embedded library or hosted server).
 
+## Find your way by what you are trying to do
+
+Nobody arrives at documentation wanting section four. Start from the question:
+
+| What you want | Where to go |
+|---|---|
+| Get something running in five minutes | **[Installation](getting-started/installation)** → **[Quick start](getting-started/quick-start)** |
+| Let the agent *do* something, not just talk | **[Your first tool](getting-started/first-tool)** |
+| Stop it doing something irreversible without a human | **[Human-in-the-loop](concepts/human-in-the-loop)**, and `confirms()` in **[Your first tool](getting-started/first-tool)** |
+| Stop it saying something, or seeing something | **[Guardrails](concepts/guardrails)** |
+| Have it remember a person between conversations | **[Persistent memory](guides/persistent-memory)** → **[Memory](concepts/memory)** |
+| Answer from my documents, with citations | **[Retrieval](concepts/retrieval)** |
+| Connect GitHub, Slack, or web search | **[Integrations](integrations/overview)** |
+| Run a multi-step process that survives a restart | **[Your first flow](getting-started/first-flow)** → **[Durable runtime](concepts/durable-runtime)** |
+| Serve many users, with a queue and a database | **[Configuration](getting-started/configuration)** |
+| Know what a turn cost | **[Usage and accounting](/specifications/usage-and-accounting)** |
+| Build the UI | **[Frontend](concepts/frontend)** |
+| Understand why something behaves as it does | **[Specifications](/specifications/)** — the design decisions and what was rejected |
+| Look up a type or a function | **[API reference](/api/)** — generated from the source |
+
 ## How the docs are organized
 
 | Section | For |
 |---|---|
-| **Getting Started** | Install and run your first agent |
-| **Core Concepts** | How agents, tools, memory, sessions, HITL and retrieval work |
+| **Getting Started** | Install → first agent → first tool → first flow. Every sample on these pages is typechecked against the published package on every build |
+| **Core Concepts** | How each subsystem works, each linking down into its specification |
+| **Integrations** | The shipped toolkits, all on one page template |
 | **Guides** | Task-focused walkthroughs |
 | **Examples** | Copy-paste starting points |
 | **[API Reference](/api/)** | Generated from the TypeScript types |
-| **[Specifications](/specifications/)** | The internal design specs |
-
-New here? Start with **[Installation](getting-started/installation)** then the
-**[Quick Start](getting-started/quick-start)**.
+| **[Specifications](/specifications/)** | The internal design specs — decisions, reasoning, and rejected alternatives |
 
 :::note Status
 Retinue is under active development. Concept docs describe the settled design; code examples

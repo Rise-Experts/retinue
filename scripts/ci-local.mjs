@@ -55,6 +55,8 @@ export const STEPS = [
   // Offline: the built output's canonical host must agree with the config. Before #203's cutover it passes
   // trivially; after it, it is what catches a config change that was never redeployed.
   ["docs site hostname", "npm run check:domain -- --offline"],
+  // After the build, because the built output is the only honest answer to "does this URL exist" — task #217.
+  ["llms.txt links", "npm run check:llms"],
 ];
 
 /** The workflow commands this file deliberately does not run, each with the reason. */

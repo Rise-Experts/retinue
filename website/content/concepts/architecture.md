@@ -48,3 +48,11 @@ The **embedded** profile runs this in-process with an inline dispatcher; the **s
 runs it durably over BullMQ with GraphQL and realtime. Same runtime, different adapters.
 
 See **[Agents](agents)** next.
+
+## Where this is specified
+
+This page is the shape of the thing. The specification is where the decisions and their reasons live — read it
+when you need to know *why* something behaves the way it does, or what was considered and rejected.
+
+- [Architecture](/specifications/architecture)
+- [The platform's own goals](/specifications/platform)

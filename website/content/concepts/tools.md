@@ -79,3 +79,12 @@ Tools **wrap** your existing services and functions rather than reimplementing t
 authorization + approval + idempotency envelope over the deterministic operation.
 
 Next: **[Memory](memory)**.
+
+## Where this is specified
+
+This page is the shape of the thing. The specification is where the decisions and their reasons live — read it
+when you need to know *why* something behaves the way it does, or what was considered and rejected.
+
+- [Intelligence runtime → Tool registry](/specifications/intelligence-runtime)
+- [The tool catalogue](/specifications/tool-catalogue)
+- [Selection at scale, measured](/specifications/tool-selection-at-scale)

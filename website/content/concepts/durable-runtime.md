@@ -53,3 +53,11 @@ so a later failure never loses the usage already consumed. A pre-flight `reserve
 that would exceed the run's cost or token ceiling.
 
 See **[Sessions](sessions)** and **[Human-in-the-loop](human-in-the-loop)**.
+
+## Where this is specified
+
+This page is the shape of the thing. The specification is where the decisions and their reasons live — read it
+when you need to know *why* something behaves the way it does, or what was considered and rejected.
+
+- [Durable runtime and HITL](/specifications/durable-runtime-and-hitl)
+- [Load and resilience](/specifications/load-and-resilience)

@@ -171,3 +171,11 @@ names *what* was redacted and never its value, or the audit trail becomes the le
 It cannot see history. `inspectInput` receives the newest user turn, not the conversation, because a guardrail
 that re-inspects the past would re-refuse a conversation over something already allowed — and a check that
 changes its mind about history makes a conversation impossible to continue.
+
+## Where this is specified
+
+**Nowhere yet, and that is worth knowing.** Guardrails arrived with REQ-046 and have no numbered specification
+document; this page and the source comments are the specification for now. The surrounding threat model — untrusted
+content, prompt injection, what the platform already refuses — is in
+[Security review](/specifications/security-review), and the requirement itself is
+[REQ-046](https://github.com/Rise-Experts/retinue/issues/205).
