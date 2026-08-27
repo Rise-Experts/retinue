@@ -60,13 +60,13 @@ results are worth knowing before you configure anything:
 
 | Arm | success@5 | Recall | ms/query |
 |---|---|---|---|
-| keyword | 55.6% | 55.6% | 7 |
-| **semantic** | **88.9%** | **83.3%** | 207 |
-| hybrid (the default) | 72.2% | 72.2% | 220 |
-| hybrid + exact-term reranker | 66.7% | 66.7% | 220 |
+| keyword | 61.1% | 61.1% | 6 |
+| **semantic** | **83.3%** | **77.8%** | 188 |
+| hybrid (the default) | 72.2% | 72.2% | 196 |
+| hybrid + exact-term reranker | 66.7% | 66.7% | 182 |
 
-**Hybrid lost to semantic alone here**, because reciprocal rank fusion weights both signals equally and the
-lexical signal is weak on natural-language questions over prose. It stays the default: that dataset has 18
+**Hybrid lost to semantic alone here** by two cases, because reciprocal rank fusion weights both signals equally
+and the lexical signal is weak on natural-language questions over prose. It stays the default: that dataset has 18
 queries and no *identifier* queries — an error code, a SKU — which is the case hybrid exists for. Know which kind
 of query your corpus gets.
 
@@ -86,3 +86,4 @@ when you need to know *why* something behaves the way it does, or what was consi
 
 - [Knowledge and documents](/specifications/knowledge-and-documents)
 - [Retrieval quality, measured](/specifications/retrieval-quality)
+- [The Open Knowledge Format, read against our document model](/specifications/open-knowledge-format)

@@ -15,7 +15,7 @@ measured, and nothing had measured it.
 ## The corpus and the dataset
 
 56 documents — this repository's own specifications and documentation site — parsed by the platform's own
-`parseMarkdown` and chunked by its own `chunkDocument`, giving 621 chunks and ~112,000 embedded tokens. So the
+`parseMarkdown` and chunked by its own `chunkDocument`, giving 603 chunks and ~114,000 embedded tokens. So the
 thing being scored is the pipeline a deployment actually runs, over long technical prose with headings, tables and
 code rather than a benchmark set chosen to flatter a retriever.
 
@@ -30,11 +30,16 @@ form a reader can check.
 
 | Arm | success@5 | Right document | P@1 | Recall | MRR | ms/query |
 |---|---|---|---|---|---|---|
-| keyword | 55.6% | 77.8% | 33.3% | 55.6% | 0.421 | 7 |
-| **semantic** | **88.9%** | **94.4%** | 27.8% | **83.3%** | 0.504 | 207 |
-| hybrid (the default) | 72.2% | 88.9% | 33.3% | 72.2% | 0.474 | 220 |
-| hybrid + exact-term reranker | 66.7% | 83.3% | 33.3% | 66.7% | 0.446 | 220 |
-| navigate (no vectors) | 61.1% | 72.2% | **44.4%** | 55.6% | **0.509** | 1,538 |
+| keyword | 61.1% | 83.3% | 33.3% | 61.1% | 0.432 | 6 |
+| **semantic** | **83.3%** | **94.4%** | 27.8% | **77.8%** | 0.493 | 188 |
+| hybrid (the default) | 72.2% | 88.9% | 33.3% | 72.2% | 0.474 | 196 |
+| hybrid + exact-term reranker | 66.7% | 83.3% | 33.3% | 66.7% | 0.446 | 182 |
+| navigate (no vectors) | 66.7% | 77.8% | **44.4%** | 61.1% | **0.520** | 1,297 |
+
+Re-run after [#220](https://github.com/Rise-Experts/retinue/issues/220) stopped YAML front matter reaching the
+block stream as content — 18 fewer chunks, and no more chunk whose text is a `sidebar_position`. Every arm moved
+by **at most one case** (keyword +1, semantic −1, navigate +1), which is the noise floor stated below arriving
+as evidence rather than as a caveat.
 
 **success@5** — a relevant hit anywhere in the top five — is the headline, because the model reads all five.
 **Right document** ignores the phrase and asks only whether a hit came from a judged document; the gap between the
@@ -43,11 +48,11 @@ what a citation cares about.
 
 ### 1. Hybrid is worse than semantic alone on this corpus
 
-−16.7 points of success@5 and −11.1 of recall against the semantic arm. The platform's own comments have said for
+−11.1 points of success@5 and −5.6 of recall against the semantic arm. The platform's own comments have said for
 months that hybrid "measurably beats" both parts; on a real corpus of technical prose it does not.
 
 The mechanism is not mysterious. RRF fuses **ranks**, weighting both signals equally by construction. The lexical
-signal is much weaker here (55.6%), and fusing a weak list with a strong one demotes the strong list's top hits
+signal is weaker here (61.1%), and fusing a weak list with a strong one demotes the strong list's top hits
 wherever the weak one disagrees. Hybrid's advantage is supposed to appear on *identifier* queries — an error code,
 a SKU, a campaign id — where an embedding of `ERR-4021` is an embedding of a string that looks like other strings.
 **This dataset has no identifier queries**, because its questions are the ones a reader of these documents would
@@ -83,7 +88,7 @@ embedding bill.
 
 **Do nothing to the default, and add the eval to the release path.** Specifically:
 
-1. **Keep `hybrid` as the default.** The 16.7-point gap is three cases out of eighteen, from a dataset with one
+1. **Keep `hybrid` as the default.** The 11.1-point gap is two cases out of eighteen, from a dataset with one
    author and no identifier queries — which is precisely the query type hybrid exists for. Changing a platform
    default on that evidence would be replacing a decision from the literature with a decision from a small
    dataset that happens to disagree with it. What the number *does* justify is a larger dataset with identifier
@@ -108,6 +113,10 @@ not, so they are not added. Same corpus, same semantic arm, three chunkings:
 | **400 / 800 (default)** | **621** | **88.9%** | **83.3%** | 0.504 |
 | 800 / 1600 | 572 | 88.9% | 83.3% | 0.513 |
 
+*(Chunking arms were measured before the front-matter fix, on the 621-chunk corpus. The comparison between them
+is unaffected — all three shared the same corpus — and re-running them would cost three more embedding passes to
+move each row by at most a case.)*
+
 Smaller chunks are clearly worse: 11 points of success@5, and the reason is visible in the corpus — a 200-token
 chunk of technical prose often splits a claim from the sentence that qualifies it. Larger chunks are
 indistinguishable from the default on this corpus, with a marginally better MRR and 8% fewer chunks to store.
@@ -119,8 +128,10 @@ this table is the baseline to argue against when somebody has one.
 
 ## Honest limits of this measurement
 
-**18 queries.** One case is 5.6 points. Only the large gaps — keyword versus semantic (33 points), semantic versus
-hybrid (17) — are outside plausible noise, and the reranker's −5.6 is *exactly one case*. It is reported as a
+**18 queries.** One case is 5.6 points. Only the largest gap — keyword versus semantic (22 points, four cases) —
+is comfortably outside plausible noise; semantic versus hybrid is two cases, and the reranker's −5.6 is *exactly
+one case*. The re-run above is the demonstration: a change to the *corpus* that touched no retrieval code moved
+three of the five arms by one case each. It is reported as a
 finding because it is a consistent direction across three metrics with no offsetting benefit, not because one case
 is significant on its own.
 
@@ -133,7 +144,7 @@ than any change to the harness.
 **The dataset had a defect on its first run, and the audit is why the numbers above are different.** Seven of the
 strict misses turned out to be hits from the *right document* whose chunk did not contain a phrase used once
 elsewhere in it: the judgements named terms rather than answers. Fixing the phrases moved semantic's success@5 from
-22.2% to 88.9%. A harness reporting a bad number is a claim about the harness until somebody has read the misses —
+22.2% to 88.9% (83.3% after the front-matter fix). A harness reporting a bad number is a claim about the harness until somebody has read the misses —
 which is the second time in this sprint that turned out to be true.
 
 ## Re-running it

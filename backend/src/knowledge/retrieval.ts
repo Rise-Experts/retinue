@@ -18,8 +18,8 @@
  * the behaviour hybrid exists for — the exact-term hit surfaces even though the semantic signal never saw it.
  *
  * **And on one real corpus it is worse than semantic alone.** This comment used to say hybrid "measurably beats"
- * both parts; #219 measured it over 56 documents of technical prose and hybrid lost 16.7 points of success@5 to
- * semantic-only. The mechanism is the same paragraph read the other way: RRF weights both signals equally by
+ * both parts; #219 measured it over 56 documents of technical prose and hybrid lost 11.1 points of success@5 to
+ * semantic-only — two cases out of eighteen. The mechanism is the same paragraph read the other way: RRF weights both signals equally by
  * construction, so fusing a weak list with a strong one demotes the strong list's top hits wherever the weak one
  * disagrees. The lexical signal is weak on natural-language questions over prose.
  *

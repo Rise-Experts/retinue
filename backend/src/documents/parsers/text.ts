@@ -114,9 +114,56 @@ const isPipeDivider = (line: string): boolean =>
  * Plain text has no headings or tables, so running it through the same parser costs nothing and means one
  * code path instead of two that differ in how they split paragraphs.
  */
+/**
+ * A leading `---` block, split off before anything else reads the document — task #220.
+ *
+ * Returns the remaining lines and the scalar keys, and **names what it could not read** rather than guessing.
+ * Front matter is metadata about a document, not part of it: left in the stream it becomes a paragraph, gets
+ * chunked and embedded, and can be returned as a retrieval hit — so a question about revenue policy can be
+ * answered with a block of YAML.
+ *
+ * Scalar keys only. `generated: { by: x, at: y }` read as the *string* `{ by: x, at: y }` would be provenance
+ * recorded as if it had been understood, which is worse than a warning saying it was skipped.
+ */
+export const splitFrontMatter = (
+  lines: readonly string[],
+): { readonly body: readonly string[]; readonly fields: Record<string, string>; readonly warnings: readonly string[] } => {
+  if ((lines[0] ?? "").trim() !== "---") return { body: lines, fields: {}, warnings: [] };
+  const end = lines.findIndex((line, at) => at > 0 && line.trim() === "---");
+  // No closing fence: a document that happens to start with a horizontal rule, not front matter.
+  if (end === -1) return { body: lines, fields: {}, warnings: [] };
+
+  const fields: Record<string, string> = {};
+  const skipped: string[] = [];
+  for (const line of lines.slice(1, end)) {
+    if (line.trim() === "" || line.trimStart().startsWith("#")) continue;
+    // An indented line or a list item belongs to a structure this does not read.
+    if (/^\s/.test(line) || line.trimStart().startsWith("- ")) continue;
+    const match = /^([A-Za-z_][\w.-]*)\s*:\s*(.*)$/.exec(line);
+    if (match === null) continue;
+    const [, key, raw] = match;
+    const value = (raw ?? "").trim();
+    // A flow collection or the start of a block one: named as skipped, never half-read.
+    if (value === "" || value.startsWith("{") || value.startsWith("[")) {
+      skipped.push(key as string);
+      continue;
+    }
+    fields[key as string] = value.replace(/^["']|["']$/g, "");
+  }
+  return {
+    body: lines.slice(end + 1),
+    fields,
+    warnings:
+      skipped.length === 0
+        ? []
+        : [`front matter key(s) not read because they are not scalars: ${skipped.join(", ")}`],
+  };
+};
+
 export const parseMarkdown = (bytes: Uint8Array, limits: ExtractionLimits): ExtractedDocument => {
   const builder = createBlockBuilder(limits);
-  const lines = decode(bytes).split(/\r?\n/);
+  const matter = splitFrontMatter(decode(bytes).split(/\r?\n/));
+  const lines = matter.body;
 
   let paragraph: string[] = [];
   const flushParagraph = (): boolean => {
@@ -192,7 +239,12 @@ export const parseMarkdown = (bytes: Uint8Array, limits: ExtractionLimits): Extr
   flushParagraph();
   flushList();
 
-  return builder.done();
+  const parsed = builder.done();
+  return {
+    ...parsed,
+    ...(Object.keys(matter.fields).length === 0 ? {} : { frontMatter: matter.fields }),
+    warnings: [...parsed.warnings, ...matter.warnings],
+  };
 };
 
 /**

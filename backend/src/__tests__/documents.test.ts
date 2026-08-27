@@ -34,6 +34,7 @@ import {
   parseDelimited,
   parseJsonDocument,
   parseMarkdown,
+  splitFrontMatter,
 } from "../documents/parsers/text.js";
 import { renderBlocks, summariseBlocks } from "../documents/render.js";
 import { MAX_BLOCKS_PER_READ, createReadDocumentTool } from "../documents/read-tool.js";
@@ -871,5 +872,69 @@ describe("AC-6: read_document reads bounded windows", () => {
       input: { fileId: id },
     });
     expect(result.ok).toBe(false);
+  });
+});
+
+describe("YAML front matter is metadata, not content — REQ-050 (#209), task #220", () => {
+  /**
+   * Found by reading the Open Knowledge Format, whose concept files carry provenance and lifecycle fields — and
+   * it was already happening to this repository's own documentation site, whose pages all start with a
+   * `sidebar_position`. Front matter left in the block stream becomes a paragraph, gets chunked, embedded, and
+   * can be returned as a retrieval hit: a question about revenue policy answered with a block of YAML.
+   */
+  it("strips the block and keeps the scalar keys", () => {
+    const doc = parseMarkdown(
+      utf8("---\ntype: Metric\ntitle: Revenue\nstatus: stable\n---\n\n# Definition\n\nRevenue is recognised when delivered.\n"),
+      LIMITS,
+    );
+    expect(doc.frontMatter).toEqual({ type: "Metric", title: "Revenue", status: "stable" });
+    // The first block is the document's own first heading, not a paragraph of YAML.
+    expect(doc.blocks[0]).toMatchObject({ kind: "heading", text: "Definition" });
+    expect(JSON.stringify(doc.blocks)).not.toContain("Metric");
+  });
+
+  it("names a key it could not read rather than half-reading it", () => {
+    /**
+     * The property that matters more than the parsing. `generated: { by: x, at: y }` read as the *string*
+     * `{ by: x, at: y }` would be provenance recorded as if it had been understood — worse than a warning
+     * saying it was skipped, because nothing downstream could tell.
+     */
+    const doc = parseMarkdown(
+      utf8("---\ntitle: Revenue\ngenerated: { by: agent, at: 2026-06-30T14:00:00Z }\nsources:\n  - id: policy\n---\n\nBody.\n"),
+      LIMITS,
+    );
+    expect(doc.frontMatter).toEqual({ title: "Revenue" });
+    expect(doc.warnings.join(" ")).toContain("generated");
+    expect(doc.warnings.join(" ")).toContain("sources");
+  });
+
+  it("leaves a document alone when a leading rule is not front matter", () => {
+    // `---` with no closing fence is a horizontal rule, and treating it as an unterminated header would eat the
+    // whole document.
+    const doc = parseMarkdown(utf8("---\n\n# Title\n\nProse.\n"), LIMITS);
+    expect(doc.frontMatter).toBeUndefined();
+    expect(doc.blocks.some((block) => block.kind === "heading")).toBe(true);
+  });
+
+  it("reports no front matter for a document that has none", () => {
+    const doc = parseMarkdown(utf8("# Title\n\nProse.\n"), LIMITS);
+    expect(doc.frontMatter).toBeUndefined();
+    expect(doc.warnings).toEqual([]);
+  });
+
+  it("splits without interpreting quotes, comments or blank lines", () => {
+    const { body, fields, warnings } = splitFrontMatter([
+      "---",
+      "# a comment",
+      "",
+      'title: "Quoted"',
+      "count: 3",
+      "flow: [a, b]",
+      "---",
+      "Body line",
+    ]);
+    expect(fields).toEqual({ title: "Quoted", count: "3" });
+    expect(warnings.join(" ")).toContain("flow");
+    expect(body).toEqual(["Body line"]);
   });
 });

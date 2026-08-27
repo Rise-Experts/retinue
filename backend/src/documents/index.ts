@@ -84,6 +84,20 @@ export type ExtractedDocument = {
    */
   readonly warnings: readonly string[];
   /**
+   * YAML front matter, when the source had a leading `---` block — REQ-050 (#209), task #220.
+   *
+   * **Scalar keys only, and deliberately not a YAML parser.** A nested mapping, a list of mappings or a flow
+   * collection is reported in `warnings` and otherwise dropped, because a half-correct parse of provenance
+   * metadata is worse than none: `generated: { by: x, at: y }` silently read as the string `{ by: x, at: y }`
+   * would be recorded as if it had been understood.
+   *
+   * It exists because the alternative was worse. Front matter used to reach the block stream as *content*: a
+   * document's `sidebar_position` and `type` became a paragraph, got chunked, embedded, and could be returned as
+   * a retrieval hit and cited. #220 found it while reading the Open Knowledge Format — whose concept files carry
+   * far more metadata than ours — and it was already happening to this repository's own documentation site.
+   */
+  readonly frontMatter?: Readonly<Record<string, string>>;
+  /**
    * How confident the extraction is, 0–1 (#132).
    *
    * Present only for extraction that *has* a confidence — OCR and vision. A PDF's text layer is not
