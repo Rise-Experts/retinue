@@ -124,7 +124,7 @@ reach systems other people depend on.
 
 | Package | Tools | Category | Notes |
 |---|---|---|---|
-| `tools-github` | `search_code`, `get_file`, `list_issues`, `create_issue`, `comment`, `create_pr`, `merge_pr`, `list_runs` | project | **First one built.** Token auth needs no OAuth plumbing; a GitHub App is the upgrade path. `merge_pr` is `destructive` |
+| `tools-github` | `github_search_code`, `github_get_file`, `github_list_issues`, `github_create_issue`, `github_comment`, `github_merge_pull_request` | project | **Built** (#214). Token auth needs no OAuth plumbing; a GitHub App is the upgrade path. `github_merge_pull_request` is `destructive`. Names are vendor-prefixed — the convention the whole catalogue follows, and the reason `check:effects` inspects the second name segment as well as the first |
 | `tools-slack` | `list_channels`, `read_history`, `post_message`, `reply_thread`, `upload_file` | communication | Second. Exercises the `credentialRef` seam before connections exist. Useful only with triggers (REQ-042 piece 3) |
 | `tools-email` | `send_email`, `list_messages`, `read_message` | communication | SMTP, Resend, AWS SES behind one contract. `send_email` is `external-write`, `always` |
 | `tools-google` | Drive, Sheets, Calendar, Gmail, Slides | productivity | Four consent surfaces in one vendor; scope sprawl is the cost driver, not the API |

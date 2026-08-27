@@ -55,8 +55,14 @@ test("an unreadable manifest is a refusal, not a crash", () => {
   assert.match(outcome.problem, /cannot read backend\/package\.json/);
 });
 
-test("only the two shipping packages are releasable", () => {
-  // #196 merged the host into the runtime and #188's tools are the `./tools` subpath, so #193's four-package
-  // table is two. If that changes, this fails and the table gets updated with it.
-  assert.deepEqual(Object.keys(RELEASABLE), ["agentkit", "react"]);
+test("exactly the shipping packages are releasable, and no more", () => {
+  /**
+   * #196 merged the host into the runtime and #188's tools are the `./tools` subpath, so #193's four-package
+   * table was two. #214 adds the first sibling toolkit, which is versioned independently — the whole reason
+   * toolkits are separate packages is that a vendor API change must not be a runtime release.
+   *
+   * Exact rather than "contains", and it has now failed twice for the right reason: a package added to the
+   * release path is a decision, and this is where it gets noticed.
+   */
+  assert.deepEqual(Object.keys(RELEASABLE), ["agentkit", "react", "tools-github"]);
 });

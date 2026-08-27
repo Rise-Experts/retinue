@@ -59,3 +59,39 @@ export const toolProvider = (id: string, tools: readonly Tool[]): ToolProvider =
     return tools;
   },
 });
+
+/**
+ * The spec a confirmation wrapper accepts — the three classification fields removed.
+ *
+ * Removed rather than defaulted, so passing one is a **compile error** instead of a silent override. "Visible in
+ * review" was the weaker version of this requirement: a reviewer reading `confirms({ …, approvalPolicy: "never" })`
+ * has to notice a contradiction, and the type system can refuse it instead.
+ */
+export type GatedToolSpec<I, O> = Omit<ToolSpec<I, O>, "effect" | "approvalPolicy" | "requiresIdempotencyKey">;
+
+/**
+ * A tool that writes somewhere outside this system, and therefore waits for a person.
+ *
+ * `effect`, `approvalPolicy` and `requiresIdempotencyKey` are one decision, and this is the word for it. Setting
+ * them individually is three chances to get it wrong, and the failure is silent: `effect: "read"` on a tool that
+ * posts a message skips the approval gate, carries no idempotency key, and nothing in the build objects, because
+ * `read` is a valid value and the compiler cannot know what the function does.
+ *
+ * Across one package that is a code-review problem. Across the twenty-one toolkit packages `docs/23` plans, some
+ * contributed, it is a systemic one — so the safe thing is now shorter to write than the unsafe thing.
+ *
+ * Use `defineTool` directly for a read, or for the rare combination this does not express.
+ */
+export const confirms = <I = unknown, O = unknown>(spec: GatedToolSpec<I, O>): Tool<O> =>
+  defineTool({ ...spec, effect: "external-write", approvalPolicy: "always", requiresIdempotencyKey: true });
+
+/**
+ * A tool whose effect cannot be undone — a delete, a merge, a send that cannot be recalled.
+ *
+ * Distinct from `confirms` because the *classification* differs and downstream policy reads it: a shadow run
+ * suppresses `destructive` and `external-write` alike, but an operator reviewing what an agent may do wants to
+ * know which of the two a tool is. Collapsing them would lose that, and the answer to "what can this agent
+ * irreversibly do" would stop being answerable from the catalogue.
+ */
+export const destroys = <I = unknown, O = unknown>(spec: GatedToolSpec<I, O>): Tool<O> =>
+  defineTool({ ...spec, effect: "destructive", approvalPolicy: "always", requiresIdempotencyKey: true });

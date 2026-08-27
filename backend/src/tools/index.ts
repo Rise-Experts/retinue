@@ -156,6 +156,7 @@ export const META_TOOLS = [
 
 export type MetaToolName = (typeof META_TOOLS)[number];
 
+export * from "./credentials.js";
 export * from "./meta-tools.js";
 export * from "./registry.js";
 export * from "./delegating.js";

@@ -42,6 +42,9 @@ import { fileURLToPath } from "node:url";
 export const RELEASABLE = {
   agentkit: { workspace: "@retinue/agentkit", dir: "backend" },
   react: { workspace: "@retinue/react", dir: "frontend" },
+  // Toolkits, versioned independently of the runtime — the whole reason they are separate packages is that a
+  // vendor API change must not be a runtime release.
+  "tools-github": { workspace: "@retinue/tools-github", dir: "tools/github" },
 };
 
 const TAG = /^(?:refs\/tags\/)?([a-z][a-z0-9-]*)@(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$/;

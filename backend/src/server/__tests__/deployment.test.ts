@@ -290,7 +290,21 @@ describe("the library reads no environment", () => {
           if (entry.name === "server") continue;
           await walk(child);
         } else if (entry.name.endsWith(".ts") && !entry.name.endsWith(".test.ts")) {
-          const source = await readFile(child, "utf8");
+          /**
+           * Comments stripped before the scan.
+           *
+           * The invariant is about *code*, and this matched prose: `tools/credentials.ts` exists to explain why a
+           * toolkit must never read `process.env.GITHUB_TOKEN`, and naming the thing it forbids made it an
+           * offender. A check that fires on documentation of its own rule pressures people to stop documenting
+           * the rule — which costs more than it protects.
+           *
+           * Deliberately a coarse strip rather than a parser: a `"process.env"` inside a string literal would
+           * still be caught, and that is the right side to err on for a rule about a library reading its
+           * environment.
+           */
+          const source = (await readFile(child, "utf8"))
+            .replace(/\/\*[\s\S]*?\*\//g, "")
+            .replace(/\/\/.*$/gm, "");
           if (source.includes("process.env")) offenders.push(entry.name);
         }
       }

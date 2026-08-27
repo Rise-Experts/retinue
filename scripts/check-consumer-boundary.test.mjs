@@ -121,7 +121,13 @@ test("every shipping package is covered, and each deep list has both halves of t
   // Both, because it checked only the runtime at first and `@retinue/react` was meanwhile shipping 32
   // sourcemaps pointing at sources it did not contain. A check covering one of two published packages reads,
   // in a green pipeline, as covering both.
-  assert.deepEqual(PACKAGES.map((shipped) => shipped.name), ["@retinue/agentkit", "@retinue/react"]);
+  // Exact, not "contains": an accidental addition should fail here and be looked at, and a toolkit added
+  // without consumer-boundary coverage would otherwise ship unchecked. #214 added the third deliberately.
+  assert.deepEqual(PACKAGES.map((shipped) => shipped.name), [
+    "@retinue/agentkit",
+    "@retinue/react",
+    "@retinue/tools-github",
+  ]);
   for (const shipped of PACKAGES) {
     // A list of only-missing paths would pass against a package with no exports map at all, which is the state
     // this check exists to detect.

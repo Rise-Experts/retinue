@@ -109,6 +109,11 @@ export const PACKAGES = [
     dir: "frontend",
     deep: ["dist/index.js", "dist/hooks/hooks.js", "src/client.ts", "hooks", "ui"],
   },
+  {
+    name: "@retinue/tools-github",
+    dir: "tools/github",
+    deep: ["dist/index.js", "src/index.ts", "tools", "internal"],
+  },
 ];
 
 /** What npm ships whatever `files` says, and what a published package is unusable without. */
@@ -241,7 +246,16 @@ const main = () => {
     const tsc = join(ROOT, "node_modules", "typescript", "bin", "tsc");
     if (!existsSync(tsc)) die("typescript is not installed in this workspace, so the build half cannot be checked");
 
-    const typecheck = (name, source, lang = "ts") => {
+    /**
+     * `types` is a parameter because the two things being typechecked live in different worlds.
+     *
+     * The subpath and deep-import probes use `types: []` on purpose: an ambient global can mask a missing export
+     * and make a broken package look importable. A **README example** is different — it is Node code a reader
+     * will paste into a Node project, and `process.env.GITHUB_TOKEN` is exactly how a host supplies a token. With
+     * `types: []` the check failed on a correct example, which is the false-positive shape that gets a check
+     * loosened until it catches nothing.
+     */
+    const typecheck = (name, source, lang = "ts", types = []) => {
       writeFileSync(join(consumer, `${name}.${lang}`), source);
       writeFileSync(
         join(consumer, `${name}.tsconfig.json`),
@@ -256,7 +270,7 @@ const main = () => {
               strict: true,
               skipLibCheck: true,
               noEmit: true,
-              types: [],
+              types,
             },
             files: [`${name}.${lang}`],
           },
@@ -429,7 +443,7 @@ const main = () => {
         }
         readmeSummary.push(`${shortName}: ${blocks.length} example(s) typecheck, ${relativeLinks(readme).length} relative link(s)`);
         blocks.forEach((block, index) => {
-          const outcome = typecheck(`readme-${shortName}-${index}`, block.code, block.lang);
+          const outcome = typecheck(`readme-${shortName}-${index}`, block.code, block.lang, ["node"]);
           if (!outcome.ok) {
             fail(
               `${shipped.name}'s README example #${index + 1} does not typecheck against the published package`,
