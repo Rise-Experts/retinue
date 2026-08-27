@@ -82,7 +82,7 @@
  * Exit codes: 0 the boundary holds, 1 it does not, 2 the check could not run.
  */
 
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -353,6 +353,7 @@ const main = () => {
 
     const summaries = [];
     const readmeSummary = [];
+    const binSummary = [];
     const docsSummary = [];
     let checked = 0;
 
@@ -545,6 +546,39 @@ const main = () => {
         }
       }
 
+      /**
+       * ── 6b: the `bin`, if the package declares one — task #252 AC-1 ──────────────────────────────────────
+       *
+       * Checked here rather than by running it in this repo, because the workspace hides exactly this class of
+       * failure. The `tools-*@0.1.0` release proved it: a local check packs the *local* runtime, so an import
+       * that only resolves against a sibling workspace passes locally and is broken for everyone who installs.
+       * A `bin` is the same shape — a path into `dist` that `files` may not ship, or an entry that throws on a
+       * command needing no configuration.
+       */
+      const bin = shipped.manifest?.bin ?? JSON.parse(readFileSync(join(modules, "@retinue", shortName, "package.json"), "utf8")).bin;
+      if (bin !== undefined) {
+        for (const [name, relative] of Object.entries(typeof bin === "string" ? { [shortName]: bin } : bin)) {
+          const target = join(modules, "@retinue", shortName, relative);
+          if (!existsSync(target)) {
+            fail(
+              `${shipped.name} declares bin "${name}" → ${relative}, which the tarball does not contain`,
+              "the `files` field decides what ships; a bin pointing outside it installs a broken command",
+            );
+            continue;
+          }
+          // `--help` needs no database, no Redis and no configuration, so a non-zero exit here is the command
+          // being broken rather than the environment being empty.
+          const help = spawnSync(process.execPath, [target, "--help"], { cwd: consumer, encoding: "utf8" });
+          if (help.status !== 0) {
+            fail(
+              `${shipped.name}'s bin "${name}" exited ${help.status} on --help`,
+              (help.stderr || help.stdout || "no output").trim(),
+            );
+          }
+          binSummary.push(`${shortName}: bin ${name} → ${relative} runs`);
+        }
+      }
+
       // ── 7: the README a consumer actually reads ───────────────────────────────────────────────────────────
       const readmePath = join(modules, "@retinue", shortName, "README.md");
       if (existsSync(readmePath)) {
@@ -685,6 +719,7 @@ const main = () => {
       );
       for (const summary of summaries) console.log(`  · ${summary}`);
       for (const summary of readmeSummary) console.log(`  · README ${summary}`);
+      for (const summary of binSummary) console.log(`  · ${summary}`);
       for (const summary of docsSummary) console.log(`  · docs ${summary} sample(s) typecheck`);
     }
   } finally {

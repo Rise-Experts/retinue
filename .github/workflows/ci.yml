@@ -104,6 +104,15 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
+      # Added for the CLI step below (#252): `doctor` checks Redis too, and a skipped check is not a check.
+      redis:
+        image: redis:7-alpine
+        ports: ["6479:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -121,6 +130,24 @@ jobs:
       # what surfaced it. A job that cannot pass and never runs is indistinguishable from a job that passes.
       - name: Build
         run: npm run build
+      # The CLI, against the real services this job already has — task #252 AC-7.
+      #
+      # Here rather than in a job of its own because the whole point is a *real* Postgres and Redis, and this is
+      # where they are. A `migrate` that only ever ran against PGlite would not have caught the concurrent-DDL
+      # race that made two simultaneous runs crash one process.
+      #
+      # `migrate` twice, deliberately: the second run asserts idempotency, which is the property an operator
+      # relies on every deploy. Then `doctor`, which must exit 0 — and it exercises the schema check reporting
+      # "current === target" immediately after the migration that made it true.
+      - name: CLI — migrate, again, then doctor
+        env:
+          RETINUE_DATABASE_URL: postgres://postgres:postgres@localhost:5442/agentkit_test
+          RETINUE_REDIS_URL: redis://localhost:6479
+        run: |
+          node backend/dist/server/bin.js migrate --status
+          node backend/dist/server/bin.js migrate
+          node backend/dist/server/bin.js migrate
+          node backend/dist/server/bin.js doctor
       - name: Conformance suite (real PostgreSQL)
         env:
           RETINUE_TEST_PG_URL: postgres://postgres:postgres@localhost:5442/agentkit_test

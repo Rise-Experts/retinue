@@ -111,10 +111,51 @@ without changing agent or tool code.
 | Realtime | in-memory event bus | Supabase Realtime / Redis pub-sub |
 | Blob store | in-memory | S3-compatible |
 
+## The `retinue` command
+
+Installing the package puts a `retinue` binary on your path. Nothing here needs you to write an entrypoint
+first.
+
+```bash
+npx retinue doctor
+```
+
+| Command | Does |
+|---|---|
+| `retinue migrate` | Applies pending migrations. Idempotent, and safe to run from several pods at once — it takes a Postgres advisory lock, so concurrent runs serialise instead of racing on DDL. |
+| `retinue migrate --status` | Reports applied and pending migrations. Changes nothing. |
+| `retinue migrate --dry-run` | Prints the statements that would run. Changes nothing — not even the ledger table. |
+| `retinue serve` | Starts the API host. Needs `RETINUE_APP_MODULE`. |
+| `retinue worker` | Starts a run worker. Needs `RETINUE_APP_MODULE`. |
+| `retinue doctor` | Checks configuration, the database, the schema version and Redis. |
+
+`migrate` and `doctor` deliberately need **no** app module: a database is provisioned before an application
+exists, and a diagnostic you cannot run until everything else is configured is a diagnostic nobody can use.
+
+### `doctor` reports every failure, not the first
+
+```
+✓ configuration: schema mode off, port 4000
+✗ postgres: postgres://db.internal:5432/app: connect ECONNREFUSED
+    → Check the database is running and RETINUE_DATABASE_URL points at it.
+– schema: not checked — Postgres is unreachable, so this would fail for the same reason
+✗ redis: redis://cache.internal:6379/0: connection refused
+    → Check Redis is running and RETINUE_REDIS_URL points at it.
+
+✗ 2 of 5 check(s) failed
+```
+
+Three things it will not do. It does not stop at the first problem — otherwise it adds nothing over starting the
+server and reading the error. It does not report a check it could not run as a pass: a `–` means skipped, and a
+check downstream of a failure is skipped rather than blamed. And it never prints a credential — a connection
+string is reduced to host and database, and if the value is ambiguous (an unescaped `@` in a password, say) it
+prints nothing at all rather than guessing which part was the secret.
+
 ## Automatic schema
 
 Development adapters can **provision their own schema on startup** (`auto` mode), so a fresh database
-is usable with no manual migration step. Production defaults to managed migrations (`off`).
+is usable with no manual migration step. Production defaults to managed migrations (`off`) — run
+`retinue migrate` as a deploy step.
 
 ## Environment
 

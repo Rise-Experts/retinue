@@ -187,5 +187,8 @@
   "homepage": "https://github.com/Rise-Experts/retinue#readme",
   "bugs": {
     "url": "https://github.com/Rise-Experts/retinue/issues"
+  },
+  "bin": {
+    "retinue": "./dist/server/bin.js"
   }
 }

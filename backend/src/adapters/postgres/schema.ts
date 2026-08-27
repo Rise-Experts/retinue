@@ -3,8 +3,19 @@
  *
  * A `SchemaManager` over the reversible migrations: it provisions a fresh database on startup
  * (`auto`), logs the diff and refuses (`plan`), or leaves the schema to managed migrations
- * (`off`, the default for Postgres). Forward-only and idempotent — running it twice is a no-op,
- * so concurrent workers never double-provision.
+ * (`off`, the default for Postgres). Forward-only and idempotent — running it twice is a no-op.
+ *
+ * **Concurrent callers do not double-provision, and one of them may still fail.** Measured for #252: two
+ * simultaneous `apply()` runs against one database leave the ledger correct (every migration recorded once,
+ * `ON CONFLICT DO NOTHING` doing its job) and crash the loser with
+ * `duplicate key value violates unique constraint "pg_type_typname_nsp_index"` — Postgres's own type catalogue,
+ * racing on DDL. The data is safe; the process is not, and the error names nothing an operator can act on.
+ *
+ * `retinue migrate` therefore takes a **session advisory lock** on a single checked-out connection before
+ * calling this, which serialises the callers rather than letting them race. `auto` mode at startup has the same
+ * exposure and no such lock — several workers booting at once can still produce one crash — and that is
+ * recorded rather than fixed here, because the lock belongs where a connection can be held for the duration and
+ * `SchemaManager` is written against `SqlExecutor`, which has no such primitive. Tracked by #266.
  */
 import { MIGRATION_LEDGER, MIGRATIONS, appliedMigrationIds, type Migration } from "./migrations.js";
 import type { SqlExecutor } from "./sql.js";
