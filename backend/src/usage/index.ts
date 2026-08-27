@@ -112,4 +112,5 @@ export interface PricingResolver {
 
 export * from "./recorder.js";
 export * from "./quota.js";
+export * from "./rate-limit.js";
 export * from "./rollups.js";

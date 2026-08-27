@@ -28,7 +28,8 @@ import {
 import { asId } from "../core/ids.js";
 import type { AgentId, ConversationId, MessageId, MessagePartId, SkillId } from "../core/ids.js";
 import type { AgentManifest } from "../agents/index.js";
-import { ADAPTER_COVERAGE, REGISTERED_PORTS, SUPABASE_NATIVE } from "../testing/conformance/index.js";
+import { ADAPTER_COVERAGE, REGISTERED_PORTS, SUPABASE_NATIVE,
+  SUPABASE_NOT_APPLICABLE } from "../testing/conformance/index.js";
 import { freshPgliteSchema } from "../testing/pglite.js";
 import { conversationStoreConformance } from "../testing/conformance/conversation-store.js";
 import { runStoreConformance } from "../testing/conformance/run-store.js";
@@ -445,7 +446,14 @@ const ALIASES: readonly (readonly [keyof typeof supabase, keyof typeof postgres]
  * to `>=`, and a genuinely missing alias would then read as an intentional divergence.
  */
 const NATIVE = new Set(SUPABASE_NATIVE);
-const ALIASED_PORTS = REGISTERED_PORTS.filter((p) => !NATIVE.has(p.port));
+/**
+ * Ports Supabase will never implement — #248 added the first.
+ *
+ * Read here as well as in the coverage ledger, so "one alias per port" stays an exact assertion rather than
+ * becoming an approximate one the moment a port is legitimately not applicable.
+ */
+const NOT_APPLICABLE = new Set(SUPABASE_NOT_APPLICABLE);
+const ALIASED_PORTS = REGISTERED_PORTS.filter((p) => !NATIVE.has(p.port) && !NOT_APPLICABLE.has(p.port));
 
 describe("supabase adapter coverage", () => {
   it("is the Postgres implementation for every port, not a second one", () => {
@@ -458,15 +466,20 @@ describe("supabase adapter coverage", () => {
     // without either an alias or a declared reason it has none. `FileContentStore` is the first and only
     // divergence: its bytes live in Supabase Storage, so there is no Postgres factory to alias to.
     expect([...NATIVE]).toEqual(["FileContentStore"]);
+    // Exact, so a second not-applicable port has to be a decision somebody states rather than a gap that
+    // silently widens this exemption.
+    expect([...NOT_APPLICABLE]).toEqual(["RateLimitStore"]);
     expect(ALIASES).toHaveLength(ALIASED_PORTS.length);
   });
 
   it("implements exactly the ports the registry claims", () => {
     expect(coverage).toBeDefined();
-    // Aliased *and* native: the column claims full coverage, because Supabase has every port. What differs
-    // per port is how — asserted above.
+    // Aliased *and* native: the column claims coverage of every port that *applies* to Supabase. What differs
+    // per port is how — asserted above. `RateLimitStore` is the one exclusion, and it is a stated decision
+    // rather than a gap: a rate limiter is an atomic counter on the admission hot path, which is Redis's
+    // primitive and not a relational one (#248).
     expect([...(coverage?.implemented ?? [])].sort()).toEqual(
-      REGISTERED_PORTS.map((p) => p.port).sort(),
+      REGISTERED_PORTS.map((p) => p.port).filter((port) => !NOT_APPLICABLE.has(port)).sort(),
     );
   });
 

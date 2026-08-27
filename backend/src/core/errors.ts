@@ -34,6 +34,21 @@ export const ERROR_CODES = [
    * Carries `details.interactionId`.
    */
   "question_pending",
+  /**
+   * A tenant asked for more runs than their rate allows — task #248.
+   *
+   * **Its own code, not `rate_limited`.** That one means *a provider* throttled us, and `decideRetry` treats it
+   * as retryable inside the run — which is right there and wrong here: this refusal happens at admission, before
+   * a run exists, so there is nothing to retry and no run event to carry it. Conflating the two would let a
+   * platform-level capacity refusal be handled by the engine's provider-backoff loop, which is the wrong
+   * mechanism for the wrong problem.
+   *
+   * Distinct from `budget_exceeded` too: that is about *spend over a period* and this is about *capacity right
+   * now*. A tenant can be well inside budget and still asking too fast.
+   *
+   * Carries `details.retryAfter` and `details.retryAfterMs`, so a client can wait rather than guess.
+   */
+  "admission_rate_limited",
   "idempotency_conflict",
   "capability_unavailable",
   "internal",

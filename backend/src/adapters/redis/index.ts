@@ -6,3 +6,4 @@
  * for realtime" are two decisions, not one.
  */
 export * from "./realtime.js";
+export * from "./rate-limit.js";

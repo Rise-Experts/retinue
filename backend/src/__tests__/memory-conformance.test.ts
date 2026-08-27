@@ -6,6 +6,8 @@
  */
 
 import { asId } from "../core/ids.js";
+import { createMemoryRateLimitStore } from "../adapters/memory/rate-limit.js";
+import { rateLimitStoreConformance } from "../testing/conformance/rate-limit.js";
 import type {
   AgentId,
   ConversationId,
@@ -228,3 +230,13 @@ crossPortInvariants(() => ({
 // Convince the type checker the ids above are used even when a harness only needs some of them.
 void asId<AgentId>("conf-agent-1");
 void asId<ConversationId>("conf-convo-1");
+
+/**
+ * `RateLimitStore` — #248.
+ *
+ * Here rather than beside the guard's own tests because the matrix reads the adapter from the file name. The
+ * same harness runs against a real Redis in `redis-rate-limit.test.ts`, which is where the cross-process
+ * clauses can actually be demonstrated; the in-memory store satisfies the contract and is single-process by
+ * construction, which is exactly why it must not be used in a deployment.
+ */
+rateLimitStoreConformance("memory", () => createMemoryRateLimitStore(), () => "mem");

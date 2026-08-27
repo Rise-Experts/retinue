@@ -7,7 +7,7 @@
 
 import type { ExecutionContext } from "../core/context.js";
 import { DEFAULT_WARN_AT, describeWindow } from "../usage/index.js";
-import type { QuotaGuard } from "../usage/index.js";
+import type { QuotaGuard, RateLimitGuard } from "../usage/index.js";
 import type { UsageRollupStore } from "../persistence/index.js";
 import type { ConversationId, RunId } from "../core/ids.js";
 import { asId } from "../core/ids.js";
@@ -41,6 +41,8 @@ export type ResolverDeps = {
    * that blocks nothing is a bill the rollups make visible.
    */
   readonly quota?: QuotaGuard;
+  /** Capacity, as distinct from spend — task #248. Absent means unchecked. */
+  readonly rateLimit?: RateLimitGuard;
   /**
    * Rollups for the spend panel (#140).
    *
@@ -259,6 +261,19 @@ export const createResolvers = (deps: ResolverDeps) => {
         //
         // Optional, because a deployment with no limits configured is valid; when it is absent nothing is
         // checked, which is the same as an unbounded limit.
+        /**
+         * Rate before cost — task #248.
+         *
+         * This order is deliberate. A rate check is one atomic counter increment; a quota check reads a rollup.
+         * A tenant hammering the platform should be turned away by the cheaper check, not made to do the more
+         * expensive one first — otherwise the defence against a runaway client is itself proportional to how
+         * hard the client is running.
+         *
+         * Optional like the quota, and absent means unchecked. See `createRateLimitGuard`: an absent policy or a
+         * `max` of zero is unlimited, so adding this feature cannot refuse a deployment that has configured
+         * nothing.
+         */
+        if (deps.rateLimit !== undefined) await deps.rateLimit.assertAdmitted(ctx.execution);
         if (deps.quota !== undefined) await deps.quota.assertAdmitted(ctx.execution);
         const started = await startOrEnqueueRun(deps.coordinator, { tenantId: tid(ctx), conversationId, runId });
         if (started === "started") await deps.dispatcher.enqueueRun({ tenantId: tid(ctx), runId });

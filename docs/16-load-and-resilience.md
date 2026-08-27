@@ -178,6 +178,64 @@ The single most important operational instruction here is in the `overload` runb
 `maxQueueDepth` to stop the refusals.** That converts an honest "no" into an unbounded backlog, and the queue then
 fails by exhausting memory instead of by saying no.
 
+## Per-tenant rate limiting — task #248
+
+Backpressure above is a **deployment-wide** bound: a queue depth that protects the process regardless of who is
+filling it. It says nothing about *whose* work is filling it, so one tenant can consume the whole envelope and
+every other tenant sees the refusals.
+
+Cost quotas (`docs/12`) are per tenant and do not close that gap either, because they bound **spend over a
+period** rather than **capacity right now**. A thousand runs a second, each costing a fraction of a cent, passes
+every quota check.
+
+So there is a third control, enforced at admission before the quota check:
+
+| Control | Scope | Bounds | Answered from |
+|---|---|---|---|
+| Queue depth | Deployment | Work in flight | The queue |
+| Cost quota | Tenant | Spend per period | A usage rollup |
+| **Rate limit** | **Tenant** | **Admissions per window** | **An atomic counter** |
+
+Rate is checked **first**, because it is one counter increment and a quota check reads a rollup — a tenant
+hammering the platform should be turned away by the cheaper check, or the defence is itself proportional to how
+hard the client is running.
+
+### Fixed window, and what it costs
+
+The window is identified by its start, truncated to the period — the same decision `bucketStartFor` makes for
+rollups, and for the same reason: every process must derive the same window for the same instant without
+coordinating. The cost is a boundary burst, so the true worst case over a *sliding* window is 2×`max`. A
+sliding-log implementation would fix it and costs a sorted set with one member per request; not worth it, because
+the point is to stop a runaway client saturating a fleet and 2× for one boundary does not.
+
+### Absent means unlimited
+
+No policy, or `max: 0`, admits everything. A deployment upgrading into this feature having configured nothing
+must keep working — an outage caused by *adding* a safety feature is how safety features get removed.
+
+### The refusal is its own error
+
+`admission_rate_limited`, deliberately not `rate_limited`. That one means a *provider* throttled us and
+`decideRetry` treats it as retryable inside the run, which is right there and wrong here: this refusal happens
+before a run exists, so there is nothing to retry and no run event to carry it. The refusal goes to a
+`RateLimitObserver` for the same reason `QuotaObserver` exists — a `RunEvent` carries a `runId`, and inventing
+one for an event about *not* starting a run would be worse than a separate sink.
+
+### Two axes deliberately not implemented
+
+**Concurrent runs per tenant** is a real gap and is not closed here.
+`startOrEnqueueRun` serialises runs *within* a conversation, and `serialization.ts` says a conversation-less
+run's concurrency is "bounded where it should be: the worker's own limits, and quotas" — a per-process setting
+and a spend limit, neither of which stops one tenant occupying every slot in a fleet. It is left out because a
+correct implementation must be crash-safe: a counter incremented at admission and decremented at completion
+leaks a permanent unit every time a worker dies mid-run. The right home is the existing run **lease**, which
+already has a TTL and a heartbeat, so this belongs *with* the lease rather than beside it. Tracked as
+[#265](https://github.com/Rise-Experts/retinue/issues/265) rather than shipped leaky.
+
+**Tool executions per run per interval** is not implemented because `ExecutionLimits.maxToolCalls` already bounds
+the count and `wallClockTimeoutMs` bounds a tight loop, so a rate would need a clock threaded through the tool
+path to constrain something already constrained twice.
+
 ## Runbooks — AC-5
 
 `src/loadtest/runbooks.ts`, one per failure mode, kept as data next to the failure matrix so a test asserts the

@@ -30,6 +30,7 @@ export * from "./artifact-exports.js";
 export * from "./knowledge.js";
 export * from "./rollups.js";
 export * from "./usage-limits.js";
+export * from "./rate-limit.js";
 export * from "./evaluation.js";
 export * from "./invariants.js";
 
@@ -57,6 +58,12 @@ export const REGISTERED_PORTS: readonly PortCoverage[] = [
   { port: "MessageStore", harness: "messageStoreConformance" },
   { port: "AgentStore", harness: "agentStoreConformance" },
   { port: "SkillStore", harness: "skillStoreConformance" },
+  /**
+   * #248. Not storage in the matrix sense — it is a counter, and its real adapter is Redis, so it has no
+   * Postgres or Supabase implementation and never will. Registered anyway because it *has* methods and a
+   * contract worth holding: the harness runs against the in-memory store and against a real Redis.
+   */
+  { port: "RateLimitStore", harness: "rateLimitStoreConformance" },
   { port: "InteractionStore", harness: "interactionStoreConformance" },
   { port: "ApprovalGrantStore", harness: "approvalGrantStoreConformance" },
   { port: "CheckpointStore", harness: "checkpointStoreConformance" },
@@ -131,6 +138,7 @@ export const NON_STORAGE_PORTS: readonly string[] = [
   "CapabilityAware", // adapter self-description, consumed *by* the suite
   "RealtimePublisher", // fan-out transport, not durable storage
   "McpClient", // outbound protocol client
+  "RateLimitObserver", // a refusal sink, like QuotaObserver — nothing durable to verify
 ];
 
 /**
@@ -145,6 +153,10 @@ export const SCANNED_PORT_MODULES: readonly string[] = [
   "src/principal-memory/index.ts",
   "src/mcp/provider.ts",
   "src/runtime/index.ts",
+  // Added by #248. A port declared in a module nobody scans escapes this ledger entirely, which is how
+  // `RateLimitStore` would have shipped with no coverage record at all — the omission being invisible rather
+  // than listed is exactly what `PLACEHOLDER_PORTS` and `DEFERRED_INFRASTRUCTURE_PORTS` exist to prevent.
+  "src/usage/rate-limit.ts",
 ];
 
 /** The adapters the conformance matrix reports on. */
@@ -213,11 +225,20 @@ export const SUPABASE_NATIVE: readonly string[] = ["FileContentStore"];
  * asserted per port in `supabase-conformance.test.ts`, which is what keeps this honest: if an alias
  * were repointed to a second implementation, that test fails rather than this list going stale.
  */
+/**
+ * Ports Supabase will never implement — #248.
+ *
+ * Read by all three columns (`implemented` via the alias derivation, `notImplemented`, `notApplicable`) so they
+ * cannot disagree. The alias derivation below defaults a new port to "aliased", and its own comment says a
+ * future exemption "has to be stated" — this is where.
+ */
+export const SUPABASE_NOT_APPLICABLE: readonly string[] = ["RateLimitStore"];
+
 const SUPABASE_ALIASED: readonly string[] = REGISTERED_PORTS.map((p) => p.port).filter(
   // `FileContentStore` is the one registered port the Postgres adapter does not implement, so there is
   // nothing for Supabase to alias. Filtered from the derivation rather than removed from it, so a future
   // port still defaults to "aliased" and a future exemption has to be stated.
-  (port) => !SUPABASE_NATIVE.includes(port),
+  (port) => !SUPABASE_NATIVE.includes(port) && !SUPABASE_NOT_APPLICABLE.includes(port),
 );
 
 /** Ports with no Postgres store yet, each against the SPEC that adds it (REQ-010→013). */
@@ -268,7 +289,15 @@ export const ADAPTER_COVERAGE: readonly AdapterCoverage[] = [
       "EvaluationStore",
     ],
     notImplemented: POSTGRES_PENDING,
-    notApplicable: [RELATIONAL_CONTENT_EXEMPTION],
+    notApplicable: [
+      {
+        port: "RateLimitStore",
+        reason:
+          "A rate limiter is a counter on the hot path of every admission, and its correctness rests on an " +
+          "atomic increment-with-expiry. A relational adapter would mean a write and a row-lock per admitted " +
+          "run, plus a sweep for expired windows — slower than the thing it protects. Redis has the primitive; " +
+          "this port has a Redis adapter and an in-memory one for tests, and needs no third (#248).",
+      },RELATIONAL_CONTENT_EXEMPTION],
   },
   {
     adapter: "supabase",
@@ -284,9 +313,29 @@ export const ADAPTER_COVERAGE: readonly AdapterCoverage[] = [
     // real second implementation, which is why the alias assertion exempts it by name rather than the
     // coverage column claiming a gap Supabase does not have.
     implemented: [...SUPABASE_ALIASED, ...SUPABASE_NATIVE],
+    /**
+     * Derived, and the derivation has to know about `notApplicable` too — #248.
+     *
+     * Filtering only on aliased/native put every never-applicable port into the gap column *as well as* the
+     * not-applicable one, and the guard rightly refused to let a port be claimed both ways. The subtraction is
+     * the point of deriving: a port that will never exist here is not a gap tracked by #104.
+     */
     notImplemented: REGISTERED_PORTS.filter(
-      (p) => !SUPABASE_ALIASED.includes(p.port) && !SUPABASE_NATIVE.includes(p.port),
+      (p) =>
+        !SUPABASE_ALIASED.includes(p.port) &&
+        !SUPABASE_NATIVE.includes(p.port) &&
+        !SUPABASE_NOT_APPLICABLE.includes(p.port),
     ).map((p) => ({ port: p.port, trackedBy: "#104" })),
+    notApplicable: [
+      {
+        port: "RateLimitStore",
+        reason:
+          "A rate limiter is a counter on the hot path of every admission, and its correctness rests on an " +
+          "atomic increment-with-expiry. A relational adapter would mean a write and a row-lock per admitted " +
+          "run, plus a sweep for expired windows — slower than the thing it protects. Redis has the primitive; " +
+          "this port has a Redis adapter and an in-memory one for tests, and needs no third (#248).",
+      },
+    ],
   },
 ];
 
@@ -295,6 +344,7 @@ export const ADAPTER_COVERAGE: readonly AdapterCoverage[] = [
  * file that is added but never wired in shows up as a missing harness rather than being skipped.
  */
 export const HARNESS_MODULES: readonly string[] = [
+  "src/testing/conformance/rate-limit.ts",
   "src/testing/conformance/conversation-store.ts",
   "src/testing/conformance/flows.ts",
   "src/testing/conformance/run-store.ts",
