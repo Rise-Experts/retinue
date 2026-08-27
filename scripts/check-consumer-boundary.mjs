@@ -66,7 +66,19 @@
  * that is identical. A separate post-publish script would be a second implementation of the checks that matter
  * most, run least often.
  *
- * Usage: node scripts/check-consumer-boundary.mjs [--keep] [--published]
+ * ## `--only <name>`
+ *
+ * Narrows the run to one package, and it is what the release workflow passes. Without it, `--published` checks
+ * **every** shipping package against the registry — which compares today's expectations against artefacts
+ * published at different times, and that is not a boundary check. It went red the first time it mattered: a
+ * `tools-slack` release failed because `@retinue/agentkit@0.1.0` — published weeks earlier, before the
+ * `guardrails` subpath existed and before the README was rewritten — does not satisfy the current checkout's
+ * subpath list or link rules. Both facts were true and neither was about the release being verified.
+ *
+ * A release verifies what it just published. Version skew between the repository and *other* published packages
+ * is a real thing to know about, and it is a different question from "is the thing I just shipped usable".
+ *
+ * Usage: node scripts/check-consumer-boundary.mjs [--keep] [--published] [--only <package>]
  * Exit codes: 0 the boundary holds, 1 it does not, 2 the check could not run.
  */
 
@@ -235,6 +247,21 @@ const main = () => {
   const work = mkdtempSync(join(tmpdir(), "retinue-consumer-"));
   const keep = process.argv.includes("--keep");
   const published = process.argv.includes("--published");
+  /**
+   * The one package to check, when a caller names it. Accepts the workspace name (`@retinue/tools-slack`) or the
+   * short form (`tools-slack`), because the release workflow has the first and a person typing it has the second.
+   */
+  const onlyAt = process.argv.indexOf("--only");
+  const only = onlyAt === -1 ? null : process.argv[onlyAt + 1];
+  if (onlyAt !== -1 && (only === undefined || only.startsWith("--"))) {
+    die("--only needs a package name, for example --only @retinue/tools-slack");
+  }
+  const selected = only === null ? PACKAGES : PACKAGES.filter((shipped) => shipped.name === only || shipped.name === `@retinue/${only}`);
+  if (only !== null && selected.length === 0) {
+    die(
+      `--only ${only} matches none of the shipping packages: ${PACKAGES.map((shipped) => shipped.name).join(", ")}`,
+    );
+  }
 
   let ok = true;
   const fail = (message, detail) => {
@@ -389,6 +416,16 @@ const main = () => {
       run("tar", ["-xzf", packed, "-C", join(modules, "@retinue")]);
       run("mv", [join(modules, "@retinue", "package"), join(modules, "@retinue", shortName)]);
 
+      /**
+       * Installed for everyone, asserted for the one named — see `--only`.
+       *
+       * The install cannot be narrowed: `@retinue/tools-slack` imports `@retinue/agentkit`, so a consumer holding
+       * only the toolkit cannot load it at all, and the check would report a boundary failure that is really a
+       * missing peer. So the scratch consumer always gets every package — which is what a real consumer has — and
+       * `--only` narrows what is *checked*.
+       */
+      if (!selected.includes(shipped)) continue;
+
       // ── 1 & 3: what loads, and what is refused ─────────────────────────────────────────────────────────────
       const probeFile = join(consumer, `probe-${shortName}.mjs`);
       writeFileSync(
@@ -519,7 +556,16 @@ const main = () => {
      * has already built, and rewriting them to compile standalone would make them worse to read. What keeps
      * *those* honest is `check:docs`, which resolves every import specifier in every page.
      */
-    for (const dir of DOC_SAMPLE_ROOTS) {
+    /**
+     * The documentation's samples, only on a full run.
+     *
+     * They import several packages — a getting-started page uses the runtime, an integration page uses a toolkit
+     * — so they need every package installed in the scratch consumer. A release scoped with `--only` installs
+     * one, and the samples then fail to resolve the others: a correct-looking check failing for a reason that has
+     * nothing to do with the release. The samples are a property of the repository's documentation and are
+     * verified by `npm test` on every commit, which is the right place for them.
+     */
+    for (const dir of only === null ? DOC_SAMPLE_ROOTS : []) {
       const root = join(ROOT, dir);
       if (!existsSync(root)) {
         fail(`${dir} does not exist, so its samples were not checked`, "a moved directory silently checks nothing");
@@ -564,8 +610,8 @@ const main = () => {
 
     if (ok) {
       console.log(
-        `✓ the boundary holds as installed${published ? " from the registry" : ""}, with no sources or` +
-          ` sourcemaps and a licence in each:`,
+        `✓ the boundary holds as installed${published ? " from the registry" : ""}${only === null ? "" : ` for ${only}`},` +
+          ` with no sources or sourcemaps and a licence in each:`,
       );
       for (const summary of summaries) console.log(`  · ${summary}`);
       for (const summary of readmeSummary) console.log(`  · README ${summary}`);

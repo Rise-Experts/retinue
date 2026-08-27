@@ -110,4 +110,10 @@ jobs:
         # The published artefact, installed from the registry into a scratch project outside this repository —
         # #193 AC-6, "verified by an actual install, not by a build". It also re-checks that a deep import fails
         # (AC-7) against the real thing rather than a tarball.
-        run: npm run check:consumer -- --published
+        #
+        # `--only` scopes it to the package this tag released, and that is the fix for a real failure: the first
+        # toolkit release went red because `@retinue/agentkit@0.1.0` — published weeks earlier, before the
+        # `guardrails` subpath and the README rewrite — does not satisfy *today's* checkout. Both facts were true
+        # and neither was about the release being verified. A release verifies what it just published; version
+        # skew against other published packages is a different question, and a red build is a bad way to ask it.
+        run: npm run check:consumer -- --published --only ${{ steps.target.outputs.workspace }}

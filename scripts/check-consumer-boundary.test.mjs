@@ -11,6 +11,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import {
   blockedByExports,
   exportedSubpaths,
@@ -137,4 +138,30 @@ test("every shipping package is covered, and each deep list has both halves of t
     assert.ok(shipped.deep.some((path) => path.startsWith("src/")), `${shipped.name}: no path into the sources`);
     assert.ok(shipped.deep.length >= 4, `${shipped.name}: too few deep imports to prove anything`);
   }
+});
+
+test("--only narrows the assertions and not the install", async () => {
+  /**
+   * The distinction the flag exists for, and it is not cosmetic.
+   *
+   * `@retinue/tools-slack` imports `@retinue/agentkit`, so a consumer holding only the toolkit cannot load it —
+   * a narrowed *install* would report a boundary failure that is really a missing peer. The scratch consumer
+   * therefore always gets every package, which is what a real consumer has, and `--only` decides what is
+   * checked. Asserted on the source, because the alternative is running the whole check twice in a unit test.
+   */
+  const source = await readFile(new URL("./check-consumer-boundary.mjs", import.meta.url), "utf8");
+  // The loop installs everything...
+  assert.match(source, /for \(const shipped of PACKAGES\) \{/);
+  // ...and skips the assertions for anything the caller did not name.
+  assert.match(source, /if \(!selected\.includes\(shipped\)\) continue;/);
+});
+
+test("the release workflow scopes the post-publish check to the tag's package", async () => {
+  /**
+   * The regression this closes: the first toolkit release went red because `@retinue/agentkit@0.1.0` — published
+   * before the `guardrails` subpath existed — does not satisfy today's checkout. Unscoped, that step is red for
+   * every release until every published package is republished, which is the "can only ever be red" shape.
+   */
+  const workflow = await readFile(new URL("../.github/workflows/release.yml", import.meta.url), "utf8");
+  assert.match(workflow, /check:consumer -- --published --only \$\{\{ steps\.target\.outputs\.workspace \}\}/);
 });
