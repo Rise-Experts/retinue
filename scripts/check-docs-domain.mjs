@@ -75,6 +75,28 @@ export const wranglerName = (source) => {
   return match ? match[1] : null;
 };
 
+/**
+ * The hostnames a wrangler config attaches as **custom domains**.
+ *
+ * Only `custom_domain: true` entries count, and the distinction is the whole point. A plain route matches
+ * traffic for a hostname that must already resolve and already have a certificate; a custom domain *creates*
+ * the DNS record and provisions an Advanced Certificate for the exact hostname. For a second-level subdomain
+ * like `docs.retinue.riseexperts.de` — which Cloudflare's universal certificate does not cover — a route leaves
+ * the site answering over plain HTTP and failing the TLS handshake. That is not a hypothetical: it is what the
+ * hostname did for several hours on 27 Aug 2026.
+ */
+export const customDomains = (source) => {
+  const out = [];
+  // Tolerant of key order and of formatting, because a jsonc file is hand-edited and a stricter parse would
+  // silently find nothing — which here means silently reporting no problem.
+  for (const [, block] of source.matchAll(/\{([^{}]*)\}/g)) {
+    if (!/"custom_domain"\s*:\s*true/.test(block)) continue;
+    const pattern = /"pattern"\s*:\s*"([^"]+)"/.exec(block);
+    if (pattern) out.push(pattern[1]);
+  }
+  return out;
+};
+
 /** The `url` the site claims. Parsed rather than imported, because the config is TypeScript with plugins. */
 export const configuredUrl = (source) => {
   const match = /^\s*url:\s*"([^"]+)"/m.exec(source);
@@ -161,6 +183,32 @@ const main = async () => {
         ` site to a Worker nobody serves from, and the deploy succeeds either way`,
     );
   }
+
+  /**
+   * ── the hostname is actually attached ──────────────────────────────────────────────────────────────────────
+   *
+   * The site's `url` is a claim about where it is served. Nothing made the *deploy* agree with that claim, and
+   * on 27 Aug 2026 they disagreed for hours: the config named a hostname that no Worker attached, so the host
+   * served a 530 and then stopped resolving. A canonical link pointing at a hostname nothing serves is worse
+   * than a wrong one — it looks deliberate.
+   */
+  const intendedHost = new URL(intended).hostname;
+  WRANGLER.forEach((path, at) => {
+    if (!existsSync(path)) return;
+    const attached = customDomains(readFileSync(path, "utf8"));
+    if (attached.length === 0) {
+      problems.push(
+        `${path} attaches no custom domain, so a deploy from it serves the site nowhere — ` +
+          `add { "pattern": "${intendedHost}", "custom_domain": true } to \`routes\``,
+      );
+    } else if (!attached.includes(intendedHost)) {
+      problems.push(
+        `${path} attaches ${attached.join(", ")} but the site claims ${intendedHost} — the canonical links point` +
+          ` at a hostname this deploy does not serve`,
+      );
+    }
+    void at;
+  });
 
   // ── the offline half: the build on disk agrees with the config ─────────────────────────────────────────────
   const sitemapPath = join(BUILD, "sitemap.xml");

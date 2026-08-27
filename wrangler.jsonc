@@ -3,17 +3,28 @@
   // Build with `npm run docs:build` (produces website/build), then `npx wrangler deploy` here
   // uploads website/build as static assets. (website/wrangler.jsonc covers Root directory=website.)
   //
-  // `name` is the Worker that actually serves the site, and it was wrong until #203. Both files said
-  // `agentkit-docs`, and no Worker by that name exists in the account: the docs are served by `agentkit`,
-  // an assets-only Worker (no user code, matching the config below) that Cloudflare's Git integration
-  // redeploys on every push to main. So `npx wrangler deploy` — the command in the line above — would have
-  // created a *third* Worker called `agentkit-docs` and published the site to it. The deploy succeeds, the
-  // command prints a URL, and the thing deployed is not the thing anybody visits.
+  // `name` is the Worker that actually serves the site. It said `agentkit-docs` until #203 — a Worker that
+  // never existed — then `agentkit`, the assets-only Worker Cloudflare's Git integration redeployed on every
+  // push to main. It is now `retinue-docs`, the Worker created on 27 Aug 2026 for the renamed site.
   //
-  // Renaming this to `retinue-docs` is #203 step 4, and it is not an edit here: `wrangler deploy` with a
-  // changed name does not rename a Worker, it creates another one. The domain bindings move first.
+  // The warning that made this a two-step change still holds and is worth keeping: `wrangler deploy` with a
+  // changed `name` does not rename a Worker, it creates another one and leaves the first serving whatever it
+  // was serving. That is safe here only because the old hostname's DNS record is gone, so `agentkit` serves
+  // nothing — check that before ever changing this line again.
+  //
+  // `routes` with `custom_domain: true` is what attaches the hostname. It has to be a *custom domain* and not
+  // a route: `docs.retinue.riseexperts.de` is a second-level subdomain, which Cloudflare's universal
+  // certificate does not cover, and a custom domain is what provisions an Advanced Certificate for the exact
+  // hostname. A route would leave the site answering over HTTP and failing the TLS handshake, which is exactly
+  // what it did before this line existed.
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "agentkit",
+  "name": "retinue-docs",
+  "routes": [
+    {
+      "pattern": "docs.retinue.riseexperts.de",
+      "custom_domain": true
+    }
+  ],
   "compatibility_date": "2024-11-01",
   "assets": {
     "directory": "./website/build"

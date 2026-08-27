@@ -183,21 +183,25 @@ Two processes, one image. They share every dependency, so two images would only 
 
 ### The docs site
 
-**[docs.retinue.riseexperts.de](https://docs.retinue.riseexperts.de)**, served by a Cloudflare Worker named
-`agentkit` — an assets-only Worker that Cloudflare's Git integration redeploys on every push to `main`. The
-Worker keeps its old name deliberately: `wrangler deploy` with a changed `name` does not rename a Worker, it
-creates a second one and leaves the first serving the live domain, so the deploy succeeds and the thing deployed
-is not the thing anybody visits. Renaming it means moving the domain bindings first and deleting the old Worker
-after, and it buys nothing.
+**[docs.retinue.riseexperts.de](https://docs.retinue.riseexperts.de)**, served by an assets-only Cloudflare
+Worker named `retinue-docs`. Both `wrangler.jsonc` files declare it, and both attach the hostname as a
+**custom domain** rather than a route — that is not a detail: `docs.retinue.riseexperts.de` is a second-level
+subdomain, which Cloudflare's universal certificate does not cover, and a custom domain is what provisions an
+Advanced Certificate for the exact hostname. Attached as a plain route it answers over HTTP and fails the TLS
+handshake, which is what it did for several hours on 27 Aug 2026.
 
-Both `wrangler.jsonc` files said `agentkit-docs` until #203, and **no Worker by that name exists**. The
-`npx wrangler deploy` those files document would have created a third Worker and published the site to it.
-Nothing local could have caught it — the name is only wrong in comparison with the account — so what is checked
-instead is that the two files agree, which is the half that catches the next drift.
+The Worker name has been wrong twice. It said `agentkit-docs`, which never existed, so the documented
+`npx wrangler deploy` would have created a third Worker and published the site to it — a deploy that succeeds
+and serves nobody. Then it said `agentkit`, which did serve the old hostname. Whenever this line changes again,
+remember that `wrangler deploy` with a new `name` does not rename a Worker: it creates another one and leaves
+the first serving whatever it was serving, so check what the old one still has attached first.
 
 `npm run check:domain` verifies the result, and needs no argument: it reads `url` from the config and holds
-reality to it — the intended host serves, the legacy host answers a **301 to the same path**, and the sitemap and
-canonical tags name the intended host rather than one that redirects. `-- --offline` runs the half that compares
+reality to it — the intended host serves, the legacy host answers a **301 to the same path**, the sitemap and
+canonical tags name the intended host rather than one that redirects, and both wrangler configs attach *that*
+hostname as a custom domain. The last of those is new, and it exists because the config and the deploy
+disagreed for hours: the site claimed a hostname nothing was attached to, which is worse than a wrong one
+because it looks deliberate. `-- --offline` runs the half that compares
 the built output with the config, which is what CI runs, because a gate that fails when DNS is slow is a gate
 people skip.
 

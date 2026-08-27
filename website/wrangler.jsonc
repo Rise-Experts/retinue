@@ -5,9 +5,16 @@
   //
   // `name` must match ../wrangler.jsonc, and `npm run check:domain -- --offline` fails if it does not:
   // two copies of one Worker name is exactly the pair that drifts, and the direction that hurts is a deploy
-  // aimed at a Worker nobody serves from. See the reasoning in ../wrangler.jsonc.
+  // aimed at a Worker nobody serves from. The custom domain is duplicated for the same reason — whichever
+  // config a deploy uses has to attach the same hostname. See the reasoning in ../wrangler.jsonc.
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "agentkit",
+  "name": "retinue-docs",
+  "routes": [
+    {
+      "pattern": "docs.retinue.riseexperts.de",
+      "custom_domain": true
+    }
+  ],
   "compatibility_date": "2024-11-01",
   "assets": {
     "directory": "./build"

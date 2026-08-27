@@ -8,6 +8,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import {
   configuredUrl,
   deepPathFrom,
@@ -16,6 +17,7 @@ import {
   redirectVerdict,
   settledPath,
   wranglerName,
+  customDomains,
 } from "./check-docs-domain.mjs";
 
 const INTENDED = "https://docs.retinue.riseexperts.de";
@@ -93,4 +95,39 @@ test("the Worker name is read from a wrangler config, comments and all", () => {
 test("the legacy host stays named after the cutover", () => {
   // Deleting it once the move is done would remove the only assertion that the old links kept working.
   assert.equal(LEGACY_URL, "https://docs.agentkit.riseexperts.de");
+});
+
+test("only a custom domain counts as attaching the hostname", () => {
+  /**
+   * The distinction that cost an afternoon. A route matches traffic for a hostname that must already resolve and
+   * already have a certificate; a custom domain *creates* the record and provisions an Advanced Certificate for
+   * the exact hostname. `docs.retinue.riseexperts.de` is a second-level subdomain, which the universal
+   * certificate does not cover, so a route leaves the site answering over HTTP and failing TLS.
+   */
+  const withDomain = '{ "routes": [ { "pattern": "docs.example.com", "custom_domain": true } ] }';
+  const withRoute = '{ "routes": [ { "pattern": "docs.example.com/*" } ] }';
+  assert.deepEqual(customDomains(withDomain), ["docs.example.com"]);
+  assert.deepEqual(customDomains(withRoute), []);
+});
+
+test("key order and formatting do not change the answer", () => {
+  // A jsonc file is hand-edited, and a stricter parse that found nothing would report no problem — which is the
+  // failure mode that matters, because this check exists to catch an absent attachment.
+  const reordered = `{
+    "routes": [
+      {
+        "custom_domain": true,
+        "pattern": "docs.example.com"
+      }
+    ]
+  }`;
+  assert.deepEqual(customDomains(reordered), ["docs.example.com"]);
+});
+
+test("the shipped configs attach exactly the hostname the site claims", () => {
+  const url = configuredUrl(readFileSync("website/docusaurus.config.ts", "utf8"));
+  const host = new URL(url).hostname;
+  for (const path of ["wrangler.jsonc", "website/wrangler.jsonc"]) {
+    assert.deepEqual(customDomains(readFileSync(path, "utf8")), [host], path);
+  }
 });
