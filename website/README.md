@@ -29,7 +29,7 @@ can consume these directly. A docs **MCP server** can serve the same corpus:
 - **Hosted:** Inkeep/kapa expose an MCP endpoint from the indexed docs.
 - **Self-hosted:** a small MCP server that returns sections of `llms-full.txt` by query.
 
-## Deployment (Cloudflare Workers Static Assets → docs.agentkit.riseexperts.de)
+## Deployment (Cloudflare Workers Static Assets → docs.retinue.riseexperts.de)
 
 > The host name, the Cloudflare project id and `url` in `docusaurus.config.ts` still say `agentkit`.
 > That is deliberate: they are live DNS and a live project, and renaming them is a cutover with a
@@ -49,7 +49,10 @@ steps need your Cloudflare/DNS access; the config is already in the repo:**
    - **Deploy command:** `npx wrangler deploy`  ← change from `npx wrangler versions upload`
      (`versions upload` stages a version without publishing to the live URL). From the repo root
      this reads the root `wrangler.jsonc`, whose `assets.directory` is `./website/build`.
-2. **Custom domain**: project → **Custom domains** → add **`docs.agentkit.riseexperts.de`**.
+2. **Custom domain**: project → **Custom domains** → add **`docs.retinue.riseexperts.de`**. It has to be a
+   *custom domain* rather than a route: a third-level hostname is not covered by Cloudflare's universal
+   certificate, and a custom domain is what provisions one for it. Without that the host serves over plain HTTP
+   and fails the TLS handshake.
    - If `riseexperts.de` DNS is **on Cloudflare**, the record is created automatically.
    - Otherwise add a DNS **CNAME**: `docs.agentkit` → `<worker>.workers.dev` (as shown in the
      Custom domains dialog).

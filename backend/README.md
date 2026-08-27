@@ -78,9 +78,9 @@ tarball rather than asserted here.
 
 ## Documentation
 
-- [Getting started](https://docs.agentkit.riseexperts.de/docs/getting-started/installation) — install, first agent, configuration
-- [Core concepts](https://docs.agentkit.riseexperts.de/docs/concepts/architecture) — agents, tools, durable runtime, retrieval, HITL
-- [Package surface](https://docs.agentkit.riseexperts.de/docs/reference/package-surface) — every module, subpath, capability and tool
+- [Getting started](https://docs.retinue.riseexperts.de/docs/getting-started/installation) — install, first agent, configuration
+- [Core concepts](https://docs.retinue.riseexperts.de/docs/concepts/architecture) — agents, tools, durable runtime, retrieval, HITL
+- [Package surface](https://docs.retinue.riseexperts.de/docs/reference/package-surface) — every module, subpath, capability and tool
 - [Versioning and deprecation](https://github.com/Rise-Experts/retinue/blob/main/docs/19-versioning.md) — what semver covers, and how you are told before it changes
 - [Specifications](https://github.com/Rise-Experts/retinue/tree/main/docs) — the design documents, kept as reference
 

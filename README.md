@@ -79,7 +79,7 @@ left alone on purpose, because renaming them is a *migration* rather than an edi
 | `x-agentkit-tenant`, `x-agentkit-principal`, `x-agentkit-roles` | Request headers are a wire contract. Every caller sends them today; renaming breaks them at the same moment the server starts expecting the new spelling |
 | `schema_migrations` ids, `agentkit_example` schema | Applied migrations are recorded by id, and the schema name is where the data physically is. Both are what an existing database already contains |
 | `mcp__agentkit-docs__*` tool ids | Tool ids appear in stored run history and in approval grants. Renaming them orphans grants that name the old id |
-| `docs.agentkit.riseexperts.de`, and the `agentkit` Worker that serves it | Live DNS and a live Cloudflare deployment — a cutover with a redirect to arrange, and renaming the Worker is the step that can take the site down. #203 |
+| the `agentkit` Worker that serves the docs site | Renaming a Worker is not an edit: `wrangler deploy` with a new `name` creates a second Worker and leaves the first serving the live domain. Moving the bindings and deleting the old one buys nothing over leaving the name alone |
 | `agentkit-test-pg`, `agentkit-test-redis`, `agentkit-test-pgvector` | Local container names on developer machines. Renaming them orphans running containers and their volumes |
 
 `RETINUE_*` variables fall back to their `AGENTKIT_*` spelling and warn once per variable, so an
@@ -181,39 +181,25 @@ the public interfaces from `shareflow/`, never added to a generic package.
 
 Two processes, one image. They share every dependency, so two images would only drift.
 
-### The docs site is still on the old hostname
+### The docs site
 
-`docs.agentkit.riseexperts.de`, served by a Cloudflare Worker named **`agentkit`** — an assets-only Worker that
-Cloudflare's Git integration redeploys on every push to `main`. The site's own title is already *Retinue*; what
-has not moved is the hostname, the Worker name and `docusaurus.config.ts`'s `url`.
+**[docs.retinue.riseexperts.de](https://docs.retinue.riseexperts.de)**, served by a Cloudflare Worker named
+`agentkit` — an assets-only Worker that Cloudflare's Git integration redeploys on every push to `main`. The
+Worker keeps its old name deliberately: `wrangler deploy` with a changed `name` does not rename a Worker, it
+creates a second one and leaves the first serving the live domain, so the deploy succeeds and the thing deployed
+is not the thing anybody visits. Renaming it means moving the domain bindings first and deleting the old Worker
+after, and it buys nothing.
 
 Both `wrangler.jsonc` files said `agentkit-docs` until #203, and **no Worker by that name exists**. The
-`npx wrangler deploy` those files document would have created a third Worker and published the site to it: the
-deploy succeeds, prints a URL, and the thing deployed is not the thing anybody visits. Nothing local could have
-caught it — the name is only wrong in comparison with the account — so what is checked instead is that the two
-files agree, which is the half that catches the next drift.
-
-Deliberately not done as an edit, because it is a cutover with a live site on the other end of it. The order
-matters, and one step in it is a trap:
-
-1. Add `docs.retinue.riseexperts.de` to the zone and attach it to the Worker as a custom domain. Both hostnames
-   then serve the same site, which is the point — nothing breaks while the rest happens.
-2. Change `url` in `docusaurus.config.ts`, rebuild, deploy. Canonical links and the sitemap move; the old
-   hostname keeps serving.
-3. Redirect the old hostname to the new one (a Cloudflare Bulk Redirect, or a route on the Worker), 301, keeping
-   the path. Existing links are in issue comments, commit messages and anything already indexed.
-4. **Only then** rename the Worker, if it is renamed at all. `wrangler deploy` with a changed `name` does not
-   rename anything — it creates a *second* Worker and leaves the first one serving the live domain, so the
-   deploy succeeds, the site looks fine, and the thing being deployed is not the thing being served. If the name
-   changes, the old Worker's domain bindings have to be moved and the old Worker deleted, in that order.
-
-Steps 1–3 are the cutover; step 4 is cosmetic and is the one that can take the site down.
+`npx wrangler deploy` those files document would have created a third Worker and published the site to it.
+Nothing local could have caught it — the name is only wrong in comparison with the account — so what is checked
+instead is that the two files agree, which is the half that catches the next drift.
 
 `npm run check:domain` verifies the result, and needs no argument: it reads `url` from the config and holds
-reality to it. While the config still names the old host it reports the pending state and passes — a check that
-could only ever be red is one people learn to ignore — and it starts enforcing the 301 the moment that line
-changes, with no edit to the check. `-- --offline` runs the half that compares the built output with the config,
-which is what CI runs, because a gate that fails when DNS is slow is a gate people skip.
+reality to it — the intended host serves, the legacy host answers a **301 to the same path**, and the sitemap and
+canonical tags name the intended host rather than one that redirects. `-- --offline` runs the half that compares
+the built output with the config, which is what CI runs, because a gate that fails when DNS is slow is a gate
+people skip.
 
 ### Configuration
 

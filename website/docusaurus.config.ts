@@ -4,7 +4,7 @@ import type * as Preset from "@docusaurus/preset-classic";
 const config: Config = {
   title: "Retinue",
   tagline: "A reusable, provider-neutral AI agent platform",
-  url: "https://docs.agentkit.riseexperts.de",
+  url: "https://docs.retinue.riseexperts.de",
   baseUrl: "/",
   organizationName: "Rise-Experts",
   projectName: "retinue",

@@ -2,11 +2,11 @@
 /**
  * The documentation site is on the hostname it says it is — REQ-035 (#184), SPEC #203.
  *
- * Every artefact carries the product name except this one: the site is served from
- * `docs.agentkit.riseexperts.de`. Moving it is a cutover with a live site on the other end — a DNS record, a
- * custom domain, a 301, and only then a rebuild — and the parts that need the Cloudflare account cannot be done
- * from this repository at all. So what this repository can own is the *verification*: the difference between a
- * promise and a gate is that one of them can be answered with "I thought it worked".
+ * The site now claims `docs.retinue.riseexperts.de`; it was `docs.agentkit.riseexperts.de` until #203. Moving it
+ * is a cutover with a live site on the other end — a DNS record, a custom domain, a 301, and only then a rebuild
+ * — and the parts that need the Cloudflare account cannot be done from this repository at all. So what this
+ * repository owns is the *verification*: the difference between a promise and a gate is that one of them can be
+ * answered with "I thought it worked".
  *
  * ## Why the config is the single source of truth
  *
@@ -18,11 +18,12 @@
  * A hostname passed on the command line would be a second place the answer lives, which is the shape this
  * repository keeps finding defects in.
  *
- * ## Before the cutover this is not a failure
+ * ## Before the cutover this was not a failure
  *
- * While the config still names the legacy host there is nothing to redirect, and reporting red would make a
- * check that can only ever be red — which is a check people learn to ignore, and then it is not there on the day
- * it matters. So it reports the pending state, verifies the live site still answers, and exits 0.
+ * While the config still named the legacy host there was nothing to redirect, and reporting red would have made
+ * a check that could only ever be red — one people learn to ignore, and then it is not there on the day it
+ * matters. That branch is still here and still correct; it simply no longer applies, because the config moved in
+ * #203 and the assertions below are live.
  *
  * ## What it asserts once the config has moved
  *
@@ -59,11 +60,12 @@ const BUILD = "website/build";
 const WRANGLER = ["wrangler.jsonc", "website/wrangler.jsonc"];
 
 /**
- * The host the site is served from today.
+ * The host the site *was* served from, kept on purpose.
  *
- * A constant rather than derived, and it stays here **after** the cutover: the thing being checked from then on
- * is that this host still answers and still redirects. Deleting it once the move is done would remove the only
- * assertion that the old links kept working.
+ * A constant rather than derived, and it stays here **after** the cutover: the thing being checked from now on is
+ * that this host still answers and still redirects, path preserved. Deleting it once the move was done would have
+ * removed the only assertion that the old links kept working — and those links are in issue comments, commit
+ * messages, and whatever is already indexed.
  */
 export const LEGACY_URL = "https://docs.agentkit.riseexperts.de";
 

@@ -60,8 +60,8 @@ const Thread = ({ conversationId, runId }: { conversationId: string; runId: stri
 
 ## Documentation
 
-- [Frontend concepts](https://docs.agentkit.riseexperts.de/docs/concepts/frontend)
-- [Client package surface](https://docs.agentkit.riseexperts.de/docs/reference/client-surface) — every module and hook
+- [Frontend concepts](https://docs.retinue.riseexperts.de/docs/concepts/frontend)
+- [Client package surface](https://docs.retinue.riseexperts.de/docs/reference/client-surface) — every module and hook
 - [GraphQL and frontend specification](https://github.com/Rise-Experts/retinue/blob/main/docs/06-graphql-and-frontend.md)
 
 ## Licence
