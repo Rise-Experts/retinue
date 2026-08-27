@@ -32,7 +32,8 @@ import type {
   ResolvedModel,
   TurnMessage,
 } from "../models/index.js";
-import { streamModelTurn } from "../models/index.js";
+import { applyInputGuardrails, applyOutputGuardrails, type Guardrail, type GuardrailRecord } from "../guardrails/index.js";
+import { streamModelTurn, turnText } from "../models/index.js";
 import {
   decideRetry,
   deriveRunMessageId,
@@ -85,6 +86,13 @@ export type DefaultEngineDeps = {
    * pause on.
    */
   readonly approvals?: RunApprovals;
+  /**
+   * Checks a deployment adds — REQ-046 (#205).
+   *
+   * Absent means no inspection, which is the current behaviour and stays the default: a runtime that imposed a
+   * model call on every turn to moderate it would be making a cost decision that belongs to the host.
+   */
+  readonly guardrails?: readonly Guardrail[];
   /**
    * The question side of resumption — #163.
    *
@@ -179,6 +187,22 @@ const questionMarker = (
   };
 };
 
+/**
+ * A record becomes an event, with no value ever attached.
+ *
+ * One place, so a future field on `GuardrailRecord` cannot reach the event log by being spread in somewhere: the
+ * mapping is explicit, field by field, and adding one here is a decision rather than a consequence.
+ */
+const verdictEvent = (record: GuardrailRecord): EngineEvent => ({
+  type: "guardrail.verdict",
+  guardrail: record.guardrail,
+  subject: record.subject,
+  outcome: record.outcome,
+  ...(record.what === undefined ? {} : { what: record.what }),
+  ...(record.code === undefined ? {} : { code: record.code }),
+  ...(record.threw === undefined ? {} : { threw: record.threw }),
+});
+
 export const createDefaultEngine = (deps: DefaultEngineDeps): AgentEngine => {
   const policy = deps.retry ?? DEFAULT_RETRY_POLICY;
   const sleep = deps.sleep ?? defaultSleep;
@@ -211,6 +235,50 @@ export const createDefaultEngine = (deps: DefaultEngineDeps): AgentEngine => {
       }
 
       /**
+       * Inspection, before the model sees anything — REQ-046 (#205), AC-1.
+       *
+       * Placed after resumption so an approved side effect that already happened is not re-inspected, and
+       * *before* the tools are built so a refusal costs nothing: no provider call, no tool discovery, no spend.
+       *
+       * The subject is the newest user turn rather than the whole history. Re-inspecting history every turn
+       * would re-refuse a conversation over something already allowed, and a guardrail that changes its mind
+       * about the past makes a conversation impossible to continue.
+       */
+      const guardrails = deps.guardrails ?? [];
+      if (guardrails.length > 0) {
+        const latest = [...messages].reverse().find((m) => m.role === "user");
+        const decision = await applyInputGuardrails(
+          guardrails,
+          { text: latest ? turnText(latest) : "" },
+          context,
+        );
+        for (const record of decision.records) yield verdictEvent(record);
+        if (decision.outcome === "refused") {
+          /**
+           * The turn ends here, and it ends *visibly*.
+           *
+           * A text part rather than a thrown error: a refusal is a policy outcome, not a crash, and a run that
+           * failed with a stack trace tells the person nothing and the operator the wrong thing. The model is
+           * never called, which is what AC-3 asks for — "the turn does not proceed".
+           */
+          const partId = `${messageId}:guardrail:refused` as MessagePartId;
+          yield {
+            type: "part.added",
+            messageId,
+            part: {
+              id: partId,
+              type: "text",
+              schemaVersion: 1,
+              createdAt: new Date(0).toISOString(),
+              text: decision.message,
+            },
+          };
+          yield { type: "run.completed" };
+          return;
+        }
+      }
+
+      /**
        * The tools the model may call, with execution routed through the approval loop.
        *
        * The caller's own `execute` is replaced rather than wrapped: the loop calls the same registry,
@@ -236,6 +304,15 @@ export const createDefaultEngine = (deps: DefaultEngineDeps): AgentEngine => {
        * the passage supports. Emitting at the tool call would produce citations supporting nothing.
        */
       const pendingCitations: CitationCandidate[] = [];
+      /**
+       * Guardrail verdicts on tool arguments, buffered — REQ-046 (#205), AC-2 and AC-4.
+       *
+       * Buffered for the same reason as the citations above: the inspection happens inside a tool's `execute`,
+       * which is a callback the model's stream invokes and not a generator, so it cannot yield. Dropping the
+       * records instead would satisfy the enforcement half of AC-2 and quietly fail AC-4 — the check would work
+       * and leave no trace, which is the combination that makes an incident unreconstructable.
+       */
+      const pendingVerdicts: GuardrailRecord[] = [];
       const approvals = deps.approvals;
       /**
        * Every tool is wrapped, whether or not an approval gate is configured.
@@ -247,6 +324,26 @@ export const createDefaultEngine = (deps: DefaultEngineDeps): AgentEngine => {
       const tools: readonly ModelTurnTool[] = declared.map((t) => ({
         ...t,
         execute: async (input: unknown) => {
+          /**
+           * A tool call is an output — AC-2.
+           *
+           * Before either branch below, so it applies whether or not an approval gate is configured, and
+           * *before* the gate so a refused call never becomes an approval request: asking a person to approve
+           * something that will not happen is how approving comes to feel meaningless.
+           *
+           * The refusal is returned as a tool *result* rather than thrown. The model then sees why its call did
+           * not happen and can say so, which is the difference between a run that explains itself and one that
+           * dies with a stack trace the person cannot act on.
+           */
+          if (guardrails.length > 0) {
+            const decision = await applyOutputGuardrails(guardrails, { kind: "tool-call", toolName: t.name, input }, context);
+            pendingVerdicts.push(...decision.records);
+            if (decision.outcome === "refused") {
+              return { refused: true, guardrail: decision.by, code: decision.code, message: decision.message };
+            }
+            // A redacted call runs with the redaction, not with what the model typed.
+            if (decision.value.kind === "tool-call") input = decision.value.input;
+          }
           if (approvals === undefined) {
             try {
               return collectCitations(await t.execute(input), pendingCitations);
@@ -365,6 +462,7 @@ export const createDefaultEngine = (deps: DefaultEngineDeps): AgentEngine => {
            * After the stream, so a citation cannot appear above text the reader is already looking at — the
            * append-only property `citationViewModel` depends on.
            */
+          for (const record of pendingVerdicts.splice(0)) yield verdictEvent(record);
           if (deps.citations !== undefined && pendingCitations.length > 0) {
             const claims = [...textParts.values()].map((t) => t.partId);
             if (claims.length > 0) {

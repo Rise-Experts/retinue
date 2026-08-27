@@ -30,6 +30,7 @@ const SUBPATHS = [
   ["/context", "../backend/dist/entries/context.js"],
   ["/knowledge", "../backend/dist/entries/knowledge.js"],
   ["/hitl", "../backend/dist/entries/hitl.js"],
+  ["/guardrails", "../backend/dist/entries/guardrails.js"],
   ["/usage", "../backend/dist/entries/usage.js"],
   ["/mcp", "../backend/dist/entries/mcp.js"],
   ["/observability", "../backend/dist/entries/observability.js"],
@@ -77,7 +78,16 @@ for (const [suffix, module] of SUBPATHS) {
 }
 
 // Only the ones a reader would copy. A prose mention of a name is not a claim that it is importable.
-const IMPORT = /import\s*(?:type\s*)?\{([^}]*)\}\s*from\s*"@retinue\/agentkit([^"]*)"/g;
+/**
+ * The `type` keyword is *captured*, not merely tolerated.
+ *
+ * It was optional-and-discarded, which handled the inline form (`import { type Foo }`) via the per-name check
+ * below and silently mishandled the statement form (`import type { Foo }`): the keyword sits before the brace,
+ * so each name arrives without a prefix and a perfectly valid type import was reported as a missing export.
+ * Found by documenting `Guardrail`, which is type-only — a checker firing on correct documentation, which is how
+ * a check gets loosened until it fires on nothing.
+ */
+const IMPORT = /import\s*(type\s*)?\{([^}]*)\}\s*from\s*"@retinue\/agentkit([^"]*)"/g;
 
 const violations = [];
 let checked = 0;
@@ -85,13 +95,14 @@ let checked = 0;
 for (const file of files) {
   const source = readFileSync(file, "utf8");
   for (const match of source.matchAll(IMPORT)) {
-    const suffix = match[2];
+    const typeOnlyStatement = match[1] !== undefined;
+    const suffix = match[3];
     if (!exported.has(suffix)) {
       violations.push(`${file}: "@retinue/agentkit${suffix}" is not a published subpath`);
       continue;
     }
     const names = exported.get(suffix);
-    for (const raw of match[1].split(",").map((n) => n.trim()).filter(Boolean)) {
+    for (const raw of match[2].split(",").map((n) => n.trim()).filter(Boolean)) {
       const name = raw.split(" as ")[0].replace(/^type\s+/, "").trim();
       checked += 1;
       /**
@@ -99,7 +110,7 @@ for (const file of files) {
        * Only a *value* import can be checked this way, and claiming otherwise would make this check fire on
        * correct documentation — which is how a check gets loosened until it fires on nothing.
        */
-      if (raw.trim().startsWith("type ")) continue;
+      if (typeOnlyStatement || raw.trim().startsWith("type ")) continue;
       if (!names.has(name)) {
         const home = [...exported].find(([, set]) => set.has(name))?.[0];
         violations.push(

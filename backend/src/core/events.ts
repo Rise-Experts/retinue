@@ -29,6 +29,7 @@ export const RUN_EVENT_TYPES = [
   "approval.decided",
   "usage.updated",
   "context.compacted",
+  "guardrail.verdict",
 ] as const;
 
 export type RunEventType = (typeof RUN_EVENT_TYPES)[number];
@@ -106,6 +107,28 @@ export type ContextCompactedEvent = EventBase<"context.compacted"> & {
   readonly tokensReclaimed: number;
 };
 
+/**
+ * What a guardrail concluded — REQ-046 (#205).
+ *
+ * Emitted for every verdict, including a pass, because "no guardrail ran" and "a guardrail ran and allowed it"
+ * are different facts and an incident review needs to tell them apart.
+ *
+ * **Carries no inspected value, ever.** `what` names fields or entity types; the content that was redacted is
+ * precisely what must not travel into an event log, a trace, or a support ticket — otherwise the audit trail
+ * becomes the leak it exists to record.
+ */
+export type GuardrailVerdictEvent = EventBase<"guardrail.verdict"> & {
+  readonly guardrail: string;
+  readonly subject: "input" | "message" | "tool-call";
+  readonly outcome: "pass" | "redacted" | "refused";
+  /** For a redaction: the fields or entity types touched. Never their contents. */
+  readonly what?: readonly string[];
+  /** For a refusal. */
+  readonly code?: string;
+  /** True when the guardrail threw and was therefore treated as a refusal. */
+  readonly threw?: boolean;
+};
+
 export type RunEvent =
   | RunLifecycleEvent
   | RunFailedEvent
@@ -114,7 +137,8 @@ export type RunEvent =
   | ToolEvent
   | InteractionEvent
   | UsageUpdatedEvent
-  | ContextCompactedEvent;
+  | ContextCompactedEvent
+  | GuardrailVerdictEvent;
 
 /** Fan-out port. Adapters: Supabase Realtime, Redis pub/sub, in-memory for tests. */
 export interface RealtimePublisher {

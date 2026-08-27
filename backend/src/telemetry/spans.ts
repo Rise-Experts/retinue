@@ -40,6 +40,9 @@ export const SPAN_FOR_RUN_EVENT: Readonly<Record<RunEventType, string>> = {
   "approval.decided": "hitl.approval",
   "usage.updated": "run.step",
   "context.compacted": "context.compact",
+  // Its own span, not `run.step`: a guardrail verdict is the boundary of a decision somebody will need to find
+  // later — "what stopped this turn" is the question a trace gets opened to answer.
+  "guardrail.verdict": "guardrail.inspect",
 };
 
 /**

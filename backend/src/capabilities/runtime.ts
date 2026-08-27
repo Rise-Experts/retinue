@@ -19,6 +19,7 @@
  * defects this module exists for. Every consumer of a store goes through the same property.
  */
 
+import type { Guardrail } from "../guardrails/index.js";
 import { AgentPlatformError } from "../core/errors.js";
 import type { RunEventLog } from "../core/events.js";
 import type {
@@ -69,6 +70,13 @@ export type RuntimeStores = {
 export type RuntimeServices = {
   readonly summarizer?: ThreadSummarizer;
   readonly mcpClient?: McpClient;
+  /**
+   * Ordered, and the order is the host's — REQ-046 (#205), AC-7.
+   *
+   * An array rather than a record, because composition order decides the outcome when two guardrails both
+   * redact, and a record's key order is an implementation detail that changes when somebody reformats a config.
+   */
+  readonly guardrails?: readonly Guardrail[];
 };
 
 /** Which capability governs which supplied name — the inverse of `CAPABILITY_REQUIRES`. */

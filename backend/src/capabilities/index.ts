@@ -46,6 +46,7 @@ export const CAPABILITIES = [
   "skills",
   "mcp",
   "usage",
+  "guardrails",
 ] as const;
 
 export type Capability = (typeof CAPABILITIES)[number];
@@ -69,6 +70,9 @@ export const CAPABILITY_REQUIRES: Readonly<Record<Capability, readonly string[]>
   skills: ["skills"],
   mcp: ["mcpConnections", "mcpClient"],
   usage: ["usage"],
+  // A guardrail set, supplied by the host. Declaring the capability without wiring one is refused at
+  // construction — which is the point: "guardrails: on" must mean a check exists, not that somebody intended one.
+  guardrails: ["guardrails"],
 };
 
 const OFF: CapabilityMap = Object.freeze(
@@ -92,6 +96,10 @@ export const PROFILES = {
     skills: "on",
     mcp: "off",
     usage: "on",
+    // Off in both profiles, deliberately. A guardrail set is the host's — and a profile that turned this on
+    // would be a profile that refuses to construct until somebody supplies one, which is a poor default for a
+    // named starting point.
+    guardrails: "off",
   },
   /**
    * A headless automation: no conversation, no person, no recall.
@@ -108,6 +116,7 @@ export const PROFILES = {
     skills: "off",
     mcp: "off",
     usage: "on",
+    guardrails: "off",
   },
 } as const satisfies Readonly<Record<string, CapabilityMap>>;
 

@@ -15,6 +15,7 @@ Importing the package root loads `ai` and `zod`. Nothing else.
 | `context.ts` | `./context` | Prompt assembly and budgeting, skills, per-principal memory, citations, and the untrusted-content fence | *none* |
 | `knowledge.ts` | `./knowledge` | Retrieval, documents, files, artifacts, export | *none* |
 | `hitl.ts` | `./hitl` | Approvals, questions, authorization | *none* |
+| `guardrails.ts` | `./guardrails` | Checks a deployment adds: PII, moderation, output policy (#205) | *none* — a contract and a composer, nothing else |
 | `usage.ts` | `./usage` | Spend, quotas, rollups | *none* |
 | `mcp.ts` | `./mcp` | Importing another server's tools, and the egress policy | *none* |
 | `observability.ts` | `./observability` | Telemetry, retention, the security review, the load and evaluation harnesses | *none* |

@@ -39,6 +39,10 @@
       "types": "./dist/entries/hitl.d.ts",
       "default": "./dist/entries/hitl.js"
     },
+    "./guardrails": {
+      "types": "./dist/entries/guardrails.d.ts",
+      "default": "./dist/entries/guardrails.js"
+    },
     "./usage": {
       "types": "./dist/entries/usage.d.ts",
       "default": "./dist/entries/usage.js"

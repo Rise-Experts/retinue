@@ -26,6 +26,7 @@ const sidebars: SidebarsConfig = {
         "concepts/sessions",
         "concepts/durable-runtime",
         "concepts/human-in-the-loop",
+        "concepts/guardrails",
         "concepts/retrieval",
         "concepts/frontend",
       ],

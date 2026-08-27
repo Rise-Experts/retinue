@@ -38,6 +38,7 @@ import {
 import { createMemoryConversationStore } from "../adapters/memory/index.js";
 import { createMemoryEventBus } from "../runtime/index.js";
 import { createMemoryMessageStore } from "../adapters/memory/message-store.js";
+import type { Guardrail } from "../guardrails/index.js";
 import { createDefaultEngine, type ResolvedModelInfo } from "./engine.js";
 import type { AgentManifest } from "./index.js";
 import {
@@ -78,6 +79,14 @@ export type CreateAgentConfig = {
    */
   readonly randomHex?: (bytes: number) => string;
   readonly authorization?: AuthorizationPolicy;
+  /**
+   * Checks to run before the model sees a turn and before anything leaves it — REQ-046 (#205), AC-5.
+   *
+   * Here so a host can add one without composing the runtime by hand: this facade exists to be the short path,
+   * and a guardrail that could only be wired through the long one would be a guardrail most deployments never
+   * add.
+   */
+  readonly guardrails?: readonly Guardrail[];
   readonly tenantId?: string;
   /** Test/advanced seam: override how a manifest resolves to a model (e.g. a mock model). */
   readonly resolveModel?: (manifest: AgentManifest, context: ExecutionContext) => ResolvedModelInfo;
@@ -141,6 +150,7 @@ export const createAgent = (config: CreateAgentConfig) => {
 
   const contextProviders = config.contextProviders ?? [];
   const engine = config.engine ?? createDefaultEngine({
+    ...(config.guardrails === undefined ? {} : { guardrails: config.guardrails }),
     async loadManifest() {
       return manifest; // single-manifest embedded agent
     },
