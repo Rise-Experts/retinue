@@ -23,6 +23,9 @@ import {
   relativeLinks,
   unresolvedLinks,
   codeBlocks,
+  PUBLISH_POLL_MS,
+  PUBLISH_WAIT_MS,
+  sleepSync,
 } from "./check-consumer-boundary.mjs";
 
 test("importing this module does not run the check", () => {
@@ -164,4 +167,27 @@ test("the release workflow scopes the post-publish check to the tag's package", 
    */
   const workflow = await readFile(new URL("../.github/workflows/release.yml", import.meta.url), "utf8");
   assert.match(workflow, /check:consumer -- --published --only \$\{\{ steps\.target\.outputs\.workspace \}\}/);
+});
+
+test("the publish wait is bounded and polls, rather than probing once", async () => {
+  /**
+   * `agentkit@0.2.0` published successfully and its own release went red with "nothing was verified": the check
+   * ran seconds after the publish, the registry had not propagated, the version was skipped as absent, and the
+   * guard against a silent skip fired for a timing reason. Earlier the same day another package took roughly
+   * twenty minutes to expose its packument while serving the version document immediately.
+   */
+  assert.equal(PUBLISH_WAIT_MS, 180_000);
+  assert.ok(PUBLISH_POLL_MS > 0 && PUBLISH_POLL_MS < PUBLISH_WAIT_MS);
+
+  const started = Date.now();
+  sleepSync(60);
+  assert.ok(Date.now() - started >= 50, "sleepSync actually waits");
+});
+
+test("a scoped run cannot skip its own package", async () => {
+  // The distinction the fix turns on: unscoped, an absent version is a loud skip; scoped with --only it is the
+  // package just published, and skipping it is a release reporting success having verified nothing.
+  const source = await readFile(new URL("./check-consumer-boundary.mjs", import.meta.url), "utf8");
+  assert.match(source, /if \(only !== null\) \{[\s\S]{0,400}never appeared on the registry/);
+  assert.match(source, /if \(published && asserting\) \{/);
 });

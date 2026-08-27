@@ -217,6 +217,27 @@ export const codeBlocks = (markdown) =>
 export const blockedByExports = (outcome) => outcome.code === "ERR_PACKAGE_PATH_NOT_EXPORTED";
 
 /**
+ * How long to wait for a just-published version to appear, and how often to ask.
+ *
+ * Three minutes because the observed lag ran to twenty for one package's *packument* while its version document
+ * was served immediately — so this is not sized to the worst case, it is sized to the common one, and the
+ * uncommon case now fails with a sentence naming the wait rather than with "nothing was verified".
+ */
+export const PUBLISH_WAIT_MS = 180_000;
+export const PUBLISH_POLL_MS = 10_000;
+
+/**
+ * Sleep, synchronously, because everything around it is synchronous `execFileSync`.
+ *
+ * `Atomics.wait` on a throwaway buffer rather than a busy loop: a spin would burn a CI core for three minutes,
+ * and making this one function async would mean threading a promise through a script whose whole shape is
+ * sequential shell calls.
+ */
+export const sleepSync = (ms) => {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+};
+
+/**
  * Verifying nothing is not passing.
  *
  * A rule rather than an inline condition, so it can be tested without a registry. The per-package 404 skip below
@@ -353,25 +374,62 @@ const main = () => {
       const deepImports = shipped.deep.map((path) => `${shipped.name}/${path}`);
 
       /**
-       * In `--published` mode, a package the registry does not have yet is skipped rather than fatal.
+       * Nothing below here is needed for a package this run will not assert on.
        *
-       * Because the first release is two tags: `agentkit@0.1.0` publishes the runtime, and this check runs at
-       * the end of *that* workflow — when `@retinue/react@0.1.0` does not exist yet. Failing there would make
-       * the runtime's own release red for a reason that is correct.
-       *
-       * Skipped **loudly**, and only on a 404. Any other failure is fatal: "the registry is unreachable" and
-       * "this version is not published" must not collapse into the same silent pass, or the check reports
-       * success having verified nothing.
+       * The install has to happen for every package — see `--only` — but the *registry* work does not: probing
+       * and packing four unrelated versions during a release costs four round trips and, worse, fills the summary
+       * with "not published yet" lines about packages nobody asked about. Placed after the manifest reads above
+       * so a malformed manifest is still caught everywhere.
        */
-      if (published) {
-        try {
-          run("npm", ["view", `${shipped.name}@${manifest.version}`, "version"], { cwd: ROOT });
-        } catch (error) {
-          const output = `${error.stdout ?? ""}${error.stderr ?? ""}`;
-          if (!/E404|is not in this registry|No match(ing version)? found/i.test(output)) {
-            die(`npm view ${shipped.name}@${manifest.version} failed for a reason other than 404: ${output.trim()}`);
+      const asserting = selected.includes(shipped);
+
+      /**
+       * In `--published` mode, wait for the registry to catch up before deciding it is absent.
+       *
+       * The first version probed once and skipped on a 404, which was right for the case it was written for —
+       * `agentkit@0.1.0`'s release running while `@retinue/react@0.1.0` did not exist. It was wrong for the case
+       * that actually happened: a release publishes, this step runs seconds later, and the registry has not
+       * propagated. `agentkit@0.2.0` published successfully and its own release went red with "nothing was
+       * verified", which is the `verifiedNothing` guard doing its job for a timing reason. Earlier the same day
+       * `@retinue/tools-github` took roughly twenty minutes to expose its packument while serving the version
+       * document immediately, so this is not a narrow window.
+       *
+       * So: poll, and let the two outcomes stay distinct. When the caller named one package with `--only`, that
+       * package **must** appear — it is the one just published, and skipping it is how a release reports success
+       * having checked nothing. Unscoped, a genuinely absent version is still a loud skip.
+       *
+       * Only a 404 is retried. "The registry is unreachable" and "this version is not published" must not
+       * collapse into the same answer.
+       */
+      if (published && asserting) {
+        const deadline = Date.now() + PUBLISH_WAIT_MS;
+        let seen = false;
+        let lastOutput = "";
+        for (;;) {
+          try {
+            run("npm", ["view", `${shipped.name}@${manifest.version}`, "version"], { cwd: ROOT });
+            seen = true;
+            break;
+          } catch (error) {
+            lastOutput = `${error.stdout ?? ""}${error.stderr ?? ""}`;
+            if (!/E404|is not in this registry|No match(ing version)? found/i.test(lastOutput)) {
+              die(`npm view ${shipped.name}@${manifest.version} failed for a reason other than 404: ${lastOutput.trim()}`);
+            }
+            if (Date.now() >= deadline) break;
+            sleepSync(PUBLISH_POLL_MS);
           }
-          summaries.push(`${shipped.name}@${manifest.version}: not published yet — skipped`);
+        }
+        if (!seen) {
+          if (only !== null) {
+            fail(
+              `${shipped.name}@${manifest.version} never appeared on the registry within ` +
+                `${Math.round(PUBLISH_WAIT_MS / 1000)}s of being asked for`,
+              "this run was scoped to that package with --only, so it is the one just published. A skip here\n" +
+                "would be a release reporting success having verified nothing",
+            );
+            continue;
+          }
+          summaries.push(`${shipped.name}@${manifest.version}: not published yet — skipped (${lastOutput.trim().split("\n")[0]})`);
           continue;
         }
       }
@@ -385,6 +443,18 @@ const main = () => {
         const output = run("npm", packArguments, { cwd: ROOT });
         packed = join(work, JSON.parse(output)[0].filename);
       } catch (error) {
+        /**
+         * A package nobody is asserting on is skipped, not fatal.
+         *
+         * During a release only one package is under assertion; the others are installed so the consumer is
+         * complete, and one whose version the registry does not have yet simply cannot be. Failing there would
+         * make a runtime release red because a client published minutes later does not exist — the case the
+         * original skip was written for, kept.
+         */
+        if (published && !asserting) {
+          summaries.push(`${shipped.name}@${manifest.version}: not on the registry — not installed`);
+          continue;
+        }
         die(
           `npm pack ${published ? `${shipped.name}@${manifest.version} from the registry` : shipped.name} failed: ` +
             `${error.stderr || error.message}`,
