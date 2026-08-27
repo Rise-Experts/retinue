@@ -19,7 +19,7 @@
   "scripts": {
     "typecheck": "tsc -b",
     "build": "tsc -b",
-    "test": "npm run test --workspaces --if-present && npm run test:boundaries && npm run test:evals && npm run check:reachability && npm run check:scripts && npm run check:docs && npm run check:template && npm run check:terminology && npm run check:catalogue && npm run check:effects && node scripts/ci-local.mjs --verify",
+    "test": "npm run test --workspaces --if-present && npm run test:boundaries && npm run test:evals && npm run check:reachability && npm run check:scripts && npm run check:docs && npm run check:template && npm run check:terminology && npm run check:catalogue && npm run check:effects && npm run check:image && node scripts/ci-local.mjs --verify",
     "test:boundaries": "node --test scripts/*.test.mjs",
     "test:evals": "node --test evals/*.test.mjs",
     "evals:coverage": "node evals/coverage.mjs",
@@ -46,7 +46,8 @@
     "ci:local": "node scripts/ci-local.mjs",
     "check:template": "node scripts/check-doc-template.mjs",
     "check:llms": "node scripts/check-llms.mjs",
-    "check:brand": "node scripts/check-brand.mjs"
+    "check:brand": "node scripts/check-brand.mjs",
+    "check:image": "node scripts/check-image.mjs"
   },
   "devDependencies": {
     "typescript": "^5"

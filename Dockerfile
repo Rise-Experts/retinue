@@ -4,9 +4,16 @@
 # command chooses which process runs — see the README's Deployment section.
 #
 # Since #196 the host is a subpath of the runtime package rather than its own workspace, so there is
-# no `server/` to copy. Three workspaces are built: `backend` (runtime + host),
-# `frontend` (view models the reference app imports) and `examples` (the reference app the host
-# loads through RETINUE_APP_MODULE). The app layer is not decoration — the
+# no `server/` to copy. Four things are built: `backend` (runtime + host),
+# `frontend` (view models the reference app imports), `tools/*` (the integration toolkits the
+# reference app registers) and `examples` (the reference app the host loads through
+# RETINUE_APP_MODULE).
+#
+# `tools/` arrived with #214 and this file did not learn about it until CI failed: the example app
+# imports `@retinue/tools-github` and friends, so without them `tsc -b examples` cannot resolve its
+# project references and the runtime stage cannot resolve the imports. `scripts/check-image.mjs`
+# now fails locally on a workspace this file does not carry, because the image job is one of the
+# three workflow steps `ci:local` deliberately does not run. The app layer is not decoration — the
 # runtime declares its heavy dependencies as *optional* peers, so something has to declare the ones
 # a given wiring actually uses, and that something is the application. Deploying your own app means
 # replacing the `examples` layer with yours, not editing the runtime's.
@@ -22,15 +29,19 @@ COPY backend/package.json ./backend/
 COPY frontend/package.json ./frontend/
 COPY shareflow/package.json ./shareflow/
 COPY examples/package.json ./examples/
+COPY tools/github/package.json ./tools/github/
+COPY tools/slack/package.json ./tools/slack/
+COPY tools/search/package.json ./tools/search/
 RUN npm ci
 COPY tsconfig.json ./
 COPY backend ./backend
 COPY frontend ./frontend
+COPY tools ./tools
 COPY examples ./examples
 # Named projects, not a bare `tsc -b`: the root config also references shareflow, whose sources this
 # image deliberately does not carry. `frontend` is here because the reference app imports its view
 # models; the host itself does not.
-RUN npx tsc -b backend examples
+RUN npx tsc -b backend tools/github tools/slack tools/search examples
 
 FROM node:20-slim AS runtime
 WORKDIR /app
@@ -43,9 +54,15 @@ COPY backend/package.json ./backend/
 COPY frontend/package.json ./frontend/
 COPY shareflow/package.json ./shareflow/
 COPY examples/package.json ./examples/
+COPY tools/github/package.json ./tools/github/
+COPY tools/slack/package.json ./tools/slack/
+COPY tools/search/package.json ./tools/search/
 RUN npm ci --omit=dev
 COPY --from=build /app/backend/dist ./backend/dist
 COPY --from=build /app/frontend/dist ./frontend/dist
+COPY --from=build /app/tools/github/dist ./tools/github/dist
+COPY --from=build /app/tools/slack/dist ./tools/slack/dist
+COPY --from=build /app/tools/search/dist ./tools/search/dist
 COPY --from=build /app/examples/dist ./examples/dist
 COPY examples/public ./examples/public
 # Non-root: nothing here needs to write to the filesystem.
