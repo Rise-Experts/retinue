@@ -1,5 +1,9 @@
 ## Unreleased
 
+### Added
+
+- **guardrails**: a port for checks we do not ship, enforced where it cannot be walked past ([#211](https://github.com/Rise-Experts/retinue/issues/211)) `c1b0164e`
+
 ### Documentation
 
 - **tools**: the catalogue specification, and a check that every tool is classified ([#213](https://github.com/Rise-Experts/retinue/issues/213)) `34541f29`
@@ -11,6 +15,7 @@
 
 ### Chores
 
+- **changelog**: regenerate `78ddd97f`
 - **changelog**: regenerate `cf55d7c5`
 - **changelog**: regenerate `8987da3e`
 
