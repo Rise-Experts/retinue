@@ -7,7 +7,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { analyse, parseEventTypes } from "./check-reachability.mjs";
+import { analyse, parseEventTypes, parseFields, isTest } from "./check-reachability.mjs";
 
 const scopes = { host: ["examples/src"], platform: ["backend/src"] };
 const capability = (over = {}) => ({ name: "thing", symbol: "createThing", scope: "host", why: "because", ...over });
@@ -169,4 +169,220 @@ test("parseEventTypes reads the closed union", () => {
 test("parseEventTypes returns nothing when the union moves, so the guard fails loudly", () => {
   // Rather than silently checking zero events if the source is refactored.
   assert.deepEqual(parseEventTypes(`export const SOMETHING_ELSE = ["a"] as const;`), []);
+});
+
+/* ------------------------------------------------- question 3: declared fields (#245) */
+
+const declared = (over = {}) => ({
+  type: "AgentManifest",
+  file: "backend/src/agents/index.ts",
+  scope: "platform",
+  definers: ["backend/src/agents/index.ts", "backend/src/agents/define.ts"],
+  fields: ["toolPolicy"],
+  ...over,
+});
+
+test("a field read as a property access passes", () => {
+  const failures = analyse({
+    files: [{ path: "backend/src/engine.ts", code: `const p = manifest.toolPolicy;` }],
+    capabilities: [],
+    eventTypes: [],
+    declaredTypes: [declared()],
+    scopes,
+  });
+  assert.deepEqual(failures, []);
+});
+
+test("a field nothing reads fails, naming it", () => {
+  const failures = analyse({
+    files: [{ path: "backend/src/engine.ts", code: `const x = 1;` }],
+    capabilities: [],
+    eventTypes: [],
+    declaredTypes: [declared()],
+    scopes,
+  });
+  assert.equal(failures.length, 1);
+  assert.match(failures[0], /AgentManifest\.toolPolicy is declared and never read/);
+});
+
+test("sabotage 1: the field's own default does not count as a read", () => {
+  // `defineAgent` sets `toolPolicy: { preloaded: [], … }` and interprets nothing. The function that makes a
+  // field inert mentions it by necessity, so counting the definer would pass on exactly the broken state.
+  const failures = analyse({
+    files: [
+      {
+        path: "backend/src/agents/define.ts",
+        code: `export const defineAgent = (i) => ({ toolPolicy: { preloaded: [] }, ...i });\nconst d = x.toolPolicy;`,
+      },
+    ],
+    capabilities: [],
+    eventTypes: [],
+    declaredTypes: [declared()],
+    scopes,
+  });
+  assert.equal(failures.length, 1);
+  assert.match(failures[0], /never read/);
+});
+
+test("sabotage 2: a test asserting the default does not count as a read", () => {
+  // The real one: `agent.test.ts` asserts `m.toolPolicy` equals the default, which passes forever whether or not
+  // anything interprets the field. Filtered inside analyse, so the property does not depend on the file walk.
+  const failures = analyse({
+    files: [
+      {
+        path: "backend/src/agents/__tests__/agent.test.ts",
+        code: `expect(m.toolPolicy).toEqual({ preloaded: [] });`,
+      },
+      { path: "backend/src/agents/thing.test.ts", code: `const q = manifest.toolPolicy;` },
+    ],
+    capabilities: [],
+    eventTypes: [],
+    declaredTypes: [declared()],
+    scopes,
+  });
+  assert.equal(failures.length, 1);
+  assert.match(failures[0], /never read/);
+  assert.ok(isTest("backend/src/agents/__tests__/agent.test.ts"));
+});
+
+test("constructing a value with the field set is not reading it", () => {
+  // `toolPolicy:` in an object literal builds a manifest; `.toolPolicy` interprets one. The five dead fields
+  // were all constructed and never interpreted, so a mention-based check would have passed on all of them.
+  const failures = analyse({
+    files: [{ path: "backend/src/host.ts", code: `const m = { toolPolicy: { preloaded: ["a"] } };` }],
+    capabilities: [],
+    eventTypes: [],
+    declaredTypes: [declared()],
+    scopes,
+  });
+  assert.equal(failures.length, 1);
+});
+
+test("a field named only in a comment fails", () => {
+  const failures = analyse({
+    files: [{ path: "backend/src/engine.ts", code: `// one day we will honour manifest.toolPolicy here\n/* .toolPolicy */` }],
+    capabilities: [],
+    eventTypes: [],
+    declaredTypes: [declared()],
+    scopes,
+  });
+  assert.equal(failures.length, 1);
+});
+
+test("an exemption with a reason is honoured", () => {
+  const failures = analyse({
+    files: [{ path: "backend/src/engine.ts", code: `const x = 1;` }],
+    capabilities: [],
+    eventTypes: [],
+    declaredTypes: [declared({ exempt: { toolPolicy: "Display only; rendered by the host." } })],
+    scopes,
+  });
+  assert.deepEqual(failures, []);
+});
+
+test("an exemption with an empty reason fails", () => {
+  // An exemption list without reasons is a place to hide a dead field. The reason is the value, so requiring it
+  // to be non-empty is what makes "written down" structural rather than conventional.
+  const failures = analyse({
+    files: [{ path: "backend/src/engine.ts", code: `const x = 1;` }],
+    capabilities: [],
+    eventTypes: [],
+    declaredTypes: [declared({ exempt: { toolPolicy: "  " } })],
+    scopes,
+  });
+  assert.equal(failures.length, 1);
+  assert.match(failures[0], /exempt with no reason/);
+});
+
+test("a type whose fields cannot be parsed fails rather than passing vacuously", () => {
+  // Renaming or moving the type would otherwise report success having examined nothing — the same shape
+  // `requireEvents` exists to prevent for events.
+  const failures = analyse({
+    files: [{ path: "backend/src/engine.ts", code: `const x = 1;` }],
+    capabilities: [],
+    eventTypes: [],
+    declaredTypes: [declared({ fields: [] })],
+    scopes,
+  });
+  assert.equal(failures.length, 1);
+  assert.match(failures[0], /no fields parsed/);
+});
+
+test("parseFields reads the top-level fields, and nothing past the closing brace", () => {
+  // Two properties. Brace counting stops the body at the type's own `}` — a terminating regex on `};` would run
+  // into the next declaration and check `Other`'s fields as if they were this type's. And matching only at line
+  // start keeps an inline object's members out: `a` and `b` are fields of `nested`'s type, not of the manifest,
+  // and reporting them would be a false alarm against code that is correct.
+  const source = [
+    "export type AgentManifest = {",
+    "  readonly id: string;",
+    "  readonly nested: { readonly a: string; readonly b: number };",
+    "  readonly responseFormat: ResponseFormat;",
+    "  readonly optional?: string;",
+    "};",
+    "export type Other = { readonly zzz: string };",
+  ].join("\n");
+  const fields = parseFields(source, "AgentManifest");
+  assert.deepEqual(fields, ["id", "nested", "responseFormat", "optional"]);
+  assert.ok(!fields.includes("zzz"), "must not read past the closing brace");
+  assert.ok(!fields.includes("a"), "an inline object's members are not the type's fields");
+});
+
+test("parseFields on a renamed type returns nothing, which analyse turns into a failure", () => {
+  assert.deepEqual(parseFields("export type Renamed = { readonly a: string };", "AgentManifest"), []);
+});
+
+test("adding a new field with no reader fails — AC-5", () => {
+  // The durable property: this is what stops a ninth built-and-unreachable feature, rather than the five found
+  // by grepping once.
+  const source = "export type AgentManifest = {\n  readonly limits: X;\n  readonly brandNewThing: Y;\n};";
+  const fields = parseFields(source, "AgentManifest");
+  assert.ok(fields.includes("brandNewThing"));
+  const failures = analyse({
+    files: [{ path: "backend/src/engine.ts", code: `const s = manifest.limits.maxSteps;` }],
+    capabilities: [],
+    eventTypes: [],
+    declaredTypes: [declared({ fields })],
+    scopes,
+  });
+  assert.equal(failures.length, 1);
+  assert.match(failures[0], /brandNewThing/);
+});
+
+test("a known-defect exemption passes but must carry an issue number", () => {
+  // `{ defect, issue }` keeps main green while the fix is filed, and the CLI prints it on every run. Without a
+  // real issue number it is an ordinary silent exemption wearing a label, so the shape is enforced.
+  const ok = analyse({
+    files: [{ path: "backend/src/engine.ts", code: `const x = 1;` }],
+    capabilities: [],
+    eventTypes: [],
+    declaredTypes: [declared({ exempt: { toolPolicy: { defect: "no interpreter ships", issue: 244 } } })],
+    scopes,
+  });
+  assert.deepEqual(ok, []);
+
+  for (const bad of [{ defect: "no interpreter" }, { issue: 244 }, { defect: "  ", issue: 244 }, { defect: "x", issue: "244" }]) {
+    const failures = analyse({
+      files: [{ path: "backend/src/engine.ts", code: `const x = 1;` }],
+      capabilities: [],
+      eventTypes: [],
+      declaredTypes: [declared({ exempt: { toolPolicy: bad } })],
+      scopes,
+    });
+    assert.equal(failures.length, 1, `expected a failure for ${JSON.stringify(bad)}`);
+    assert.match(failures[0], /exempt with no reason/);
+  }
+});
+
+test("a field read from the reference host counts — the scope doctrine applies to fields too", () => {
+  // `DefaultEngineDeps` hands the manifest to host callbacks, so a host interpreting `toolPolicy` in `buildTools`
+  // is the intended design. Failing that would be the false alarm that gets a check deleted.
+  const failures = analyse({
+    files: [{ path: "examples/src/app.ts", code: `const t = manifest.toolPolicy.excluded;` }],
+    capabilities: [],
+    eventTypes: [],
+    declaredTypes: [declared({ scope: "definition" })],
+    scopes: { ...scopes, definition: ["backend/src", "examples/src"] },
+  });
+  assert.deepEqual(failures, []);
 });

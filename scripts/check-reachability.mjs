@@ -25,6 +25,24 @@
  *    telemetry span map and the frontend all switch over exhaustively — so an event nobody *produces* passes
  *    every exhaustiveness check in the codebase while being unreachable. That is exactly how #163 hid.
  *
+ * 3. **Is every field of a consumer-authored definition read?** Task #245. `AgentManifest` declared twelve
+ *    fields and five of them — `responseFormat`, `toolPolicy`, `skillPolicy`, `contextProviderIds`,
+ *    `authorizationPolicyId` — were read by nothing, having shipped that way in 0.2.0. A field is neither a
+ *    capability nor an event, so questions 1 and 2 both passed over them; `toolPolicy.excluded` reads as a
+ *    security control and enforced nothing. Five fields is not five accidents, it is the same class again in a
+ *    place the ledger did not look.
+ *
+ *    Two shapes make a dead field look alive, and both had to be closed:
+ *
+ *    - **Its own default counts as a read.** `defineAgent` sets `responseFormat: { kind: "text" }`, so the very
+ *      function that makes a field inert also references it. Hence `definers`: files whose mention never counts.
+ *    - **A test asserting the default counts as a read.** `agent.test.ts` asserts `m.toolPolicy` equals the
+ *      default — a test that passes forever whether or not anything interprets the field. Tests were already
+ *      excluded from the file walk, which closes this one for free, and there is a fixture test to keep it shut.
+ *
+ *    A **read** means a property access — `manifest.limits`, not `limits:` in an object literal. Constructing a
+ *    value with a field set is not interpreting it, which is precisely what the five inert fields did.
+ *
  * ## Why the reference host counts as the consumer
  *
  * Most of these are host-facing on purpose: the platform ships a capability and an application wires it. So
@@ -42,6 +60,12 @@
  * - Unwiring the compaction *trigger* passed, because the platform function underneath was still called — by the
  *   wrapper that nothing then called. One layer of unreachability had replaced another. So both the platform
  *   symbol and the wiring site are named.
+ *
+ * The field check has a third, known limitation: a property access is matched by name, so a field called `id`,
+ * `name` or `version` matches accesses on every unrelated object in the tree and can never fail. That errs
+ * toward passing, which is the wrong direction for a guard — but the alternative is a type-aware analysis, and
+ * the failure mode being hunted has never been a generically-named field. Nobody names a policy field `id`. The
+ * distinctive names are the ones that go dead, and those are matched exactly.
  *
  * Neither of those is a flaw to be fixed by cleverness; they are the shape of the tool. The mitigation is that
  * adding a capability means adding a line, and this file is short enough to read.
@@ -71,6 +95,15 @@ const SCOPES = {
   platform: ["backend/src"],
   entrypoint: ["backend/src/server"],
   host: ["examples/src", "examples/scripts"],
+  /**
+   * Platform **or** reference host — for question 3.
+   *
+   * A manifest policy field is host-interpreted by design: `DefaultEngineDeps` hands the manifest to
+   * `buildTools`, `systemPrompt` and `resolveModel`, so a host reading `toolPolicy` there is the intended
+   * design and must count as a read. Scoping the field check to `platform` alone would report a correctly
+   * host-wired field as dead, which is the false alarm that gets a check deleted rather than fixed.
+   */
+  definition: ["backend/src", "examples/src", "examples/scripts"],
 };
 
 /**
@@ -386,6 +419,52 @@ const EVENT_PRODUCER_EXEMPTIONS = {
   // Listed because its absence from the scan is a property of how it is built, not of whether it works.
 };
 
+/**
+ * Definition types a consumer authors, whose every field must be read by something — question 3.
+ *
+ * `definers` is the mechanism that makes this work: the type's own declaration and the `define*` factory that
+ * fills in defaults both mention every field, and neither interprets any of them. Without excluding them the
+ * check passes on exactly the state it exists to find.
+ *
+ * `exempt` is for a field the check should not fail on. Each entry carries a reason, because an exemption list
+ * without reasons is a place to hide things rather than a record of decisions — and an empty reason is itself a
+ * failure, so "written down" is structural rather than conventional.
+ *
+ * Two kinds, and the difference matters:
+ *
+ * - A **string** means accepted by design: the field is genuinely declaration-only — persisted, returned over an
+ *   API, rendered by a host. Nothing to do.
+ * - `{ defect, issue }` means **a known defect with a filed fix**. The guard still passes, so `main` stays
+ *   green, but it prints the field and the issue on every run. A silent exemption would turn this ledger into
+ *   the hiding place it was built to prevent; a loud one is a standing reminder that shrinks as the issues
+ *   close. Closing the issue means deleting the entry, and the check then holds the field for real.
+ */
+const DECLARED_TYPES = [
+  {
+    type: "AgentManifest",
+    file: "backend/src/agents/index.ts",
+    scope: "definition",
+    definers: ["backend/src/agents/index.ts", "backend/src/agents/define.ts"],
+    exempt: {
+      id: "Identity. Read as `run.agentId` and by the persistence mapping, never as `manifest.id`.",
+      version: "Identity. A run records `agentVersion` so editing an agent never rewrites history; the manifest's copy is written, not interpreted.",
+      name: "Display. Rendered by a host and returned over GraphQL.",
+      description: "Display. Same.",
+      responseFormat: {
+        defect: "Declared since the manifest existed and read by nothing; the engine owns the model call and never asks for structured output, so a structured agent silently returns prose",
+        issue: 243,
+      },
+      toolPolicy: {
+        defect: "No interpreter ships anywhere, including the reference host. `excluded` reads as a security control and enforces nothing",
+        issue: 244,
+      },
+      skillPolicy: { defect: "No interpreter ships anywhere", issue: 244 },
+      authorizationPolicyId: { defect: "No interpreter ships anywhere", issue: 244 },
+      contextProviderIds: { defect: "No interpreter ships anywhere", issue: 244 },
+    },
+  },
+];
+
 const SOURCE_DIRS = ["backend/src", "server/src", "examples/src", "examples/scripts"];
 
 /**
@@ -395,7 +474,7 @@ const SOURCE_DIRS = ["backend/src", "server/src", "examples/src", "examples/scri
  * by design. Counting it would make this guard pass on the strength of the very suite whose blind spot it exists
  * to cover: `run.checkpointed` has a producer in a conformance fixture and none in the runtime.
  */
-const isTest = (path) =>
+export const isTest = (path) =>
   /\/__tests__\/|\.test\.[tm]?js$|\.test\.ts$/.test(path) || path.includes("src/testing/");
 
 const walk = (dir) => {
@@ -453,6 +532,12 @@ export const analyse = ({
   scopes = SCOPES,
   exemptEvents = {},
   /**
+   * Declared definition types whose fields must be read — question 3. Each entry is
+   * `{ type, fields, scope, definers, exempt }`; `fields` is passed in already parsed so the analysis stays
+   * pure and testable against fixtures.
+   */
+  declaredTypes = [],
+  /**
    * Whether an empty event list is itself a failure.
    *
    * On for the CLI: if `RUN_EVENT_TYPES` is renamed or moved, `parseEventTypes` returns nothing and the guard
@@ -509,7 +594,87 @@ export const analyse = ({
     }
   }
 
+  for (const declared of declaredTypes) {
+    if (declared.fields.length === 0) {
+      // A type whose fields could not be parsed reports success having checked nothing — the failure mode this
+      // guard's own `requireEvents` exists to prevent, in a second place.
+      failures.push(
+        `${declared.type}: no fields parsed from ${declared.file} — the type was renamed or moved, and the ` +
+          `field check would pass having examined nothing`,
+      );
+      continue;
+    }
+
+    const definers = declared.definers ?? [];
+    const readable = stripped.filter(
+      (f) =>
+        (scopes[declared.scope] ?? []).some((dir) => f.path.startsWith(dir)) &&
+        !definers.includes(f.path) &&
+        // Filtered here as well as in the walk, so the property holds regardless of what a caller passed in.
+        // `agent.test.ts` asserts `m.toolPolicy` equals its default — a read that proves nothing interprets it,
+        // and a guard that depended on the caller to exclude it would be one refactor from accepting it.
+        !isTest(f.path),
+    );
+
+    for (const [field, reason] of Object.entries(declared.exempt ?? {})) {
+      if (typeof reason === "string" && reason.trim() !== "") continue;
+      if (
+        reason !== null &&
+        typeof reason === "object" &&
+        typeof reason.defect === "string" &&
+        reason.defect.trim() !== "" &&
+        Number.isInteger(reason.issue)
+      )
+        continue;
+      failures.push(
+        `${declared.type}.${field} is exempt with no reason — an exemption list without reasons is a place to ` +
+          `hide a dead field rather than a record of a decision. Use a string for accepted-by-design, or ` +
+          `{ defect, issue } for a known defect with a filed fix`,
+      );
+    }
+
+    for (const field of declared.fields) {
+      if (declared.exempt !== undefined && field in declared.exempt) continue;
+      // A property access, not a mention. `limits:` in an object literal constructs a value; `x.limits` reads
+      // one, and only the read means something interprets the field.
+      const access = new RegExp(`\\.${field}\\b`);
+      if (readable.some((f) => access.test(f.code))) continue;
+      failures.push(
+        `${declared.type}.${field} is declared and never read: nothing in ` +
+          `${(scopes[declared.scope] ?? []).join(" or ")} accesses \`.${field}\`, so a consumer setting it ` +
+          `gets no behaviour and no error` +
+          `\n      Either interpret it, delete it, or exempt it with a reason.`,
+      );
+    }
+  }
+
   return failures;
+};
+
+/**
+ * The field names of an `export type X = { ... }` block.
+ *
+ * Brace-counted rather than regex-terminated, because a field whose type is itself an object literal would end
+ * the match early and silently shorten the list — a parser that reports four fields of twelve is a check that
+ * passes having looked at a third of them.
+ */
+export const parseFields = (source, typeName) => {
+  const start = source.indexOf(`export type ${typeName} = {`);
+  if (start === -1) return [];
+  let depth = 0;
+  let end = start;
+  for (let i = source.indexOf("{", start); i < source.length; i += 1) {
+    if (source[i] === "{") depth += 1;
+    else if (source[i] === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        end = i;
+        break;
+      }
+    }
+  }
+  const body = source.slice(start, end);
+  return [...body.matchAll(/^\s*(?:readonly\s+)?([a-zA-Z_][a-zA-Z0-9_]*)\??\s*:/gm)].map((m) => m[1]);
 };
 
 /** Parse the closed event union out of its source, since a `const` array is not importable from a .mjs guard. */
@@ -530,16 +695,22 @@ if (process.argv[1] !== undefined && import.meta.url.endsWith(process.argv[1].sp
   const eventTypes = parseEventTypes(readFileSync(resolve(ROOT, "backend/src/core/events.ts"), "utf8"));
   // Before the analysis, so a typo in the ledger is reported as a typo rather than as a wiring failure.
   assertScopesExist(CAPABILITIES, SCOPES);
+  assertScopesExist(DECLARED_TYPES, SCOPES);
+  const declaredTypes = DECLARED_TYPES.map((declared) => ({
+    ...declared,
+    fields: parseFields(readFileSync(resolve(ROOT, declared.file), "utf8"), declared.type),
+  }));
   const failures = analyse({
     files,
     capabilities: CAPABILITIES,
     eventTypes,
     exemptEvents: EVENT_PRODUCER_EXEMPTIONS,
+    declaredTypes,
     requireEvents: true,
   });
 
   if (failures.length > 0) {
-    console.error(`\n✗ ${failures.length} unreachable ${failures.length === 1 ? "capability" : "capabilities"}:\n`);
+    console.error(`\n✗ ${failures.length} unreachable ${failures.length === 1 ? "thing" : "things"}:\n`);
     for (const failure of failures) console.error(`  - ${failure}\n`);
     console.error(
       `A capability with no consumer is not a feature. Either wire it, or add it to the exemption list with a\n` +
@@ -548,5 +719,27 @@ if (process.argv[1] !== undefined && import.meta.url.endsWith(process.argv[1].sp
     process.exit(1);
   }
 
-  console.log(`✓ ${CAPABILITIES.length} capabilities wired, ${eventTypes.length} run events emitted`);
+  const checkedFields = declaredTypes.reduce(
+    (n, d) => n + d.fields.filter((f) => !(d.exempt !== undefined && f in d.exempt)).length,
+    0,
+  );
+  console.log(
+    `✓ ${CAPABILITIES.length} capabilities wired, ${eventTypes.length} run events emitted, ` +
+      `${checkedFields} declared field(s) read across ${declaredTypes.length} definition type(s)`,
+  );
+
+  // Printed every run, deliberately. A known defect that stops being mentioned is a known defect that becomes
+  // furniture — the same reason `check:catalogue` prints its not-yet-built count instead of swallowing it.
+  const defects = declaredTypes.flatMap((d) =>
+    Object.entries(d.exempt ?? {})
+      .filter(([, r]) => r !== null && typeof r === "object")
+      .map(([field, r]) => `${d.type}.${field} (#${r.issue}): ${r.defect}`),
+  );
+  if (defects.length > 0) {
+    console.log(
+      `\n  ${defects.length} field(s) exempt as known defects — the guard passes, the defect stands:`,
+    );
+    for (const d of defects) console.log(`  · ${d}`);
+    console.log("  Closing the issue means deleting the entry, and the field is then held for real.");
+  }
 }
