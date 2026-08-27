@@ -45,7 +45,9 @@
  * 4. A deep import fails to *typecheck*, which is the form the platform's build would actually hit.
  * 5. The tarball contains no `src/` and no sourcemaps, because a consumer who can read the sources will read
  *    them, and then the internals are the API in practice whatever the map says.
- * 6. The tarball contains `LICENSE`, `README.md` and `package.json`. npm includes those three whatever `files`
+ * 6. The tarball contains `LICENSE`, `README.md` and `package.json`.
+ * 7. **Every relative link in the shipped README resolves inside the tarball**, and every fenced `ts`/`tsx`
+ *    block in it typechecks against the installed package. npm includes those three whatever `files`
  *    says, so this is a check on npm's behaviour rather than ours — which is the point: the licence is what
  *    makes the package usable at all, and a manifest claiming `Apache-2.0` over a tarball with no licence text
  *    fails somebody's compliance review rather than ours.
@@ -143,6 +145,34 @@ export const missingTarballEntries = (paths) => {
 };
 
 /**
+ * Relative link targets in a markdown document — `](path)` and `src="path"`.
+ *
+ * The published README is read on npmjs.com, where the repository does not exist. A relative link there resolves
+ * to nothing, and the reader's first act is a 404. This was not hypothetical: 14 of the 15 relative links in
+ * `@retinue/agentkit`'s README were broken at 0.1.0, starting with the first line, which pointed at `../docs`.
+ */
+export const relativeLinks = (markdown) => [
+  ...[...markdown.matchAll(/\]\((?!https?:|mailto:|#)([^)\s]+)/g)].map((m) => m[1]),
+  ...[...markdown.matchAll(/src="(?!https?:|data:)([^"]+)"/g)].map((m) => m[1]),
+].map((target) => target.split("#")[0]).filter((target) => target.length > 0);
+
+/** Which of those the tarball does not contain. `paths` is the extracted file list, package-prefix stripped. */
+export const unresolvedLinks = (targets, paths) => {
+  const present = new Set(paths);
+  return [...new Set(targets)].filter((target) => !present.has(target.replace(/^\.\//, "")));
+};
+
+/**
+ * Fenced code blocks, by language.
+ *
+ * Every `ts`/`tsx` block in a published README is typechecked against the installed package, because a README
+ * example is the first code anybody runs and a snippet that no longer compiles is worse than no example: it
+ * teaches an API that does not exist. A block that cannot compile standalone does not belong in a README.
+ */
+export const codeBlocks = (markdown) =>
+  [...markdown.matchAll(/```(ts|tsx)\n([\s\S]*?)```/g)].map((m) => ({ lang: m[1], code: m[2] }));
+
+/**
  * Whether a deep import was stopped *by the boundary*.
  *
  * The distinction this makes is the point of the whole file. `ERR_MODULE_NOT_FOUND` means the specifier resolved
@@ -211,8 +241,8 @@ const main = () => {
     const tsc = join(ROOT, "node_modules", "typescript", "bin", "tsc");
     if (!existsSync(tsc)) die("typescript is not installed in this workspace, so the build half cannot be checked");
 
-    const typecheck = (name, source) => {
-      writeFileSync(join(consumer, `${name}.ts`), source);
+    const typecheck = (name, source, lang = "ts") => {
+      writeFileSync(join(consumer, `${name}.${lang}`), source);
       writeFileSync(
         join(consumer, `${name}.tsconfig.json`),
         JSON.stringify(
@@ -228,7 +258,7 @@ const main = () => {
               noEmit: true,
               types: [],
             },
-            files: [`${name}.ts`],
+            files: [`${name}.${lang}`],
           },
           null,
           2,
@@ -243,6 +273,7 @@ const main = () => {
     };
 
     const summaries = [];
+    const readmeSummary = [];
     let checked = 0;
 
     for (const shipped of PACKAGES) {
@@ -375,6 +406,39 @@ const main = () => {
         }
       }
 
+      // ── 7: the README a consumer actually reads ───────────────────────────────────────────────────────────
+      const readmePath = join(modules, "@retinue", shortName, "README.md");
+      if (existsSync(readmePath)) {
+        const readme = readFileSync(readmePath, "utf8");
+        const stripped = entries.map((path) => path.replace(/^package\//, "")).filter(Boolean);
+        const broken = unresolvedLinks(relativeLinks(readme), stripped);
+        if (broken.length > 0) {
+          fail(
+            `${shipped.name}'s README has ${broken.length} relative link(s) that do not exist in the tarball:` +
+              ` ${broken.slice(0, 6).join(", ")}`,
+            "the README is read on npmjs.com, where this repository does not exist. Use an absolute URL — a\n" +
+              "relative one is a 404 as the reader's first act",
+          );
+        }
+        const blocks = codeBlocks(readme);
+        if (blocks.length === 0) {
+          fail(
+            `${shipped.name}'s README has no \`ts\`/\`tsx\` example`,
+            "the first screen of a package page is where somebody decides whether to keep reading",
+          );
+        }
+        readmeSummary.push(`${shortName}: ${blocks.length} example(s) typecheck, ${relativeLinks(readme).length} relative link(s)`);
+        blocks.forEach((block, index) => {
+          const outcome = typecheck(`readme-${shortName}-${index}`, block.code, block.lang);
+          if (!outcome.ok) {
+            fail(
+              `${shipped.name}'s README example #${index + 1} does not typecheck against the published package`,
+              outcome.output.trim() || "no compiler output",
+            );
+          }
+        });
+      }
+
       // ── 2 & 4: the same thing at build time, which is the form a consumer's CI would hit ───────────────────
       const legal = typecheck(
         `legal-${shortName}`,
@@ -425,6 +489,7 @@ const main = () => {
           ` sourcemaps and a licence in each:`,
       );
       for (const summary of summaries) console.log(`  · ${summary}`);
+      for (const summary of readmeSummary) console.log(`  · README ${summary}`);
     }
   } finally {
     if (keep) console.log(`\n  kept: ${work}`);

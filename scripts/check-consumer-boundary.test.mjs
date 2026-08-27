@@ -19,6 +19,9 @@ import {
   PACKAGES,
   REQUIRED_ENTRIES,
   verifiedNothing,
+  relativeLinks,
+  unresolvedLinks,
+  codeBlocks,
 } from "./check-consumer-boundary.mjs";
 
 test("importing this module does not run the check", () => {
@@ -86,6 +89,32 @@ test("an empty --published run is a failure, not a pass", () => {
   // Locally there is nothing to skip: every package is packed from this checkout, so zero means a real problem
   // that the per-package checks have already reported.
   assert.equal(verifiedNothing(false, 0), false);
+});
+
+test("relative links are found in both markdown and html form, and absolute ones ignored", () => {
+  const md = [
+    "[a](../docs/x.md) [b](./README.md) [c](https://example.com/y) [d](#anchor) [e](mailto:x@y.z)",
+    '<img src="brand/mark.svg" /> <img src="https://cdn.example/logo.png" />',
+    "[f](dist/index.js#L4)",
+  ].join("\n");
+  assert.deepEqual(relativeLinks(md), ["../docs/x.md", "./README.md", "dist/index.js", "brand/mark.svg"]);
+});
+
+test("a link is unresolved unless the tarball actually contains it", () => {
+  // The defect this exists for: `../docs` in a published README, which resolves to nothing on npmjs.com.
+  const files = ["README.md", "package.json", "dist/index.js"];
+  assert.deepEqual(unresolvedLinks(["../docs/x.md", "./README.md", "dist/index.js"], files), ["../docs/x.md"]);
+  assert.deepEqual(unresolvedLinks([], files), []);
+});
+
+test("ts and tsx blocks are extracted, other languages left alone", () => {
+  const md = "```bash\nnpm i x\n```\n```ts\nconst a = 1;\n```\n```tsx\nconst b = <p />;\n```\n";
+  assert.deepEqual(codeBlocks(md), [
+    { lang: "ts", code: "const a = 1;\n" },
+    { lang: "tsx", code: "const b = <p />;\n" },
+  ]);
+  // A shell block is not a compile target; extracting it would fail every README with an install line.
+  assert.equal(codeBlocks("```bash\nnpm i\n```").length, 0);
 });
 
 test("every shipping package is covered, and each deep list has both halves of the risk", () => {

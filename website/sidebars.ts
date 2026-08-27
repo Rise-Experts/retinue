@@ -45,6 +45,11 @@ const sidebars: SidebarsConfig = {
       label: "Examples",
       items: ["examples/simple-agent", "examples/persistent-memory"],
     },
+    {
+      type: "category",
+      label: "Reference",
+      items: ["reference/package-surface", "reference/client-surface"],
+    },
     "troubleshooting",
   ],
 };
