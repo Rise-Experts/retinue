@@ -21,7 +21,7 @@
  * Exit codes: 0 clean, 1 an unclassified tool, 2 the check could not run.
  */
 
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -38,6 +38,37 @@ const SOURCES = [
   ["backend/src/tools/library/index.ts", "STANDARD_TOOL_NAMES"],
   ["backend/src/tools/index.ts", "META_TOOLS"],
 ];
+
+/**
+ * Shipping toolkit packages, **discovered** rather than listed.
+ *
+ * Listing them is the version of this check that quietly stops covering anything: the fourth toolkit lands,
+ * nobody remembers the list in this file, and its tools ship unclassified while the check prints a tick. So the
+ * directory decides, and every package in it must export `<DIR>_TOOL_NAMES` — an absent constant is a hard
+ * failure, not a package silently skipped.
+ */
+export const toolkitPackages = (root = "tools") => {
+  let entries;
+  try {
+    entries = readdirSync(root, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  return entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort();
+};
+
+/** The name of the constant a toolkit package must export. */
+export const namesConstantFor = (dir) => `${dir.toUpperCase().replace(/-/g, "_")}_TOOL_NAMES`;
+
+/**
+ * How many tools a source file actually declares.
+ *
+ * Cross-checked against the exported constant, because the constant is what this check reads and a constant that
+ * has drifted from the code is a check that passes while covering less than it claims. Counting call sites rather
+ * than parsing names is deliberate: a toolkit file has other `name:` fields — a search provider's name, for one —
+ * and a name parser would report those as unclassified tools.
+ */
+export const declarationCount = (source) => [...source.matchAll(/\b(?:defineTool|confirms|destroys)\s*\(/g)].length;
 
 /** The string literals of a `export const NAME = [ … ] as const;` array. */
 export const namesFrom = (source, constant) => {
@@ -111,6 +142,36 @@ const main = () => {
     registered.push(...names);
   }
 
+  const shipsNoTools = [];
+  for (const dir of toolkitPackages()) {
+    const path = `tools/${dir}/src/index.ts`;
+    const constant = namesConstantFor(dir);
+    let source;
+    try {
+      source = readFileSync(path, "utf8");
+    } catch (error) {
+      console.error(`✗ cannot read ${path}: ${error.message}`);
+      console.error("  every tools/* package is a shipping package; one this check cannot read is one whose");
+      console.error("  tools nobody classified");
+      return 2;
+    }
+    const names = namesFrom(source, constant);
+    if (names === null) {
+      console.error(`✗ tools/${dir} does not export ${constant}`);
+      console.error("  a toolkit package declares its tool names in one array so this check can read them;");
+      console.error(`  without it, tools/${dir} ships tools that no catalogue entry classifies`);
+      return 2;
+    }
+    const declared = declarationCount(source);
+    if (declared !== names.length) {
+      console.error(`✗ ${constant} lists ${names.length} tool(s) but tools/${dir} declares ${declared}`);
+      console.error("  the constant is what this check reads, so a stale one means it covers less than it says");
+      return 2;
+    }
+    if (names.length === 0) shipsNoTools.push(dir);
+    registered.push(...names);
+  }
+
   const missing = unclassified(registered, catalogued);
   if (missing.length > 0) {
     console.error(`✗ ${missing.length} registered tool(s) are absent from ${CATALOGUE}: ${missing.join(", ")}`);
@@ -124,6 +185,9 @@ const main = () => {
     `✓ all ${registered.length} registered tools are classified in ${CATALOGUE}` +
       ` (${catalogued.size} catalogued, ${notBuilt} specified but not yet built)`,
   );
+  if (shipsNoTools.length > 0) {
+    console.log(`  tools/${shipsNoTools.join(", tools/")} declare no tools — providers behind a contract that exists`);
+  }
   return 0;
 };
 

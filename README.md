@@ -10,6 +10,9 @@ TypeScript implementation of the specifications in [`docs/`](docs/README.md).
 | [`services/api/`](services/api) | `@retinue/api-service` | A Nest.js service serving the platform's schema through Nest's container — the second consumer, and the one that tests whether the package can be wired more than one way |
 | [`examples/`](examples) | `@retinue/example-app` | The reference application: what a deployment's own app module looks like |
 | [`frontend/`](frontend) | `@retinue/react` | Client: headless React state, subscriptions and typed part reducers |
+| [`tools/github/`](tools/github) | `@retinue/tools-github` | Integration: six GitHub tools. A sibling package, not a folder in the runtime — a vendor's API change is a patch here, not a platform release |
+| [`tools/slack/`](tools/slack) | `@retinue/tools-slack` | Integration: four Slack tools. Reads the response envelope rather than the HTTP status, because Slack answers `200` with `ok: false` |
+| [`tools/search/`](tools/search) | `@retinue/tools-search` | Integration: **no tools** — four search providers behind the one `web_search` the runtime already ships. One contract, several providers |
 | [`shareflow/`](shareflow) | `@retinue/shareflow` | The ShareFlow integration: its tools, context providers, skills and agent manifests. Depends on `backend`; nothing generic depends on it |
 | [`docs/`](docs) | — | The specifications these packages implement |
 

@@ -114,6 +114,16 @@ export const PACKAGES = [
     dir: "tools/github",
     deep: ["dist/index.js", "src/index.ts", "tools", "internal"],
   },
+  {
+    name: "@retinue/tools-slack",
+    dir: "tools/slack",
+    deep: ["dist/index.js", "src/index.ts", "tools", "internal"],
+  },
+  {
+    name: "@retinue/tools-search",
+    dir: "tools/search",
+    deep: ["dist/index.js", "src/index.ts", "providers", "internal"],
+  },
 ];
 
 /** What npm ships whatever `files` says, and what a published package is unusable without. */

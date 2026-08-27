@@ -43,6 +43,16 @@ const sidebars: SidebarsConfig = {
     },
     {
       type: "category",
+      label: "Integrations",
+      items: [
+        "integrations/overview",
+        "integrations/github",
+        "integrations/slack",
+        "integrations/web-search",
+      ],
+    },
+    {
+      type: "category",
       label: "Examples",
       items: ["examples/simple-agent", "examples/persistent-memory"],
     },

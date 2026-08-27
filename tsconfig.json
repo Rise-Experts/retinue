@@ -18,6 +18,12 @@
     },
     {
       "path": "./tools/github"
+    },
+    {
+      "path": "./tools/search"
+    },
+    {
+      "path": "./tools/slack"
     }
   ]
 }

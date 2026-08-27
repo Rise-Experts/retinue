@@ -45,6 +45,8 @@ export const RELEASABLE = {
   // Toolkits, versioned independently of the runtime — the whole reason they are separate packages is that a
   // vendor API change must not be a runtime release.
   "tools-github": { workspace: "@retinue/tools-github", dir: "tools/github" },
+  "tools-slack": { workspace: "@retinue/tools-slack", dir: "tools/slack" },
+  "tools-search": { workspace: "@retinue/tools-search", dir: "tools/search" },
 };
 
 const TAG = /^(?:refs\/tags\/)?([a-z][a-z0-9-]*)@(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$/;

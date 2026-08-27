@@ -8,7 +8,14 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { cataloguedTools, namesFrom, unclassified } from "./check-tool-catalogue.mjs";
+import {
+  cataloguedTools,
+  declarationCount,
+  namesConstantFor,
+  namesFrom,
+  toolkitPackages,
+  unclassified,
+} from "./check-tool-catalogue.mjs";
 
 const TABLE = [
   "| Tool | Category | Effect | Approval | Idem. | Status |",
@@ -63,4 +70,42 @@ test("only registered-but-uncatalogued is a failure", () => {
   assert.deepEqual(unclassified(["fetch_url", "brand_new"], catalogued), ["brand_new"]);
   // `future_tool` is catalogued and unbuilt: reported as a count, never a failure, because the specification is
   // written before the tools on purpose.
+});
+
+test("toolkit packages are discovered from the directory, not from a list in this repository", () => {
+  // The point of discovery: the fourth toolkit is covered the day it lands, without anybody editing the checker.
+  const found = toolkitPackages("tools");
+  assert.ok(found.includes("github") && found.includes("slack") && found.includes("search"));
+  assert.deepEqual(found, [...found].sort());
+});
+
+test("a missing tools directory yields nothing rather than throwing", () => {
+  assert.deepEqual(toolkitPackages("tools-that-do-not-exist"), []);
+});
+
+test("the constant name follows the directory name", () => {
+  assert.equal(namesConstantFor("slack"), "SLACK_TOOL_NAMES");
+  assert.equal(namesConstantFor("google-workspace"), "GOOGLE_WORKSPACE_TOOL_NAMES");
+});
+
+test("declarations are counted at the call site, not by parsing names", () => {
+  // A toolkit file has other `name:` fields — a search provider's, for one — so a name parser would report
+  // providers as unclassified tools. Counting `defineTool`/`confirms`/`destroys` calls cannot make that mistake.
+  const source = `
+    const a = defineTool({ name: "x_read_thing", effect: "read" });
+    const b = confirms({ name: "x_post_thing" });
+    const c = destroys({ name: "x_delete_thing" });
+    const provider = { name: "brave", endpoint: () => "" };
+  `;
+  assert.equal(declarationCount(source), 3);
+});
+
+test("an import of the helpers is not counted as a declaration", () => {
+  assert.equal(declarationCount('import { confirms, defineTool, destroys } from "@retinue/agentkit/tools";'), 0);
+});
+
+test("a package declaring no tools counts zero, which is a claim and not a skip", () => {
+  assert.equal(declarationCount('export const SEARCH_TOOL_NAMES = [] as const;'), 0);
+  assert.deepEqual(namesFrom("export const SEARCH_TOOL_NAMES = [] as const;", "SEARCH_TOOL_NAMES"), []);
+  assert.equal(namesFrom("export const NOTHING = 1;", "SEARCH_TOOL_NAMES"), null);
 });

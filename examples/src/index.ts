@@ -36,6 +36,7 @@ import { STANDARD_TOOL_CATEGORIES, createStandardToolProvider } from "@retinue/a
 import { createAttachmentResolver } from "@retinue/agentkit/knowledge";
 import { createFlowRunner } from "@retinue/agentkit/flows";
 import { EXAMPLE_FLOWS, createExampleFlowHandler } from "./flows.js";
+import { exampleToolkits, searchProviderFrom } from "./toolkits.js";
 
 /** One authenticator, built the first time a request needs it. */
 let devAuth: Authenticate | undefined;
@@ -91,13 +92,43 @@ const FIRST_PARTY_TOOLS = ["remember", "recall", "list_notes", "search_notes", "
  * hoping: `example-app.test.ts` asserts every tool the provider actually lists is granted to some role, so an
  * undecided tool is a failing build and not an invisible one.
  */
-const KIT_READ_TOOLS = ["fetch_url", "fetch_json", "http_request", "parse_csv", "query_json", "calculate", "now"] as const;
+const KIT_READ_TOOLS = ["fetch_url", "fetch_json", "http_request", "parse_csv", "query_json", "calculate", "now", "web_search"] as const;
 
 /** Only `editor` gets these: they change or share something. */
 const WRITE_TOOLS = ["write_note", "share_note"] as const;
 
 /** `http_write` reaches another system, so it sits with the writes and is gated like them. */
 const KIT_WRITE_TOOLS = ["http_write"] as const;
+
+/**
+ * The integration toolkits' reads — #214.
+ *
+ * Granted to both roles: reading a public repository or a channel the bot is in is the same kind of act as
+ * fetching a URL. Typed out for the same reason as the kit's own list — a grant is a decision, and deriving it
+ * from `GITHUB_TOOL_NAMES` would widen it every time the package gained a tool.
+ */
+const TOOLKIT_READ_TOOLS = [
+  "github_search_code",
+  "github_get_file",
+  "github_list_issues",
+  "slack_list_channels",
+  "slack_read_history",
+] as const;
+
+/**
+ * The integration toolkits' writes — `editor` only, and every one of them gated.
+ *
+ * `github_merge_pull_request` is `destructive`, and it is granted here deliberately: a destructive tool that no
+ * role may call is a gate nothing exercises, and the approval path is the platform's most distinctive behaviour.
+ * It reaches a real repository, which is exactly why it stops and asks.
+ */
+const TOOLKIT_WRITE_TOOLS = [
+  "github_create_issue",
+  "github_comment",
+  "github_merge_pull_request",
+  "slack_post_message",
+  "slack_reply_in_thread",
+] as const;
 
 // The imported MCP tools come from `./mcp.ts`, derived from the administrator classification there.
 
@@ -112,6 +143,8 @@ export const ROLE_TOOL_NAMES: readonly string[] = [
   ...KIT_READ_TOOLS,
   ...WRITE_TOOLS,
   ...KIT_WRITE_TOOLS,
+  ...TOOLKIT_READ_TOOLS,
+  ...TOOLKIT_WRITE_TOOLS,
   ...DOCS_MCP_TOOLS,
 ];
 
@@ -124,7 +157,15 @@ const ROLES = [
       { action: "execute", resourceType: "tool" },
       { action: "publish", resourceType: "note", requiresApproval: true },
     ],
-    tools: [...FIRST_PARTY_TOOLS, ...KIT_READ_TOOLS, ...WRITE_TOOLS, ...KIT_WRITE_TOOLS, ...DOCS_MCP_TOOLS],
+    tools: [
+      ...FIRST_PARTY_TOOLS,
+      ...KIT_READ_TOOLS,
+      ...WRITE_TOOLS,
+      ...KIT_WRITE_TOOLS,
+      ...TOOLKIT_READ_TOOLS,
+      ...TOOLKIT_WRITE_TOOLS,
+      ...DOCS_MCP_TOOLS,
+    ],
   },
   {
     roleId: "viewer",
@@ -134,7 +175,7 @@ const ROLES = [
     ],
     // No `write_note`, no `share_note`. `viewer` cannot *see* them in the catalogue, so the model never offers
     // something the person cannot do — which is a better experience than a refusal after asking.
-    tools: [...FIRST_PARTY_TOOLS, ...KIT_READ_TOOLS, ...DOCS_MCP_TOOLS],
+    tools: [...FIRST_PARTY_TOOLS, ...KIT_READ_TOOLS, ...TOOLKIT_READ_TOOLS, ...DOCS_MCP_TOOLS],
   },
 ] as const;
 
@@ -339,7 +380,18 @@ const exampleToolProviders = (backend: ExampleBackend) => [
   createStandardToolProvider({
     deps: { authorization, idempotency: backend.idempotency, approvals: approvalGateFor(backend) },
     http: {},
+    // A search provider from `@retinue/tools-search` when one is configured, and no `web_search` otherwise
+    // (#214). Note that the toolkit contributes a *provider*, not a tool: five vendors are five values of one
+    // parameter, so switching from Brave to Tavily changes an environment variable and nothing else.
+    ...(searchProviderFrom(process.env) === undefined ? {} : { search: searchProviderFrom(process.env) }),
   }),
+  /**
+   * The integration toolkits — one call each, and nothing in `backend/` knows they exist (#214 AC-2).
+   *
+   * They arrive through the same registry as everything else, so a GitHub write inherits the approval gate, the
+   * idempotency key, the authorization filter and the audit trail rather than bringing its own rules.
+   */
+  ...exampleToolkits(process.env),
   /**
    * The MCP server's tools, arriving through the same registry as the first-party ones.
    *

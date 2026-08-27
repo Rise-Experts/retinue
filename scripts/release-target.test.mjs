@@ -64,5 +64,5 @@ test("exactly the shipping packages are releasable, and no more", () => {
    * Exact rather than "contains", and it has now failed twice for the right reason: a package added to the
    * release path is a decision, and this is where it gets noticed.
    */
-  assert.deepEqual(Object.keys(RELEASABLE), ["agentkit", "react", "tools-github"]);
+  assert.deepEqual(Object.keys(RELEASABLE), ["agentkit", "react", "tools-github", "tools-slack", "tools-search"]);
 });

@@ -117,6 +117,19 @@ export type SearchProvider = {
   /** Build the request URL for a query. The key belongs in `headers`, not here, wherever the provider allows it. */
   readonly endpoint: (query: string, limit: number) => string;
   readonly headers?: Readonly<Record<string, string>>;
+  /**
+   * `POST`, for the providers that require it.
+   *
+   * Added when the first real adapters were written (#214): this contract was GET-only, and three of the four
+   * most-used providers — Tavily, Serper, Exa — are POST with a JSON body. A GET-only seam would have limited the
+   * catalogue to Brave and self-hosted SearXNG, which is not a "one contract, several providers" rule so much as
+   * a rule with two providers.
+   *
+   * Optional, so every existing GET provider is unchanged.
+   */
+  readonly method?: "GET" | "POST";
+  /** The request body for a `POST` provider. Ignored for `GET`. */
+  readonly body?: (query: string, limit: number) => unknown;
   /** Read the provider's JSON into hits. Returning `[]` means "searched, found nothing". */
   readonly parse: (payload: unknown) => readonly SearchHit[];
 };
@@ -148,10 +161,16 @@ export const createWebSearch = (
           "directly.",
       };
     }
+    const method = provider.method ?? "GET";
     const outcome = await client.request({
       url: provider.endpoint(query, limit),
-      headers: provider.headers,
+      ...(provider.headers === undefined ? {} : { headers: provider.headers }),
+      ...(method === "POST"
+        ? { method, body: JSON.stringify(provider.body?.(query, limit) ?? { query }) }
+        : {}),
       accept: "application/json",
+      // Parsed by the provider's own `parse` and never shown to the model verbatim, so the untrusted-content
+      // envelope would only corrupt the JSON. The *hits* are fenced downstream, where they are read as prose.
       fence: false,
     });
     if (!outcome.ok) {

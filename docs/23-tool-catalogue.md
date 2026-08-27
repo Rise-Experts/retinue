@@ -71,7 +71,7 @@ Extensions of what exists. Nothing here needs a vendor account, so nothing here 
 | `list_attachments` | files | `read` | `never` | no | **built** |
 | `now` | general | `read` | `never` | no | **built** |
 | `calculate` | general | `read` | `never` | no | **built** |
-| `web_search` | web | `read` | `policy` | no | **built** (placeholder provider — see wave 2) |
+| `web_search` | web | `read` | `policy` | no | **built**; real providers ship in `@retinue/tools-search` (#214) |
 | `fs_read` | files | `read` | `never` | no | #215 |
 | `fs_list` | files | `read` | `never` | no | #215 |
 | `fs_search` | files | `read` | `never` | no | #215 |
@@ -103,7 +103,7 @@ tool.
 
 | Tool | Package | Category | Effect | Approval | Providers |
 |---|---|---|---|---|---|
-| `web_search` | `tools-search` | web | `read` | `policy` | Tavily, Brave, Exa, Serper, SearXNG, DuckDuckGo, Perplexity, Linkup, You.com |
+| `web_search` | `tools-search` | web | `read` | `policy` | **Built** (#214): Brave, Tavily, Serper, SearXNG. Deferred: Exa, DuckDuckGo, Perplexity, Linkup, You.com — each is one more adapter object, so they are additions rather than work. The package exports **no tools**: this is the one-contract rule applied to itself |
 | `web_scrape` | `tools-scrape` | web | `read` | `policy` | Firecrawl, Jina Reader, Crawl4AI, Spider, Oxylabs, BrightData, ScrapeGraph |
 | `web_crawl` | `tools-scrape` | web | `read` | `always` | Same. `always` because a crawl is a load someone else pays for |
 | `browser_navigate` | `tools-browser` | web | `read` | `always` | Browserbase, Playwright. A driven browser carries a session; approval is not optional |
@@ -125,7 +125,7 @@ reach systems other people depend on.
 | Package | Tools | Category | Notes |
 |---|---|---|---|
 | `tools-github` | `github_search_code`, `github_get_file`, `github_list_issues`, `github_create_issue`, `github_comment`, `github_merge_pull_request` | project | **Built** (#214). Token auth needs no OAuth plumbing; a GitHub App is the upgrade path. `github_merge_pull_request` is `destructive`. Names are vendor-prefixed — the convention the whole catalogue follows, and the reason `check:effects` inspects the second name segment as well as the first |
-| `tools-slack` | `list_channels`, `read_history`, `post_message`, `reply_thread`, `upload_file` | communication | Second. Exercises the `credentialRef` seam before connections exist. Useful only with triggers (REQ-042 piece 3) |
+| `tools-slack` | `slack_list_channels`, `slack_read_history`, `slack_post_message`, `slack_reply_in_thread` | communication | **Built** (#214). Slack answers `200` with `ok: false`, so the envelope is read and not the status — the mistake the integration exists to not make. `upload_file` deferred: multipart to a second host. Most useful with triggers (REQ-042 piece 3) |
 | `tools-email` | `send_email`, `list_messages`, `read_message` | communication | SMTP, Resend, AWS SES behind one contract. `send_email` is `external-write`, `always` |
 | `tools-google` | Drive, Sheets, Calendar, Gmail, Slides | productivity | Four consent surfaces in one vendor; scope sprawl is the cost driver, not the API |
 | `tools-jira` | `search_issues`, `create_issue`, `transition`, `comment` | project | API token per-user works today; OAuth 3LO for multi-tenant |
@@ -170,6 +170,18 @@ A deferred item is a decision, not a backlog. Recording the reason is what stops
 - [ ] Errors as the shared result envelope, never a vendor's error shape. A model should not have to learn nine error formats.
 - [ ] A docs page on the one template, and a test that the tool is reachable from the example app — "built, tested and unreachable" has happened six times in this repository.
 - [ ] An entry in this file. `npm run check:catalogue` fails on a registered tool that is not listed.
+
+## Built so far
+
+**31** tools across four packages: 21 in `@retinue/agentkit`, 6 in `@retinue/tools-github`, 4 in
+`@retinue/tools-slack`, and 0 in `@retinue/tools-search` — which ships four providers for a contract that already
+exists. `npm run check:catalogue` reads every one of those packages, so a toolkit landing with an unclassified
+tool is a failing build; it also requires each `tools/*` package to export its own `*_TOOL_NAMES` and
+cross-checks that array's length against the declarations in the file, because a constant that has drifted from
+the code is a check that passes while covering less than it says.
+
+The estimate said ~0.5–1 PD per toolkit after the first. Slack and search together came in inside that, and the
+long tail below is now addition rather than design.
 
 ## Counting honestly
 
