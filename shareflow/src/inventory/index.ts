@@ -57,10 +57,15 @@ export type CapabilityEntry = {
   /** Required when `status` is `dropped`. */
   readonly droppedBy?: DropSignature;
   /**
-   * The instruction set the replacement runs under, when the capability carries one.
+   * The instruction set the replacement runs under — REQ-041 AC-5.
    *
    * Part of the inventory because a tool-for-tool match with different instructions is a different product, and
    * that difference produces *identical write sets* on the runs where the instructions did not happen to matter.
+   *
+   * **Required for every entry that has a replacement**, and `"none — …"` is a legitimate value with a reason
+   * after it. Optional-and-usually-absent is what this field was, and it said nothing: 26 of 27 entries left it
+   * unset, which is indistinguishable between "this tool is deterministic and carries no prose" and "nobody
+   * looked". A sentinel that has to be typed out cannot be reached by omission.
    */
   readonly instructions?: string;
   /**
@@ -136,6 +141,23 @@ export const validateInventory = (entries: readonly CapabilityEntry[]): readonly
 
     if ((entry.status === "implemented" || entry.status === "partial") && (entry.contractTest ?? "").trim() === "") {
       at("has a replacement and no behavioural test against the old contract — AC-5");
+    }
+
+    /**
+     * Instructions, for anything with a replacement — AC-5.
+     *
+     * The AC is "prompts and instructions are accounted for", and an unset optional field accounts for nothing.
+     * `none` is allowed and has to be *written*, because the difference between "deterministic tool, no prose"
+     * and "nobody checked" is the whole point of the column.
+     */
+    if (
+      (entry.status === "implemented" || entry.status === "partial") &&
+      (entry.instructions ?? "").trim() === ""
+    ) {
+      at(
+        "has a replacement and does not say which instruction set it runs under — AC-5. Name the skill, or " +
+          'write "none — …" with the reason',
+      );
     }
   }
 

@@ -8,6 +8,9 @@
  */
 
 import { describe, expect, it } from "vitest";
+import { existsSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   BEHAVIOURAL_CONTRACT,
   CAPABILITY_INVENTORY,
@@ -17,6 +20,7 @@ import {
   type CapabilityEntry,
 } from "../index.js";
 import { canRemoveOldRuntime, evaluateWorkflow } from "../../parity/index.js";
+import { SHAREFLOW_BUILT_IN_SKILLS } from "../../skills/index.js";
 import type { ParityReport } from "../../shadow/index.js";
 
 const entry = (over: Partial<CapabilityEntry> = {}): CapabilityEntry => ({
@@ -26,6 +30,9 @@ const entry = (over: Partial<CapabilityEntry> = {}): CapabilityEntry => ({
   status: "implemented",
   invocation: "interactive",
   contractTest: "posts.test.ts",
+  // AC-5: an entry with a replacement has to say which instruction set it runs under, and `none` is a value
+  // somebody has to type rather than one they can reach by omission.
+  instructions: "skills/post-composition",
   ...over,
 });
 
@@ -128,6 +135,53 @@ describe("what an entry has to say", () => {
   it("refuses the same capability twice", () => {
     const problems = validateInventory([entry(), entry()]);
     expect(problems.some((p) => p.problem.includes("appears twice"))).toBe(true);
+  });
+});
+
+describe("instructions are accounted for — AC-5", () => {
+  /**
+   * A tool-for-tool match under different instructions is a different product, and the difference produces
+   * *identical write sets* on every run where the instructions did not happen to matter — so the parity gate is
+   * the one thing that cannot catch it.
+   */
+  it("refuses an entry with a replacement and no instruction set named", () => {
+    const problems = validateInventory([entry({ instructions: undefined })]);
+    expect(problems.map((p) => p.problem).join(" ")).toContain("instruction set");
+  });
+
+  it("accepts `none` with a reason, because deterministic tools exist", () => {
+    // The point of requiring the field rather than defaulting it: "no prose" and "nobody looked" have to be
+    // distinguishable, and only one of them can be typed.
+    expect(validateInventory([entry({ instructions: "none — a deterministic read" })])).toEqual([]);
+  });
+
+  it("does not demand instructions from a capability that is not built", () => {
+    // A `missing` entry has no replacement to run under anything. Demanding it would be asking somebody to
+    // invent the instructions for a tool that does not exist.
+    expect(validateInventory([entry({ status: "missing", replacement: null, instructions: undefined, contractTest: undefined })])).toEqual([]);
+  });
+
+  it("every shipped entry with a replacement names one", () => {
+    const silent = CAPABILITY_INVENTORY.filter(
+      (candidate) => candidate.replacement !== null && (candidate.instructions ?? "").trim() === "",
+    );
+    expect(silent.map((candidate) => candidate.capability)).toEqual([]);
+  });
+
+  it("every named skill exists in the shipped skill set", () => {
+    /**
+     * The claim that would otherwise rot. `instructions: "skills/post-composition"` is a string; a renamed or
+     * deleted skill leaves it pointing at nothing, and the inventory would keep reporting that instructions are
+     * accounted for.
+     */
+    const known = new Set(SHAREFLOW_BUILT_IN_SKILLS.map((skill) => skill.name));
+    const unknown: string[] = [];
+    for (const candidate of CAPABILITY_INVENTORY) {
+      for (const [, name] of (candidate.instructions ?? "").matchAll(/skills\/([a-z0-9-]+)/g)) {
+        if (!known.has(name)) unknown.push(`${candidate.capability} → ${name}`);
+      }
+    }
+    expect(unknown).toEqual([]);
   });
 });
 
@@ -244,6 +298,21 @@ describe("the shipped inventory", () => {
       "nightly metrics refresh",
       "the scheduled publish itself",
     ]);
+  });
+
+  it("every contract test it names is a file that exists", () => {
+    /**
+     * The other claim that rots. `contractTest: "…/posts.test.ts"` is a string, and a renamed or deleted test
+     * leaves the entry asserting a behavioural comparison that nothing performs — while `validateInventory`
+     * keeps reporting the entry as complete, because the field is non-empty.
+     *
+     * Paths are repository-relative, so this resolves them from the workspace root rather than from here.
+     */
+    const root = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..");
+    const missing = [...new Set(CAPABILITY_INVENTORY.map((entry) => entry.contractTest).filter(Boolean))].filter(
+      (path) => !existsSync(resolve(root, path as string)),
+    );
+    expect(missing).toEqual([]);
   });
 
   it("names a behavioural contract with the approval clause in it", () => {
