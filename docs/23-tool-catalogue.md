@@ -188,7 +188,12 @@ natural language — including language the model merely *read*. What makes it d
 | Exit code in the envelope | Inferring success from output text is guessing |
 
 Every one of those is a flag in `dockerArgs`, and the tests assert the **argv** rather than only running a
-command: a test that checked output would pass just as well with `--network=none` missing. The isolation
+command: a test that checked output would pass just as well with `--network=none` missing.
+
+A timed-out command kills its whole **process group**, not just the shell. `sh -c "sleep 999 | cat"` forks, so a
+`SIGKILL` aimed at the shell left `sleep` running on the host — and the orphan held the stdout pipe open, so the
+call never returned either. Found by CI on a machine whose shell forked where mine had exec'd, then reproduced
+locally in one line. Resolution is on `exit` rather than `close` for the same reason. The isolation
 guarantees are then exercised for real against a local image — no network, read-only root, a killed timeout and an
 OOM reported as `memory`.
 

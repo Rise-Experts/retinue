@@ -124,6 +124,35 @@ describe("the local adapter refuses to exist without being told twice", () => {
     expect(result.reason).toBe("timeout");
   });
 
+  it("kills the whole process group, and does not wait for an orphan to close the pipe", async () => {
+    /**
+     * The case CI found and my machine did not.
+     *
+     * `sleep 999 | cat` makes the shell fork, so a `SIGKILL` aimed at the shell leaves `sleep` running — and the
+     * orphan **holds the stdout pipe open**, so the `close` event the first version waited for never arrived. The
+     * command was killed and the promise hung until the test runner gave up thirty seconds later.
+     *
+     * Two failures in one: a process left running on the host, and a call that never returns. Both are fixed by
+     * killing the group and resolving on `exit`, and this asserts the second directly — a regression would show
+     * up here as a thirty-second timeout rather than as a wrong value.
+     */
+    const sandbox = createLocalSandbox({ allowUnsafeLocalExecution: true, timeoutMs: 300 });
+    const started = Date.now();
+    const result = await sandbox.run({ command: "sleep 999 | cat" });
+    expect(result.reason).toBe("timeout");
+    // Generous, because CI is slow; the failure mode being guarded is 30s, not 2s.
+    expect(Date.now() - started).toBeLessThan(5_000);
+  });
+
+  it("returns once even when both exit and close arrive", async () => {
+    // Listening to both events is what makes the fix safe in the ordinary case; the guard is what keeps it from
+    // resolving twice, which would be invisible in a promise and a real bug in a caller counting effects.
+    const sandbox = createLocalSandbox({ allowUnsafeLocalExecution: true, timeoutMs: 5_000 });
+    const result = await sandbox.run({ command: "echo once" });
+    expect(result.stdout.trim()).toBe("once");
+    expect(result.exitCode).toBe(0);
+  });
+
   it("truncates long output and says it did", async () => {
     const sandbox = createLocalSandbox({ allowUnsafeLocalExecution: true, timeoutMs: 10_000 });
     const result = await sandbox.run({ command: `yes x | head -c ${MAX_OUTPUT_BYTES * 2}` });

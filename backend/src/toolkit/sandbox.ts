@@ -86,6 +86,17 @@ const cap = (text: string, limit: number): { text: string; truncated: boolean } 
  * The output cap is applied **while reading**, not afterwards: a command that prints a gigabyte would otherwise
  * be buffered in full before any limit could run, which is the same mistake `readBounded` exists to avoid in the
  * HTTP client.
+ *
+ * ## Two decisions the first version got wrong, and CI found
+ *
+ * **The whole process group is killed, not the child.** `sh -c "sleep 999"` may exec or may fork, and when it
+ * forks the grandchild survives a `SIGKILL` aimed at its parent — so a timed-out command left a process running
+ * on the host. `detached: true` makes the child a group leader; `process.kill(-pid)` takes the group with it.
+ *
+ * **Resolution is on `exit`, not `close`.** `close` waits for every stdio stream to end, and an orphaned
+ * grandchild *holds the pipe open* — so `sh -c "sleep 5 | cat"` never resolved at all. The timeout fired, the
+ * process was killed, and the promise hung until the test runner gave up thirty seconds later. Reproduced
+ * locally in one line once CI had pointed at it.
  */
 const boundedSpawn = async (
   file: string,
@@ -94,7 +105,8 @@ const boundedSpawn = async (
 ): Promise<SandboxResult> => {
   const startedAt = Date.now();
   return new Promise((resolve) => {
-    const child = spawn(file, [...args], { stdio: ["ignore", "pipe", "pipe"] });
+    // A group leader, so a fork inside the shell can be killed with its parent.
+    const child = spawn(file, [...args], { stdio: ["ignore", "pipe", "pipe"], detached: true });
     let out = "";
     let err = "";
     let truncated = false;
@@ -118,15 +130,39 @@ const boundedSpawn = async (
       if (capped.truncated) truncated = true;
     });
 
+    /**
+     * The group, not the process.
+     *
+     * `-pid` addresses the group `detached` created. It throws if the group is already gone — a command that
+     * finished between the timer firing and this line — so the fallback is the plain kill, and neither is
+     * allowed to reject the promise.
+     */
+    const killGroup = () => {
+      try {
+        if (child.pid !== undefined) process.kill(-child.pid, "SIGKILL");
+      } catch {
+        child.kill("SIGKILL");
+      }
+    };
+
     const timer = setTimeout(() => {
       reason = "timeout";
       input.onKill?.();
-      child.kill("SIGKILL");
+      killGroup();
     }, input.timeoutMs);
 
-    child.on("error", (error) => {
+    // `exit` and `close` can both fire, and after a group kill only one of them may. Whichever arrives first
+    // answers, and the guard is what makes listening to both safe rather than a double resolution.
+    let settled = false;
+    const settle = (result: SandboxResult) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
-      resolve({
+      resolve(result);
+    };
+
+    child.on("error", (error) => {
+      settle({
         ok: false,
         exitCode: null,
         stdout: out,
@@ -137,9 +173,8 @@ const boundedSpawn = async (
       });
     });
 
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      resolve({
+    const finish = (code: number | null) =>
+      settle({
         // A timeout is not a completed command, whatever it printed before it died.
         ok: reason === undefined,
         exitCode: code,
@@ -149,7 +184,16 @@ const boundedSpawn = async (
         ...(reason === undefined ? {} : { reason }),
         durationMs: Date.now() - startedAt,
       });
-    });
+
+    /**
+     * `exit` fires when the process dies; `close` waits for its stdio to end.
+     *
+     * Preferring `exit` is the fix: a grandchild holding the pipe open means `close` may never come, and the
+     * output collected so far is still the output. `close` stays wired for the ordinary case, where it arrives
+     * a moment later with the last of the buffer flushed.
+     */
+    child.on("exit", (code) => finish(code));
+    child.on("close", (code) => finish(code));
   });
 };
 
