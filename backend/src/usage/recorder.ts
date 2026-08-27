@@ -74,6 +74,9 @@ export const createUsageRecorder = (config: {
     return computeModelCostMinorUnits(pricing, {
       inputTokens: estimate.inputTokens,
       outputTokens: estimate.maxOutputTokens,
+      // Cache-aware when the caller said so — task #247. Absent means assume none, which over-reserves; that is
+      // the safe direction for a spend limit and is what this always did.
+      ...(estimate.cachedInputTokens === undefined ? {} : { cachedInputTokens: estimate.cachedInputTokens }),
     });
   };
 

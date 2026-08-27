@@ -224,6 +224,7 @@ export const createDurableWorker = (deps: DurableWorkerDeps) => {
           inputTokens: event.inputTokens,
           outputTokens: event.outputTokens,
           cachedInputTokens: event.cachedInputTokens ?? 0,
+          ...(event.cacheWriteTokens === undefined ? {} : { cacheWriteTokens: event.cacheWriteTokens }),
           ...(event.reasoningTokens === undefined ? {} : { reasoningTokens: event.reasoningTokens }),
           ...(event.imageCount === undefined ? {} : { imageCount: event.imageCount }),
           ...(event.audioSeconds === undefined ? {} : { audioSeconds: event.audioSeconds }),

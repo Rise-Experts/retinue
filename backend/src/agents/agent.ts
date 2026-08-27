@@ -288,7 +288,15 @@ export const createAgent = (config: CreateAgentConfig) => {
         model: providerFactory.languageModel(def),
         modelId: def.modelId,
         currency: def.pricing.currency,
-        price: (u) => computeModelCostMinorUnits(def.pricing, { inputTokens: u.inputTokens, outputTokens: u.outputTokens, cachedInputTokens: u.cachedInputTokens }),
+        price: (u) =>
+          computeModelCostMinorUnits(def.pricing, {
+            inputTokens: u.inputTokens,
+            outputTokens: u.outputTokens,
+            cachedInputTokens: u.cachedInputTokens,
+            // Dropped here before #247, so a cache write was billed as fresh input — and on a provider that
+            // charges a premium for a write, under-billed.
+            ...(u.cacheWriteTokens === undefined ? {} : { cacheWriteTokens: u.cacheWriteTokens }),
+          }),
       };
     });
 

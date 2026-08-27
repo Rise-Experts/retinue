@@ -27,6 +27,23 @@ export type ModelCapabilities = {
   readonly structuredOutput: boolean;
   readonly reasoning: boolean;
   readonly nativeSearch: boolean;
+  /**
+   * How this model caches a repeated prompt prefix — task #247.
+   *
+   * Three values because the providers genuinely differ in a way that changes what this platform must *send*,
+   * not merely what it can expect back:
+   *
+   * - `"automatic"` — the provider caches a matching prefix on its own, with no directive. OpenAI. Nothing to
+   *   emit; the only thing that matters is that the prefix is byte-stable.
+   * - `"explicit"` — the provider caches only what is marked. Anthropic, via `cache_control` breakpoints. A
+   *   platform that emits nothing gets no caching at all here, which is how this was losing the discount.
+   * - `"none"` — no prompt caching. Emitting a directive would be an unknown field at best and an error at worst.
+   *
+   * Optional, and absent means `"none"`: an existing catalogue entry keeps behaving exactly as it did, and a
+   * provider that does cache has to be declared rather than assumed. Assuming the other way would send
+   * breakpoints to providers that reject them.
+   */
+  readonly promptCaching?: "automatic" | "explicit" | "none";
 };
 
 export type ModelLimits = {

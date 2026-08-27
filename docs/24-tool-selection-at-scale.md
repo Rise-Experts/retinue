@@ -148,3 +148,18 @@ node evals/tool-selection-scale.mjs --sizes 200 --budget 1500
 Needs `RETINUE_MODEL_API_KEY`; costs a few dollars of `gpt-4o` for a full run. `--cases N` truncates for a smoke
 test. Re-run this after any catalog change and compare against the table above — that is what the committed JSON
 is for.
+
+## Addendum: the lever this did not consider — prompt caching
+
+The conclusion above is that per-tenant toolsets are the lever and a catalogue budget is not, because truncation
+costs 19-23 points of accuracy. That still holds, and it is about the *accuracy* cost of a large catalogue.
+
+The **token** cost has a second lever that costs no accuracy at all: the catalogue is byte-identical on every turn
+of a conversation, which is what prompt caching exists for. Measured in `docs/28-prompt-caching.md` — a stable
+200-tool prefix on `gpt-4o` saves **31.9%** of turn cost at a **65.2%** hit rate, and every hit covers 97-98% of
+the prefix.
+
+Two things there bear on this document directly. A per-turn catalogue **budget** whose selection varies would
+destroy the hit rate as well as costing accuracy, which is a second reason it stays off. And context
+**compaction** must append its summary *after* the catalogue rather than before it: prepending changes byte 0 and
+more than halves the saving.

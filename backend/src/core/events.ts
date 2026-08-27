@@ -96,6 +96,8 @@ export type UsageUpdatedEvent = EventBase<"usage.updated"> & {
   /** When present, the worker records a durable `UsageEvent` for this realized step. */
   readonly modelId?: string;
   readonly cachedInputTokens?: number;
+  /** Tokens written into a prompt cache — task #247. Absent means the provider reported no breakdown. */
+  readonly cacheWriteTokens?: number;
   readonly reasoningTokens?: number;
   /**
    * Non-text input this step carried — #185 AC-4.

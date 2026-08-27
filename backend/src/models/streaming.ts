@@ -166,6 +166,15 @@ export type ModelTurnRequest = {
    * distinction is the entire point of the task.
    */
   readonly structuredOutput?: { readonly schema: unknown };
+  /**
+   * Where this turn's prompt prefix may be cached, and how — task #247.
+   *
+   * `"explicit"` makes this layer emit the provider's cache directive; `"automatic"` and `"none"` emit nothing,
+   * for opposite reasons — one needs no help and the other would reject the field. Mapped by the engine from
+   * `ModelDefinition.capabilities.promptCaching`, so a caller that supplies no definition sends nothing, which
+   * is the behaviour every existing host already has.
+   */
+  readonly promptCaching?: "automatic" | "explicit" | "none";
   readonly maxOutputTokens?: number;
   readonly temperature?: number;
   readonly topP?: number;
@@ -175,7 +184,26 @@ export type ModelTurnRequest = {
 export type NeutralUsage = {
   readonly inputTokens: number;
   readonly outputTokens: number;
+  /**
+   * Input tokens served from a prompt cache — a **subset** of `inputTokens`, not an addition to it.
+   *
+   * Read from the provider's `inputTokenDetails.cacheReadTokens` (task #247). It used to be read from
+   * `totalUsage.cachedInputTokens`, **a field the AI SDK does not send** — so this was zero on every turn, and
+   * `computeModelCostMinorUnits` billed cached tokens at the full input rate. Measured against a live model, a
+   * turn reusing a 9,700-token prefix reported 9,472 cache-read tokens and this platform recorded none of them.
+   */
   readonly cachedInputTokens: number;
+  /**
+   * Input tokens written *into* a prompt cache — also a subset of `inputTokens`.
+   *
+   * Its own quantity because it is priced differently and, on some providers, priced **higher** than a fresh
+   * input token: Anthropic charges 1.25× to write a cache entry. Folding it into fresh input under-bills a
+   * cache write and over-credits the first turn of every conversation, which is the direction that looks like a
+   * saving and is not.
+   *
+   * Absent means "not reported", not "none" — the rule `imageCount` already follows.
+   */
+  readonly cacheWriteTokens?: number;
   readonly reasoningTokens?: number;
   /**
    * Non-text input, counted from what **we sent** rather than from what the provider reported — #185 AC-4.
@@ -360,6 +388,25 @@ const toModelContent = (content: TurnMessage["content"]): ModelMessage["content"
   ) as ModelMessage["content"];
 };
 
+/**
+ * The cache-read count, from wherever the provider put it — task #247.
+ *
+ * Exported so the arithmetic is testable without a provider: the whole defect this fixes was a field name that
+ * did not exist, which no amount of testing *through* a fake could reveal.
+ */
+export const cacheRead = (usage: Record<string, unknown>): number => {
+  const details = usage.inputTokenDetails as { cacheReadTokens?: unknown } | undefined;
+  if (details?.cacheReadTokens !== undefined) return num(details.cacheReadTokens);
+  return num(usage.cachedInputTokens);
+};
+
+/** The cache-write count, or `undefined` when the provider did not report one. */
+export const cacheWrite = (usage: Record<string, unknown>): number | undefined => {
+  const details = usage.inputTokenDetails as { cacheWriteTokens?: unknown } | undefined;
+  if (details?.cacheWriteTokens !== undefined) return num(details.cacheWriteTokens);
+  return usage.cacheWriteTokens === undefined ? undefined : num(usage.cacheWriteTokens);
+};
+
 export async function* streamModelTurn(req: ModelTurnRequest): AsyncIterable<NeutralStreamChunk> {
   /**
    * Refuse a modality the model cannot take — #185.
@@ -418,6 +465,24 @@ export async function* streamModelTurn(req: ModelTurnRequest): AsyncIterable<Neu
     ...(req.structuredOutput === undefined
       ? {}
       : { output: Output.object({ schema: req.structuredOutput.schema as never }) }),
+    /**
+     * The cache breakpoint, for providers that need one told — task #247.
+     *
+     * Only `"explicit"`. Anthropic caches nothing unless a block carries `cache_control`, so a platform that
+     * emitted nothing got no caching there at all — which is what this did. OpenAI needs no directive and would
+     * treat one as an unknown field, so `"automatic"` deliberately sends nothing.
+     *
+     * The breakpoint goes on the **system** block, which is where the stable prefix is: the system prompt and
+     * the tool catalogue are byte-identical across every turn of a conversation, and the history after them is
+     * not. Anthropic caches everything *up to* a breakpoint, so marking the system block caches the prompt and
+     * the tool definitions together.
+     *
+     * `providerOptions` rather than a top-level field, because this is provider-specific by construction and the
+     * AI SDK's neutral surface has no cache concept. A provider that ignores the namespace is unaffected.
+     */
+    ...(req.promptCaching === "explicit"
+      ? { providerOptions: { anthropic: { cacheControl: { type: "ephemeral" } } } }
+      : {}),
     stopWhen: stepCountIs(req.maxSteps ?? 8),
     ...(req.abortSignal ? { abortSignal: req.abortSignal } : {}),
     // Spread conditionally so an unset parameter leaves the provider's own default alone, rather than pinning it
@@ -498,7 +563,20 @@ export async function* streamModelTurn(req: ModelTurnRequest): AsyncIterable<Neu
           usage: {
             inputTokens: num(usage.inputTokens),
             outputTokens: num(usage.outputTokens),
-            cachedInputTokens: num(usage.cachedInputTokens),
+            /**
+             * From `inputTokenDetails`, with the old field as a fallback — task #247.
+             *
+             * The AI SDK reports the breakdown as
+             * `inputTokenDetails: { noCacheTokens, cacheReadTokens, cacheWriteTokens }`, and **not** as
+             * `cachedInputTokens`. Reading the latter — which is what this did — yielded `undefined` on every
+             * provider, so `num()` made it zero and every cached token was billed at the full input rate.
+             *
+             * The fallback is kept because the field is what a *host-supplied* `streamTurn` would most naturally
+             * set, and because a future SDK may reinstate it. Order matters: the detailed breakdown wins, since
+             * it is the one a real provider fills in.
+             */
+            cachedInputTokens: cacheRead(usage),
+            ...(cacheWrite(usage) === undefined ? {} : { cacheWriteTokens: cacheWrite(usage) }),
             ...(usage.reasoningTokens !== undefined ? { reasoningTokens: num(usage.reasoningTokens) } : {}),
             /**
              * Non-text input, counted from the request rather than read from the response — #185 AC-4.

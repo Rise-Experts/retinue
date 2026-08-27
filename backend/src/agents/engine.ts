@@ -589,6 +589,11 @@ export const createDefaultEngine = (deps: DefaultEngineDeps): AgentEngine => {
             ...(manifest.responseFormat?.kind === "structured"
               ? { structuredOutput: { schema: manifest.responseFormat.schema } }
               : {}),
+            // From the resolved model's own declaration — #247. Absent definition means send nothing, the same
+            // rule `modelModalities` follows: a host that has not said what its model does has not said it caches.
+            ...(resolved.definition?.capabilities?.promptCaching === undefined
+              ? {}
+              : { promptCaching: resolved.definition.capabilities.promptCaching }),
             tools,
             maxSteps,
             abortSignal: controller.signal,
@@ -852,6 +857,9 @@ function* mapChunk(
         inputTokens: chunk.usage.inputTokens,
         outputTokens: chunk.usage.outputTokens,
         cachedInputTokens: chunk.usage.cachedInputTokens,
+        // Carried only when the provider reported it, so a turn with no breakdown is distinguishable from a
+        // turn that wrote nothing — the same rule `imageCount` follows two lines down.
+        ...(chunk.usage.cacheWriteTokens === undefined ? {} : { cacheWriteTokens: chunk.usage.cacheWriteTokens }),
         ...(chunk.usage.reasoningTokens !== undefined ? { reasoningTokens: chunk.usage.reasoningTokens } : {}),
         // Counted at the send site (`nonTextCounts`), carried through so the ledger records it (#185).
         ...(chunk.usage.imageCount !== undefined ? { imageCount: chunk.usage.imageCount } : {}),

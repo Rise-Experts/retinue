@@ -34,6 +34,14 @@ export type UsageEvent = {
   readonly inputTokens: number;
   readonly outputTokens: number;
   readonly cachedInputTokens: number;
+  /**
+   * Tokens written into a prompt cache — task #247.
+   *
+   * Optional, and absent means "not reported" rather than "none": rows written before this existed and a turn
+   * whose provider reports no breakdown are different facts, and a zero would merge them. The same rule
+   * `imageCount` follows.
+   */
+  readonly cacheWriteTokens?: number;
   readonly reasoningTokens?: number;
   /**
    * Non-text input this turn carried — #185 AC-4.
@@ -75,6 +83,18 @@ export type CostEstimate = {
   readonly modelId: string;
   readonly inputTokens: number;
   readonly maxOutputTokens: number;
+  /**
+   * How much of `inputTokens` the caller expects to be served from cache — task #247.
+   *
+   * Optional, and its absence means "assume none", which is what this did unconditionally before. That default
+   * is deliberately the *conservative* one for a spend limit: over-reserving refuses a turn slightly early,
+   * under-reserving admits a turn that then exceeds the ceiling, and only the second one costs money.
+   *
+   * A seam rather than a prediction. The platform cannot know a hit rate before the call, and inventing one
+   * would make every reservation wrong in a new way; a caller that has just observed 97% on the previous turn of
+   * the same conversation genuinely does know something, and this is where it says so.
+   */
+  readonly cachedInputTokens?: number;
 };
 
 export type Reservation = {

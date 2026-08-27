@@ -49,9 +49,22 @@ export const DEFAULT_MODEL_CATALOG: readonly ModelDefinition[] = [
     label: "Claude Sonnet 5",
     lifecycle: "generally-available",
     inputModalities: ["text", "image"],
-    capabilities: { tools: true, structuredOutput: true, reasoning: true, nativeSearch: false },
+    capabilities: { tools: true, structuredOutput: true, reasoning: true, nativeSearch: false, promptCaching: "explicit" },
     limits: { contextTokens: 200_000, maxOutputTokens: 8_192 },
-    pricing: { currency: "USD", inputPerMillion: 3_000, outputPerMillion: 15_000 },
+    /**
+     * Cache rates, added by #247.
+     *
+     * Anthropic's published ratios: a cache **read** is 0.1× a fresh input token and a cache **write** is
+     * **1.25×** — a write costs *more*. `cacheWritePerMillion` was in `ModelPricing` and read by nothing, so a
+     * cache write was billed as ordinary input and the first turn of every conversation was under-billed.
+     */
+    pricing: {
+      currency: "USD",
+      inputPerMillion: 3_000,
+      outputPerMillion: 15_000,
+      cacheReadPerMillion: 300,
+      cacheWritePerMillion: 3_750,
+    },
     dataResidency: ["us"],
   },
   {
@@ -60,9 +73,16 @@ export const DEFAULT_MODEL_CATALOG: readonly ModelDefinition[] = [
     label: "Claude Haiku 4.5",
     lifecycle: "generally-available",
     inputModalities: ["text", "image"],
-    capabilities: { tools: true, structuredOutput: true, reasoning: false, nativeSearch: false },
+    capabilities: { tools: true, structuredOutput: true, reasoning: false, nativeSearch: false, promptCaching: "explicit" },
     limits: { contextTokens: 200_000, maxOutputTokens: 8_192 },
-    pricing: { currency: "USD", inputPerMillion: 800, outputPerMillion: 4_000 },
+    pricing: {
+      currency: "USD",
+      inputPerMillion: 800,
+      outputPerMillion: 4_000,
+      // Same ratios as Sonnet above: read 0.1×, write 1.25×.
+      cacheReadPerMillion: 80,
+      cacheWritePerMillion: 1_000,
+    },
     dataResidency: ["us"],
   },
 ];

@@ -21,18 +21,36 @@ export const computeModelCostMinorUnits = (
     readonly inputTokens: number;
     readonly outputTokens: number;
     readonly cachedInputTokens?: number;
+    /** Tokens written into the cache — a subset of `inputTokens`, priced separately. See below. */
+    readonly cacheWriteTokens?: number;
     /** Images sent with the turn — counted from the parts, not from the provider. See `NeutralUsage`. */
     readonly imageCount?: number;
     readonly audioSeconds?: number;
   },
 ): number => {
+  /**
+   * Three kinds of input token, and all three are inside `inputTokens` — task #247.
+   *
+   * Measured against a live provider: `noCacheTokens + cacheReadTokens + cacheWriteTokens === inputTokens`. So
+   * fresh input is the remainder after both cache quantities, and adding them on top would double-bill — the
+   * same trap `nonTextInput` exists for.
+   *
+   * A cache **write** is not a discount. Anthropic charges 1.25× a fresh input token to write an entry, so
+   * folding writes into fresh input *under-bills* the first turn of every conversation — the direction that
+   * looks like a saving and is not. `cacheWritePerMillion` existed in `ModelPricing` and was read by nothing
+   * until now.
+   */
   const cachedIn = usage.cachedInputTokens ?? 0;
-  const freshIn = Math.max(0, usage.inputTokens - cachedIn);
+  const cacheWrite = usage.cacheWriteTokens ?? 0;
+  const freshIn = Math.max(0, usage.inputTokens - cachedIn - cacheWrite);
   const perMillion = (tokens: number, price: number): number => (tokens * price) / 1_000_000;
 
   const tokenCost =
     perMillion(freshIn, pricing.inputPerMillion) +
     perMillion(cachedIn, pricing.cacheReadPerMillion ?? pricing.inputPerMillion) +
+    // Defaulting a write to the plain input rate is the conservative choice: it neither invents a premium a
+    // provider does not charge nor silently discounts one it does.
+    perMillion(cacheWrite, pricing.cacheWritePerMillion ?? pricing.inputPerMillion) +
     perMillion(usage.outputTokens, pricing.outputPerMillion);
 
   /**
