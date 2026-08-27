@@ -15,7 +15,8 @@ export type PartRenderKind =
   | "reference"
   | "artifact"
   | "status"
-  | "error";
+  | "error"
+  | "structured";
 
 const KIND: Record<MessagePart["type"], PartRenderKind> = {
   text: "text",
@@ -31,6 +32,7 @@ const KIND: Record<MessagePart["type"], PartRenderKind> = {
   artifact: "artifact",
   status: "status",
   error: "error",
+  structured: "structured",
 };
 
 /**
@@ -59,6 +61,15 @@ export const formatByteSize = (byteSize: number, locale?: string): string => {
     maximumFractionDigits: digits,
   }).format(value);
   return `${number} ${units[unit]}`;
+};
+
+/** Compact JSON, or a plain description when the value cannot be serialised. Never throws. */
+const safeJson = (value: unknown): string => {
+  try {
+    return JSON.stringify(value) ?? String(value);
+  } catch {
+    return "(unserialisable value)";
+  }
 };
 
 /** A stable render kind + short plain-text preview for a part. */
@@ -90,6 +101,19 @@ export const partSummary = (part: MessagePart): { kind: PartRenderKind; preview:
       return { kind, preview: part.title };
     case "artifact":
       return { kind, preview: part.title };
+    case "structured":
+      /**
+       * The validated answer of a structured agent — task #243.
+       *
+       * Rendered as compact JSON, truncated like every other preview. A structured answer is data, and the
+       * honest preview of data is the data — inventing a prose summary of it here would be this layer guessing
+       * at meaning it has no way to know.
+       *
+       * `JSON.stringify` can return `undefined` (for a bare `undefined`) and can throw on a circular value.
+       * Neither should reach here — the part is validated against a schema before it is emitted — but a preview
+       * helper that throws takes the whole transcript down with it, so both are handled.
+       */
+      return { kind, preview: safeJson(part.value).slice(0, 200) };
     case "status":
       return { kind, preview: part.detail ?? part.status };
     case "error":

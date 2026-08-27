@@ -22,7 +22,7 @@ import type { ExecutionContext } from "../core/context.js";
 import { AgentPlatformError, isAgentPlatformError } from "../core/errors.js";
 import type { InteractionId, MessageId, MessagePartId, RunId, TenantId, ToolCallId } from "../core/ids.js";
 import { asId } from "../core/ids.js";
-import type { MessagePart, TextPart, ToolCallPart, ToolResultPart } from "../core/content-parts.js";
+import type { MessagePart, StructuredPart, TextPart, ToolCallPart, ToolResultPart } from "../core/content-parts.js";
 import type {
   ModelDefinition,
   ModelToolCallOptions,
@@ -240,6 +240,29 @@ export const createDefaultEngine = (deps: DefaultEngineDeps): AgentEngine => {
     async *run({ run, context, signal }: EngineRunInput): AsyncIterable<EngineEvent> {
       const manifest = await deps.loadManifest({ agentId: run.agentId, version: run.agentVersion, context });
       const resolved = deps.resolveModel(manifest, context);
+      /**
+       * A structured agent needs a model that can do it — task #243 AC-3.
+       *
+       * Checked at resolution, before a token is spent, and here rather than only in the host's `resolveModel`
+       * because that callback is the host's: a host that has not been updated would resolve a text-only model
+       * and the agent would silently get prose, which is the defect being fixed rather than a new one.
+       *
+       * Skipped when the host returned no `definition`, following the same rule `modelModalities` already uses
+       * (#185): a caller that did not say what the model can do has not said it cannot do this, and refusing
+       * every structured agent from every host that has not been updated would be an outage dressed as a check.
+       */
+      if (manifest.responseFormat?.kind === "structured" && resolved.definition !== undefined) {
+        if (resolved.definition.capabilities?.structuredOutput !== true)
+          throw new AgentPlatformError({
+            code: "capability_unavailable",
+            message:
+              `agent "${manifest.id}" asks for a structured response format and the resolved model ` +
+              `${resolved.modelId} does not declare the \`structuredOutput\` capability. Add ` +
+              "`requiredCapabilities: { structuredOutput: true }` to the agent's model policy so resolution " +
+              "picks a model that can, rather than discovering it mid-turn.",
+            retryable: false,
+          });
+      }
       const system = (await (deps.systemPrompt?.(manifest, context) ?? manifest.instructions)) || undefined;
       const history = await deps.loadHistory(context, run);
       const built = deps.buildTools ? await deps.buildTools(context, manifest) : [];
@@ -491,6 +514,8 @@ export const createDefaultEngine = (deps: DefaultEngineDeps): AgentEngine => {
       let attempt = 1;
       for (;;) {
         let emitted = 0;
+        // Whether this turn produced the structured answer a structured agent promises — #243.
+        let sawStructured = false;
         const textParts = new Map<string, { partId: MessagePartId; text: string }>();
         const controller = new AbortController();
         try {
@@ -527,6 +552,10 @@ export const createDefaultEngine = (deps: DefaultEngineDeps): AgentEngine => {
             ...(resolved.definition === undefined
               ? {}
               : { modelModalities: resolved.definition.inputModalities }),
+            // Mapped from the manifest here, so the model layer stays free of any dependency on `agents/`.
+            ...(manifest.responseFormat?.kind === "structured"
+              ? { structuredOutput: { schema: manifest.responseFormat.schema } }
+              : {}),
             tools,
             maxSteps,
             abortSignal: controller.signal,
@@ -540,6 +569,7 @@ export const createDefaultEngine = (deps: DefaultEngineDeps): AgentEngine => {
             }
             for (const event of mapChunk(chunk, messageId, resolved, textParts, ranByCall)) {
               emitted += 1;
+              if (event.type === "part.added" && event.part.type === "structured") sawStructured = true;
               yield event;
             }
             // Raised by a tool call this turn. Stop here rather than letting the model keep going: the
@@ -570,6 +600,25 @@ export const createDefaultEngine = (deps: DefaultEngineDeps): AgentEngine => {
            * After the stream, so a citation cannot appear above text the reader is already looking at — the
            * append-only property `citationViewModel` depends on.
            */
+          /**
+           * A structured agent must have produced a structured answer — task #243 AC-2.
+           *
+           * `streamModelTurn` already validates and fails, so in the normal path this never fires. It fires for
+           * a host that supplied its own `streamTurn`, and that is the case worth guarding: the guarantee a
+           * consumer bought is "structured or an error", and if it depended solely on the shipped model layer
+           * then any host replacing that layer would silently get prose again — the original defect, reachable
+           * through a documented extension point.
+           */
+          if (manifest.responseFormat?.kind === "structured" && !sawStructured)
+            throw new AgentPlatformError({
+              code: "provider_error",
+              message:
+                `agent "${manifest.id}" asks for a structured response format and the turn produced none. ` +
+                "The run fails rather than returning the turn's text, which would be prose presented as a " +
+                "validated object.",
+              retryable: true,
+            });
+
           for (const record of pendingVerdicts.splice(0)) yield verdictEvent(record);
           if (deps.citations !== undefined && pendingCitations.length > 0) {
             const claims = [...textParts.values()].map((t) => t.partId);
@@ -778,6 +827,25 @@ function* mapChunk(
         currency: resolved.currency ?? "USD",
         costMinorUnits: resolved.price ? resolved.price(chunk.usage) : 0,
       };
+      return;
+    }
+    case "structured-output": {
+      /**
+       * The validated answer of a structured agent — task #243.
+       *
+       * Emitted once, complete. `streamModelTurn` has already validated it against the schema and fails the turn
+       * if it does not conform, so reaching here means the value satisfies what the caller asked for. Nothing
+       * partial is ever emitted: a half-built object does not satisfy a schema, so streaming one would publish
+       * values that violate the contract.
+       */
+      const part: StructuredPart = {
+        id: `${messageId}:structured` as MessagePartId,
+        type: "structured",
+        schemaVersion: 1,
+        createdAt: new Date(0).toISOString(),
+        value: chunk.value,
+      };
+      yield { type: "part.added", messageId, part };
       return;
     }
     case "error":

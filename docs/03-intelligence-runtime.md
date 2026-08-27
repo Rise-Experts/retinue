@@ -44,6 +44,60 @@ type AgentManifest = {
 
 Agents are declarative, stored, versioned and auditable.
 
+### Which of these fields the runtime honours
+
+A field on a stored definition is worth nothing until something reads it, and five of these were read by nothing
+through 0.2.0 — see task [#242](https://github.com/Rise-Experts/retinue/issues/242). `check:reachability` now
+holds every field of this type, so the table below is enforced rather than asserted:
+
+| Field | State |
+|---|---|
+| `id`, `version` | Identity. A run records `agentId` and `agentVersion`, so editing an agent never rewrites history. |
+| `name`, `description` | Display. Rendered by a host, returned over GraphQL. |
+| `instructions` | The system prompt, unless the host overrides `systemPrompt`. |
+| `modelPolicy` | Read by `resolveModel`. |
+| `limits` | Enforced — step ceiling, output-token ceiling as the *lower* of agent and model definition, temperature, retries. |
+| `responseFormat` | **Honoured** ([#243](https://github.com/Rise-Experts/retinue/issues/243)). See below. |
+| `toolPolicy`, `skillPolicy`, `authorizationPolicyId`, `contextProviderIds` | **Not yet interpreted** — declared, and read by nothing. [#244](https://github.com/Rise-Experts/retinue/issues/244) decides per field whether an interpreter ships or the field is removed. Until then, setting them has no effect: notably `toolPolicy.excluded` is **not** an enforced exclusion. Use a `TenantToolset` for that. |
+
+### Structured output
+
+`responseFormat: { kind: "structured", schema }` makes the agent answer with a validated object instead of prose.
+
+```ts
+const triage = defineAgent({
+  id: "triage",
+  name: "Triage",
+  instructions: "Classify the inbound message.",
+  modelPolicy: { role: "smart", requiredCapabilities: { structuredOutput: true } },
+  responseFormat: {
+    kind: "structured",
+    schema: z.object({ severity: z.enum(["low", "high"]), summary: z.string() }),
+  },
+});
+```
+
+Four things are true of it, and each is a deliberate choice:
+
+- **The schema must be one this process can validate** — a Zod schema, or anything implementing Standard Schema.
+  A bare JSON-schema object is **refused**, with an error naming the fix. The AI SDK's `jsonSchema()` wrapper
+  leaves `validate` undefined: it constrains the provider's generation and checks nothing on the way back, so
+  accepting one would mean promising a shape nobody verifies. Tools keep taking JSON schema, because a tool's
+  arguments are validated by the provider and a bad call is a tool error the model can see and retry — a
+  different situation from a guarantee made to a caller about a return value.
+- **A non-conforming answer fails the run.** It is never returned as text. A caller who wanted best-effort prose
+  did not ask for a schema.
+- **Nothing partial streams.** A half-built object does not satisfy the schema, so the answer arrives once, as a
+  single `structured` message part, at the end of the turn. Tool calls stream normally around it, so the turn is
+  not silent.
+- **Tools still work.** Structured output constrains the final answer only; the model↔tool loop is unchanged.
+
+Add `requiredCapabilities: { structuredOutput: true }` to the model policy. Without it, resolution can return a
+model that cannot do this, and the engine then refuses at resolution time with a message naming the model —
+better than mid-turn, but later than necessary.
+
+`examples/` ships a working one: `examples/src/structured.ts` and `npm run structured`.
+
 ## Tool registry
 
 Tool descriptors declare name, label, description, category, input/output schemas, effect classification, approval policy and idempotency requirement. The model-facing description stays canonical; the user-facing label/description is localizable (a catalog key or locale map) per docs/14.

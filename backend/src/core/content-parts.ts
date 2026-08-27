@@ -34,6 +34,7 @@ export const MESSAGE_PART_TYPES = [
   "artifact",
   "status",
   "error",
+  "structured",
 ] as const;
 
 export type MessagePartType = (typeof MESSAGE_PART_TYPES)[number];
@@ -50,6 +51,23 @@ type PartBase<T extends MessagePartType> = {
 
 export type TextPart = PartBase<"text"> & {
   readonly text: string;
+};
+
+/**
+ * The validated answer of a structured agent — task #243.
+ *
+ * Its own part rather than a `TextPart` holding JSON, for the reason the whole task exists: a consumer that
+ * asked for structured output wants the object, and handing back text would leave every reader re-parsing it
+ * and deciding for itself whether the parse succeeded. The part carries the value **after** validation, so its
+ * presence is the guarantee — an agent whose model produced nothing conforming fails the run instead of
+ * emitting this with something unchecked in it.
+ *
+ * There is no partial form. A half-built object does not satisfy the schema the caller asked for, so streaming
+ * one would mean emitting values that violate the contract; the part is added once, complete, at the end of the
+ * turn. Tool calls still stream normally around it.
+ */
+export type StructuredPart = PartBase<"structured"> & {
+  readonly value: unknown;
 };
 
 export type ReasoningPart = PartBase<"reasoning"> & {
@@ -245,6 +263,7 @@ export type MessagePart =
   | SourcePart
   | ArtifactPart
   | StatusPart
+  | StructuredPart
   | ErrorPart;
 
 export type MessageRole = "system" | "user" | "assistant" | "tool";

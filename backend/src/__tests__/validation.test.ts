@@ -29,10 +29,13 @@ const samples: Record<string, MessagePart> = {
   artifact: { id: "p11", type: "artifact", schemaVersion: 1, createdAt: "t", artifactId: "a1", versionId: "v1", title: "Report" } as MessagePart,
   status: { id: "p12", type: "status", schemaVersion: 1, createdAt: "t", status: "running", detail: "step 1" } as MessagePart,
   error: { id: "p13", type: "error", schemaVersion: 1, createdAt: "t", error: { code: "internal", message: "boom", retryable: false } } as MessagePart,
+  // A structured agent's validated answer — #243. The value is arbitrary JSON by design: the schema that
+  // constrains it belongs to the agent, not to the part.
+  structured: { id: "p14", type: "structured", schemaVersion: 1, createdAt: "t", value: { sentiment: "mixed", score: 0.5, tags: ["a", "b"] } } as MessagePart,
 };
 
 describe("message part validation", () => {
-  it("covers all 13 declared part types", () => {
+  it("covers all 14 declared part types", () => {
     expect(Object.keys(samples).sort()).toEqual([...MESSAGE_PART_TYPES].sort());
   });
 
@@ -96,5 +99,28 @@ describe("run event validation", () => {
   it("accepts a known event and rejects an unknown type", () => {
     expect(parseRunEvent({ type: "run.started", runId: "r1", sequence: 1, occurredAt: "t" })).toMatchObject({ type: "run.started" });
     expect(() => parseRunEvent({ type: "run.exploded", runId: "r1", sequence: 1, occurredAt: "t" })).toThrow(/invalid/i);
+  });
+});
+
+describe("a structured part must carry a value — #243", () => {
+  it("rejects a structured part with no value", () => {
+    // `z.unknown()` accepts `undefined`, so without the refinement a part claiming to be a validated answer
+    // could round-trip carrying nothing: the empty version of the defect #243 fixed.
+    expect(() =>
+      parseMessagePart({ id: "p14", type: "structured", schemaVersion: 1, createdAt: "t" }),
+    ).toThrow(/must carry a value/);
+  });
+
+  it("accepts null, which is a legal JSON value a schema may permit", () => {
+    const part = parseMessagePart({ id: "p14", type: "structured", schemaVersion: 1, createdAt: "t", value: null });
+    expect((part as { value: unknown }).value).toBeNull();
+  });
+
+  it("preserves a nested value through serialize + parse without reshaping it", () => {
+    // The value is the agent's, not this layer's. Anything that normalises it here would silently change what a
+    // caller validated against their own schema.
+    const value = { a: [1, { b: "two" }], c: { d: null }, e: false };
+    const part = { id: "p14", type: "structured" as const, schemaVersion: 1, createdAt: "t", value };
+    expect(parseMessagePart(serializeMessagePart(part as never))).toEqual(part);
   });
 });

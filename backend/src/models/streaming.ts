@@ -7,7 +7,7 @@
  * ever importing the SDK, so switching providers changes nothing above this layer.
  */
 
-import { jsonSchema, stepCountIs, streamText, tool as aiTool, type LanguageModel, type ModelMessage, type ToolSet } from "ai";
+import { Output, jsonSchema, stepCountIs, streamText, tool as aiTool, type LanguageModel, type ModelMessage, type ToolSet } from "ai";
 import { AgentPlatformError } from "../core/errors.js";
 import type { InputModality } from "./index.js";
 
@@ -146,6 +146,18 @@ export type ModelTurnRequest = {
    * `temperature` matters for a second reason: the evaluation harness (#141) rests its reproducibility argument
    * partly on temperature zero, and there was no way to ask for it on a real run.
    */
+  /**
+   * Ask the model for a value conforming to a schema, rather than prose — task #243.
+   *
+   * Neutral on purpose: this layer sits below `agents/`, so it takes a schema rather than an
+   * `AgentManifest["responseFormat"]`. The engine does the mapping.
+   *
+   * The schema must be validatable by this process — see `structuredValidator`. A bare JSON schema is refused,
+   * because the AI SDK's `jsonSchema()` wrapper leaves `validate` undefined: it constrains the provider request
+   * and checks nothing on the way back, which would make "structured" a request rather than a guarantee. That
+   * distinction is the entire point of the task.
+   */
+  readonly structuredOutput?: { readonly schema: unknown };
   readonly maxOutputTokens?: number;
   readonly temperature?: number;
   readonly topP?: number;
@@ -178,7 +190,68 @@ export type NeutralStreamChunk =
   | { readonly type: "tool-call"; readonly toolCallId: string; readonly toolName: string; readonly input: unknown }
   | { readonly type: "tool-result"; readonly toolCallId: string; readonly toolName: string; readonly output: unknown }
   | { readonly type: "finish"; readonly usage: NeutralUsage }
+  /** A validated structured answer — emitted once, at the end, only when `structuredOutput` was asked for. */
+  | { readonly type: "structured-output"; readonly value: unknown }
   | { readonly type: "error"; readonly error: unknown };
+
+/**
+ * A schema this process can actually check, or a refusal — task #243.
+ *
+ * The rule: **only a schema with a validator is accepted for structured output.** Zod (a direct dependency) and
+ * anything else implementing Standard Schema qualify. A bare JSON-schema object does not, and refusing it is a
+ * deliberate choice rather than an omission:
+ *
+ * - The AI SDK's `jsonSchema()` wrapper returns `{ _type, jsonSchema, validate }` with **`validate` undefined**.
+ *   It constrains the provider's generation and validates nothing coming back. Accepting one would mean the
+ *   platform says "structured", the provider mostly complies, and nobody checks — which is a softer version of
+ *   the bug being fixed, not a fix.
+ * - Validating JSON schema properly needs `ajv`, and that is a new runtime dependency for every consumer of a
+ *   package whose entire dependency list is `ai` and `zod`. Not worth it when `z.object({...})` is one line and
+ *   already validates.
+ *
+ * So this fails closed, at wiring time, with a message naming the fix. Tools keep taking JSON schema — a tool's
+ * arguments are validated by the provider and a bad call is a tool error the model can see and retry, which is
+ * a different situation from a guarantee made to a caller about a return value.
+ */
+export const structuredValidator = (
+  schema: unknown,
+): ((value: unknown) => { readonly ok: true } | { readonly ok: false; readonly detail: string }) => {
+  const standard = (schema as { "~standard"?: { validate?: (v: unknown) => unknown } } | null)?.["~standard"];
+  if (schema !== null && typeof schema === "object" && typeof standard?.validate === "function") {
+    return (value) => {
+      const result = standard.validate!(value) as { issues?: readonly { message?: string; path?: unknown[] }[] };
+      // Standard Schema is allowed to return a promise; a validator that cannot answer synchronously is not
+      // usable here, and silently treating a pending promise as success is how this would pass having checked
+      // nothing. Refuse instead.
+      if (result instanceof Promise)
+        return { ok: false, detail: "the schema validates asynchronously, which this path cannot await" };
+      if (result.issues === undefined || result.issues.length === 0) return { ok: true };
+      return {
+        ok: false,
+        detail: result.issues
+          .map((i) => `${(i.path ?? []).join(".") || "(root)"}: ${i.message ?? "invalid"}`)
+          .join("; "),
+      };
+    };
+  }
+  if (isZodSchema(schema)) {
+    const parse = (schema as { safeParse: (v: unknown) => { success: boolean; error?: { message?: string } } })
+      .safeParse;
+    return (value) => {
+      const result = parse.call(schema, value);
+      return result.success ? { ok: true } : { ok: false, detail: result.error?.message ?? "invalid" };
+    };
+  }
+  throw new AgentPlatformError({
+    code: "capability_unavailable",
+    message:
+      "a structured response format needs a schema this process can validate — a Zod schema, or anything " +
+      "implementing Standard Schema. A plain JSON-schema object is refused: the AI SDK sends it to the " +
+      "provider but validates nothing on the way back, so the platform would be promising a shape it never " +
+      "checks. Use `z.object({ … })`.",
+    retryable: false,
+  });
+};
 
 const isZodSchema = (s: unknown): boolean =>
   typeof s === "object" && s !== null && typeof (s as { safeParse?: unknown }).safeParse === "function";
@@ -308,11 +381,35 @@ export async function* streamModelTurn(req: ModelTurnRequest): AsyncIterable<Neu
   const messages: ModelMessage[] = req.messages.map(
     (m) => ({ role: m.role, content: toModelContent(m.content) }) as ModelMessage,
   );
+  /**
+   * Validated before the call, not after — task #243 AC-2/AC-3.
+   *
+   * A schema this process cannot check makes "structured" a request rather than a guarantee, and finding that
+   * out after a paid generation is finding it out in the worst place. `structuredValidator` throws here.
+   */
+  const validate = req.structuredOutput === undefined ? undefined : structuredValidator(req.structuredOutput.schema);
+
   const result = streamText({
     model: req.model,
     ...(req.system ? { system: req.system } : {}),
     messages,
     ...(req.tools && req.tools.length > 0 ? { tools: toToolSet(req.tools) } : {}),
+    /**
+     * `output` rather than `streamObject`, because tools must keep working — AC-4.
+     *
+     * `streamObject` has no tool loop at all, so a structured agent would silently lose every tool. This keeps
+     * `streamText`'s model↔tool loop and constrains only the final answer.
+     *
+     * The option is `output`, **not** `experimental_output`. It was named the latter in `ai@4` and the name was
+     * dropped in `ai@7`; passing the old one is not an error, it is *ignored* — `streamText` accepts the unknown
+     * key, the model is never constrained, and `result.output` comes back as ordinary prose. Written down
+     * because that is the whole defect class this task exists to close, met again inside the fix: the first
+     * version of this code passed `experimental_output`, typechecked, and did nothing. Only the live check
+     * against a real model found it.
+     */
+    ...(req.structuredOutput === undefined
+      ? {}
+      : { output: Output.object({ schema: req.structuredOutput.schema as never }) }),
     stopWhen: stepCountIs(req.maxSteps ?? 8),
     ...(req.abortSignal ? { abortSignal: req.abortSignal } : {}),
     // Spread conditionally so an unset parameter leaves the provider's own default alone, rather than pinning it
@@ -326,6 +423,14 @@ export async function* streamModelTurn(req: ModelTurnRequest): AsyncIterable<Neu
   for await (const chunk of result.fullStream) {
     switch (chunk.type) {
       case "text-delta":
+        /**
+         * Swallowed on a structured turn — AC-5.
+         *
+         * With `experimental_output` the model's text *is* the JSON, arriving a fragment at a time. Forwarding it
+         * would put half-built JSON in the transcript as prose and leave a reader watching `{"na` appear. The
+         * decision is one complete part at the end instead; tool calls still stream, so the turn is not silent.
+         */
+        if (req.structuredOutput !== undefined) break;
         yield { type: "text-delta", id: (chunk as { id?: string }).id ?? "text", text: (chunk as { text?: string }).text ?? "" };
         break;
       case "tool-call":
@@ -408,4 +513,47 @@ export async function* streamModelTurn(req: ModelTurnRequest): AsyncIterable<Neu
         break;
     }
   }
+
+  if (validate === undefined) return;
+
+  /**
+   * The structured answer, after the loop and after validation — AC-2.
+   *
+   * Read from the SDK's resolved output rather than reassembled from the text deltas that were swallowed above:
+   * the SDK has already parsed the JSON, and re-parsing a string this layer discarded would be two chances to
+   * get it wrong.
+   *
+   * Every failure here is a **run failure**, deliberately. The alternative is emitting the text as an ordinary
+   * answer, which is precisely the defect this task fixes: an agent that asked for a schema, got prose, and had
+   * no way to tell. A caller who wanted best-effort prose did not set a structured response format.
+   */
+  let value: unknown;
+  try {
+    value = await (result as unknown as { output: Promise<unknown> }).output;
+  } catch (thrown) {
+    throw new AgentPlatformError({
+      code: "provider_error",
+      message:
+        "the model produced no value conforming to the structured response format: " +
+        errorMessageOf(thrown) +
+        ". The turn is failed rather than returning the raw text, which would be prose presented as a " +
+        "validated object.",
+      retryable: true,
+    });
+  }
+
+  // Belt and braces over the SDK's own parse. `Output.object` validates a Standard Schema, but this layer is
+  // where the guarantee is made, and a guarantee that depends on a dependency's internals is a guarantee that
+  // changes when the dependency does.
+  const verdict = validate(value);
+  if (!verdict.ok)
+    throw new AgentPlatformError({
+      code: "provider_error",
+      message:
+        `the model's answer does not satisfy the structured response format — ${verdict.detail}. ` +
+        "The turn is failed rather than returning it unchecked.",
+      retryable: true,
+    });
+
+  yield { type: "structured-output", value };
 }

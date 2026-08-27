@@ -145,6 +145,25 @@ const messagePartSchema = z.discriminatedUnion("type", [
   z.object({ ...base, type: z.literal("artifact"), artifactId: idString, versionId: idString, title: z.string() }),
   z.object({ ...base, type: z.literal("status"), status: z.string(), detail: z.string().optional() }),
   z.object({ ...base, type: z.literal("error"), error: platformErrorSchema }),
+  /**
+   * A structured agent's validated answer — #243.
+   *
+   * `value` is `unknown` on purpose. The schema that constrains it belongs to the *agent*, is chosen by whoever
+   * wrote the manifest, and has already been enforced before the part was emitted — so re-describing it here is
+   * impossible (there is no one shape) and re-validating it would be validating against the wrong schema.
+   *
+   * What this layer does check is that `value` is **present**. `z.unknown()` accepts `undefined`, which would let
+   * a part claiming to be a structured answer round-trip carrying nothing — the empty version of the exact defect
+   * #243 fixed. `z.unknown().refine(v => v !== undefined)` is the narrowest thing that closes it, and `null`
+   * stays legal because `null` is a valid JSON value a schema may well permit.
+   */
+  z.object({
+    ...base,
+    type: z.literal("structured"),
+    value: z.unknown().refine((v) => v !== undefined, {
+      message: "a structured part must carry a value; an absent one is an answer that was never validated",
+    }),
+  }),
 ]);
 
 const executionContextSchema = z.object({

@@ -450,10 +450,6 @@ const DECLARED_TYPES = [
       version: "Identity. A run records `agentVersion` so editing an agent never rewrites history; the manifest's copy is written, not interpreted.",
       name: "Display. Rendered by a host and returned over GraphQL.",
       description: "Display. Same.",
-      responseFormat: {
-        defect: "Declared since the manifest existed and read by nothing; the engine owns the model call and never asks for structured output, so a structured agent silently returns prose",
-        issue: 243,
-      },
       toolPolicy: {
         defect: "No interpreter ships anywhere, including the reference host. `excluded` reads as a security control and enforces nothing",
         issue: 244,

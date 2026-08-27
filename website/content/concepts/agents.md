@@ -25,7 +25,7 @@ type AgentManifest = {
   name: string;
   instructions: string;
   modelPolicy: ModelPolicy;          // asks for a `fast`/`smart` role, not a model id
-  responseFormat: ResponseFormat;
+  responseFormat: ResponseFormat;    // text, or a validated object — see below
   toolPolicy: { preloaded: string[]; categories: string[]; excluded: string[] };
   skillPolicy: { assigned: string[]; allowTenantSkills: boolean };
   authorizationPolicyId: string;
@@ -33,6 +33,46 @@ type AgentManifest = {
   limits: ExecutionLimits;           // max steps, tool calls, cost ceiling, timeout
 };
 ```
+
+:::warning Four of these fields are declared and not yet interpreted
+
+`toolPolicy`, `skillPolicy`, `authorizationPolicyId` and `contextProviderIds` are read by nothing today. Setting
+them has no effect — in particular **`toolPolicy.excluded` is not an enforced exclusion**; use a tenant toolset
+for that. This is tracked as [#244](https://github.com/Rise-Experts/retinue/issues/244), which decides per field
+whether an interpreter ships or the field is removed, and `check:reachability` now fails the build if a fifth
+one joins them quietly.
+
+:::
+
+## Structured output
+
+An agent can answer with a validated object instead of prose:
+
+```ts
+const triage = defineAgent({
+  id: "triage",
+  name: "Triage",
+  instructions: "Classify the inbound message.",
+  modelPolicy: { role: "smart", requiredCapabilities: { structuredOutput: true } },
+  responseFormat: {
+    kind: "structured",
+    schema: z.object({ severity: z.enum(["low", "high"]), summary: z.string() }),
+  },
+});
+```
+
+The answer arrives as a single `structured` message part carrying the validated value. Four rules:
+
+- **Use a Zod schema** (or anything implementing Standard Schema). A plain JSON-schema object is refused: the
+  underlying SDK sends one to the provider and validates nothing coming back, so the platform would be promising
+  a shape it never checks.
+- **A non-conforming answer fails the run** — it is never handed back as text.
+- **Nothing partial streams.** A half-built object does not satisfy the schema, so the value is emitted once, at
+  the end of the turn. Tool calls stream normally around it.
+- **Tools still work.** Only the final answer is constrained.
+
+Ask for `requiredCapabilities: { structuredOutput: true }` so resolution picks a model that can do it, rather
+than the run failing at the turn.
 
 ## Model resolution
 
