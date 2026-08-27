@@ -14,9 +14,19 @@
  *
  *     score(d) = Σ over signals of 1 / (K + rank(d))
  *
- * A document ranked first by one signal and absent from the other still beats one ranked fifth by both, which
- * is the behaviour that makes hybrid better than either — the exact-term hit surfaces even though the semantic
- * signal never saw it.
+ * A document ranked first by one signal and absent from the other still beats one ranked fifth by both, which is
+ * the behaviour hybrid exists for — the exact-term hit surfaces even though the semantic signal never saw it.
+ *
+ * **And on one real corpus it is worse than semantic alone.** This comment used to say hybrid "measurably beats"
+ * both parts; #219 measured it over 56 documents of technical prose and hybrid lost 16.7 points of success@5 to
+ * semantic-only. The mechanism is the same paragraph read the other way: RRF weights both signals equally by
+ * construction, so fusing a weak list with a strong one demotes the strong list's top hits wherever the weak one
+ * disagrees. The lexical signal is weak on natural-language questions over prose.
+ *
+ * Hybrid remains the default, deliberately — that dataset has 18 queries, one author, and **no identifier
+ * queries**, which is precisely the case hybrid exists for. But the claim in this comment was untested for months
+ * and turned out to be false where it was finally tested, so it is stated with its evidence now. See
+ * `docs/26-retrieval-quality.md`.
  *
  * **`K = 60`** is the value from Cormack, Clarke and Buettcher's original TREC work and the one every
  * implementation since has used. It is large relative to the ranks that matter, which flattens the difference
@@ -37,6 +47,7 @@ import type {
   VectorIndex,
 } from "../persistence/index.js";
 import type { EmbeddingProvider } from "./index.js";
+import type { Navigator } from "./navigate.js";
 
 /** The rank-fusion constant. See the note above on why 60 and why rank rather than score. */
 export const RRF_K = 60;
@@ -53,7 +64,18 @@ export const DEFAULT_CANDIDATES = 20;
  */
 export const DEFAULT_RELEVANCE_FLOOR = 0.4;
 
-export type RetrievalMode = "semantic" | "keyword" | "hybrid";
+/**
+ * `navigate` is a **spike** — REQ-050 (#209), task #219, AC-4.
+ *
+ * The issue asked whether retrieval without vectors can be expressed as a fourth mode behind this interface, and
+ * "if it cannot, that is itself the finding". It can: `createRetriever` gains one optional dependency, and every
+ * caller — `search_knowledge` included — is unchanged. A deployment that has not wired a navigator gets a named
+ * refusal rather than a silent fall back to semantic search, which is the failure that would have made the mode
+ * dangerous rather than merely unused.
+ *
+ * See `navigate.ts` for what it is and `docs/26-retrieval-quality.md` for what it scored.
+ */
+export type RetrievalMode = "semantic" | "keyword" | "hybrid" | "navigate";
 
 /** What a citation needs, derived from a hit so there is one shape rather than each caller's own (AC-6). */
 export type SourceReference = {
@@ -81,7 +103,20 @@ export type RetrievalHit = {
  * different answer from "you have no indexed documents", and telling a user the first when the second is true
  * sends them looking for content they never uploaded.
  */
-export const NO_RESULT_REASONS = ["nothing-indexed", "no-match", "below-threshold", "no-access"] as const;
+export const NO_RESULT_REASONS = [
+  "nothing-indexed",
+  "no-match",
+  "below-threshold",
+  "no-access",
+  /**
+   * The mode asked for is not wired — task #219.
+   *
+   * Its own reason rather than `no-match`, because the two want opposite responses: one says rephrase, this says
+   * a deployment has not configured what you asked for. Falling back to another mode silently would be worse
+   * than either, since the caller would attribute the results to the mode it named.
+   */
+  "not-configured",
+] as const;
 export type NoResultReason = (typeof NO_RESULT_REASONS)[number];
 
 export type RetrievalOutcome =
@@ -94,6 +129,14 @@ export type RetrievalOutcome =
  * A port, and **switchable**, because a reranker's value is a claim that has to be provable. A cross-encoder is
  * materially more expensive than the retrieval it reorders, so "we rerank" without a measured contribution is
  * a cost nobody justified. Absent means fusion order stands, which is the honest default.
+ *
+ * **`createExactTermReranker`'s measured contribution is negative** — #219, over 56 documents of technical prose:
+ * −5.6 points of success@5, −5.6 of recall, −0.028 MRR, and no latency saving. It promotes chunks containing query
+ * terms verbatim, which on prose queries promotes chunks that happen to repeat a common word. Leave it off.
+ *
+ * That is a result about *that* reranker, not about reranking: a cross-encoder is a different mechanism and might
+ * well earn its cost. This port is how it would be measured, and `docs/26-retrieval-quality.md` is the baseline to
+ * measure it against.
  */
 export interface Reranker {
   readonly id: string;
@@ -121,6 +164,14 @@ export type RetrieverDeps = {
    * "no match"), the best of them normalises to 1.0, and every query finds something.
    */
   readonly semanticFloor?: number;
+  /**
+   * Serves `mode: "navigate"` — task #219, AC-4.
+   *
+   * Optional, and its absence is a *named refusal* for that mode rather than a fall back to semantic search: a
+   * caller that asked for navigation and silently got embeddings would attribute the results to the wrong
+   * mechanism, which is the only way this spike could have done harm.
+   */
+  readonly navigator?: Navigator;
 };
 
 export type RetrieveInput = {
@@ -206,6 +257,7 @@ const NO_RESULT_MESSAGES: Readonly<Record<NoResultReason, string>> = {
   "no-match": "Nothing in the available material matches that.",
   "below-threshold": "Nothing in the available material is a close enough match to rely on.",
   "no-access": "There is no material you have access to that matches that.",
+  "not-configured": "That retrieval mode is not configured for this deployment.",
 };
 
 export const createRetriever = (deps: RetrieverDeps) => {
@@ -221,6 +273,23 @@ export const createRetriever = (deps: RetrieverDeps) => {
       input: RetrieveInput,
     ): Promise<RetrievalOutcome> {
       const mode = input.mode ?? "hybrid";
+
+      // The spike's mode, delegated whole: it shares no step with the fusion path below.
+      if (mode === "navigate") {
+        if (deps.navigator === undefined)
+          return {
+            found: false,
+            reason: "not-configured",
+            message: NO_RESULT_MESSAGES["not-configured"],
+            mode,
+          };
+        return deps.navigator.navigate(context, {
+          query: input.query,
+          authSubjects: input.authSubjects,
+          limit: input.limit,
+        });
+      }
+
       // Checked before either index is asked. An empty subject list is not a query with no results — it is a
       // caller with no access, and the two want different sentences.
       if (input.authSubjects.length === 0)

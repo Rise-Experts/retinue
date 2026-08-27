@@ -1,0 +1,370 @@
+[
+  {
+    "id": "rq-01",
+    "dimension": "retrieval",
+    "title": "Idempotency on a retried tool call",
+    "input": {
+      "message": "how do I stop a tool from running twice when a run is retried"
+    },
+    "expect": {
+      "kind": "retrieves",
+      "relevant": [
+        {
+          "source": "docs/04-durable-runtime-and-hitl.md",
+          "mustContain": "idempotency key"
+        }
+      ]
+    },
+    "tags": [
+      "docs-corpus"
+    ]
+  },
+  {
+    "id": "rq-02",
+    "dimension": "retrieval",
+    "title": "Authorization filters the catalogue",
+    "input": {
+      "message": "what stops a model from calling a tool the user is not allowed to use"
+    },
+    "expect": {
+      "kind": "retrieves",
+      "relevant": [
+        {
+          "source": "docs/11-authorization.md",
+          "mustContain": "permission-filtered catalog"
+        }
+      ]
+    },
+    "tags": [
+      "docs-corpus"
+    ]
+  },
+  {
+    "id": "rq-03",
+    "dimension": "retrieval",
+    "title": "How the two retrieval signals fuse",
+    "input": {
+      "message": "how are keyword results and semantic results combined into one ranking"
+    },
+    "expect": {
+      "kind": "retrieves",
+      "relevant": [
+        {
+          "source": "docs/05-knowledge-and-documents.md",
+          "mustContain": "Rank fusion"
+        }
+      ]
+    },
+    "tags": [
+      "docs-corpus"
+    ]
+  },
+  {
+    "id": "rq-04",
+    "dimension": "retrieval",
+    "title": "A thread longer than the window",
+    "input": {
+      "message": "what happens when a conversation grows too long for the model's context window"
+    },
+    "expect": {
+      "kind": "retrieves",
+      "relevant": [
+        {
+          "source": "website/content/concepts/sessions.md",
+          "mustContain": "context.compacted"
+        },
+        {
+          "source": "docs/04-durable-runtime-and-hitl.md",
+          "mustContain": "compacted"
+        }
+      ]
+    },
+    "tags": [
+      "docs-corpus"
+    ]
+  },
+  {
+    "id": "rq-05",
+    "dimension": "retrieval",
+    "title": "Running a shell command safely",
+    "input": {
+      "message": "can an agent run a shell command, and how is that made safe"
+    },
+    "expect": {
+      "kind": "retrieves",
+      "relevant": [
+        {
+          "source": "docs/23-tool-catalogue.md",
+          "mustContain": "sandbox"
+        },
+        {
+          "source": "website/content/concepts/tools.md",
+          "mustContain": "sandbox"
+        }
+      ]
+    },
+    "tags": [
+      "docs-corpus"
+    ]
+  },
+  {
+    "id": "rq-06",
+    "dimension": "retrieval",
+    "title": "Where an integration's token comes from",
+    "input": {
+      "message": "where does a GitHub token come from when the agent opens an issue"
+    },
+    "expect": {
+      "kind": "retrieves",
+      "relevant": [
+        {
+          "source": "website/content/integrations/github.md",
+          "mustContain": "credentialRef"
+        }
+      ]
+    },
+    "tags": [
+      "docs-corpus"
+    ]
+  },
+  {
+    "id": "rq-07",
+    "dimension": "retrieval",
+    "title": "What a large catalogue costs per turn",
+    "input": {
+      "message": "how much context does a big tool catalogue cost on every turn"
+    },
+    "expect": {
+      "kind": "retrieves",
+      "relevant": [
+        {
+          "source": "docs/24-tool-selection-at-scale.md",
+          "mustContain": "catalog tokens"
+        }
+      ]
+    },
+    "tags": [
+      "docs-corpus"
+    ]
+  },
+  {
+    "id": "rq-08",
+    "dimension": "retrieval",
+    "title": "Guardrails for personal data",
+    "input": {
+      "message": "what guardrails does the platform ship for personal data"
+    },
+    "expect": {
+      "kind": "retrieves",
+      "relevant": [
+        {
+          "source": "website/content/concepts/guardrails.md",
+          "mustContain": "PII"
+        }
+      ]
+    },
+    "tags": [
+      "docs-corpus"
+    ]
+  },
+  {
+    "id": "rq-09",
+    "dimension": "retrieval",
+    "title": "Surviving a worker crash",
+    "input": {
+      "message": "how does a run survive the worker process being killed halfway through"
+    },
+    "expect": {
+      "kind": "retrieves",
+      "relevant": [
+        {
+          "source": "docs/04-durable-runtime-and-hitl.md",
+          "mustContain": "checkpoint"
+        }
+      ]
+    },
+    "tags": [
+      "docs-corpus"
+    ]
+  },
+  {
+    "id": "rq-10",
+    "dimension": "retrieval",
+    "title": "Measuring and capping spend",
+    "input": {
+      "message": "how is spend measured and capped per tenant"
+    },
+    "expect": {
+      "kind": "retrieves",
+      "relevant": [
+        {
+          "source": "docs/12-usage-and-accounting.md",
+          "mustContain": "quota"
+        }
+      ]
+    },
+    "tags": [
+      "docs-corpus"
+    ]
+  },
+  {
+    "id": "rq-11",
+    "dimension": "retrieval",
+    "title": "What is remembered between conversations",
+    "input": {
+      "message": "what does the assistant remember about a person between conversations"
+    },
+    "expect": {
+      "kind": "retrieves",
+      "relevant": [
+        {
+          "source": "docs/15-user-memory.md",
+          "mustContain": "principal"
+        }
+      ]
+    },
+    "tags": [
+      "docs-corpus"
+    ]
+  },
+  {
+    "id": "rq-12",
+    "dimension": "retrieval",
+    "title": "How long data is kept",
+    "input": {
+      "message": "how long is conversation data kept before it is deleted"
+    },
+    "expect": {
+      "kind": "retrieves",
+      "relevant": [
+        {
+          "source": "docs/18-data-retention.md",
+          "mustContain": "retention"
+        }
+      ]
+    },
+    "tags": [
+      "docs-corpus"
+    ]
+  },
+  {
+    "id": "rq-13",
+    "dimension": "retrieval",
+    "title": "Keeping MCP tools apart",
+    "input": {
+      "message": "how are tools imported from an MCP server kept apart from first-party ones"
+    },
+    "expect": {
+      "kind": "retrieves",
+      "relevant": [
+        {
+          "source": "docs/10-mcp-integration.md",
+          "mustContain": "mcp__"
+        }
+      ]
+    },
+    "tags": [
+      "docs-corpus"
+    ]
+  },
+  {
+    "id": "rq-14",
+    "dimension": "retrieval",
+    "title": "Which language the assistant answers in",
+    "input": {
+      "message": "which language does the assistant reply in"
+    },
+    "expect": {
+      "kind": "retrieves",
+      "relevant": [
+        {
+          "source": "docs/14-localization.md",
+          "mustContain": "locale"
+        }
+      ]
+    },
+    "tags": [
+      "docs-corpus"
+    ]
+  },
+  {
+    "id": "rq-15",
+    "dimension": "retrieval",
+    "title": "Concurrency the runtime was tested at",
+    "input": {
+      "message": "how many concurrent runs has the runtime been tested with"
+    },
+    "expect": {
+      "kind": "retrieves",
+      "relevant": [
+        {
+          "source": "docs/16-load-and-resilience.md",
+          "mustContain": "throughput"
+        }
+      ]
+    },
+    "tags": [
+      "docs-corpus"
+    ]
+  },
+  {
+    "id": "rq-16",
+    "dimension": "retrieval",
+    "title": "Which databases are supported",
+    "input": {
+      "message": "which databases can store the platform's data"
+    },
+    "expect": {
+      "kind": "retrieves",
+      "relevant": [
+        {
+          "source": "docs/02-core-and-persistence.md",
+          "mustContain": "RLS"
+        }
+      ]
+    },
+    "tags": [
+      "docs-corpus"
+    ]
+  },
+  {
+    "id": "rq-17",
+    "dimension": "retrieval",
+    "title": "Writing your own tool",
+    "input": {
+      "message": "how do I write my own tool and give it to an agent"
+    },
+    "expect": {
+      "kind": "retrieves",
+      "relevant": [
+        {
+          "source": "website/content/getting-started/first-tool.md",
+          "mustContain": "defineTool"
+        }
+      ]
+    },
+    "tags": [
+      "docs-corpus"
+    ]
+  },
+  {
+    "id": "rq-18",
+    "dimension": "retrieval",
+    "title": "A document that tells the model to misbehave",
+    "input": {
+      "message": "what does the platform do when a document tells the model to ignore its instructions"
+    },
+    "expect": {
+      "kind": "retrieves",
+      "relevant": [
+        {
+          "source": "docs/17-security-review.md",
+          "mustContain": "untrusted"
+        }
+      ]
+    },
+    "tags": [
+      "docs-corpus"
+    ]
+  }
+]

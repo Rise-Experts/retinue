@@ -136,19 +136,48 @@ describe("egress — AC-2", () => {
    * route the destination through `validateEndpoint`. Asserting that today's two paths are validated would pass
    * forever and say nothing about the third.
    */
-  it("has no outbound HTTP call outside the MCP transport and the storage adapter", () => {
-    const allowed = ["adapters/supabase/storage.ts", "mcp/index.ts", "mcp/egress.ts"];
+  it("has no outbound HTTP call or captured fetch outside the audited paths", () => {
+    /**
+     * The allow-list, each entry with the reason its destination is auditable.
+     *
+     * It grew from three to five when #219 added an embedding adapter, and finding out *why* it had been three
+     * exposed a hole: this check matched `fetch(` and `config.fetch(` and not **`?? fetch`**. `toolkit/http.ts`
+     * — the platform's own client, the one every web tool goes through — captures the global that way and had
+     * therefore never appeared here. It was not a vulnerability (its destination goes through
+     * `validateHttpEgress`, which is exactly the property AC-2 wants) but the audit was passing it for the wrong
+     * reason, and the next such file would have passed too.
+     *
+     * | Path | Why its destination is auditable |
+     * |---|---|
+     * | `mcp/index.ts`, `mcp/egress.ts` | The MCP transport, through `validateEndpoint` |
+     * | `adapters/supabase/storage.ts` | Operator-configured storage host |
+     * | `toolkit/http.ts` | The one client the web tools use, through `validateHttpEgress` — the *model-directed* path, and the reason that function exists |
+     * | `adapters/embeddings/openai.ts` | Operator-configured endpoint, never named by a model |
+     */
+    const allowed = [
+      "adapters/supabase/storage.ts",
+      "mcp/index.ts",
+      "mcp/egress.ts",
+      "toolkit/http.ts",
+      "adapters/embeddings/openai.ts",
+    ];
     const offenders: string[] = [];
     for (const file of sourceFiles()) {
       const rel = file.slice(SRC.length).replace(/^\/+/, "");
       if (allowed.includes(rel)) continue;
       const source = codeOnly(readFileSync(file, "utf8"));
-      // `fetch(` and `config.fetch(` both: an injected fetch is still an outbound call.
-      //
-      // Deliberately *not* also flagging URL literals. My first version did, and it flagged `security/findings.ts`
-      // -- whose own text quotes the URL from SEC-001. A URL in prose is not an outbound call, and a check that
-      // fires on documentation is one someone will loosen until it fires on nothing.
-      if (/(^|[^.\w])fetch\s*\(/.test(source)) offenders.push(rel);
+      /**
+       * A call **or** a capture. `fetch(`, `config.fetch(`, and `?? fetch` / `= fetch` / `: fetch`.
+       *
+       * The capture is the one that was missing, and it is the more common shape in this codebase: every
+       * injectable client writes `const doFetch = config.fetchImpl ?? fetch`, which is an outbound capability
+       * acquired without ever writing `fetch(`.
+       *
+       * Deliberately *not* also flagging URL literals. My first version did, and it flagged
+       * `security/findings.ts` — whose own text quotes the URL from SEC-001. A URL in prose is not an outbound
+       * call, and a check that fires on documentation is one someone will loosen until it fires on nothing.
+       */
+      if (/(^|[^.\w])fetch\s*\(/.test(source) || /(\?\?|=|:)\s*fetch\b/.test(source)) offenders.push(rel);
     }
     expect(offenders, `outbound HTTP outside the audited paths: ${offenders.join(", ")}`).toEqual([]);
   });

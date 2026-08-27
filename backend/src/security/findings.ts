@@ -182,21 +182,31 @@ export const FINDINGS: readonly Finding[] = [
     id: "SEC-006",
     area: "egress",
     severity: "informational",
-    title: "There is no research or web-fetch path to audit",
+    title: "The web-fetch path exists now, and the audit had been passing it for the wrong reason",
     impact:
       "AC-2 asks for the allow-list to be enforced at a single point covered by *both* the research and MCP paths. " +
-      "The research path does not exist in this package: the only outbound HTTP is the MCP transport and the " +
-      "Supabase storage adapter, whose destination is operator configuration rather than a model's choice. So the " +
-      "single-point property holds trivially today and is not evidence that it will hold once research lands.",
-    foundBy: "grepping for every `fetch(` call in the tree and finding two, neither model-directed",
+      "When this was written the research path did not exist and the property held trivially. It exists now — " +
+      "REQ-039 (#188) shipped `fetch_url`, `fetch_json`, `http_request` and `http_write`, all through " +
+      "`toolkit/http.ts`, and #219 added an embedding adapter — so the property is real rather than trivial: the " +
+      "model-directed path goes through `validateHttpEgress`, which refuses private ranges, cloud metadata, " +
+      "non-https schemes, credentials in the URL and followed redirects.\n\n" +
+      "The finding that replaces the original: the audit asserting 'no other outbound call' matched `fetch(` and " +
+      "not `?? fetch`, and every injectable client in this codebase captures the global that way. So " +
+      "`toolkit/http.ts` had never appeared in that check at all. Not a vulnerability — its destination was " +
+      "policed throughout — but the check was passing it by accident, and would have passed the next such file " +
+      "the same way.",
+    foundBy:
+      "adding a third outbound path in #219 and asking why the audit's allow-list had only ever had three " +
+      "entries when the tree had four outbound sites",
     resolution: {
       kind: "accepted",
       owner: "azeem@snipe-solutions.de",
       reason:
-        "Nothing to fix; recording it so the AC is not read as stronger than the evidence. A test asserts the " +
-        "*absence* of any other outbound call, so adding one fails the audit and forces the author to route it " +
-        "through `validateEndpoint` — which is the durable version of this guarantee.",
-      revisitBy: "when a research or web-fetch tool is implemented",
+        "The audit now matches a captured `fetch` as well as a called one, and its allow-list names five paths " +
+        "with the reason each destination is auditable. Adding a sixth fails the test and forces its author to " +
+        "say which policy governs the destination — which is the durable version of this guarantee, and is what " +
+        "the original entry was reaching for before there was anything to govern.",
+      revisitBy: "2027-06-30",
     },
   },
 ];

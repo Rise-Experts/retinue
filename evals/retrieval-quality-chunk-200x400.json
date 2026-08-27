@@ -1,0 +1,45 @@
+{
+  "corpus": {
+    "documents": 56,
+    "chunks": 858,
+    "embeddingModel": {
+      "modelId": "text-embedding-3-small",
+      "version": "1",
+      "dimensions": 1536
+    },
+    "chunking": {
+      "targetTokens": 200,
+      "maxTokens": 400,
+      "overlapBlocks": 1
+    }
+  },
+  "cases": 18,
+  "arms": [
+    {
+      "arm": "semantic",
+      "cases": 18,
+      "success5": 0.7777777777777778,
+      "docSuccess5": 0.9444444444444444,
+      "p1": 0.2777777777777778,
+      "p5": 0.27777777777777785,
+      "recall": 0.75,
+      "mrr": 0.48055555555555546,
+      "msPerQuery": 190
+    },
+    {
+      "arm": "hybrid",
+      "cases": 18,
+      "success5": 0.6666666666666666,
+      "docSuccess5": 0.9444444444444444,
+      "p1": 0.2777777777777778,
+      "p5": 0.2666666666666667,
+      "recall": 0.6666666666666666,
+      "mrr": 0.4462962962962963,
+      "msPerQuery": 207
+    }
+  ],
+  "navigateCost": {
+    "prompt": 0,
+    "completion": 0
+  }
+}

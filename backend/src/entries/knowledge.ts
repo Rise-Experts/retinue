@@ -16,3 +16,13 @@ export * from "../artifacts/index.js";
 export * from "../export/index.js";
 export * from "../export/pdf.js";
 export * from "../export/markdown.js";
+
+/**
+ * The one embedding adapter — REQ-050 (#209), task #219.
+ *
+ * Here rather than behind an `adapters/*` subpath because it carries no driver: it is a `fetch` to an
+ * OpenAI-shaped endpoint, so it adds nothing to a consumer's install. The Postgres and Redis adapters have their
+ * own subpaths because they each pull a client library in.
+ */
+export { DEFAULT_EMBEDDING_BATCH, DEFAULT_EMBEDDING_MODEL, createOpenAiEmbeddings } from "../adapters/embeddings/openai.js";
+export type { OpenAiEmbeddingsConfig } from "../adapters/embeddings/openai.js";

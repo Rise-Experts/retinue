@@ -249,3 +249,5 @@ export type EmbeddingPipeline = ReturnType<typeof createEmbeddingPipeline>;
 
 export * from "./chunking.js";
 export * from "./retrieval.js";
+
+export * from "./navigate.js";

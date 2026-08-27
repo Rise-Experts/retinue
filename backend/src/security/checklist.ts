@@ -227,6 +227,16 @@ export const CREDENTIAL_FIELD_EXEMPTIONS: readonly { readonly file: string; read
       "credential must exist in memory to authenticate; what AC-1 forbids is storing, passing, returning or " +
       "logging one, and none of those happen here.",
   },
+  {
+    file: "adapters/embeddings/openai.ts",
+    reason:
+      "`OpenAiEmbeddingsConfig.apiKey` is the same shape as the model provider's, for the same reason and with " +
+      "the same limits: a key the host supplies at wiring time and this adapter puts in one Authorization " +
+      "header. Process-local — never written to a table, never in a message part or a result envelope, and no " +
+      "allowlisted log field could carry it. It is also never reachable from a model: an embedding is computed " +
+      "for a chunk the platform is indexing, not for text a model asked about, so there is no input path that " +
+      "could name or read it.",
+  },
 ];
 
 /** Checks with no automated backing. The set a person must actually walk at each release. */

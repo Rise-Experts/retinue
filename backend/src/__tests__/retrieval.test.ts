@@ -17,6 +17,7 @@ import {
   RRF_K,
   createExactTermReranker,
   createEmbeddingPipeline,
+  createNavigator,
   createRetriever,
   type EmbeddingProvider,
   type RetrievalMode,
@@ -589,5 +590,111 @@ describe("AC-6: results carry what citations need", () => {
       embeddings: semanticEmbedder,
     }).retrieve(ctx, { query: "ERR-4021", authSubjects: ["convo-1"], limit: 3 });
     expect(outcome.found && outcome.hits[0]?.reference.locator).toBe("Quarterly Review > Incidents");
+  });
+});
+
+describe("the navigate mode — REQ-050 (#209), task #219", () => {
+  /**
+   * A spike, and these are the properties that make it safe to *have* rather than the ones that make it good.
+   * How good it is, is `evals/retrieval-quality.mjs`, and `docs/26-retrieval-quality.md` says do not ship it.
+   */
+  const outlineFor = (sourceId: string) => ({
+    sourceType: "file" as const,
+    sourceId,
+    title: sourceId,
+    headings: ["Overview", "Details"],
+  });
+
+  it("refuses by name when no navigator is wired, rather than falling back to embeddings", async () => {
+    // The one way this spike could have done harm: a caller that asked for navigation, silently got semantic
+    // search, and attributed the results to the wrong mechanism.
+    const { retriever } = await retrieverFor();
+    const outcome = await retriever.retrieve(ctx, { query: "anything", authSubjects: ["convo-1"], limit: 3, mode: "navigate" });
+    expect(outcome.found).toBe(false);
+    if (!outcome.found) {
+      expect(outcome.reason).toBe("not-configured");
+      expect(outcome.mode).toBe("navigate");
+    }
+  });
+
+  it("reads only the documents the chooser named", async () => {
+    const backend = await indexed();
+    const asked: string[] = [];
+    const navigator = createNavigator({
+      store: backend.store,
+      catalogue: { list: async () => CORPUS.map((doc) => outlineFor(doc.id)) },
+      chooser: {
+        id: "fixed",
+        async choose({ catalogue }) {
+          asked.push(...catalogue.map((outline) => outline.sourceId));
+          return [CORPUS[0]!.id];
+        },
+      },
+    });
+    const retriever = createRetriever({
+      vector: backend.index,
+      keyword: backend.keyword,
+      embeddings: semanticEmbedder,
+      navigator,
+    });
+    const outcome = await retriever.retrieve(ctx, {
+      query: CORPUS[0]!.text.split(" ").slice(0, 4).join(" "),
+      authSubjects: ["convo-1"],
+      limit: 5,
+      mode: "navigate",
+    });
+    // The chooser saw the whole catalogue and picked one; only that document's chunks came back.
+    expect(asked.length).toBe(CORPUS.length);
+    expect(outcome.found).toBe(true);
+    if (outcome.found) {
+      expect(new Set(outcome.hits.map((hit) => hit.reference.sourceId))).toEqual(new Set([CORPUS[0]!.id]));
+      expect(outcome.hits[0]?.signals).toEqual(["navigate"]);
+    }
+  });
+
+  it("treats an empty choice as no match, which is a thing a cosine distance cannot say", async () => {
+    const backend = await indexed();
+    const navigator = createNavigator({
+      store: backend.store,
+      catalogue: { list: async () => CORPUS.map((doc) => outlineFor(doc.id)) },
+      chooser: { id: "abstains", choose: async () => [] },
+    });
+    const retriever = createRetriever({ vector: backend.index, keyword: backend.keyword, embeddings: semanticEmbedder, navigator });
+    const outcome = await retriever.retrieve(ctx, { query: "photosynthesis", authSubjects: ["convo-1"], limit: 5, mode: "navigate" });
+    expect(outcome.found).toBe(false);
+    if (!outcome.found) expect(outcome.reason).toBe("no-match");
+  });
+
+  it("ignores a document the chooser invented", async () => {
+    // A chooser naming something outside the catalogue it was given has hallucinated it, and fetching it would be
+    // a model choosing which document to read rather than choosing from a list.
+    const backend = await indexed();
+    const navigator = createNavigator({
+      store: backend.store,
+      catalogue: { list: async () => [outlineFor(CORPUS[0]!.id)] },
+      chooser: { id: "invents", choose: async () => ["../../etc/passwd", CORPUS[0]!.id] },
+    });
+    const retriever = createRetriever({ vector: backend.index, keyword: backend.keyword, embeddings: semanticEmbedder, navigator });
+    const outcome = await retriever.retrieve(ctx, { query: CORPUS[0]!.text.slice(0, 20), authSubjects: ["convo-1"], limit: 5, mode: "navigate" });
+    expect(outcome.found).toBe(true);
+    if (outcome.found) expect(new Set(outcome.hits.map((hit) => hit.reference.sourceId))).toEqual(new Set([CORPUS[0]!.id]));
+  });
+
+  it("says nothing is indexed when the catalogue is empty, rather than asking a model about nothing", async () => {
+    const backend = await indexed();
+    const navigator = createNavigator({
+      store: backend.store,
+      catalogue: { list: async () => [] },
+      chooser: {
+        id: "never-called",
+        choose: async () => {
+          throw new Error("the chooser must not be asked about an empty catalogue");
+        },
+      },
+    });
+    const retriever = createRetriever({ vector: backend.index, keyword: backend.keyword, embeddings: semanticEmbedder, navigator });
+    const outcome = await retriever.retrieve(ctx, { query: "anything", authSubjects: ["convo-1"], limit: 5, mode: "navigate" });
+    expect(outcome.found).toBe(false);
+    if (!outcome.found) expect(outcome.reason).toBe("nothing-indexed");
   });
 });
