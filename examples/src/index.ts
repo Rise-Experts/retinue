@@ -226,6 +226,16 @@ const TOOLKIT_READ_TOOLS = [
   "instagram_get_account",
   "instagram_list_media",
   "instagram_get_media",
+  // The public forums — REQ-053 (#227). Reads only for X and Reddit here: researching a topic is what an agent
+  // is actually asked to do on them, and the writes below are one apiece.
+  "x_search_posts",
+  "x_get_post",
+  "x_get_user",
+  "x_list_user_posts",
+  "reddit_search",
+  "reddit_get_post",
+  "reddit_list_subreddit",
+  "reddit_get_user",
 ] as const;
 
 /**
@@ -253,6 +263,11 @@ const TOOLKIT_WRITE_TOOLS = [
   // clearest `publishing` act in the catalogue, and a gate nothing exercises is a gate nobody trusts.
   "whatsapp_send_template",
   "instagram_publish_media",
+  // `x_delete_post` is granted for the same reason `github_merge_pull_request` is: a `destroys()` tool that no
+  // role may call is a gate nothing exercises, and this is the most public irreversible act in the catalogue.
+  "x_post",
+  "x_delete_post",
+  "reddit_comment",
 ] as const;
 
 // The imported MCP tools come from `./mcp.ts`, derived from the administrator classification there.

@@ -26,6 +26,8 @@ import { createJiraToolkit } from "@retinue/tools-jira";
 import { createLinearToolkit } from "@retinue/tools-linear";
 import { createMetaToolkit } from "@retinue/tools-meta";
 import { createNotionToolkit } from "@retinue/tools-notion";
+import { createRedditToolkit } from "@retinue/tools-reddit";
+import { createXToolkit } from "@retinue/tools-x";
 import { createSlackToolkit } from "@retinue/tools-slack";
 import { braveSearch, searxngSearch, serperSearch, tavilySearch } from "@retinue/tools-search";
 import type { SearchProvider, ToolProvider } from "@retinue/agentkit";
@@ -136,6 +138,37 @@ export const exampleToolkits = (env: ToolkitEnv, fetchImpl?: typeof fetch): read
         ...(env.WHATSAPP_PHONE_NUMBER_ID === undefined ? {} : { phoneNumberId: env.WHATSAPP_PHONE_NUMBER_ID }),
         ...(env.WHATSAPP_BUSINESS_ACCOUNT_ID === undefined ? {} : { wabaId: env.WHATSAPP_BUSINESS_ACCOUNT_ID }),
         ...(env.INSTAGRAM_ACCOUNT_ID === undefined ? {} : { instagramAccountId: env.INSTAGRAM_ACCOUNT_ID }),
+        ...wiring,
+      }),
+    );
+  }
+
+  if (env.X_BEARER_TOKEN !== undefined) {
+    providers.push(
+      createXToolkit({
+        credentialRef: "x",
+        resolver: createStaticCredentialResolver({ x: env.X_BEARER_TOKEN }),
+        // The tier is a fact about the subscription, so the deployment states it and reads report it.
+        ...(env.X_TIER === undefined ? {} : { tier: env.X_TIER as "free" | "basic" | "pro" | "enterprise" }),
+        ...wiring,
+      }),
+    );
+  }
+
+  /**
+   * Reddit needs a `User-Agent` identifying *this* deployment, so it is configuration rather than a constant:
+   * a shared default would make every deployment look like one client to Reddit's rate limiter.
+   */
+  if (env.REDDIT_ACCESS_TOKEN !== undefined && env.REDDIT_USER_AGENT_CONTACT !== undefined) {
+    providers.push(
+      createRedditToolkit({
+        credentialRef: "reddit",
+        resolver: createStaticCredentialResolver({ reddit: env.REDDIT_ACCESS_TOKEN }),
+        userAgent: {
+          appId: env.REDDIT_APP_ID ?? "retinue-example",
+          version: env.REDDIT_APP_VERSION ?? "0.3.0",
+          contact: env.REDDIT_USER_AGENT_CONTACT,
+        },
         ...wiring,
       }),
     );

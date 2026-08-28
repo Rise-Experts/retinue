@@ -1,7 +1,7 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "lib": ["ES2022", "DOM"],
+    "lib": ["ES2022"],
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "strict": true,
@@ -21,18 +21,5 @@
   },
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist", "src/**/__tests__/**", "src/**/*.test.ts"],
-  "references": [
-    { "path": "../backend" },
-    { "path": "../frontend" },
-    { "path": "../tools/confluence" },
-    { "path": "../tools/github" },
-    { "path": "../tools/jira" },
-    { "path": "../tools/linear" },
-    { "path": "../tools/meta" },
-    { "path": "../tools/notion" },
-    { "path": "../tools/reddit" },
-    { "path": "../tools/x" },
-    { "path": "../tools/slack" },
-    { "path": "../tools/search" }
-  ]
+  "references": [{ "path": "../../backend" }]
 }

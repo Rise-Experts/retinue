@@ -68,7 +68,19 @@ export const namesConstantFor = (dir) => `${dir.toUpperCase().replace(/-/g, "_")
  * than parsing names is deliberate: a toolkit file has other `name:` fields — a search provider's name, for one —
  * and a name parser would report those as unclassified tools.
  */
-export const declarationCount = (source) => [...source.matchAll(/\b(?:defineTool|confirms|destroys)\s*\(/g)].length;
+export const declarationCount = (source) => [...withoutComments(source).matchAll(/\b(?:defineTool|confirms|destroys)\s*\(/g)].length;
+
+/**
+ * Source with comments removed, so a *mention* of a helper is not counted as a call to it.
+ *
+ * `tools/x` documents why `x_delete_post` uses `destroys()` — twice, in prose — and the count jumped to 8 for
+ * six tools. That is a check firing on correct code, and the correct code is the well-commented kind this
+ * repository writes everywhere, so the check is what had to change.
+ *
+ * Strings are left alone: `"destroys("` inside a string literal is not a shape anybody writes, and stripping
+ * string contents properly would need a real lexer for no benefit.
+ */
+export const withoutComments = (source) => source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/[^\n]*/g, "$1");
 
 /**
  * Every non-test source file in a toolkit package.

@@ -50,6 +50,8 @@ export const RELEASABLE = {
   "tools-linear": { workspace: "@retinue/tools-linear", dir: "tools/linear" },
   "tools-meta": { workspace: "@retinue/tools-meta", dir: "tools/meta" },
   "tools-notion": { workspace: "@retinue/tools-notion", dir: "tools/notion" },
+  "tools-reddit": { workspace: "@retinue/tools-reddit", dir: "tools/reddit" },
+  "tools-x": { workspace: "@retinue/tools-x", dir: "tools/x" },
   "tools-slack": { workspace: "@retinue/tools-slack", dir: "tools/slack" },
   "tools-search": { workspace: "@retinue/tools-search", dir: "tools/search" },
 };

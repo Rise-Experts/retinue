@@ -17,6 +17,7 @@ export {
   REQUEST_TIMEOUT_MS,
   createHttpClient,
   readBounded,
+  rateLimitHeadersOf,
   retryAfterOf,
 } from "./http.js";
 export type { HttpClient, HttpClientConfig, HttpFailure, HttpOutcome, HttpRequest, HttpSuccess } from "./http.js";

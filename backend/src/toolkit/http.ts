@@ -79,6 +79,16 @@ export type HttpFailure = {
    * Both wire formats: a delay in seconds, and an HTTP date.
    */
   readonly retryAfterMs?: number;
+  /**
+   * The vendor's rate-limit headers, and **only** those — see `RATE_LIMIT_HEADERS`.
+   *
+   * An allowlist rather than every header, for two reasons. A failure travels into error messages and audit
+   * records, so carrying `set-cookie` or an auth echo would be a leak with no purpose. And a bounded set says
+   * what this field is *for*: `retryAfterMs` answers "how long", and these answer the question X forces —
+   * **which** limit was hit. A 15-minute burst limit and a 24-hour cap are both `429`, and treating the second
+   * as retryable makes a client sit in backoff until tomorrow.
+   */
+  readonly headers?: Readonly<Record<string, string>>;
 };
 
 export type HttpSuccess = {
@@ -143,6 +153,24 @@ export type HttpClient = {
  * for a six-hour wait inside a request path is a vendor to give up on, not to obey.
  */
 const MAX_RETRY_AFTER_MS = 5 * 60_000;
+
+/**
+ * The response headers a failure carries, by prefix.
+ *
+ * These are the shapes vendors actually use: `x-ratelimit-*` (GitHub, Reddit), `x-rate-limit-*` (X's
+ * per-15-minute window), and `x-user-limit-24hour-*` / `x-app-limit-24hour-*` (X's daily caps, which are a
+ * different limit with a different remedy).
+ */
+const RATE_LIMIT_HEADERS = ["retry-after", "x-ratelimit-", "x-rate-limit-", "x-user-limit-", "x-app-limit-"];
+
+export const rateLimitHeadersOf = (headers: Headers): { headers?: Readonly<Record<string, string>> } => {
+  const kept: Record<string, string> = {};
+  headers.forEach((value, name) => {
+    const lower = name.toLowerCase();
+    if (RATE_LIMIT_HEADERS.some((prefix) => lower === prefix || lower.startsWith(prefix))) kept[lower] = value;
+  });
+  return Object.keys(kept).length === 0 ? {} : { headers: kept };
+};
 
 export const retryAfterOf = (headers: Headers): { retryAfterMs?: number } => {
   const raw = headers.get("retry-after");
@@ -230,6 +258,7 @@ export const createHttpClient = (config: HttpClientConfig = {}): HttpClient => {
             status: response.status,
             reason: `That URL returned ${response.status}${text.trim() === "" ? "" : `: ${text.slice(0, 500)}`}`,
             ...retryAfterOf(response.headers),
+            ...rateLimitHeadersOf(response.headers),
           };
         }
 

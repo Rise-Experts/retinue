@@ -35,6 +35,12 @@
       "path": "./tools/notion"
     },
     {
+      "path": "./tools/reddit"
+    },
+    {
+      "path": "./tools/x"
+    },
+    {
       "path": "./tools/search"
     },
     {
