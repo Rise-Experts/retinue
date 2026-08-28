@@ -39,16 +39,23 @@ export const createMemoryConnectionStore = (now: () => string = () => new Date()
       return row;
     },
 
-    async get({ tenantId, id }) {
+    async get({ tenantId, id, kind }) {
       const row = of(tenantId).get(id);
+      // A caller that did not ask for an app registration must not receive one — see `ConnectionKind`.
+      if (row !== undefined && (row.kind ?? "connection") !== (kind ?? "connection")) return null;
       // A revoked connection reads as absent. Anything else would let a caller resolve a credential somebody
       // deliberately withdrew.
       return row === undefined || row.revokedAt !== undefined ? null : row;
     },
 
-    async list({ tenantId, provider }) {
+    async list({ tenantId, provider, kind }) {
       return [...of(tenantId).values()]
-        .filter((c) => c.revokedAt === undefined && (provider === undefined || c.provider === provider))
+        .filter(
+          (c) =>
+            c.revokedAt === undefined &&
+            (provider === undefined || c.provider === provider) &&
+            (c.kind ?? "connection") === (kind ?? "connection"),
+        )
         .sort((a, b) => (a.createdAt === b.createdAt ? a.id.localeCompare(b.id) : a.createdAt.localeCompare(b.createdAt)));
     },
 

@@ -96,6 +96,42 @@ endpoint is *reported*, not silently skipped.
 **Revocation takes effect on runs already in flight**, because a credential is resolved per call. A run that
 resolved one holds it for that call only; the next goes back to the store and fails.
 
+## Bringing your own OAuth app
+
+A customer with a registered Slack app, GitHub App or Google Cloud project can connect through **theirs** rather
+than the deployment's. For three providers this is the difference between working and not:
+
+| Provider | Why a shared app is not enough |
+|---|---|
+| **Meta** (WhatsApp, Instagram) | App review is per app. A shared app's approved use case may not cover a customer's. |
+| **X** | The access tier is per app. A customer paying for a higher tier gains nothing from a shared app on a lower one. |
+| **Google Workspace** | An enterprise whose security team will not approve a third-party app in their tenant has no other route. |
+
+```ts
+import { registerTenantOAuthApp, resolveOAuthClient, configForTenant } from "@retinue/agentkit/connections";
+```
+
+Register once per tenant per provider, then resolve before each flow. `resolveOAuthClient` reports
+`source: "tenant" | "deployment"`, so a fallback is visible rather than silent.
+
+Four things hold:
+
+- **The client secret is sealed by the same cipher as every token.** It is exactly as much a secret and exactly
+  as much the tenant's. The client id, redirect URIs and scopes stay readable, so a settings screen renders
+  without a key.
+- **The tenant's redirect URIs *become* the allowlist — they do not widen it.** Still matched exactly, still
+  refusing `https://acme.example.com.evil.tld`, and the deployment's own URI is not automatically allowed for a
+  tenant running their own app. This is the obvious place that check gets loosened into a wildcard, and #262's
+  second defence would go with it.
+- **Scopes are per app**, because a tenant's may be approved for a different set.
+- **A token is not usable through a different client.** Refresh and revocation both authenticate as the client,
+  so a connection whose client changed fails loudly, naming both — the provider's own answer is "invalid
+  client", which reads as *your integration is broken* and sends nobody to the cause.
+
+Removing a registration **does not** re-point live connections at the shared app. Those tokens were issued by a
+client that no longer participates, and the shared app can neither refresh nor revoke them — so they fail with a
+message saying so, rather than being silently swapped.
+
 ## Limits
 
 **No router, and no session cookie.** Mounting and authentication are the host's. What is offered here is the

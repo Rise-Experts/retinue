@@ -24,6 +24,7 @@ import type { SqlExecutor } from "./sql.js";
 
 type Row = {
   readonly id: string;
+  readonly kind: string;
   readonly provider: string;
   readonly label: string | null;
   readonly mode: string;
@@ -44,6 +45,7 @@ const iso = (value: Date | string): string => (value instanceof Date ? value.toI
 
 const toConnection = (row: Row): Connection => ({
   id: row.id,
+  kind: row.kind as never,
   provider: row.provider,
   ...(row.label === null ? {} : { label: row.label }),
   mode: row.mode as AuthMode,
@@ -62,7 +64,7 @@ const toConnection = (row: Row): Connection => ({
   ...(row.revoked_at === null ? {} : { revokedAt: iso(row.revoked_at) }),
 });
 
-const COLUMNS = `id, provider, label, mode, scheme, metadata, granted_scopes,
+const COLUMNS = `id, kind, provider, label, mode, scheme, metadata, granted_scopes,
   secret_key_id, secret_algorithm, secret_nonce, secret_ciphertext,
   expires_at, created_at, updated_at, revoked_at`;
 
@@ -73,9 +75,9 @@ export const createPostgresConnectionStore = (sql: SqlExecutor): ConnectionStore
   async create({ tenantId, connection }: TenantScope & { connection: ConnectionInput }) {
     const rows = await sql.query<Row>(
       `INSERT INTO connections (
-         tenant_id, id, provider, label, mode, scheme, metadata, granted_scopes,
+         tenant_id, id, kind, provider, label, mode, scheme, metadata, granted_scopes,
          secret_key_id, secret_algorithm, secret_nonce, secret_ciphertext, expires_at
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11,$12,$13)
+       ) VALUES ($1,$2,$14,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11,$12,$13)
        -- No upsert: a second create for the same id is a caller bug, and silently overwriting a credential is
        -- the worst possible resolution of it.
        RETURNING ${COLUMNS}`,
@@ -93,6 +95,7 @@ export const createPostgresConnectionStore = (sql: SqlExecutor): ConnectionStore
         connection.sealed.nonce,
         connection.sealed.ciphertext,
         connection.expiresAt ?? null,
+        connection.kind ?? "connection",
       ],
     );
     const row = rows[0];
@@ -101,22 +104,25 @@ export const createPostgresConnectionStore = (sql: SqlExecutor): ConnectionStore
     return toConnection(row);
   },
 
-  async get({ tenantId, id }) {
+  async get({ tenantId, id, kind }) {
     // `revoked_at IS NULL` here rather than in the caller: a revoked connection reading as present is how a
     // withdrawn credential gets used once more.
     const rows = await sql.query<Row>(
-      `SELECT ${COLUMNS} FROM connections WHERE tenant_id = $1 AND id = $2 AND revoked_at IS NULL`,
-      [tenantId, id],
+      // `kind` in the predicate, not filtered afterwards: a caller that did not ask for an app registration
+      // must not receive one, and a post-filter is a place somebody later removes.
+      `SELECT ${COLUMNS} FROM connections
+       WHERE tenant_id = $1 AND id = $2 AND revoked_at IS NULL AND kind = $3`,
+      [tenantId, id, kind ?? "connection"],
     );
     return rows[0] === undefined ? null : toConnection(rows[0]);
   },
 
-  async list({ tenantId, provider }) {
+  async list({ tenantId, provider, kind }) {
     const rows = await sql.query<Row>(
       `SELECT ${COLUMNS} FROM connections
-       WHERE tenant_id = $1 AND revoked_at IS NULL AND ($2::text IS NULL OR provider = $2)
+       WHERE tenant_id = $1 AND revoked_at IS NULL AND ($2::text IS NULL OR provider = $2) AND kind = $3
        ORDER BY created_at, id`,
-      [tenantId, provider ?? null],
+      [tenantId, provider ?? null, kind ?? "connection"],
     );
     return rows.map(toConnection);
   },

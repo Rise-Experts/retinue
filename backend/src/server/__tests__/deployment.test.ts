@@ -129,10 +129,24 @@ describe("startup provisioning", () => {
     const second = await bootAgainst(sql, "auto");
     expect(second.result.schema.applied).toEqual([]);
 
-    const tables = await sql.query<{ count: string }>(
-      `SELECT count(*) AS count FROM information_schema.tables WHERE table_schema = 'public'`,
+    /**
+     * Named tables, not a count against `MIGRATIONS.length`.
+     *
+     * The count was a proxy for "provisioning actually built something", and it rested on migrations creating
+     * *more* tables than there are migrations — which stopped being true the moment one migration added a
+     * column rather than a table (#263's `0033_connection_kind`). The proxy then failed against a schema that
+     * was completely correct, which is a test firing on working code.
+     *
+     * Naming a few tables from different eras says the same thing and cannot drift that way. The ledger
+     * assertion above already covers "every migration ran".
+     */
+    const tables = await sql.query<{ table_name: string }>(
+      `SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'`,
     );
-    expect(Number(tables[0]?.count)).toBeGreaterThan(MIGRATIONS.length);
+    const present = new Set(tables.map((t) => t.table_name));
+    for (const table of ["conversations", "runs", "messages", "schema_migrations", "connections"]) {
+      expect(present.has(table), `${table} was not provisioned`).toBe(true);
+    }
   }, 60_000);
 
   it("applies nothing in off mode, which is the production default", async () => {

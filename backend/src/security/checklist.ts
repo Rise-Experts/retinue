@@ -219,6 +219,18 @@ export const SECURITY_CHECKS: readonly SecurityCheck[] = [
  */
 export const CREDENTIAL_FIELD_EXEMPTIONS: readonly { readonly file: string; readonly reason: string }[] = [
   {
+    file: "connections/oauth/client.ts",
+    reason:
+      "`ResolvedOAuthClient.clientSecret` and `registerTenantOAuthApp`'s parameter are a *tenant's own* OAuth " +
+      "client secret, which is exactly as much a secret as the deployment's above and is treated more " +
+      "carefully, not less: it is sealed by the same `SecretCipher` as every access token before it reaches " +
+      "the database, and the stored row holds ciphertext — asserted by the same raw-row test that covers " +
+      "connections. It exists in memory only between being opened for one flow and being handed to the token " +
+      "request, is never written to a table in plaintext, never placed in a message part, a result envelope or " +
+      "an audit row, and never put in an authorization URL. The readable half of a registration — client id, " +
+      "redirect URIs, scopes — is deliberately *not* sealed, so a settings screen renders without a key.",
+  },
+  {
     file: "connections/oauth/index.ts",
     reason:
       "`OAuthProviderConfig.clientSecret` is the *deployment's own* OAuth client secret, supplied by the host " +

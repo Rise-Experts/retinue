@@ -37,8 +37,25 @@ export type ConnectionId = string;
  * Everything here is safe to read and to log, including `sealed` — which is ciphertext, not a secret. The name
  * is the point: a connection list is a screen a person looks at, and rendering it must not need a key.
  */
+/**
+ * What a stored row *is* — REQ-063 (#259), task #263.
+ *
+ * A tenant's own OAuth **app registration** is the same kind of record as a connection: tenant-scoped,
+ * provider-keyed, holding exactly one sealed secret, with metadata beside it, revocable, and covered by the same
+ * retention promise. So it is the same table with a discriminator rather than a second port, a second adapter
+ * family, a second migration, a second RLS policy and a second conformance suite for a record of identical
+ * shape.
+ *
+ * The discriminator is load-bearing, not cosmetic: `list` and `get` return **connections only** unless asked
+ * otherwise, so a credential resolver can never hand a toolkit a client secret by accident.
+ */
+export const CONNECTION_KINDS = ["connection", "oauth-app"] as const;
+export type ConnectionKind = (typeof CONNECTION_KINDS)[number];
+
 export type Connection = {
   readonly id: ConnectionId;
+  /** Defaults to `"connection"`, so every existing row and caller means what it always did. */
+  readonly kind?: ConnectionKind;
   /** `github`, `slack`, `google` — the toolkit's own name, so a ref can be resolved without a second lookup. */
   readonly provider: string;
   /** What a person called it: "Acme org", "#support workspace". Absent for a connection nobody named. */
@@ -90,9 +107,14 @@ export type ConnectionPatch = {
  */
 export interface ConnectionStore {
   create(input: TenantScope & { readonly connection: ConnectionInput }): Promise<Connection>;
-  get(input: TenantScope & { readonly id: ConnectionId }): Promise<Connection | null>;
-  /** Every live connection, optionally narrowed to one provider. Revoked ones are excluded. */
-  list(input: TenantScope & { readonly provider?: string }): Promise<readonly Connection[]>;
+  get(input: TenantScope & { readonly id: ConnectionId; readonly kind?: ConnectionKind }): Promise<Connection | null>;
+  /**
+   * Every live connection, optionally narrowed to one provider. Revoked ones are excluded.
+   *
+   * `kind` defaults to `"connection"`, so a caller that does not ask cannot receive an OAuth app registration —
+   * which is what stops a credential resolver handing a toolkit a client secret.
+   */
+  list(input: TenantScope & { readonly provider?: string; readonly kind?: ConnectionKind }): Promise<readonly Connection[]>;
   update(input: TenantScope & { readonly id: ConnectionId; readonly patch: ConnectionPatch }): Promise<Connection>;
   /** Marks it revoked. The row stays, so the audit trail survives. */
   revoke(input: TenantScope & { readonly id: ConnectionId }): Promise<void>;
@@ -130,3 +152,4 @@ export * from "./cipher.js";
 export * from "./resolver.js";
 export * from "./oauth/index.js";
 export * from "./oauth/service.js";
+export * from "./oauth/client.js";

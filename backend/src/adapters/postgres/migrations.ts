@@ -1481,6 +1481,30 @@ export const MIGRATIONS: readonly Migration[] = [
     ],
     down: [`DROP TABLE IF EXISTS connections`],
   },
+  {
+    /**
+     * A tenant's *own* OAuth app registration, in the same table — task #263.
+     *
+     * Same shape as a connection in every respect that matters: tenant-scoped, provider-keyed, one sealed
+     * secret, metadata beside it, revocable, and covered by the same retention promise. A discriminator rather
+     * than a second table means one cipher, one RLS policy, one retention path and one conformance suite.
+     *
+     * Defaulted to `'connection'`, so every existing row keeps meaning what it meant.
+     */
+    id: "0033_connection_kind",
+    up: [
+      `ALTER TABLE connections ADD COLUMN IF NOT EXISTS kind text NOT NULL DEFAULT 'connection'`,
+      // A tenant has at most one registered app per provider; two would make "which client issued this token"
+      // ambiguous, and #263's AC-4 turns on that question being answerable.
+      `CREATE UNIQUE INDEX IF NOT EXISTS connections_one_app_per_provider_idx
+         ON connections (tenant_id, provider)
+         WHERE kind = 'oauth-app' AND revoked_at IS NULL`,
+    ],
+    down: [
+      `DROP INDEX IF EXISTS connections_one_app_per_provider_idx`,
+      `ALTER TABLE connections DROP COLUMN IF EXISTS kind`,
+    ],
+  },
 ];
 
 /**
