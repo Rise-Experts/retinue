@@ -136,3 +136,19 @@ opposite of age order.
 table, taking the index with it. Replacing the down statement with `SELECT 1` left the test green: it was
 asserting that dropping a table removes its indexes, which Postgres guarantees and nobody doubted. It now runs
 **this migration's own down statements** and asserts the table survives.
+
+## Connections — added by #261
+
+A tenant's third-party credentials are personal data of the sharpest kind: each row is somebody's access to
+somebody else's system. `ConnectionStore` therefore has two removals, and the difference matters.
+
+**`revoke` is soft.** The row stays with a `revoked_at`, and the connection stops resolving immediately. That is
+deliberate: *who connected this, and when was it removed* is a question a security review asks, and a hard
+delete makes it unanswerable.
+
+**`purge` is the hard delete**, and it is what this document's promises are made of. Deleting a tenant must
+remove their secrets — a soft-deleted credential is still a credential, and "we kept it for the audit trail" is
+not an answer to "delete my data". `purge` removes revoked connections too, for the same reason.
+
+The conformance suite holds both, on every adapter: that `purge` stops at the tenant boundary (a retention job
+for one customer must not remove another's access) and that it takes revoked rows with it.

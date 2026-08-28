@@ -31,6 +31,7 @@ export * from "./knowledge.js";
 export * from "./rollups.js";
 export * from "./usage-limits.js";
 export * from "./rate-limit.js";
+export * from "./connections.js";
 export * from "./evaluation.js";
 export * from "./invariants.js";
 
@@ -64,6 +65,8 @@ export const REGISTERED_PORTS: readonly PortCoverage[] = [
    * contract worth holding: the harness runs against the in-memory store and against a real Redis.
    */
   { port: "RateLimitStore", harness: "rateLimitStoreConformance" },
+  /** #261. Tenant-scoped storage like any other, holding a sealed blob it cannot read. */
+  { port: "ConnectionStore", harness: "connectionStoreConformance" },
   { port: "InteractionStore", harness: "interactionStoreConformance" },
   { port: "ApprovalGrantStore", harness: "approvalGrantStoreConformance" },
   { port: "CheckpointStore", harness: "checkpointStoreConformance" },
@@ -157,6 +160,8 @@ export const SCANNED_PORT_MODULES: readonly string[] = [
   // `RateLimitStore` would have shipped with no coverage record at all — the omission being invisible rather
   // than listed is exactly what `PLACEHOLDER_PORTS` and `DEFERRED_INFRASTRUCTURE_PORTS` exist to prevent.
   "src/usage/rate-limit.ts",
+  // #261.
+  "src/connections/index.ts",
 ];
 
 /** The adapters the conformance matrix reports on. */
@@ -257,6 +262,8 @@ export const ADAPTER_COVERAGE: readonly AdapterCoverage[] = [
     adapter: "postgres",
     implemented: [
       "ConversationStore",
+      // #261 — the store holds a sealed blob it cannot read.
+      "ConnectionStore",
       // #187, #186 — both harnesses run against the Postgres adapter in `postgres-conformance.test.ts`.
       "FlowDefinitionStore",
       "FlowExecutionStore",
@@ -345,6 +352,7 @@ export const ADAPTER_COVERAGE: readonly AdapterCoverage[] = [
  */
 export const HARNESS_MODULES: readonly string[] = [
   "src/testing/conformance/rate-limit.ts",
+  "src/testing/conformance/connections.ts",
   "src/testing/conformance/conversation-store.ts",
   "src/testing/conformance/flows.ts",
   "src/testing/conformance/run-store.ts",

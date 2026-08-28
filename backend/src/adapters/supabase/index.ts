@@ -14,6 +14,11 @@
 import type { AdapterCapability } from "../../persistence/index.js";
 
 // Conversation and session
+/**
+ * #261. Aliased rather than reimplemented, like every other store here: Supabase *is* Postgres, and a second
+ * implementation would make "identical results" something to prove per port rather than by identity.
+ */
+export { createPostgresConnectionStore as createSupabaseConnectionStore } from "../postgres/connections.js";
 export { createPostgresConversationStore as createSupabaseConversationStore } from "../postgres/conversation-store.js";
 export {
   createPostgresSessionStateStore as createSupabaseSessionStateStore,

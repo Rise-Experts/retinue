@@ -26,6 +26,7 @@ import {
   type TransactionRunner,
 } from "../adapters/postgres/index.js";
 import { asId } from "../core/ids.js";
+import { connectionStoreConformance } from "../testing/conformance/connections.js";
 import type { AgentId, ConversationId, MessageId, MessagePartId, SkillId } from "../core/ids.js";
 import type { AgentManifest } from "../agents/index.js";
 import { ADAPTER_COVERAGE, REGISTERED_PORTS, SUPABASE_NATIVE,
@@ -398,6 +399,8 @@ fileMetadataStoreConformance(() => {
  */
 flowDefinitionStoreConformance(() => supabase.createSupabaseFlowDefinitionStore(freshExecutor()));
 flowExecutionStoreConformance(() => supabase.createSupabaseFlowExecutionStore(freshExecutor()));
+/** #261. Aliased to the Postgres store, so this runs the same code the postgres column does — by identity. */
+connectionStoreConformance(() => supabase.createSupabaseConnectionStore(freshExecutor()));
 
 // ---------------------------------------------------------------------------------------------
 // The alias contract and the registry contract.
@@ -406,6 +409,8 @@ flowExecutionStoreConformance(() => supabase.createSupabaseFlowExecutionStore(fr
 /** Every Supabase factory and the Postgres factory it must be. */
 const ALIASES: readonly (readonly [keyof typeof supabase, keyof typeof postgres])[] = [
   ["createSupabaseConversationStore", "createPostgresConversationStore"],
+  // #261.
+  ["createSupabaseConnectionStore", "createPostgresConnectionStore"],
   ["createSupabaseFlowDefinitionStore", "createPostgresFlowDefinitionStore"],
   ["createSupabaseFlowExecutionStore", "createPostgresFlowExecutionStore"],
   ["createSupabaseRunStore", "createPostgresRunStore"],

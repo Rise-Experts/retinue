@@ -1435,6 +1435,52 @@ export const MIGRATIONS: readonly Migration[] = [
       `ALTER TABLE runs DROP COLUMN IF EXISTS input`,
     ],
   },
+  {
+    /**
+     * A tenant's connections to third-party providers — REQ-063 (#259), task #261.
+     *
+     * **Every secret column holds ciphertext.** The table is deliberately shaped so that only
+     * `secret_ciphertext` could ever contain one: the username of a basic credential, the header name of a
+     * custom-header one and every vendor identifier live in `metadata`, readable, because a connection list is
+     * a screen a person looks at and rendering it must not need a key.
+     *
+     * `key_id` is what makes rotation possible. A design without it has a first key that is permanent:
+     * re-sealing every row needs the old key, which a process that has retired it no longer has.
+     *
+     * `revoked_at` rather than a delete, because "who connected this and when was it removed" is a question a
+     * security review asks. `purge` is the one hard delete, and it exists for `docs/18`: a soft-deleted
+     * credential is still a credential, and "we kept it for the audit trail" is not an answer to "delete my
+     * data".
+     */
+    id: "0032_connections",
+    up: [
+      `CREATE TABLE IF NOT EXISTS connections (
+         tenant_id text NOT NULL,
+         id text NOT NULL,
+         provider text NOT NULL,
+         label text,
+         mode text NOT NULL,
+         scheme text NOT NULL,
+         metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+         granted_scopes text[],
+         secret_key_id text NOT NULL,
+         secret_algorithm text NOT NULL,
+         secret_nonce text NOT NULL,
+         secret_ciphertext text NOT NULL,
+         expires_at timestamptz,
+         created_at timestamptz NOT NULL DEFAULT now(),
+         updated_at timestamptz NOT NULL DEFAULT now(),
+         revoked_at timestamptz,
+         PRIMARY KEY (tenant_id, id)
+       )`,
+      // Listing a tenant's live connections for one provider is the hot path: it happens on every resolution
+      // of a bare `<provider>` ref.
+      `CREATE INDEX IF NOT EXISTS connections_tenant_provider_idx
+         ON connections (tenant_id, provider, created_at)
+         WHERE revoked_at IS NULL`,
+    ],
+    down: [`DROP TABLE IF EXISTS connections`],
+  },
 ];
 
 /**

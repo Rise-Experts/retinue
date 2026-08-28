@@ -47,6 +47,10 @@
       "types": "./dist/entries/usage.d.ts",
       "default": "./dist/entries/usage.js"
     },
+    "./connections": {
+      "types": "./dist/entries/connections.d.ts",
+      "default": "./dist/entries/connections.js"
+    },
     "./mcp": {
       "types": "./dist/entries/mcp.d.ts",
       "default": "./dist/entries/mcp.js"

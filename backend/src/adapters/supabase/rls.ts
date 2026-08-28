@@ -89,6 +89,13 @@ export const TENANT_SCOPED_TABLES: readonly RlsTable[] = [
   { table: "idempotency_keys" },
   { table: "skills" },
   { table: "mcp_connections" },
+  /**
+   * #261. A tenant's third-party credentials, and therefore the table where a missing policy would be worst:
+   * every row is somebody's access to somebody else's system, and the plain `tenant_id` predicate is exactly
+   * the isolation the port already enforces in its `WHERE` clauses. Defence in depth, and #91 is the reminder
+   * that a method accepting a tenant scope and not using it typechecks perfectly.
+   */
+  { table: "connections" },
   { table: "principal_memory", extraPredicate: PRINCIPAL_PREDICATE },
   // `blobs`, not the SPEC's `blob_refs`: BlobStore stores the value, and the metadata-and-pointer
   // design belongs to FileMetadataStore (#129) / ArtifactStore (#133).

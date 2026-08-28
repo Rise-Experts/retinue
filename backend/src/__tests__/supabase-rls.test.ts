@@ -126,6 +126,12 @@ const SEEDS: Readonly<Record<string, (tenant: string, principal: string) => stri
   skills: (t) =>
     `INSERT INTO skills (tenant_id, id, name, description, source, version, instructions, status, created_at)
      VALUES ('${t}', '${t}-s1', 'post-composition', repeat('d', 40), 'tenant', 1, 'body', 'active', now())`,
+  // #261. A tenant's third-party credentials — the table where a missing policy would be worst, since every
+  // row is somebody's access to somebody else's system. Seeded with ciphertext, as the store only ever holds.
+  connections: (t) =>
+    `INSERT INTO connections
+       (tenant_id, id, provider, mode, scheme, metadata, secret_key_id, secret_algorithm, secret_nonce, secret_ciphertext)
+     VALUES ('${t}', '${t}-conn1', 'github', 'token', 'bearer', '{}'::jsonb, 'k1', 'aes-256-gcm', 'bm9uY2U=', 'Y2lwaGVy')`,
   mcp_connections: (t) =>
     `INSERT INTO mcp_connections (tenant_id, id, label, transport, endpoint, auth_kind, enabled, created_at)
      VALUES ('${t}', '${t}-mc1', 'srv', 'streamable-http', 'https://x/y', 'none', true, now())`,
@@ -268,11 +274,11 @@ describe("policy coverage is derived from MIGRATIONS, not transcribed", () => {
       expect(RLS_STATEMENTS).toContain(`ALTER TABLE ${table} ENABLE ROW LEVEL SECURITY`);
       expect(RLS_STATEMENTS).toContain(`ALTER TABLE ${table} FORCE ROW LEVEL SECURITY`);
     }
-    // 30 tables as of #187 (`flow_definitions`, `flow_executions`); the count is asserted so a table silently
-    // dropping out is visible.
+    // 31 tables as of #261 (`connections`); 30 before that, from #187's flow tables. The count is asserted so
+    // a table silently dropping out is visible.
     // Updating this number is meant to be a moment of thought: it is the one place that notices a policy list
     // shrinking, which no per-table test can see.
-    expect(TENANT_SCOPED_TABLES).toHaveLength(30);
+    expect(TENANT_SCOPED_TABLES).toHaveLength(31);
 
     // #135. `knowledge_chunks` lives behind the optional pgvector migration, so its policies are a separate
     // list applied by whoever ran that migration -- `ALTER TABLE ... ENABLE ROW LEVEL SECURITY` on an absent

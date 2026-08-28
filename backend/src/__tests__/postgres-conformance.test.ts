@@ -17,7 +17,7 @@
 
 import { PGlite } from "@electric-sql/pglite";
 import { afterAll, describe, expect, it } from "vitest";
-import {
+import { createPostgresConnectionStore,
   createPostgresArtifactExportStore,
   createPostgresKeywordIndex,
   createPostgresKnowledgeStore,
@@ -60,6 +60,7 @@ import {
   type TransactionRunner,
 } from "../adapters/postgres/index.js";
 import { asId } from "../core/ids.js";
+import { connectionStoreConformance } from "../testing/conformance/connections.js";
 import type { AgentId, ConversationId, MessageId, MessagePartId, SkillId } from "../core/ids.js";
 import type { AgentManifest } from "../agents/index.js";
 import { ADAPTER_COVERAGE } from "../testing/conformance/index.js";
@@ -403,6 +404,12 @@ usageStoreConformance(() => {
 
 idempotencyStoreConformance(() => createPostgresIdempotencyStore(freshExecutor()));
 
+/**
+ * `ConnectionStore` — #261. No seeders: the table references neither a run nor a conversation, and it
+ * deliberately holds a sealed blob it cannot read, so the suite supplies no plaintext.
+ */
+connectionStoreConformance(() => createPostgresConnectionStore(freshExecutor()));
+
 // Tenant configuration, #101. Neither table references a run or a conversation, so no seeders.
 skillStoreConformance(
   () => createPostgresSkillStore(freshExecutor()),
@@ -606,6 +613,8 @@ describe("postgres adapter coverage", () => {
     expect(coverage).toBeDefined();
     expect([...(coverage?.implemented ?? [])]).toEqual([
       "ConversationStore",
+      // #261 — a tenant's third-party connections, holding a sealed blob this adapter cannot read.
+      "ConnectionStore",
       // #187, #186.
       "FlowDefinitionStore",
       "FlowExecutionStore",

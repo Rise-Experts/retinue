@@ -127,3 +127,4 @@ export * from "./principal-memory.js";
 export * from "./message-store.js";
 export * from "./flows.js";
 export * from "./rate-limit.js";
+export * from "./connections.js";

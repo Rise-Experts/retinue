@@ -8,6 +8,8 @@
 import { asId } from "../core/ids.js";
 import { createMemoryRateLimitStore } from "../adapters/memory/rate-limit.js";
 import { rateLimitStoreConformance } from "../testing/conformance/rate-limit.js";
+import { connectionStoreConformance } from "../testing/conformance/connections.js";
+import { createMemoryConnectionStore } from "../adapters/memory/connections.js";
 import type {
   AgentId,
   ConversationId,
@@ -240,3 +242,6 @@ void asId<ConversationId>("conf-convo-1");
  * construction, which is exactly why it must not be used in a deployment.
  */
 rateLimitStoreConformance("memory", () => createMemoryRateLimitStore(), () => "mem");
+
+/** `ConnectionStore` — #261. */
+connectionStoreConformance(() => createMemoryConnectionStore());
