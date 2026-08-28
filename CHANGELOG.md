@@ -1,5 +1,9 @@
 ## Unreleased
 
+### Changed — BREAKING
+
+- **tools**: `CredentialResolver.resolve` returns a typed `Credential`, not a `string` ([#260](https://github.com/Rise-Experts/retinue/issues/260)). A bare string still works in `createStaticCredentialResolver` and still means a bearer token, so a single-tenant host changes nothing; a host with its own resolver wraps its return in `bearer(...)`. Migration in `docs/19-versioning.md`. **This is a `0.3.0`** — at 0.x the minor is the breaking increment.
+
 ### Added
 
 - **knowledge**: a retrieval eval set, and two beliefs it contradicts ([#219](https://github.com/Rise-Experts/retinue/issues/219)) `85a6080b`

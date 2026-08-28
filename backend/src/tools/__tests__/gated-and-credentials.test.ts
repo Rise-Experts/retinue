@@ -66,8 +66,12 @@ describe("confirms / destroys — AC-9", () => {
 
 describe("credentials are referenced, not held — AC-5", () => {
   it("resolves a reference to a secret", async () => {
+    // A bare string still means a bearer token — #260 widened the return type and deliberately did not make the
+    // single-tenant path harder. The common case stays one line.
     const resolver = createStaticCredentialResolver({ github: "ghp_example" });
-    await expect(resolver.resolve({ ref: "github", context })).resolves.toBe("ghp_example");
+    const credential = await resolver.resolve({ ref: "github", context });
+    expect(credential.scheme).toBe("bearer");
+    expect(credential.scheme === "bearer" && credential.token).toBe("ghp_example");
   });
 
   it("throws on a missing reference rather than returning an empty string", async () => {

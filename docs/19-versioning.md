@@ -54,6 +54,53 @@ reading (that 0.x means nothing is stable) is how a package acquires consumers w
 
 At 1.0 the normal rules apply: major for a removal, minor for an addition, patch for a fix.
 
+### Breaking changes so far
+
+| Version | Change | Migration |
+|---|---|---|
+| `0.3.0` (pending) | `CredentialResolver.resolve` returns a `Credential` instead of a `string` ([#260](https://github.com/Rise-Experts/retinue/issues/260)) | See below |
+
+**`0.3.0` — a credential is a typed value.**
+
+`resolve()` returned `Promise<string>`, which covers a bearer token and nothing else. Jira and Confluence want
+an account email *and* an API token as Basic auth; Atlassian's OAuth needs a cloud id discovered after consent;
+WhatsApp needs a phone number id. Four of the fourteen integrations in `docs/23` cannot be expressed as a
+string, and each would otherwise have grown a private side-channel.
+
+**A host wiring one token changes nothing.** `createStaticCredentialResolver` still accepts a bare string and
+still means a bearer token:
+
+```ts
+createStaticCredentialResolver({ github: process.env.GITHUB_TOKEN ?? "" });
+```
+
+**A host with its own resolver returns a credential instead of a string:**
+
+```ts
+// before
+const resolver = { async resolve({ ref, context }) { return lookupToken(ref, context); } };
+
+// after
+import { bearer } from "@retinue/agentkit/tools";
+const resolver = { async resolve({ ref, context }) { return bearer(await lookupToken(ref, context)); } };
+```
+
+**A toolkit reading the result presents it through one helper**, rather than building the header itself:
+
+```ts
+// before
+const token = await resolver.resolve({ ref, context });
+headers.authorization = `Bearer ${token}`;
+
+// after
+import { credentialHeader } from "@retinue/agentkit/tools";
+const [name, value] = credentialHeader(await resolver.resolve({ ref, context }));
+headers[name.toLowerCase()] = value;
+```
+
+Additive alongside it, and needing no migration: `ToolDescriptor.requiredScopes`, `ToolkitAuth`,
+`CredentialAudit`, and `withCredentialAudit`.
+
 ## Deprecation policy
 
 A removed export keeps working for **one minor version**, and the consumer is told three ways:

@@ -17,7 +17,9 @@ import {
   createHttpClient,
   defineTool,
   type CredentialRef,
+  credentialHeader,
   type CredentialResolver,
+  type ToolkitAuth,
   type HttpOutcome,
   type Tool,
   type ToolProvider,
@@ -64,11 +66,12 @@ export const createSlackToolkit = (config: SlackToolkitConfig): ToolProvider => 
   const base = (config.baseUrl ?? API).replace(/\/$/, "");
 
   const call = async (context: ExecutionContext, method: string, body: Json = {}): Promise<Json> => {
-    const token = await config.resolver.resolve({ ref: config.credentialRef, context });
+    const credential = await config.resolver.resolve({ ref: config.credentialRef, context });
+    const [headerName, headerValue] = credentialHeader(credential);
     const host = new URL(base).host;
     const client = createHttpClient({
       ...(config.fetchImpl === undefined ? {} : { fetchImpl: config.fetchImpl }),
-      headersFor: (requested) => (requested === host ? { authorization: `Bearer ${token}` } : undefined),
+      headersFor: (requested) => (requested === host ? { [headerName.toLowerCase()]: headerValue } : undefined),
     });
     const outcome = await client.request({
       url: `${base}/${method}`,
@@ -174,6 +177,15 @@ export const createSlackToolkit = (config: SlackToolkitConfig): ToolProvider => 
     },
   };
 };
+
+/**
+ * What Slack accepts — #260 AC-2.
+ *
+ * A bot token is what this toolkit is written against. Slack's *user* tokens are OAuth-obtained and behave
+ * differently enough (per-user scopes, a different rate model) that offering the mode here without having
+ * tested it would be a claim rather than a capability.
+ */
+export const SLACK_AUTH: ToolkitAuth = { modes: ["token"], schemes: ["bearer"] };
 
 export const SLACK_TOOL_NAMES = [
   "slack_list_channels",

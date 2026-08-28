@@ -39,6 +39,20 @@ export type ToolDescriptor = {
   /** External and destructive tools must supply an idempotency key. */
   readonly requiresIdempotencyKey: boolean;
   /**
+   * The vendor scopes this tool needs — REQ-063 (#259), task #260 AC-3.
+   *
+   * Per **tool**, not per toolkit, because that is the granularity the question is asked at: a deployment
+   * enabling three of Gmail's eight tools should be sent through a consent screen for three tools' worth of
+   * scopes, not eight. Google's restricted scopes are the case that makes this matter — asking for
+   * `gmail.modify` when only `gmail.readonly` is needed is the difference between a consent a security team
+   * approves and one they refuse.
+   *
+   * Absent means "no scope is required or the vendor has no scopes", which is true of every wave 1 tool.
+   * Declared here rather than only in prose so a connection can be checked against what the enabled tools
+   * actually need **before** a tenant is sent through consent, rather than after a 403.
+   */
+  readonly requiredScopes?: readonly string[];
+  /**
    * For a delegating tool (#113): the deterministic function this capability wraps.
    *
    * On the descriptor rather than only at the definition site, so "which existing function does this

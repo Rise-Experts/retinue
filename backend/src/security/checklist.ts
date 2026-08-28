@@ -219,6 +219,20 @@ export const SECURITY_CHECKS: readonly SecurityCheck[] = [
  */
 export const CREDENTIAL_FIELD_EXEMPTIONS: readonly { readonly file: string; readonly reason: string }[] = [
   {
+    file: "tools/credentials.ts",
+    reason:
+      "The `Credential` union is the *resolved* value — the one place a third-party secret legitimately exists, " +
+      "for the duration of one call. `password` and the other secret-bearing fields are named honestly rather " +
+      "than hidden behind a generic `value`, because a `basic` credential genuinely has two parts and calling " +
+      "them `a` and `b` would make every call site guess. This module is what makes this the *only* such place: " +
+      "it is why a tool takes a `credentialRef` instead of a secret, and why nothing is stored on the tool. " +
+      "The exemption comes with compensating controls rather than on its own — #260 defines the secret fields " +
+      "**non-enumerably** and overrides `toJSON`, `toString` and `util.inspect`, so a spread, a " +
+      "`JSON.stringify` or a `console.log` of a credential yields `[credential redacted]` and never the secret. " +
+      "It is still never written to a table, never placed in a message part, a result envelope or an audit " +
+      "row, and `CredentialAudit` receives the scheme and the ref, never the value.",
+  },
+  {
     file: "models/provider-factory.ts",
     reason:
       "`ProviderCredentials.apiKey` is the model provider's own key, supplied by the host at wiring time and " +

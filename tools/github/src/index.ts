@@ -29,7 +29,9 @@ import {
   defineTool,
   destroys,
   type CredentialRef,
+  credentialHeader,
   type CredentialResolver,
+  type ToolkitAuth,
   type HttpOutcome,
   type Tool,
   type ToolProvider,
@@ -111,13 +113,19 @@ export const createGitHubToolkit = (config: GitHubToolkitConfig): ToolProvider =
    * issued for `api.github.com` cannot be sent to another host by asking for a URL that merely mentions it.
    */
   const call = async (context: ExecutionContext, path: string, init: { method?: string; body?: Json } = {}): Promise<unknown> => {
-    const token = await config.resolver.resolve({ ref: config.credentialRef, context });
+    const credential = await config.resolver.resolve({ ref: config.credentialRef, context });
+    // One helper, so twenty toolkits do not each write their own base64 and get the padding wrong — #260.
+    const [headerName, headerValue] = credentialHeader(credential);
     const host = new URL(base).host;
     const client = createHttpClient({
       ...(config.fetchImpl === undefined ? {} : { fetchImpl: config.fetchImpl }),
       headersFor: (requested) =>
         requested === host
-          ? { authorization: `Bearer ${token}`, accept: "application/vnd.github+json", "x-github-api-version": "2022-11-28" }
+          ? {
+              [headerName.toLowerCase()]: headerValue,
+              accept: "application/vnd.github+json",
+              "x-github-api-version": "2022-11-28",
+            }
           : undefined,
     });
     const outcome = await client.request({
@@ -236,6 +244,15 @@ export const createGitHubToolkit = (config: GitHubToolkitConfig): ToolProvider =
 };
 
 /** Every tool this toolkit offers, so a host can preload by name and `docs/23` can be checked against it. */
+/**
+ * What GitHub accepts — #260 AC-2.
+ *
+ * A PAT and an OAuth access token are both presented as a bearer, which is exactly why `modes` and `schemes`
+ * are separate: the wire format is the same and the way a tenant gets one is not. A GitHub App installation
+ * token is a third mode and is not offered yet.
+ */
+export const GITHUB_AUTH: ToolkitAuth = { modes: ["token", "oauth2"], schemes: ["bearer"] };
+
 export const GITHUB_TOOL_NAMES = [
   "github_search_code",
   "github_get_file",
