@@ -135,6 +135,8 @@ test("every shipping package is covered, and each deep list has both halves of t
     "@retinue/tools-search",
     "@retinue/tools-jira",
     "@retinue/tools-confluence",
+    "@retinue/tools-linear",
+    "@retinue/tools-notion",
   ]);
   for (const shipped of PACKAGES) {
     // A list of only-missing paths would pass against a package with no exports map at all, which is the state

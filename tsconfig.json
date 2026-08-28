@@ -26,6 +26,12 @@
       "path": "./tools/jira"
     },
     {
+      "path": "./tools/linear"
+    },
+    {
+      "path": "./tools/notion"
+    },
+    {
       "path": "./tools/search"
     },
     {

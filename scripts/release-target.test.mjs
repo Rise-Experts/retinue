@@ -70,6 +70,8 @@ test("exactly the shipping packages are releasable, and no more", () => {
     "tools-confluence",
     "tools-github",
     "tools-jira",
+    "tools-linear",
+    "tools-notion",
     "tools-slack",
     "tools-search",
   ]);

@@ -148,6 +148,17 @@ export const PACKAGES = [
     dir: "tools/confluence",
     deep: ["dist/index.js", "src/index.ts", "storage", "internal"],
   },
+  {
+    name: "@retinue/tools-linear",
+    dir: "tools/linear",
+    deep: ["dist/index.js", "src/index.ts", "graphql", "internal"],
+  },
+  {
+    name: "@retinue/tools-notion",
+    dir: "tools/notion",
+    // `blocks` is the module a consumer would most plausibly reach for, which is why it must not resolve.
+    deep: ["dist/index.js", "src/index.ts", "blocks", "internal"],
+  },
 ];
 
 /**
