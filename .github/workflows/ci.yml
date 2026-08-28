@@ -89,6 +89,56 @@ jobs:
   # cannot exercise advisory locks or SKIP LOCKED, and those are exactly the primitives the run
   # coordinator and lease-based claim depend on. Required, not advisory — an advisory gate is not a
   # gate, which is the lesson of #20 closing green against "passes the full conformance suite".
+  #
+  # The compose stack, brought up from nothing — task #254 AC-6.
+  #
+  # A compose file that is published rather than exercised is a compose file that works on the machine it was
+  # written on. This one builds the image, brings the stack up from a clean state, and asserts the things that
+  # can be asserted without a model key: migrations applied, every dependency healthy, and the host's own
+  # readiness route — which probes Postgres, Redis *and* the schema version, so a 200 means more than "a process
+  # is listening".
+  compose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Bring the stack up from clean
+        # A dummy key: no model call is made by any assertion below, and the variable has no default on purpose
+        # so a real deployment cannot start without one.
+        env:
+          RETINUE_MODEL_API_KEY: ci-no-model-call-is-made
+        run: docker compose up -d --build --wait
+      - name: Migrations ran, once
+        run: |
+          docker compose logs migrate | tee /tmp/migrate.log
+          grep -q "applied 30 migration(s)" /tmp/migrate.log
+      - name: Every service healthy
+        run: |
+          docker compose ps
+          test "$(docker compose ps --status running --services | sort | tr '\n' ' ')" = "api postgres redis worker "
+      - name: The host is ready on the published port
+        run: |
+          code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:4010/readyz)
+          echo "readyz → $code"
+          test "$code" = "200"
+      - name: doctor, from inside the network
+        env:
+          RETINUE_MODEL_API_KEY: ci-no-model-call-is-made
+        run: docker compose exec -T api node backend/dist/server/bin.js doctor
+      - name: A conversation round-trips through the API and into Postgres
+        run: |
+          curl -sf -X POST http://127.0.0.1:4010/graphql \
+            -H 'content-type: application/json' \
+            -H 'x-agentkit-tenant: ci' -H 'x-agentkit-principal: ci' -H 'x-agentkit-roles: admin' \
+            -d '{"query":"mutation{ createConversation(id:\"ci-1\", title:\"ci\"){ id } }"}' | tee /tmp/gql.json
+          grep -q '"id":"ci-1"' /tmp/gql.json
+          docker compose exec -T postgres psql -U postgres -d retinue -tAc \
+            "select count(*) from conversations where id = 'ci-1'" | grep -q 1
+      - name: Logs on failure
+        if: failure()
+        run: docker compose logs --no-color
+      - name: Down
+        if: always()
+        run: docker compose down -v
   conformance-matrix:
     runs-on: ubuntu-latest
     services:

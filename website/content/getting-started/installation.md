@@ -27,6 +27,28 @@ the tool registry, the model registry and the reference in-memory adapters. Swap
 Supabase adapters for production. `@retinue/react` is transport-agnostic headless state — hooks,
 reducers, localization — plus an optional UI component set.
 
+## The whole stack, with Docker
+
+For the server profile, `compose.yaml` in the repository brings up Postgres (with pgvector), Redis, a migration
+step and the API host and worker:
+
+```bash
+RETINUE_MODEL_API_KEY=sk-… docker compose up
+```
+
+Three things about it are deliberate:
+
+- **The ports are not the defaults** — 55440, 56380 and 4010. You very likely have Postgres on 5432 and Redis on
+  6379 already, holding data that matters, and a compose file that binds them looks broken for reasons nobody
+  connects to this.
+- **Migrations are a service**, not a note in the README. `api` and `worker` wait for it to complete
+  successfully, so a stack that comes up has a schema. "Remember to migrate" is a step people forget exactly
+  once and then debug for an hour.
+- **`RETINUE_MODEL_API_KEY` has no default and is not written down.** Starting without it fails with a message
+  naming the variable, rather than a stack that starts and dies on the first message.
+
+`docker compose down` keeps the data; `down -v` is the deliberate reset.
+
 ## Two profiles
 
 Retinue runs the same core in two shapes — pick per app:

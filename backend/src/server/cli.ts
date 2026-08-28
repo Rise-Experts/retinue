@@ -16,6 +16,7 @@ import { createHealthRoutes, postgresProbe, redisProbe, schemaProbe } from "./he
 import { loadConfig, type RetinueConfig } from "./config.js";
 import type { ResolverDeps } from "../index.js";
 import type { SqlExecutor } from "../entries/adapters-postgres.js";
+import type { TransactionRunner } from "../adapters/postgres/transaction.js";
 
 /**
  * What a deployment's app module must default-export.
@@ -25,7 +26,22 @@ import type { SqlExecutor } from "../entries/adapters-postgres.js";
  */
 export type RetinueApp = {
   readonly authenticate: Authenticate;
-  readonly deps: (input: { readonly config: RetinueConfig; readonly sql: SqlExecutor }) => Promise<ResolverDeps> | ResolverDeps;
+  /**
+   * `runner` added by #254, and it was not optional in practice — it was missing.
+   *
+   * The reference app's `deps` has always accepted an optional `TransactionRunner`, and this host never passed
+   * one, so the conversation run coordinator refused with *"this process has no TransactionRunner… The API host
+   * supplies one"*. It did not. `sendMessage` — the mutation that starts every run — failed with an internal
+   * error in this command and in `npm run api`, which is the documented way to run the reference app.
+   *
+   * Still optional on the signature, because a worker genuinely does not need it and an app that ignores it
+   * keeps compiling.
+   */
+  readonly deps: (input: {
+    readonly config: RetinueConfig;
+    readonly sql: SqlExecutor;
+    readonly runner?: TransactionRunner;
+  }) => Promise<ResolverDeps> | ResolverDeps;
   /** Optional liveness/readiness extras beyond Postgres, Redis and the schema version. */
   readonly redis?: (config: RetinueConfig) => { ping(): Promise<string> };
 };
@@ -57,16 +73,19 @@ export const runApiHost = async (
   // twice: `loadConfig` is pure and `boot` validates again.
   loadConfig(env);
   const app = await loadApp(env);
-  const { config, sql } = await boot({
+  const { config, sql, runner } = await boot({
     env,
     connect: async (loaded) => {
       const { Pool } = await import("pg");
-      const { createPgExecutor } = await import("../entries/adapters-postgres.js");
-      return { sql: createPgExecutor(new Pool({ connectionString: loaded.databaseUrl })) };
+      const { createPgExecutor, createPoolOpener } = await import("../entries/adapters-postgres.js");
+      const pool = new Pool({ connectionString: loaded.databaseUrl });
+      // `open` is what lets `boot` build a transaction scope. Without it the API host had no runner and
+      // `sendMessage` could not claim a conversation — #254.
+      return { sql: createPgExecutor(pool), open: createPoolOpener(pool) };
     },
   });
 
-  const deps = await app.deps({ config, sql });
+  const deps = await app.deps({ config, sql, ...(runner === undefined ? {} : { runner }) });
   const { createSchemaManager } = await import("../entries/adapters-postgres.js");
   const probes = [postgresProbe(sql), schemaProbe(createSchemaManager(sql))];
   if (app.redis) probes.push(redisProbe(app.redis(config)));

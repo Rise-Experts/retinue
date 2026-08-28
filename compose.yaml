@@ -1,0 +1,119 @@
+# The whole stack, for a first deployment — task #254.
+#
+#   RETINUE_MODEL_API_KEY=sk-… docker compose up
+#
+# A `Dockerfile` existed and nothing brought its dependencies up with it, so a consumer's first act was to
+# assemble Postgres, Redis, a migration step, an API host and a worker themselves — before seeing the thing work
+# once.
+#
+# ## Ports are deliberately not the defaults
+#
+# 55440, 56380 and 4010. A consumer running this on a laptop very likely has Postgres on 5432 and Redis on 6379
+# already, holding data that matters, and a compose file that binds them is a compose file that looks broken
+# for reasons nobody will connect to this. The repository's own test containers make the same choice for the
+# same reason (:55432, :56379) — these are offset again so `docker compose up` and the test containers can run
+# at the same time.
+#
+# ## This serves the platform host, not the reference demo app
+#
+# `retinue serve` mounts the GraphQL host. That is a complete API and it is *not* the example's web UI, which
+# `npm run app` serves locally — the image carries neither `examples/scripts/` nor a built composer bundle.
+# Tracked as #267. It matters for more than looks: the GraphQL host's `sendMessage` coordinates a conversation's
+# slot and does **not** create the run row, so a bare client can drive this stack as far as admission and no
+# further. The reference app's own routes create the run first, which is what a full turn needs.
+#
+# ## Nothing here is a secret
+#
+# The database password is `postgres` because this database is reachable only from this compose network and
+# holds nothing. `RETINUE_MODEL_API_KEY` has **no default** and is not written down: it comes from the
+# environment, and starting without one produces `retinue doctor`'s named failure rather than a crash.
+
+name: retinue
+
+services:
+  postgres:
+    # pgvector, not plain postgres: the knowledge adapter's vector index needs the extension, and a stack that
+    # works until the first document is a stack that lied.
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: retinue
+    ports: ["55440:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d retinue"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    # A named volume, so `docker compose down` keeps the data and `down -v` is the deliberate reset.
+    volumes: ["retinue-pg:/var/lib/postgresql/data"]
+
+  redis:
+    image: redis:7-alpine
+    ports: ["56380:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # Migrations as a service that runs once and exits — AC-4.
+  #
+  # A service rather than a note in the README, because "remember to migrate" is a step people forget exactly
+  # once and then debug for an hour. `api` and `worker` wait on this completing successfully, so a stack that
+  # comes up has a schema.
+  migrate:
+    build: .
+    command: ["node", "backend/dist/server/bin.js", "migrate"]
+    environment:
+      RETINUE_DATABASE_URL: postgres://postgres:postgres@postgres:5432/retinue
+      RETINUE_REDIS_URL: redis://redis:6379
+    depends_on:
+      postgres: { condition: service_healthy }
+    restart: "no"
+
+  api:
+    build: .
+    command: ["node", "backend/dist/server/bin.js", "serve"]
+    environment:
+      RETINUE_DATABASE_URL: postgres://postgres:postgres@postgres:5432/retinue
+      RETINUE_REDIS_URL: redis://redis:6379
+      # No default, deliberately. Absent, `doctor` names it and the host refuses to answer usefully — which is
+      # a better first experience than a stack that starts and then fails on the first message.
+      RETINUE_MODEL_API_KEY: ${RETINUE_MODEL_API_KEY:?set RETINUE_MODEL_API_KEY, e.g. in a .env file beside this one}
+      RETINUE_MODEL_ID: ${RETINUE_MODEL_ID:-gpt-4o}
+      RETINUE_MODEL_BASE_URL: ${RETINUE_MODEL_BASE_URL:-}
+      # Dev auth: the reference app trusts headers for identity. Fine on a laptop, and the reason this file is
+      # not a deployment — see the docs.
+      # Exactly `1`: the example refuses any other value, deliberately, so nobody reaches header-based
+      # "authentication" by setting something that looks truthy.
+      RETINUE_EXAMPLE_DEV_AUTH: "1"
+      PORT: "4000"
+    ports: ["4010:4000"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+    healthcheck:
+      # The host's own readiness route, which probes Postgres, Redis and the schema version — so a healthy
+      # container means the dependencies are healthy too, not merely that a process is running.
+      test: ["CMD-SHELL", "node -e \"fetch('http://localhost:4000/readyz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  worker:
+    build: .
+    command: ["node", "backend/dist/server/bin.js", "worker"]
+    environment:
+      RETINUE_DATABASE_URL: postgres://postgres:postgres@postgres:5432/retinue
+      RETINUE_REDIS_URL: redis://redis:6379
+      RETINUE_MODEL_API_KEY: ${RETINUE_MODEL_API_KEY:?set RETINUE_MODEL_API_KEY, e.g. in a .env file beside this one}
+      RETINUE_MODEL_ID: ${RETINUE_MODEL_ID:-gpt-4o}
+      RETINUE_MODEL_BASE_URL: ${RETINUE_MODEL_BASE_URL:-}
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+
+volumes:
+  retinue-pg:
