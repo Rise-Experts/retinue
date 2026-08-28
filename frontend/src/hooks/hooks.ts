@@ -9,7 +9,7 @@
 import { createContext, createElement, useCallback, useContext, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type { RetinueClient, ApprovalDecision } from "../client.js";
-import { createRunProjector, type RunView } from "../reducers.js";
+import { createRunProjector, type ConnectionRequest, type RunView } from "../reducers.js";
 import { shapeContextPanel, type ContextPanelData } from "../context-inspector.js";
 import type { ConversationSummary, Message, MessagePart, PlatformError } from "../types/index.js";
 
@@ -143,6 +143,28 @@ export const useAnswerQuestion = () => {
 export const useDecideApproval = () => {
   const { run, busy } = useMutation((client, input: { interactionId: string; runId: string; decision: ApprovalDecision }) => client.decideApproval(input));
   return { decide: run, submitting: busy };
+};
+
+/**
+ * The pending connection request, and whether the login URL is still good — task #264, AC-9.
+ *
+ * Shaped like `usePendingInteraction`: a selector over state the reducer already folded, not a fetch. What it
+ * deliberately does **not** do is navigate. A person clicks; an agent redirecting somebody's browser unprompted
+ * is wrong regardless of popup blockers, and a UI that opened a consent screen by itself would be
+ * indistinguishable from a phishing flow.
+ */
+export const usePendingConnection = (input: { view: { connectionRequest?: ConnectionRequest | undefined } }) => {
+  const request = input.view.connectionRequest;
+  if (request === undefined) return { request: undefined, expired: false, prompt: undefined };
+  // The URL is single-use and TTL-bounded, so an old one is a dead link. Saying so beats a button that fails.
+  const expired = Date.parse(request.expiresAt) <= Date.now();
+  return {
+    request,
+    expired,
+    prompt: expired
+      ? `The ${request.provider} sign-in link expired. Send the message again to get a new one.`
+      : `Connect ${request.provider} to continue${request.scopes.length > 0 ? ` — grants ${request.scopes.join(", ")}` : ""}.`,
+  };
 };
 
 export const useCancelRun = () => {

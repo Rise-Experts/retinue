@@ -153,3 +153,5 @@ export * from "./resolver.js";
 export * from "./oauth/index.js";
 export * from "./oauth/service.js";
 export * from "./oauth/client.js";
+export * from "./pause.js";
+export * from "./resume.js";

@@ -411,7 +411,7 @@ export const createDurableWorker = (deps: DurableWorkerDeps) => {
       const iterable = engine.run({ run: started, context, resume: recovered ? toCheckpoint() : null, signal });
 
       // A run pauses (rather than completes) when the engine requests a question/approval and ends.
-      let pause: "waiting-for-question" | "waiting-for-approval" | null = null;
+      let pause: "waiting-for-question" | "waiting-for-approval" | "waiting-for-connection" | null = null;
       for await (const body of iterable) {
         await emit(body);
         await persist(); // durable before the engine proceeds (tool.started) / between retry attempts
@@ -433,7 +433,15 @@ export const createDurableWorker = (deps: DurableWorkerDeps) => {
         }
         if (body.type === "question.requested") pause = "waiting-for-question";
         else if (body.type === "approval.requested") pause = "waiting-for-approval";
-        else if (body.type === "question.answered" || body.type === "approval.decided") pause = null;
+        // The third pause — #264. Same shape as the other two: an event the engine emits, a status the worker
+        // parks in, and a resume back to `queued`.
+        else if (body.type === "connection.requested") pause = "waiting-for-connection";
+        else if (
+          body.type === "question.answered" ||
+          body.type === "approval.decided" ||
+          body.type === "connection.completed"
+        )
+          pause = null;
         await heartbeat(); // throttled; runs on every event so a tool-heavy run keeps its lease alive
         if (cancelRequested) break;
       }

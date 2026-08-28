@@ -172,6 +172,68 @@ const engine = createDefaultEngine({
 });
 ```
 
+## Connections — the third pause, added by #264
+
+A tool call fails because the tenant has no connection to a provider, or the one they have expired or lacks a
+scope. That used to be `capability_unavailable`: the run died and a person read an error. Now it **pauses**,
+hands back a login URL, and resumes when consent completes.
+
+It is deliberately the *same shape* as the two above, and that is the whole design argument:
+
+| | Questions | Approvals | Connections |
+|---|---|---|---|
+| Status | `waiting-for-question` | `waiting-for-approval` | `waiting-for-connection` |
+| Raised by | `question.requested` | `approval.requested` | `connection.requested` |
+| Resolved by | `question.answered` | `approval.decided` | `connection.completed` |
+| Resumes to | `queued` | `queued` | `queued` |
+| Client hook | `useAnswerQuestion` | `useDecideApproval` | `usePendingConnection` |
+
+A bespoke polling loop, or a failed run somebody restarts by hand, would have been a second mechanism for the
+thing this runtime exists to do.
+
+### Where it does *not* apply
+
+**Only where a login URL exists.** A token-based integration has nothing to redirect to, so a missing token
+still fails with the message naming the credential reference. Getting this backwards produces the worst outcome
+available: a run parked for ever on a consent screen nobody can reach.
+
+Three things must all be true to pause: the failure is a *marked* connection gap, the host wired a
+`connectionConsent` callback, and that callback returned an offer. Any of them absent means fail — because
+failing is recoverable and hanging is not. The decision comes from `ToolkitAuth.modes`, which is why #260 kept
+`AuthMode` separate from `CredentialScheme`: an OAuth access token is presented as a bearer, so the wire format
+cannot answer the question.
+
+### Three gaps, three different sentences
+
+`absent`, `expired` and `insufficient-scope` are separate values because a person told the wrong one looks in
+the wrong place — somebody told "connect your GitHub" when the real problem is a missing scope will disconnect,
+reconnect, and land in exactly the same place.
+
+### Recognised structurally, not by message
+
+The connection resolver marks the failure with `details.connectionGap`. The engine reads the marker, never the
+prose, so rewording an error cannot silently turn a pausable failure into a fatal one — or the reverse.
+
+### The security property is about the URL, not the run
+
+The login URL is rendered in a UI, appears in screenshots and gets pasted into chats. So resuming requires
+**both** halves: the OAuth `state` is bound to the tenant *and the principal* who began the flow (#262), and the
+resume requires the run to belong to the caller's tenant. Without the second, a leaked URL would let a stranger
+attach their own account to somebody else's tenant — and every action the agent then took against that provider
+would be theirs.
+
+Absent and not-yours give the **same answer**, so a leaked URL cannot be used to probe which run ids exist.
+
+### Resuming is idempotent, and a pause has a ceiling
+
+A double-click, a retried redirect or a browser prefetch must queue the run **once** — a second job would run
+the tool call that paused it a second time. `transition` is guarded by the current status, so a run already
+moved out of `waiting-for-connection` reports `resumed: false` rather than being enqueued again.
+
+And a pause has a TTL. The reaper does not cover this: it exists for *abandoned* runs, whose leases expired
+because a worker died. A run waiting for a connection is not abandoned — it is waiting for a person who may never
+come back — so `expireStaleConsents` fails it with a reason, which beats a row nobody can explain.
+
 ## Idempotency
 
 Every external/destructive tool requires an idempotency key derived from tenant, run and tool-call identity. A resumed or retried call returns the original result instead of repeating the side effect.

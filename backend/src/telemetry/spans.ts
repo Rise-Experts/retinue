@@ -38,6 +38,11 @@ export const SPAN_FOR_RUN_EVENT: Readonly<Record<RunEventType, string>> = {
   "question.answered": "hitl.question",
   "approval.requested": "hitl.approval",
   "approval.decided": "hitl.approval",
+  // Its own span rather than `hitl.approval`: both pause a run for a person, and the questions they answer are
+  // different — "may I do this" versus "I have no access, grant me some" — so a trace that merged them would
+  // make "how often do runs stall on a missing connection" unanswerable.
+  "connection.requested": "hitl.connection",
+  "connection.completed": "hitl.connection",
   "usage.updated": "run.step",
   "context.compacted": "context.compact",
   // Its own span, not `run.step`: a guardrail verdict is the boundary of a decision somebody will need to find

@@ -284,8 +284,10 @@ describe("spans align with run events — AC-2", () => {
         continue;
       }
       const domain = event.split(".")[0];
-      // `question.*` and `approval.*` are the hitl domain; everything else shares its first word with its span.
-      if (domain === "question" || domain === "approval") expect(span.startsWith("hitl."), event).toBe(true);
+      // `question.*`, `approval.*` and `connection.*` are the hitl domain — the three ways a run stops for a
+      // person. Everything else shares its first word with its span.
+      if (domain === "question" || domain === "approval" || domain === "connection")
+        expect(span.startsWith("hitl."), event).toBe(true);
       else expect(span.startsWith(`${domain}.`), `${event} -> ${span}`).toBe(true);
     }
     // And the exception list is exhaustive: a *new* event folded into run.step without being listed here fails.

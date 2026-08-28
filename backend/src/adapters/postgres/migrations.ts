@@ -1505,6 +1505,33 @@ export const MIGRATIONS: readonly Migration[] = [
       `ALTER TABLE connections DROP COLUMN IF EXISTS kind`,
     ],
   },
+  {
+    /**
+     * `waiting-for-connection` — the third pause, task #264.
+     *
+     * The CHECK constraint mirrors `RUN_STATUSES`, so a new status has to be added in **both** places or every
+     * write of it is rejected by the database. Found by `run-events-retention.test.ts`, which iterates every
+     * status and inserts one — a test that exists precisely so the two lists cannot drift apart silently.
+     *
+     * Dropped and recreated rather than altered: Postgres has no `ALTER CONSTRAINT` for a CHECK's expression,
+     * and `IF EXISTS`/`IF NOT EXISTS` keep both statements re-runnable, which `migrate` requires.
+     */
+    id: "0034_run_status_waiting_for_connection",
+    up: [
+      `ALTER TABLE runs DROP CONSTRAINT IF EXISTS runs_status_check`,
+      `ALTER TABLE runs ADD CONSTRAINT runs_status_check CHECK (status IN (
+         'queued', 'running', 'waiting-for-question', 'waiting-for-approval',
+         'waiting-for-connection', 'retry-pending', 'completed', 'failed', 'cancelled'
+       ))`,
+    ],
+    down: [
+      `ALTER TABLE runs DROP CONSTRAINT IF EXISTS runs_status_check`,
+      `ALTER TABLE runs ADD CONSTRAINT runs_status_check CHECK (status IN (
+         'queued', 'running', 'waiting-for-question', 'waiting-for-approval',
+         'retry-pending', 'completed', 'failed', 'cancelled'
+       ))`,
+    ],
+  },
 ];
 
 /**

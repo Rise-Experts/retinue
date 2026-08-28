@@ -22,6 +22,7 @@ import {
 } from "../tools/credentials.js";
 import type { SecretCipher } from "./cipher.js";
 import { parseCredentialRef, type Connection, type ConnectionStore } from "./index.js";
+import { withConnectionGap } from "./pause.js";
 
 /**
  * How the plaintext behind a connection maps back to a `Credential`.
@@ -89,14 +90,20 @@ export const createConnectionCredentialResolver = (deps: ConnectionResolverDeps)
           : ((await deps.store.get({ tenantId: context.tenantId, id })) ?? undefined);
 
       if (connection === undefined || connection === null)
-        throw new AgentPlatformError({
-          code: "capability_unavailable",
-          message:
-            `no ${provider} connection for this workspace` +
-            (id === undefined ? "" : ` with id "${id}"`) +
-            ". Connect one, or check the credential reference.",
-          retryable: false,
-        });
+        // Marked, so the engine can recognise it as *a missing connection* rather than a broken tool and pause
+        // the run instead of failing it — #264. Structural, not a string match: rewording this message must not
+        // silently turn a pausable failure into a fatal one.
+        throw withConnectionGap(
+          new AgentPlatformError({
+            code: "capability_unavailable",
+            message:
+              `no ${provider} connection for this workspace` +
+              (id === undefined ? "" : ` with id "${id}"`) +
+              ". Connect one, or check the credential reference.",
+            retryable: false,
+          }),
+          { provider, gap: "absent", scopes: [] },
+        );
 
       // A ref naming one provider must not resolve to another's credential, which is what a wrong id would do.
       if (id !== undefined && connection.provider !== provider)
@@ -113,11 +120,14 @@ export const createConnectionCredentialResolver = (deps: ConnectionResolverDeps)
        * a vendor 401 that says the token is invalid.
        */
       if (connection.expiresAt !== undefined && Date.parse(connection.expiresAt) <= Date.now())
-        throw new AgentPlatformError({
-          code: "capability_unavailable",
-          message: `the ${provider} connection expired at ${connection.expiresAt}. Reconnect, or wire a refresh.`,
-          retryable: false,
-        });
+        throw withConnectionGap(
+          new AgentPlatformError({
+            code: "capability_unavailable",
+            message: `the ${provider} connection expired at ${connection.expiresAt}. Reconnect, or wire a refresh.`,
+            retryable: false,
+          }),
+          { provider, gap: "expired", scopes: connection.grantedScopes ?? [] },
+        );
 
       const plaintext = await deps.cipher.open(connection.sealed);
       return toCredential(connection, plaintext);

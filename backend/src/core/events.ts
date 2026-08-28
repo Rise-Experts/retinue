@@ -27,6 +27,14 @@ export const RUN_EVENT_TYPES = [
   "question.answered",
   "approval.requested",
   "approval.decided",
+  /**
+   * The run needs a connection, and here is where to go and get one — task #264.
+   *
+   * Carries the provider, the scopes being asked for and a login URL. It carries **no secret**: not the client
+   * secret, not a token, not the PKCE verifier. This is an event a client renders and a person clicks.
+   */
+  "connection.requested",
+  "connection.completed",
   "usage.updated",
   "context.compacted",
   "guardrail.verdict",
@@ -87,6 +95,33 @@ export type InteractionEvent = EventBase<
   "question.requested" | "question.answered" | "approval.requested" | "approval.decided"
 > & {
   readonly interactionId: InteractionId;
+};
+
+/**
+ * The run needs a connection, and here is where to get one — task #264.
+ *
+ * Its own event rather than an `InteractionEvent`, because it carries different things: an interaction id names
+ * a stored question or approval, and this names a *provider*, the scopes being asked for, and a URL. Folding it
+ * in would mean an `interactionId` for something that is not one.
+ *
+ * **It carries no secret.** Not the client secret, not a token, not the PKCE verifier. This is rendered in a UI
+ * and clicked by a person, so it goes wherever a screenshot goes.
+ */
+export type ConnectionRequestedEvent = EventBase<"connection.requested"> & {
+  readonly provider: string;
+  /** Where to send the person. Single-use and TTL-bounded — see the OAuth flow's `state`. */
+  readonly loginUrl: string;
+  /** What the consent will ask for, so a UI can say what is being granted. */
+  readonly scopes: readonly string[];
+  /** Which tool stalled, so a transcript reads coherently. */
+  readonly toolName?: string;
+  /** When the login URL stops working, so a client can offer a fresh one rather than a dead link. */
+  readonly expiresAt: string;
+};
+
+export type ConnectionCompletedEvent = EventBase<"connection.completed"> & {
+  readonly provider: string;
+  readonly connectionId: string;
 };
 
 export type UsageUpdatedEvent = EventBase<"usage.updated"> & {
@@ -185,6 +220,8 @@ export type RunEvent =
   | PartEvent
   | ToolEvent
   | InteractionEvent
+  | ConnectionRequestedEvent
+  | ConnectionCompletedEvent
   | UsageUpdatedEvent
   | ContextCompactedEvent
   | GuardrailVerdictEvent
@@ -236,6 +273,21 @@ export type RunStreamState = {
   /** Present between retry attempts, cleared as soon as the run makes progress again. */
   readonly retry?: { readonly attempt: number; readonly maxAttempts: number; readonly nextAttemptAt: string };
   readonly error?: PlatformError;
+  /**
+   * Present while the run is waiting for somebody to connect a provider — task #264.
+   *
+   * On the stream state rather than as a message part, because it is not a thing the model said: it is the
+   * platform telling a client *this run is stopped and here is the way to unstick it*. Cleared by
+   * `connection.completed`, so a client that reconnects mid-consent still sees the button and one that
+   * reconnects after it does not.
+   */
+  readonly connectionRequest?: {
+    readonly provider: string;
+    readonly loginUrl: string;
+    readonly scopes: readonly string[];
+    readonly toolName?: string;
+    readonly expiresAt: string;
+  };
   readonly terminal: boolean;
 };
 
@@ -294,11 +346,32 @@ export const reduceRunEvent = (state: RunStreamState, event: RunEvent): RunStrea
         ...base,
         retry: { attempt: event.attempt, maxAttempts: event.maxAttempts, nextAttemptAt: event.nextAttemptAt },
       };
+    /**
+     * The connection request, held until consent completes — task #264.
+     *
+     * Set and cleared here rather than derived by each client, so a reconnecting client sees the button exactly
+     * when the run is actually waiting: the durable log replays both events in order, and the fold gives the
+     * same answer as if it had been watching live.
+     */
+    case "connection.requested":
+      return {
+        ...base,
+        connectionRequest: {
+          provider: event.provider,
+          loginUrl: event.loginUrl,
+          scopes: event.scopes,
+          ...(event.toolName === undefined ? {} : { toolName: event.toolName }),
+          expiresAt: event.expiresAt,
+        },
+      };
+    case "connection.completed":
+      return { ...base, connectionRequest: undefined };
     case "run.failed":
-      return { ...base, error: event.error, terminal: true };
+      // Cleared: a failed run's login URL is a button that leads nowhere.
+      return { ...base, connectionRequest: undefined, error: event.error, terminal: true };
     case "run.completed":
     case "run.cancelled":
-      return { ...base, terminal: true };
+      return { ...base, connectionRequest: undefined, terminal: true };
     default:
       return base;
   }

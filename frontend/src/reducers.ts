@@ -18,8 +18,26 @@ export type RunView = {
   /** Present only between retry attempts; drives the "attempt 2 of 5" indicator. */
   readonly retry: RetryState | undefined;
   readonly error: PlatformError | undefined;
+  /**
+   * Present while the run waits for somebody to connect a provider — #264, and what a Connect button renders
+   * from.
+   *
+   * Folded here rather than derived from parts, because it is not something the model said: it is the platform
+   * saying *this run is stopped and here is the way to unstick it*. Cleared by `connection.completed` and by
+   * every terminal event, so a reconnecting client sees the button exactly when the run is actually waiting and
+   * never a link that leads nowhere.
+   */
+  readonly connectionRequest: ConnectionRequest | undefined;
   readonly lastSequence: number;
   readonly done: boolean;
+};
+
+export type ConnectionRequest = {
+  readonly provider: string;
+  readonly loginUrl: string;
+  readonly scopes: readonly string[];
+  readonly toolName?: string;
+  readonly expiresAt: string;
 };
 
 export const EMPTY_RUN_VIEW: RunView = {
@@ -27,6 +45,7 @@ export const EMPTY_RUN_VIEW: RunView = {
   parts: [],
   retry: undefined,
   error: undefined,
+  connectionRequest: undefined,
   lastSequence: 0,
   done: false,
 };
@@ -40,8 +59,11 @@ const STATUS_BY_EVENT: Partial<Record<RunEventType, RunStatus>> = {
   "run.cancelled": "cancelled",
   "question.requested": "waiting-for-question",
   "approval.requested": "waiting-for-approval",
+  // The third pause — #264.
+  "connection.requested": "waiting-for-connection",
   "question.answered": "running",
   "approval.decided": "running",
+  "connection.completed": "running",
   // Any forward progress means the run is actively running again (clears retry-pending/waiting).
   "part.added": "running",
   "part.updated": "running",
@@ -78,8 +100,25 @@ export const applyRunEvent = (view: RunView, event: RunEvent): RunView => {
         ...base,
         retry: { attempt: event.attempt, maxAttempts: event.maxAttempts, nextAttemptAt: event.nextAttemptAt, reason: event.error },
       };
+    case "connection.requested":
+      return {
+        ...base,
+        connectionRequest: {
+          provider: event.provider,
+          loginUrl: event.loginUrl,
+          scopes: event.scopes,
+          ...(event.toolName === undefined ? {} : { toolName: event.toolName }),
+          expiresAt: event.expiresAt,
+        },
+      };
+    case "connection.completed":
+      return { ...base, connectionRequest: undefined };
     case "run.failed":
-      return { ...base, error: event.error };
+      // Cleared with every terminal event too: a finished run's login URL is a button that leads nowhere.
+      return { ...base, connectionRequest: undefined, error: event.error };
+    case "run.completed":
+    case "run.cancelled":
+      return { ...base, connectionRequest: undefined };
     default:
       return base;
   }

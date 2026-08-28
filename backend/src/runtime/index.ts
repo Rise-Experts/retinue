@@ -11,6 +11,14 @@ export const RUN_STATUSES = [
   "running",
   "waiting-for-question",
   "waiting-for-approval",
+  /**
+   * The run needs a connection the tenant does not have, and a person must complete a consent — task #264.
+   *
+   * A third pause beside question and approval, and deliberately the *same shape*: the runtime already stops a
+   * run and resumes it twice over, and a bespoke polling loop or a failed run somebody restarts by hand would
+   * be a second mechanism for the thing the durable runtime exists to do.
+   */
+  "waiting-for-connection",
   "retry-pending",
   "completed",
   "failed",
@@ -28,6 +36,7 @@ export const RUN_TRANSITIONS: Readonly<Record<RunStatus, readonly RunStatus[]>> 
   running: [
     "waiting-for-question",
     "waiting-for-approval",
+    "waiting-for-connection",
     "retry-pending",
     "completed",
     "failed",
@@ -35,6 +44,9 @@ export const RUN_TRANSITIONS: Readonly<Record<RunStatus, readonly RunStatus[]>> 
   ],
   "waiting-for-question": ["queued", "cancelled"],
   "waiting-for-approval": ["queued", "cancelled"],
+  // Resumes to `queued` exactly as the other two do: consent completing is an answer, and the run rejoins the
+  // queue rather than continuing in whatever process happened to receive the callback.
+  "waiting-for-connection": ["queued", "cancelled"],
   "retry-pending": ["queued", "cancelled"],
   completed: [],
   failed: [],

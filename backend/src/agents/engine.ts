@@ -20,6 +20,7 @@
 
 import type { ExecutionContext } from "../core/context.js";
 import { AgentPlatformError, isAgentPlatformError } from "../core/errors.js";
+import { connectionNeedOf, type ConnectionNeed } from "../connections/pause.js";
 import type { InteractionId, MessageId, MessagePartId, RunId, TenantId, ToolCallId } from "../core/ids.js";
 import { asId } from "../core/ids.js";
 import type { MessagePart, StructuredPart, TextPart, ToolCallPart, ToolResultPart } from "../core/content-parts.js";
@@ -147,6 +148,21 @@ export type DefaultEngineDeps = {
   readonly now?: () => number;
   /** The streaming primitive. Defaults to the models-layer `streamModelTurn`; overridden in tests. */
   readonly streamTurn?: (req: ModelTurnRequest) => AsyncIterable<NeutralStreamChunk>;
+  /**
+   * Turns "this run needs a connection" into somewhere to send a person — task #264.
+   *
+   * **Optional, and its absence means today's behaviour**: the tool call fails and the run fails with it. That
+   * is the correct default, not a degraded one — a host with no OAuth flow wired has no login URL to offer, and
+   * pausing a run for a consent screen nobody can reach would hang it for ever.
+   *
+   * Returning `null` says the same thing for one provider: this one is token-only, so fail rather than pause.
+   * That decision comes from `ToolkitAuth.modes`, which is why #260 kept `AuthMode` separate from
+   * `CredentialScheme` — an OAuth token is presented as a bearer, so the wire format cannot answer it.
+   */
+  readonly connectionConsent?: (input: {
+    readonly context: ExecutionContext;
+    readonly need: ConnectionNeed;
+  }) => Promise<{ readonly loginUrl: string; readonly scopes: readonly string[]; readonly expiresAt: string } | null>;
 };
 
 const defaultSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -415,6 +431,57 @@ export const createDefaultEngine = (deps: DefaultEngineDeps): AgentEngine => {
        */
       let pendingQuestion: string | null = null;
       /**
+       * A connection a tool needed and the tenant does not have — task #264.
+       *
+       * Tracked exactly like `pendingApproval` and `pendingQuestion`, and for the same reason: the run has to
+       * stop on an *event* the worker understands rather than on an error the model would try to work around.
+       */
+      /**
+       * Turns a marked connection failure into a pause, or leaves it to fail — task #264.
+       *
+       * Three ways to end up failing rather than pausing, and each is deliberate:
+       *
+       * - the failure is not a connection gap at all
+       * - no `connectionConsent` is wired, so this deployment has no flow to send anybody to
+       * - the callback returns `null`, meaning *this provider* is token-only and there is no login URL
+       *
+       * All three fail, because the alternative is a run parked for ever on a consent screen nobody can reach.
+       */
+      const consentMarker = async (thrown: unknown, toolName: string) => {
+        const need = connectionNeedOf(thrown);
+        if (need === null || deps.connectionConsent === undefined) return null;
+        const offer = await deps.connectionConsent({ context, need: { ...need, toolName } });
+        if (offer === null) return null;
+        return {
+          event: {
+            type: "connection.requested" as const,
+            provider: need.provider,
+            loginUrl: offer.loginUrl,
+            scopes: offer.scopes,
+            toolName,
+            expiresAt: offer.expiresAt,
+          },
+          // Returned to the model, not thrown — the same choice the approval path makes. The tool call stays a
+          // real part of the record with a real result, and the run pauses on the event rather than on an error
+          // the model would try to work around.
+          marker: {
+            status: "connection_required" as const,
+            provider: need.provider,
+            message: `${toolName} needs a ${need.provider} connection. The run is paused; do not retry.`,
+          },
+        };
+      };
+
+      /**
+       * The formed event, not the parts.
+       *
+       * Storing the pieces and building the event at the check site fought control-flow analysis: the
+       * assignment happens inside a tool's `execute` closure, so the outer `let` narrows to `never` at the
+       * check and every property access errors. Holding the event itself needs no property access there, and
+       * reads more like `pendingApproval` — a value the emit site simply yields.
+       */
+      let pendingConnection: EngineEvent | null = null;
+      /**
        * Citation candidates a tool handed back this turn, waiting for the claims they ground — #165.
        *
        * Buffered rather than emitted on the spot, because `supports` names the *text parts* a citation grounds
@@ -511,9 +578,14 @@ export const createDefaultEngine = (deps: DefaultEngineDeps): AgentEngine => {
               );
             } catch (thrown) {
               const parked = questionMarker(thrown, t.name);
-              if (parked === null) throw thrown;
-              pendingQuestion = parked.interactionId;
-              return parked.marker;
+              if (parked !== null) {
+                pendingQuestion = parked.interactionId;
+                return parked.marker;
+              }
+              const consent = await consentMarker(thrown, t.name);
+              if (consent === null) throw thrown;
+              pendingConnection = consent.event;
+              return consent.marker;
             }
           }
           const outcome = await approvals.runTool(context, run.id, { name: t.name, input });
@@ -623,6 +695,13 @@ export const createDefaultEngine = (deps: DefaultEngineDeps): AgentEngine => {
             if (pendingQuestion !== null) {
               controller.abort();
               yield { type: "question.requested", interactionId: asId<InteractionId>(pendingQuestion) };
+              return;
+            }
+            // The third stop — #264. The event carries the provider, the scopes and the URL, and **no secret**:
+            // it is rendered in a UI and clicked by a person, so it goes wherever a screenshot goes.
+            if (pendingConnection !== null) {
+              controller.abort();
+              yield pendingConnection;
               return;
             }
           }
