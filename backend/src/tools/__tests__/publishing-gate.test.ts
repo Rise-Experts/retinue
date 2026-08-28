@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
-import { publishingProblems, tableUnder } from "../../../../scripts/check-tool-effects.mjs";
+import { publishingProblems, scopeOf, tableUnder } from "../../../../scripts/check-tool-effects.mjs";
 
 /**
  * #228 — the exact list of tools that publish to the public under the operator's brand.
@@ -70,6 +70,34 @@ describe("the publishing gate (#228)", () => {
     );
     expect(problems).toHaveLength(1);
     expect(problems[0]).toContain("appears in neither list");
+  });
+
+  it("excuses a whole package once, and refuses to for a package that publishes", () => {
+    // The floor is airtight and would otherwise be unreadable: `tools-github` alone contributes twenty outward
+    // writes and none of them broadcast. One row, one reason — but only for a package with no publishing surface.
+    const wildcarded = [{ name: "tools-github/*" }];
+    expect(
+      publishingProblems(
+        [{ name: "x_post", cells: ["`x_post`", "`tools-x`", "`external-write`"] }],
+        wildcarded,
+        [{ name: "github_write_file", effect: "external-write", scope: "tools-github" }],
+      ),
+    ).toEqual([]);
+
+    // The loophole that matters, closed: a package cannot both publish and be excused wholesale.
+    const bothWays = publishingProblems(
+      [{ name: "x_post", cells: ["`x_post`", "`tools-x`", "`external-write`"] }],
+      [{ name: "tools-x/*" }],
+      [],
+    );
+    expect(bothWays).toHaveLength(1);
+    expect(bothWays[0]).toContain("must name its outward writes individually");
+  });
+
+  it("maps a source file to the package the floor excuses", () => {
+    expect(scopeOf("tools/github/src/index.ts")).toBe("tools-github");
+    expect(scopeOf("backend/src/tools/registry.ts")).toBe("agentkit");
+    expect(scopeOf("shareflow/src/tools/publishing.ts")).toBe("shareflow");
   });
 
   it("passes an outward write that the catalogue explicitly excuses", () => {

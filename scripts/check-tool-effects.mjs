@@ -161,7 +161,8 @@ export const tableUnder = (markdown, heading) => {
     // The header and separator rows have no backticked identifier in cell 0, which is what excludes them.
     const cells = line.split("|").slice(1, -1).map((cell) => cell.trim());
     if (cells.length < 2) continue;
-    const name = /^`([a-z][a-z0-9_]*)`$/.exec(cells[0])?.[1];
+    // A tool name, or a package wildcard like `tools-github/*` — see `scopeOf`.
+    const name = /^`([a-z][a-z0-9_]*|[a-z][a-z0-9-]*\/\*)`$/.exec(cells[0])?.[1];
     if (name === undefined) continue;
     rows.push({ name, cells });
   }
@@ -172,6 +173,24 @@ export const tableUnder = (markdown, heading) => {
  * Whether the tool reaches outside this system at all. The floor's subject.
  */
 const GATED = new Set(["external-write", "destructive"]);
+
+/**
+ * Which publishable unit a source file belongs to, so the floor can be excused per package.
+ *
+ * Twenty-one toolkits are planned and most of them are all writes — `tools-github` alone contributes twenty.
+ * Twenty rows each saying "a repository write is not a broadcast" is not a record anybody reads, and an
+ * unreadable table is the state a check gets deleted from. So a package may be excused once, with one reason.
+ *
+ * The safeguard is in `publishingProblems`: a package that contributes **any** row to the publishing table
+ * cannot hold a wildcard. `tools-x` has to name its tools individually, and a broadcast tool added to it later
+ * is a floor failure — while `tools-github`, which has no public-broadcast surface at all, says so once.
+ */
+export const scopeOf = (file) => {
+  const parts = file.split("/");
+  if (parts[0] === "tools" && parts[1] !== undefined) return `tools-${parts[1]}`;
+  if (parts[0] === "backend") return "agentkit";
+  return parts[0] ?? "unknown";
+};
 
 /**
  * #228: publishing does not get its own `ToolEffect`, and this is what took its place.
@@ -218,12 +237,28 @@ export const publishingProblems = (publishing, exempt, declared) => {
     }
   }
 
-  const triaged = new Set([...expected.keys(), ...exempt.map((row) => row.name)]);
+  const named = new Set([...expected.keys(), ...exempt.filter((row) => !row.name.endsWith("/*")).map((row) => row.name)]);
+  const wildcards = new Set(exempt.filter((row) => row.name.endsWith("/*")).map((row) => row.name.slice(0, -2)));
+
+  // A package cannot both publish and be excused wholesale — that is the loophole the wildcard would otherwise
+  // open, and it is the one that matters, because the packages with a publishing surface are the risky ones.
+  for (const row of publishing) {
+    const scope = row.cells[1]?.replaceAll("`", "");
+    if (scope !== undefined && wildcards.has(scope)) {
+      problems.push(
+        `docs/23 excuses all of ${scope} with a wildcard and also lists ${row.name} as publishing — a package ` +
+          "with a publishing surface must name its outward writes individually",
+      );
+    }
+  }
+
   for (const tool of declared) {
-    if (!GATED.has(tool.effect) || triaged.has(tool.name)) continue;
+    if (!GATED.has(tool.effect) || named.has(tool.name)) continue;
+    if (tool.scope !== undefined && wildcards.has(tool.scope)) continue;
     problems.push(
       `${tool.name} is "${tool.effect}" and appears in neither list in docs/23 — add it to "The publishing ` +
-        'tools" if it reaches strangers, or to "External writes that are not publishing" with the reason',
+        'tools" if it reaches strangers, or to "External writes that are not publishing" with the reason ' +
+        `(a whole package can be excused once, as \`${tool.scope ?? "package"}/*\`, if none of it broadcasts)`,
     );
   }
   return problems;
@@ -262,7 +297,7 @@ const main = () => {
   for (const file of files) {
     const source = readFileSync(file, "utf8");
     for (const declaration of declarationsIn(source)) {
-      declared.push(declaration);
+      declared.push({ ...declaration, scope: scopeOf(file) });
       if (!looksLikeAWrite(declaration.name)) continue;
       checked += 1;
       if (declaration.effect !== "read") continue;

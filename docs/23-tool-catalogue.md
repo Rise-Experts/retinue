@@ -128,14 +128,18 @@ Public under the operator's brand. Exact, and checked in both directions.
 
 The other half of the floor. An `external-write` here says *reaches a third party, reaches no strangers*.
 
+A row may name one tool or a whole package, as `` `tools-github/*` ``. The wildcard exists because most
+toolkits are all writes and none of them broadcast — twenty rows each saying "a repository write is not a
+broadcast" is not a record anybody reads, and an unreadable table is one step from a deleted check. The
+safeguard: **a package that contributes any row to the publishing table above cannot hold a wildcard.**
+`tools-x` names its tools individually, so a broadcast tool added to it later is a floor failure.
+
 | Tool | Package | Why it is not publishing |
 |---|---|---|
 | `check_media_storage` | `shareflow` | Reads a storage provider's quota; publishes nothing |
 | `slack_post_message` | `tools-slack` | The case the question was asked about — a workspace is not the public |
 | `slack_reply_in_thread` | `tools-slack` | Same workspace, same members |
-| `github_create_issue` | `tools-github` | Public on a public repository and not on a private one — finding 2 |
-| `github_comment` | `tools-github` | Same |
-| `github_merge_pull_request` | `tools-github` | Changes a repository; broadcasts nothing |
+| `tools-github/*` | `tools-github` | No public-broadcast surface. A repository write is public exactly when the repository is — finding 2 — and `github_create_issue` on a private repo reaches nobody. Twenty outward writes, one reason |
 | `http_write` | `agentkit` | A generic escape hatch. Its destination is an argument, so its publicness is *entirely* dynamic — the strongest case of finding 2, and the reason a static label was never going to work |
 | `shell_exec` | `agentkit` | Runs a command on the host. Destructive, and local |
 
