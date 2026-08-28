@@ -94,3 +94,32 @@ and carry the same untrusted-data treatment.
 - Credentials never appear in prompts, logs or tool results.
 - Mid-run tool-list changes are detectable through the recorded catalog hash.
 - Endpoints failing the egress policy are rejected at registration and at handshake.
+
+## Both directions — added by #250
+
+This document describes MCP **outbound**: a tenant registers their server and the platform consumes it. That was
+the only direction the package had, and it is half the story — `backend/src/mcp/index.ts` even points at an
+inbound server that lives in the *old Chorus repository*, not in this package. So a deployment could consume an
+MCP server and could not be one, and its tools were unreachable from Claude Code, Claude Desktop and Cursor.
+
+`@retinue/agentkit/mcp-server` is the other direction. It adds no capability: every call goes through
+`registry.execute` exactly as an agent's would, so authorization, the tenant's toolset, the approval gate,
+validation, idempotency and audit attribution all apply unchanged.
+
+The rule this document sets for outbound is what governs inbound too, read in a mirror. Here:
+
+> a remote server's `readOnlyHint`/`destructiveHint` are advisory and come from the remote server, which is
+> untrusted. A remote server cannot talk its way down to a weaker effect.
+
+Inbound, **this package is the remote server**, so it owes the other side the honesty this document demands of
+them: the MCP annotations are derived from `ToolEffect` by a single function, so what is advertised cannot drift
+from what is enforced — and nothing a client sends is trusted, including an effect, a hint, or a claim of prior
+approval.
+
+One consequence worth stating, because it changed a declaration in the reference host: **a mis-declared effect
+stops being internal the moment tools are exposed over MCP.** `remember` was declared `read` while delegating to
+`principalMemory.put`, which was survivable while the only reader was this platform's own policy; over MCP it
+advertises `readOnlyHint: true` to an external client, which may skip a confirmation on that basis. `check:effects`
+did not catch it because that check reads the tool's *name*.
+
+See `website/content/integrations/mcp-server.md` for the operator-facing page.

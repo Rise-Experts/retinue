@@ -51,6 +51,10 @@
       "types": "./dist/entries/mcp.d.ts",
       "default": "./dist/entries/mcp.js"
     },
+    "./mcp-server": {
+      "types": "./dist/entries/mcp-server.d.ts",
+      "default": "./dist/entries/mcp-server.js"
+    },
     "./observability": {
       "types": "./dist/entries/observability.d.ts",
       "default": "./dist/entries/observability.js"
@@ -143,7 +147,8 @@
     "ioredis": "^6.0.0",
     "pg": "^8.23.0",
     "vitest": "^3.0.0 || ^4.0.0",
-    "@electric-sql/pglite": "^0.2.0 || ^0.3.0"
+    "@electric-sql/pglite": "^0.2.0 || ^0.3.0",
+    "@modelcontextprotocol/sdk": "^1.0.0"
   },
   "peerDependenciesMeta": {
     "pg": {
@@ -186,6 +191,9 @@
       "optional": true
     },
     "@electric-sql/pglite": {
+      "optional": true
+    },
+    "@modelcontextprotocol/sdk": {
       "optional": true
     }
   },

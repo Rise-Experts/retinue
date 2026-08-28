@@ -586,7 +586,18 @@ const buildTools = (backend: ExampleBackend): readonly Tool[] => {
       name: "remember",
       description: "Store a fact about this person for future conversations.",
       category: "assistant",
-      effect: "read" as const,
+      /**
+       * `internal-write`, not `read` — corrected by #250.
+       *
+       * It delegates to `principalMemory.put`: it writes something durable that outlives the run. Declaring it
+       * `read` was harmless-looking while the only consumer was this platform's own policy, and stopped being
+       * harmless the moment the tool surface was exposed over MCP — an external client is shown
+       * `readOnlyHint: true` for a `read` tool, and a client may skip a confirmation on that basis.
+       *
+       * `check:effects` did not catch it because that check reads the *name*, and "remember" carries no
+       * write-ish verb. A mis-declared effect is only visible where the effect is used.
+       */
+      effect: "internal-write" as const,
       delegatesTo: "principalMemory.put",
       inputSchema: { type: "object", properties: { fact: { type: "string" } }, required: ["fact"] },
       /**

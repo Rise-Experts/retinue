@@ -26,7 +26,9 @@
     "test:kill": "node --env-file=../.env ./scripts/kill-worker-test.mjs",
     "build:composer": "node scripts/build-composer.mjs",
     "flow": "node --env-file=../.env ./scripts/run-flow.mjs",
-    "structured": "node --env-file=../.env ./scripts/run-structured.mjs"
+    "structured": "node --env-file=../.env ./scripts/run-structured.mjs",
+    "mcp": "node ./scripts/mcp-server.mjs",
+    "mcp:verify": "node ./scripts/mcp-verify.mjs"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^4.0.42",
