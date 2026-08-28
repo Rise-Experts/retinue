@@ -139,7 +139,7 @@ safeguard: **a package that contributes any row to the publishing table above ca
 | `check_media_storage` | `shareflow` | Reads a storage provider's quota; publishes nothing |
 | `slack_post_message` | `tools-slack` | The case the question was asked about — a workspace is not the public |
 | `slack_reply_in_thread` | `tools-slack` | Same workspace, same members |
-| `tools-github/*` | `tools-github` | No public-broadcast surface. A repository write is public exactly when the repository is — finding 2 — and `github_create_issue` on a private repo reaches nobody. Twenty outward writes, one reason |
+| `tools-github/*` | `tools-github` | **44**, all built · `github_list_issues`, `github_create_issue`, `github_comment`, `github_merge_pull_request`, `github_search_issues`, `github_get_issue`, `github_update_issue`, `github_close_issue`, `github_reopen_issue`, `github_list_pull_requests`, `github_get_pull_request`, `github_search_pull_requests`, `github_create_pull_request`, `github_update_pull_request`, `github_review_pull_request`, `github_close_pull_request`, `github_search_code`, `github_get_file`, `github_list_directory`, `github_list_commits`, `github_get_commit`, `github_list_branches`, `github_list_tags`, `github_create_branch`, `github_write_file`, `github_delete_file`, `github_list_projects`, `github_get_project`, `github_create_project`, `github_add_project_item`, `github_set_project_field`, `github_remove_project_item`, `github_list_releases`, `github_get_release`, `github_create_release`, `github_list_workflow_runs`, `github_get_workflow_run`, `github_get_workflow_run_logs`, `github_rerun_workflow`, `github_dispatch_workflow`, `github_list_labels`, `github_add_labels`, `github_remove_label`, `github_list_milestones`. `destroys`: `github_merge_pull_request`, `github_delete_file`, `github_remove_project_item`. `include`/`exclude` at construction, because 44 entries is ~1,540 resident tokens and #210 measured a run-time budget costing 19–23 points of selection accuracy | project | [#214](https://github.com/Rise-Experts/retinue/issues/214), [#223](https://github.com/Rise-Experts/retinue/issues/223) |
 | `http_write` | `agentkit` | A generic escape hatch. Its destination is an argument, so its publicness is *entirely* dynamic — the strongest case of finding 2, and the reason a static label was never going to work |
 | `shell_exec` | `agentkit` | Runs a command on the host. Destructive, and local |
 
@@ -254,13 +254,16 @@ the package will export, not an estimate.
 | `tools-browser` | **6** · `browser_navigate`, `browser_read`, `browser_click`, `browser_type`, `browser_screenshot`, `browser_close` | web | [#239](https://github.com/Rise-Experts/retinue/issues/239) |
 | `tools-email` | **4** · `email_send`, `email_compose_preview`, `email_get_status`, `email_list_sent` | communication | [#241](https://github.com/Rise-Experts/retinue/issues/241) |
 
-**163 tools specified across 16 packages**, of which 10 are built — every one named above, so
-`npm run check:catalogue` counts 206 catalogued tools and the gap to the total below is exactly the sketched
+**161 tools specified across 16 packages**, of which 48 are built — every one named above, so
+`npm run check:catalogue` counts 213 catalogued tools and the gap to the total below is exactly the sketched
 packages that have no contract yet.
 
-One discrepancy surfaced while enumerating: [#223](https://github.com/Rise-Experts/retinue/issues/223) is titled
-*"38 more"* and its tables specify **40**. The names above are what the issue actually contains; whoever
-implements it should trust the tables and correct the title.
+The discrepancy noted while enumerating is now **resolved in favour of the title.** #223 is titled *"38 more"*
+and its tables named **40**, because they listed `github_create_file` and `github_update_file` beside
+`github_write_file`. Implementing it settled which was right: the create/update split is the *contents API's*
+distinction — an update needs a `sha` and a create refuses one — and not a distinction the caller has. A model
+asked to fix a typo does not know whether the file exists, and picking wrong earns a 422 it cannot interpret.
+So one tool, which looks the `sha` up itself, and the count is 38.
 
 ### Sketched, not yet specified
 

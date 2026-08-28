@@ -70,6 +70,28 @@ export const namesConstantFor = (dir) => `${dir.toUpperCase().replace(/-/g, "_")
  */
 export const declarationCount = (source) => [...source.matchAll(/\b(?:defineTool|confirms|destroys)\s*\(/g)].length;
 
+/**
+ * Every non-test source file in a toolkit package.
+ *
+ * The count used to read `src/index.ts` alone, which was right while a toolkit was one file. `tools/github`
+ * reached 44 tools and split into four group modules with `index.ts` as assembly — and the check then reported
+ * "lists 44 but declares 0", firing on the correct structure. The names constant still lives in `index.ts`,
+ * because one array in one known place is what makes it readable; the declarations are wherever they are.
+ */
+export const sourceFilesOf = (dir) => {
+  const files = [];
+  const walk = (path) => {
+    for (const entry of readdirSync(path, { withFileTypes: true })) {
+      if (entry.name === "node_modules" || entry.name === "dist" || entry.name === "__tests__") continue;
+      const child = `${path}/${entry.name}`;
+      if (entry.isDirectory()) walk(child);
+      else if (entry.name.endsWith(".ts") && !entry.name.includes(".test.")) files.push(child);
+    }
+  };
+  walk(`tools/${dir}/src`);
+  return files;
+};
+
 /** The string literals of a `export const NAME = [ … ] as const;` array. */
 export const namesFrom = (source, constant) => {
   const start = source.indexOf(`export const ${constant} = [`);
@@ -162,7 +184,7 @@ const main = () => {
       console.error(`  without it, tools/${dir} ships tools that no catalogue entry classifies`);
       return 2;
     }
-    const declared = declarationCount(source);
+    const declared = sourceFilesOf(dir).reduce((total, file) => total + declarationCount(readFileSync(file, "utf8")), 0);
     if (declared !== names.length) {
       console.error(`✗ ${constant} lists ${names.length} tool(s) but tools/${dir} declares ${declared}`);
       console.error("  the constant is what this check reads, so a stale one means it covers less than it says");
