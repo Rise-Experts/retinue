@@ -44,6 +44,7 @@
     "@retinue/tools-github": "^0.2.0",
     "@retinue/tools-jira": "^0.3.0",
     "@retinue/tools-linear": "^0.3.0",
+    "@retinue/tools-meta": "^0.3.0",
     "@retinue/tools-notion": "^0.3.0",
     "@retinue/tools-search": "^0.2.0",
     "@retinue/tools-slack": "^0.2.0",

@@ -71,6 +71,7 @@ test("exactly the shipping packages are releasable, and no more", () => {
     "tools-github",
     "tools-jira",
     "tools-linear",
+    "tools-meta",
     "tools-notion",
     "tools-slack",
     "tools-search",

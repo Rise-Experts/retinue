@@ -24,6 +24,7 @@ import { createConfluenceToolkit } from "@retinue/tools-confluence";
 import { createGitHubToolkit } from "@retinue/tools-github";
 import { createJiraToolkit } from "@retinue/tools-jira";
 import { createLinearToolkit } from "@retinue/tools-linear";
+import { createMetaToolkit } from "@retinue/tools-meta";
 import { createNotionToolkit } from "@retinue/tools-notion";
 import { createSlackToolkit } from "@retinue/tools-slack";
 import { braveSearch, searxngSearch, serperSearch, tavilySearch } from "@retinue/tools-search";
@@ -118,6 +119,23 @@ export const exampleToolkits = (env: ToolkitEnv, fetchImpl?: typeof fetch): read
       createNotionToolkit({
         credentialRef: "notion",
         resolver: createStaticCredentialResolver({ notion: env.NOTION_TOKEN }),
+        ...wiring,
+      }),
+    );
+  }
+
+  /**
+   * WhatsApp and Instagram — REQ-053 (#227). Each surface is toggled by its own id, so a deployment that has
+   * cleared Meta's review for one and not the other gets exactly the tools it can use.
+   */
+  if (env.META_ACCESS_TOKEN !== undefined && (env.WHATSAPP_PHONE_NUMBER_ID !== undefined || env.INSTAGRAM_ACCOUNT_ID !== undefined)) {
+    providers.push(
+      createMetaToolkit({
+        credentialRef: "meta",
+        resolver: createStaticCredentialResolver({ meta: env.META_ACCESS_TOKEN }),
+        ...(env.WHATSAPP_PHONE_NUMBER_ID === undefined ? {} : { phoneNumberId: env.WHATSAPP_PHONE_NUMBER_ID }),
+        ...(env.WHATSAPP_BUSINESS_ACCOUNT_ID === undefined ? {} : { wabaId: env.WHATSAPP_BUSINESS_ACCOUNT_ID }),
+        ...(env.INSTAGRAM_ACCOUNT_ID === undefined ? {} : { instagramAccountId: env.INSTAGRAM_ACCOUNT_ID }),
         ...wiring,
       }),
     );

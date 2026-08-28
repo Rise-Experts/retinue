@@ -95,7 +95,18 @@ const defaultClassification = (failure: VendorFailure, vendor: string): Pick<Pla
     };
   }
   if (failure.status === 429) {
-    return { code: "rate_limited", message: `${vendor} rate limit reached: ${failure.reason}`, retryable: true };
+    /**
+     * `Retry-After` is honoured when the vendor sent one — the default backoff is a guess, and a vendor that
+     * told you the number has removed the need to guess. Meta, X and Reddit all send it.
+     */
+    return {
+      code: "rate_limited",
+      message:
+        `${vendor} rate limit reached: ${failure.reason}` +
+        (failure.retryAfterMs === undefined ? "" : ` Retry after ${Math.ceil(failure.retryAfterMs / 1000)}s.`),
+      retryable: true,
+      ...(failure.retryAfterMs === undefined ? {} : { retryAfterMs: failure.retryAfterMs }),
+    };
   }
   if (failure.status === 401 || failure.status === 403) {
     return {

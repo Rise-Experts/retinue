@@ -29,6 +29,9 @@
       "path": "./tools/linear"
     },
     {
+      "path": "./tools/meta"
+    },
+    {
       "path": "./tools/notion"
     },
     {

@@ -68,6 +68,17 @@ export type HttpFailure = {
   readonly kind: "forbidden" | "redirected" | "timeout" | "unreachable" | "http-error" | "unreadable";
   readonly status?: number;
   readonly reason: string;
+  /**
+   * `Retry-After`, in milliseconds, when the server sent one.
+   *
+   * Parsed here because it is the one response header a *failure* still needs to carry: a vendor that answers
+   * `429` with `Retry-After: 47` has told you exactly how long to wait, and a default backoff that ignores it
+   * either hammers the vendor or waits far too long. `PlatformError.retryAfterMs` already exists and the retry
+   * path already reads it — this is the missing link between them.
+   *
+   * Both wire formats: a delay in seconds, and an HTTP date.
+   */
+  readonly retryAfterMs?: number;
 };
 
 export type HttpSuccess = {
@@ -120,6 +131,26 @@ const RESERVED_HEADERS = new Set(["authorization", "cookie", "proxy-authorizatio
 
 export type HttpClient = {
   request(input: HttpRequest): Promise<HttpOutcome>;
+};
+
+/**
+ * `Retry-After` as milliseconds, in whichever of its two forms the server used.
+ *
+ * Returns a spreadable object rather than a number so an absent or unparseable header adds no key at all —
+ * `retryAfterMs: undefined` and "no retry hint" are different things to a consumer reading the field.
+ *
+ * A date in the past yields `0` rather than a negative delay, and an absurd value is capped: a vendor asking
+ * for a six-hour wait inside a request path is a vendor to give up on, not to obey.
+ */
+const MAX_RETRY_AFTER_MS = 5 * 60_000;
+
+export const retryAfterOf = (headers: Headers): { retryAfterMs?: number } => {
+  const raw = headers.get("retry-after");
+  if (raw === null || raw.trim() === "") return {};
+  const seconds = Number(raw.trim());
+  const ms = Number.isFinite(seconds) ? seconds * 1000 : Date.parse(raw.trim()) - Date.now();
+  if (!Number.isFinite(ms)) return {};
+  return { retryAfterMs: Math.min(Math.max(Math.round(ms), 0), MAX_RETRY_AFTER_MS) };
 };
 
 export const createHttpClient = (config: HttpClientConfig = {}): HttpClient => {
@@ -198,6 +229,7 @@ export const createHttpClient = (config: HttpClientConfig = {}): HttpClient => {
             kind: "http-error",
             status: response.status,
             reason: `That URL returned ${response.status}${text.trim() === "" ? "" : `: ${text.slice(0, 500)}`}`,
+            ...retryAfterOf(response.headers),
           };
         }
 

@@ -154,6 +154,11 @@ export const PACKAGES = [
     deep: ["dist/index.js", "src/index.ts", "graphql", "internal"],
   },
   {
+    name: "@retinue/tools-meta",
+    dir: "tools/meta",
+    deep: ["dist/index.js", "src/index.ts", "whatsapp", "internal"],
+  },
+  {
     name: "@retinue/tools-notion",
     dir: "tools/notion",
     // `blocks` is the module a consumer would most plausibly reach for, which is why it must not resolve.

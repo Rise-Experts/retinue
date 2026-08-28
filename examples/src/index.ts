@@ -220,6 +220,12 @@ const TOOLKIT_READ_TOOLS = [
   "notion_get_page",
   // The most useful Notion read: a database is the closest thing Notion has to an issue list.
   "notion_query_database",
+  // Meta — REQ-053 (#227). The template list is granted with the send for the same reason as Jira's
+  // transitions: a template name is per business account, so the send is uncallable without it.
+  "whatsapp_list_templates",
+  "instagram_get_account",
+  "instagram_list_media",
+  "instagram_get_media",
 ] as const;
 
 /**
@@ -243,6 +249,10 @@ const TOOLKIT_WRITE_TOOLS = [
   "confluence_update_page",
   "linear_update_issue",
   "notion_create_page",
+  // One send and one public post, both gated. `instagram_publish_media` is granted deliberately: it is the
+  // clearest `publishing` act in the catalogue, and a gate nothing exercises is a gate nobody trusts.
+  "whatsapp_send_template",
+  "instagram_publish_media",
 ] as const;
 
 // The imported MCP tools come from `./mcp.ts`, derived from the administrator classification there.
