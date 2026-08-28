@@ -17,7 +17,13 @@
       "path": "./services/api"
     },
     {
+      "path": "./tools/confluence"
+    },
+    {
       "path": "./tools/github"
+    },
+    {
+      "path": "./tools/jira"
     },
     {
       "path": "./tools/search"

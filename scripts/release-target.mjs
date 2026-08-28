@@ -44,7 +44,9 @@ export const RELEASABLE = {
   react: { workspace: "@retinue/react", dir: "frontend" },
   // Toolkits, versioned independently of the runtime — the whole reason they are separate packages is that a
   // vendor API change must not be a runtime release.
+  "tools-confluence": { workspace: "@retinue/tools-confluence", dir: "tools/confluence" },
   "tools-github": { workspace: "@retinue/tools-github", dir: "tools/github" },
+  "tools-jira": { workspace: "@retinue/tools-jira", dir: "tools/jira" },
   "tools-slack": { workspace: "@retinue/tools-slack", dir: "tools/slack" },
   "tools-search": { workspace: "@retinue/tools-search", dir: "tools/search" },
 };

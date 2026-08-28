@@ -136,6 +136,18 @@ export const PACKAGES = [
     dir: "tools/search",
     deep: ["dist/index.js", "src/index.ts", "providers", "internal"],
   },
+  {
+    name: "@retinue/tools-jira",
+    dir: "tools/jira",
+    // `adf` is the module a consumer would most plausibly reach for — the converter is genuinely useful on its
+    // own — which is exactly why it must not resolve as a subpath. It is re-exported from the root instead.
+    deep: ["dist/index.js", "src/index.ts", "adf", "internal"],
+  },
+  {
+    name: "@retinue/tools-confluence",
+    dir: "tools/confluence",
+    deep: ["dist/index.js", "src/index.ts", "storage", "internal"],
+  },
 ];
 
 /**

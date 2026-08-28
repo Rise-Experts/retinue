@@ -20,6 +20,9 @@ export {
 } from "./http.js";
 export type { HttpClient, HttpClientConfig, HttpFailure, HttpOutcome, HttpRequest, HttpSuccess } from "./http.js";
 
+export { createVendorTransport } from "./vendor.js";
+export type { VendorClassifier, VendorFailure, VendorTransport, VendorTransportConfig } from "./vendor.js";
+
 export {
   DEFAULT_SEARCH_LIMIT,
   MAX_SNIPPET_CHARS,
