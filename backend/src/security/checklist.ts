@@ -219,6 +219,18 @@ export const SECURITY_CHECKS: readonly SecurityCheck[] = [
  */
 export const CREDENTIAL_FIELD_EXEMPTIONS: readonly { readonly file: string; readonly reason: string }[] = [
   {
+    file: "connections/oauth/index.ts",
+    reason:
+      "`OAuthProviderConfig.clientSecret` is the *deployment's own* OAuth client secret, supplied by the host " +
+      "at wiring time — the same shape and the same limits as the model provider's key above. It goes into one " +
+      "token-request body over the back channel and is never put in an authorization URL, because a secret in " +
+      "a URL is in the browser history, the referrer header and every proxy log between. `TokenResponse` " +
+      "carries `accessToken`/`refreshToken` for the moments between the exchange and sealing them: the " +
+      "connection service passes them straight to `SecretCipher.seal`, and what reaches the database is " +
+      "ciphertext. Neither is written to a table, placed in a message part or a result envelope, and the " +
+      "provider's own error body is deliberately not echoed because it routinely quotes the request.",
+  },
+  {
     file: "tools/credentials.ts",
     reason:
       "The `Credential` union is the *resolved* value — the one place a third-party secret legitimately exists, " +

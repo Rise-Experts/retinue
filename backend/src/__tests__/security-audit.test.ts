@@ -153,6 +153,7 @@ describe("egress — AC-2", () => {
      * | `adapters/supabase/storage.ts` | Operator-configured storage host |
      * | `toolkit/http.ts` | The one client the web tools use, through `validateHttpEgress` — the *model-directed* path, and the reason that function exists |
      * | `adapters/embeddings/openai.ts` | Operator-configured endpoint, never named by a model |
+     * | `connections/oauth/index.ts`, `connections/oauth/service.ts` | The provider's token and revocation endpoints — operator-configured in `OAuthProviderConfig`, never named by a model, and asserted `https` at construction because the request body carries the client secret and the authorization code (#262) |
      */
     const allowed = [
       "adapters/supabase/storage.ts",
@@ -160,6 +161,8 @@ describe("egress — AC-2", () => {
       "mcp/egress.ts",
       "toolkit/http.ts",
       "adapters/embeddings/openai.ts",
+      "connections/oauth/index.ts",
+      "connections/oauth/service.ts",
     ];
     const offenders: string[] = [];
     for (const file of sourceFiles()) {

@@ -197,3 +197,70 @@ And one genuine bug the existing tests caught, which is worth recording because 
 filename to `q[removed]3[removed].[removed]c…`. A platform section neutralising an interpolated value legitimately
 has no delimiter of its own, so the empty nonce is a real case. Had the attachment tests not existed, every
 filename in every prompt would have been quietly mangled.
+
+## The OAuth callback — added by #262
+
+The most attackable surface this package exposes, and the reason the flow ships here rather than being left to
+each deployment: twenty deployments writing it themselves is twenty chances at the same three mistakes.
+
+### 1. A `state` not bound to the session
+
+**The attack.** An attacker completes their *own* consent and arranges for the code to be delivered into the
+victim's session. The victim's tenant then holds an attacker-controlled connection, and every action the agent
+subsequently takes against that provider happens in the attacker's account. This is login CSRF, and it is worse
+than the name suggests — nothing looks broken afterwards.
+
+**The defence.** `state` is 256 bits of randomness, single-use, TTL-bounded, and bound to the tenant **and the
+principal** who began the flow. Same tenant is not the same person: a code must not be redeemable by a
+colleague.
+
+`consume` is take-once — it returns and removes in one step. A `get` followed by a `delete` is a replay window,
+which is the attack.
+
+**One message for every state failure.** Unknown, replayed, expired, wrong tenant, wrong principal: one
+response. A callback that distinguishes them is an oracle, and knowing a state existed is enough to confirm a
+guess. The distinction belongs in the server-side log.
+
+**Nothing outbound on a bad state.** Every check that can be made without the provider is made first, so probing
+the callback causes no request and spends no real code.
+
+### 2. An unallowlisted `redirect_uri`
+
+**The attack.** Any reflection of a caller-supplied redirect turns the callback into an open redirect, and the
+authorization code into a token somebody else holds.
+
+**The defence.** Exact string match against configuration. Not a prefix — `https://app.example.com.evil.tld`
+starts with `https://app.example.com` — and deliberately not a `URL` comparison, which normalises and would
+widen the allowlist by accident over a trailing slash or a default port.
+
+Refused **before** an attempt is stored, so probing leaves nothing behind. And the token exchange uses the
+*recorded* redirect, never one from the request: taking it from the request would let an attacker choose both
+halves of the pair the provider checks.
+
+### 3. No PKCE
+
+**The defence.** S256, on by default, including when a client secret is configured — "we have a secret so we do
+not need PKCE" is an argument about one threat and PKCE defends another. The verifier is stored server-side
+against the state and never reaches the browser; sending it there defeats the mechanism entirely.
+
+### What is not echoed
+
+A provider's error body is not passed through: it routinely quotes the request, which carries the client secret
+and the code. The client secret never appears in an authorization URL — a secret in a URL is in the browser
+history, the referrer header and every proxy log between.
+
+### Revocation
+
+`disconnect` revokes at the provider **first**, then locally. The other order leaves a live token nobody can see
+and nobody can stop — strictly worse than either failure alone. A provider with no revocation endpoint is
+*reported*, not silently skipped, because a caller who believes a token was revoked will not go and remove it by
+hand.
+
+Revocation reaches runs already in flight, and by construction rather than by a new mechanism: credentials are
+resolved per call, so a run that resolved one holds it for that call only.
+
+### Not yet reviewed against a live provider
+
+No OAuth application has been registered with a real provider from this repository, so the flow is verified by
+unit tests down to the exact bytes of the token request and **not** by a completed consent. That gap is
+[#262](https://github.com/Rise-Experts/retinue/issues/262) AC-10 and is recorded rather than closed.

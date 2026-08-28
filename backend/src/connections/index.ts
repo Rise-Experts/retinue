@@ -128,3 +128,5 @@ export const parseCredentialRef = (ref: string): { readonly provider: string; re
 
 export * from "./cipher.js";
 export * from "./resolver.js";
+export * from "./oauth/index.js";
+export * from "./oauth/service.js";
