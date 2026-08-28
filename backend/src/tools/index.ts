@@ -14,6 +14,13 @@ import type { IdempotencyKey } from "../idempotency/index.js";
 /**
  * Effect classification. This drives the approval policy, so an unknown effect is
  * never treated as `read` — see `../mcp` for how imported tools are classified.
+ *
+ * **Adding a value is more expensive than it looks — #228.** `external-write` and `destructive` appear in a
+ * disjunction three times: twice in `define.ts` (deriving `approvalPolicy` and `requiresIdempotencyKey`) and
+ * once in `registry.ts`'s `requiresKey`. A new value has to be added to all three, and missing one gives the
+ * new effect **`approvalPolicy: "never"`** by default — silently ungating the very tools it was added to
+ * protect. #228 asked for a fifth value for public publishing and declined for this reason; the gate there is
+ * an exact list in `docs/23-tool-catalogue.md`, enforced by `check:effects`.
  */
 export const TOOL_EFFECTS = [
   "read",

@@ -92,8 +92,20 @@ export const declarationsIn = (source) => {
 
   // `confirms({ name: "x" … })` / `destroys({ … })` — classification comes from the wrapper and the type forbids
   // stating an effect, so these can never be misclassified.
-  for (const [, wrapper, name] of source.matchAll(/\b(confirms|destroys)\s*\(\s*\{[\s\S]{0,400}?name:\s*"([a-z][a-z0-9_]*)"/g)) {
-    found.push({ name, effect: wrapper === "destroys" ? "destructive" : "external-write", via: wrapper });
+  for (const match of source.matchAll(/\b(confirms|destroys)\s*\(\s*\{[\s\S]{0,400}?name:\s*"([a-z][a-z0-9_]*)"/g)) {
+    const [, wrapper, name] = match;
+    // A window forward from the name for `category:`. The wrapper decides the other three, always:
+    // `confirms()` sets approval `always` and requires a key, `destroys()` the same plus `destructive`,
+    // and the type forbids a caller restating any of them. So they are known, not parsed.
+    const from = match.index ?? 0;
+    found.push({
+      name,
+      effect: wrapper === "destroys" ? "destructive" : "external-write",
+      via: wrapper,
+      category: /category:\s*"([a-z-]+)"/.exec(source.slice(from, from + 800))?.[1],
+      approvalPolicy: "always",
+      requiresIdempotencyKey: true,
+    });
   }
 
   /**
@@ -113,10 +125,111 @@ export const declarationsIn = (source) => {
     const to = names[i + 1]?.index ?? source.length;
     const body = source.slice(from, to);
     const effect = /effect:\s*"([a-z-]+)"/.exec(body)?.[1];
-    found.push({ name, effect: effect ?? "read", via: effect ? "explicit" : "default" });
+    found.push({
+      name,
+      effect: effect ?? "read",
+      via: effect ? "explicit" : "default",
+      category: /category:\s*"([a-z-]+)"/.exec(body)?.[1],
+      approvalPolicy: /approvalPolicy:\s*"([a-z-]+)"/.exec(body)?.[1],
+      // Tri-state, not a boolean. `undefined` means the field is absent, which is how a *correct* tool is
+      // written — the effect derives it. Collapsing absent to `false` reported all four existing publishing
+      // tools as overriding it, which is the "check fires on correct code" shape.
+      requiresIdempotencyKey: /requiresIdempotencyKey:\s*(true|false)/.exec(body)?.[1] === "true"
+        ? true
+        : /requiresIdempotencyKey:\s*false/.test(body)
+          ? false
+          : undefined,
+    });
   }
   return found;
 };
+
+/**
+ * A `| `name` | … |` table under a `###` heading in the catalogue.
+ *
+ * From the heading to the next heading, not to the next blank line. The first version stopped at `\n\n` and so
+ * captured the *paragraph* between the heading and the table — an empty parse, caught by the floor in `main()`
+ * rather than by silently asserting nothing about ten ungated tools.
+ */
+export const tableUnder = (markdown, heading) => {
+  const start = markdown.indexOf(`### ${heading}`);
+  if (start === -1) return [];
+  const rest = markdown.slice(start + 1);
+  const end = rest.search(/\n#{1,3} /);
+  const rows = [];
+  for (const line of rest.slice(0, end === -1 ? undefined : end).split("\n")) {
+    // The header and separator rows have no backticked identifier in cell 0, which is what excludes them.
+    const cells = line.split("|").slice(1, -1).map((cell) => cell.trim());
+    if (cells.length < 2) continue;
+    const name = /^`([a-z][a-z0-9_]*)`$/.exec(cells[0])?.[1];
+    if (name === undefined) continue;
+    rows.push({ name, cells });
+  }
+  return rows;
+};
+
+/**
+ * Whether the tool reaches outside this system at all. The floor's subject.
+ */
+const GATED = new Set(["external-write", "destructive"]);
+
+/**
+ * #228: publishing does not get its own `ToolEffect`, and this is what took its place.
+ *
+ * Two lists in `docs/23`, and three assertions:
+ *
+ * 1. **The floor.** Every `external-write` or `destructive` tool appears in one of the two lists. This is the
+ *    part that makes the rest airtight — publicness is not a function of the effect *or* the category
+ *    (`reply_to_comment` is a public reply in the `engagement` category), so a name- or category-based rule
+ *    would miss a broadcast tool whose author chose differently. Requiring every outward write to be triaged
+ *    cannot be escaped by choosing a label.
+ * 2. **The declared effect matches the document**, so the two cannot describe different tools.
+ * 3. **The derivation was not overridden.** `defineTool` derives `approvalPolicy: "always"` and
+ *    `requiresIdempotencyKey: true` from those two effects, so the pairing holds by construction and the only
+ *    way to break it is an explicit `approvalPolicy: "never"` beside a publishing effect. That is what this
+ *    looks for — not the *absence* of the fields, which is the normal and correct way to write one.
+ *
+ * Tools that are specified but not yet built are checked against the document only. Five of the six planned
+ * packages are unwritten, and binding the specification is the point: the constraint is in force when
+ * `tools-x` lands, rather than being added afterwards by somebody who has to notice it is missing.
+ */
+export const publishingProblems = (publishing, exempt, declared) => {
+  const problems = [];
+  const byName = new Map(declared.map((tool) => [tool.name, tool]));
+  const expected = new Map(publishing.map((row) => [row.name, row.cells[2]?.replaceAll("`", "")]));
+
+  for (const [name, effect] of expected) {
+    const tool = byName.get(name);
+    if (tool === undefined) continue; // Not built yet — specified, and not further verifiable.
+    if (!GATED.has(effect)) {
+      problems.push(`docs/23 lists ${name} as publishing with effect "${effect}" — must be external-write or destructive`);
+    }
+    if (tool.effect !== effect) {
+      problems.push(`${name} declares effect "${tool.effect}" and docs/23 says "${effect}"`);
+    }
+    if (tool.approvalPolicy !== undefined && tool.approvalPolicy !== "always") {
+      problems.push(
+        `${name} publishes publicly and overrides the derived approval policy with "${tool.approvalPolicy}" — ` +
+          "remove the override and the effect alone gives it `always`",
+      );
+    }
+    if (tool.requiresIdempotencyKey === false) {
+      problems.push(`${name} publishes publicly and overrides requiresIdempotencyKey to false — a retry would post twice`);
+    }
+  }
+
+  const triaged = new Set([...expected.keys(), ...exempt.map((row) => row.name)]);
+  for (const tool of declared) {
+    if (!GATED.has(tool.effect) || triaged.has(tool.name)) continue;
+    problems.push(
+      `${tool.name} is "${tool.effect}" and appears in neither list in docs/23 — add it to "The publishing ` +
+        'tools" if it reaches strangers, or to "External writes that are not publishing" with the reason',
+    );
+  }
+  return problems;
+};
+
+const CATALOGUE = "docs/23-tool-catalogue.md";
 
 const walk = (path, out = []) => {
   let stats;
@@ -144,10 +257,12 @@ const main = () => {
   }
 
   const problems = [];
+  const declared = [];
   let checked = 0;
   for (const file of files) {
     const source = readFileSync(file, "utf8");
     for (const declaration of declarationsIn(source)) {
+      declared.push(declaration);
       if (!looksLikeAWrite(declaration.name)) continue;
       checked += 1;
       if (declaration.effect !== "read") continue;
@@ -166,7 +281,31 @@ const main = () => {
     return 1;
   }
 
+  const catalogue = readFileSync(CATALOGUE, "utf8");
+  const expected = tableUnder(catalogue, "The publishing tools");
+  const exempt = tableUnder(catalogue, "External writes that are not publishing");
+  if (expected.length === 0 || exempt.length === 0) {
+    console.error(`✗ parsed ${expected.length} publishing and ${exempt.length} non-publishing tool(s) from ${CATALOGUE} —`);
+    console.error("  a table moved or changed shape, and an empty expectation passes every assertion below it.");
+    console.error("  Fix the parser, not the document.");
+    return 2;
+  }
+  const problemsWithPublishing = publishingProblems(expected, exempt, declared);
+  if (problemsWithPublishing.length > 0) {
+    for (const problem of problemsWithPublishing) console.error(`✗ ${problem}`);
+    console.error("\n  Publishing tools reach strangers under the operator's brand. #228 decided the effect stays");
+    console.error("  `external-write`, and that the gated set is the exact list in docs/23 instead — because");
+    console.error("  neither the effect nor the category sorts public from private. See the decision there.");
+    return 1;
+  }
+
+  const built = expected.filter((row) => declared.some((tool) => tool.name === row.name)).length;
+  const outward = declared.filter((tool) => GATED.has(tool.effect)).length;
   console.log(`✓ ${checked} write-named tool(s) are classified as writes across ${files.length} files, ${EXEMPT.size} exempt`);
+  console.log(
+    `✓ ${outward} outward write(s) all triaged in docs/23: ${expected.length} publishing specified ` +
+      `(${built} built, gated, derivation intact), ${exempt.length} explicitly not`,
+  );
   return 0;
 };
 

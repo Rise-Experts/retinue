@@ -46,8 +46,104 @@ toolkit, and it takes vendor app review off this repository's critical path enti
 Preloading is *by category*, so a category is a loadout unit and not a filing convenience. Five today; twelve
 proposed, because a hundred tools in one bucket is one bad default away from being resident.
 
-`web` · `data` · `files` · `code` · `knowledge` · `general` · `communication` · `project` · `crm` ·
-`productivity` · `media` · `finance` · `cloud` · `meta`
+`web` · `data` · `files` · `code` · `knowledge` · `general` · `communication` · `publishing` · `project` ·
+`crm` · `productivity` · `media` · `finance` · `cloud` · `meta`
+
+`publishing` was split out of `communication` by
+[#228](https://github.com/Rise-Experts/retinue/issues/228) — see the decision below. A tenant switching off
+`publishing` keeps directed messaging and loses public broadcasting, which is a distinction `communication`
+could not express.
+
+## Decision: publishing does **not** get its own `ToolEffect` — #228
+
+REQ-053 asked whether `external-write` is the right effect for *publishing to the public under the operator's
+brand*. A tweet to 40,000 followers and a Slack message to a private channel carry the same label today, and
+`destroys()` exists because `external-write` was too coarse once already — so the question was fair.
+
+**The answer is no. Three findings, in ascending order of weight.**
+
+**1. The measured lever is categories, not effects.** `docs/24` measured that per-tenant toolsets — not a
+catalogue budget — are what narrows what an agent can reach, and a toolset switches **categories**. So the
+ability to allow Slack and forbid X was never going to come from a new effect; `communication` is where that
+coarseness lives, and `publishing` above is the fix.
+
+**2. Publicness is not a property of the tool alone, so no static label can carry it.**
+`github_create_issue` on a public repository *is* a public broadcast; on a private one it is not. A
+`publishing` effect would give a static answer to a partly dynamic question — worse than no answer, because a
+policy would trust it.
+
+The category is not exempt from this, which is the useful part of the finding. `reply_to_comment` is a
+*public* reply on a social post and its category is `engagement`; `check_media_storage` is an `external-write`
+that reaches a storage provider and nobody else. Neither the effect nor the category sorts these correctly, so
+**the gated set is an exact list** — enumerated below and checked in both directions — and the category is left
+to do the job it is good at, which is bulk toolset switching.
+
+**3. A fifth effect would not be inert. It would be a footgun.** This is the decisive one, and it is the
+opposite of what the issue assumed.
+
+`effect` is read in **four** places, and the fourth is the one that matters:
+
+```ts
+// backend/src/tools/define.ts
+approvalPolicy: spec.approvalPolicy ?? (effect === "external-write" || effect === "destructive" ? "always" : "never"),
+requiresIdempotencyKey: spec.requiresIdempotencyKey ?? (effect === "external-write" || effect === "destructive"),
+```
+
+The approval gate and the idempotency requirement are **derived from the effect at definition time**. So the
+pairing REQ-053 worried about drifting apart cannot drift: it holds by construction, and the only way to break
+it is to explicitly override one of the two.
+
+But that same derivation is why a new value is dangerous. `effect === "external-write" || effect ===
+"destructive"` appears three times — twice above and once in `registry.ts`'s `requiresKey`. Adding
+`"publishing"` means finding all three. Miss one and a publishing tool silently defaults to
+**`approvalPolicy: "never"`** — the exact failure REQ-053 was trying to prevent, introduced by the fix for it.
+An open enumeration behind a disjunction is a place where every future value has to remember to be added.
+
+### What binds instead
+
+Every tool on the list below is `external-write` or `destructive`, which *derives* `approvalPolicy: "always"`
+and an idempotency key. `check:effects` asserts the derivation was not overridden, and — the floor that makes
+this airtight — that **every** `external-write` or `destructive` tool in the repository appears in one of the
+two lists below. A new broadcast tool cannot slip through by choosing a different category, because it has to
+be triaged either way.
+
+### The publishing tools
+
+Public under the operator's brand. Exact, and checked in both directions.
+
+| Tool | Package | Effect | Why it is publishing |
+|---|---|---|---|
+| `publish_post_now` | `shareflow` | `external-write` | Posts to every selected network immediately |
+| `schedule_post` | `shareflow` | `external-write` | Publishes later without asking again |
+| `retry_publish_target` | `shareflow` | `external-write` | Re-attempts a public post |
+| `reply_to_comment` | `shareflow` | `external-write` | A public reply, attributed to the account |
+| `x_post` | `tools-x` | `external-write` | Visible to every follower and to search, immediately |
+| `x_delete_post` | `tools-x` | `destructive` | Irreversible, and the deletion is itself public |
+| `reddit_submit_post` | `tools-reddit` | `external-write` | A public forum; subreddit rules are not machine-readable |
+| `reddit_comment` | `tools-reddit` | `external-write` | Same thread, same audience |
+| `instagram_publish_media` | `tools-meta` | `external-write` | A post under the operator's brand |
+| `instagram_reply_comment` | `tools-meta` | `external-write` | A public reply, attributed to the account |
+
+### External writes that are not publishing
+
+The other half of the floor. An `external-write` here says *reaches a third party, reaches no strangers*.
+
+| Tool | Package | Why it is not publishing |
+|---|---|---|
+| `check_media_storage` | `shareflow` | Reads a storage provider's quota; publishes nothing |
+| `slack_post_message` | `tools-slack` | The case the question was asked about — a workspace is not the public |
+| `slack_reply_in_thread` | `tools-slack` | Same workspace, same members |
+| `github_create_issue` | `tools-github` | Public on a public repository and not on a private one — finding 2 |
+| `github_comment` | `tools-github` | Same |
+| `github_merge_pull_request` | `tools-github` | Changes a repository; broadcasts nothing |
+| `http_write` | `agentkit` | A generic escape hatch. Its destination is an argument, so its publicness is *entirely* dynamic — the strongest case of finding 2, and the reason a static label was never going to work |
+| `shell_exec` | `agentkit` | Runs a command on the host. Destructive, and local |
+
+Planned, and listed here so the reasoning survives the packages being written:
+
+- **WhatsApp sends** — directed to one recipient. The constraint there is the template rule, not visibility.
+- **`telegram_pin_message`, `discord_send_message`** — visible to a chat's members, not to strangers. A tenant
+  switching off `publishing` should keep them.
 
 ---
 

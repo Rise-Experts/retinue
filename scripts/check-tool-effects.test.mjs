@@ -30,15 +30,64 @@ test("finds declarations that are far apart", () => {
 
 test("an unstated effect is read, and says so", () => {
   const found = declarationsIn('defineTool({ name: "send_report", description: "x" });');
-  assert.deepEqual(found, [{ name: "send_report", effect: "read", via: "default" }]);
+  assert.deepEqual(found, [
+    // The three pairing fields are `undefined`, not `false` — absent is how a correct tool is written, because
+    // `defineTool` derives approval and the idempotency requirement from the effect. Collapsing absent to
+    // `false` made the publishing gate report all four existing publishing tools as overriding it.
+    {
+      name: "send_report",
+      effect: "read",
+      via: "default",
+      category: undefined,
+      approvalPolicy: undefined,
+      requiresIdempotencyKey: undefined,
+    },
+  ]);
+});
+
+test("an explicit pairing override is read as one, and its absence is not", () => {
+  const overridden = declarationsIn(
+    'defineTool({ name: "post_thing", effect: "external-write", approvalPolicy: "never", requiresIdempotencyKey: false });',
+  );
+  assert.equal(overridden[0]?.approvalPolicy, "never");
+  assert.equal(overridden[0]?.requiresIdempotencyKey, false);
+
+  const derived = declarationsIn('defineTool({ name: "post_thing", effect: "external-write" });');
+  assert.equal(derived[0]?.approvalPolicy, undefined);
+  assert.equal(derived[0]?.requiresIdempotencyKey, undefined);
+});
+
+test("a category is read from the declaration, wrapper or not", () => {
+  const plain = declarationsIn('defineTool({ name: "post_thing", category: "publishing", effect: "external-write" });');
+  assert.equal(plain[0]?.category, "publishing");
+  // The wrapper path looks *forward* from the name rather than using the generic pass's body slice, so it
+  // needs its own assertion — `confirms()` consumed the declaration before that slice was ever taken.
+  const wrapped = declarationsIn('confirms({ name: "post_thing", category: "publishing", description: "x" });');
+  assert.equal(wrapped[0]?.category, "publishing");
 });
 
 test("a wrapper's classification comes from the wrapper, not from a field", () => {
   const source = 'confirms({ name: "create_issue", description: "x" });\ndestroys({ name: "delete_repo", description: "y" });';
   const found = declarationsIn(source);
   assert.deepEqual(found, [
-    { name: "create_issue", effect: "external-write", via: "confirms" },
-    { name: "delete_repo", effect: "destructive", via: "destroys" },
+    // `approvalPolicy` and `requiresIdempotencyKey` are known rather than parsed for the wrappers: the type
+    // removes all three fields from their spec, so a caller cannot state — or contradict — any of them.
+    {
+      name: "create_issue",
+      effect: "external-write",
+      via: "confirms",
+      category: undefined,
+      approvalPolicy: "always",
+      requiresIdempotencyKey: true,
+    },
+    {
+      name: "delete_repo",
+      effect: "destructive",
+      via: "destroys",
+      category: undefined,
+      approvalPolicy: "always",
+      requiresIdempotencyKey: true,
+    },
   ]);
 });
 
