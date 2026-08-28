@@ -20,6 +20,9 @@
       "path": "./tools/confluence"
     },
     {
+      "path": "./tools/discord"
+    },
+    {
       "path": "./tools/github"
     },
     {
@@ -45,6 +48,9 @@
     },
     {
       "path": "./tools/slack"
+    },
+    {
+      "path": "./tools/telegram"
     }
   ]
 }

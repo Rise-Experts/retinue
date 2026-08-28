@@ -21,12 +21,14 @@
 
 import { createStaticCredentialResolver } from "@retinue/agentkit/tools";
 import { createConfluenceToolkit } from "@retinue/tools-confluence";
+import { createDiscordToolkit } from "@retinue/tools-discord";
 import { createGitHubToolkit } from "@retinue/tools-github";
 import { createJiraToolkit } from "@retinue/tools-jira";
 import { createLinearToolkit } from "@retinue/tools-linear";
 import { createMetaToolkit } from "@retinue/tools-meta";
 import { createNotionToolkit } from "@retinue/tools-notion";
 import { createRedditToolkit } from "@retinue/tools-reddit";
+import { createTelegramToolkit } from "@retinue/tools-telegram";
 import { createXToolkit } from "@retinue/tools-x";
 import { createSlackToolkit } from "@retinue/tools-slack";
 import { braveSearch, searxngSearch, serperSearch, tavilySearch } from "@retinue/tools-search";
@@ -169,6 +171,29 @@ export const exampleToolkits = (env: ToolkitEnv, fetchImpl?: typeof fetch): read
           version: env.REDDIT_APP_VERSION ?? "0.3.0",
           contact: env.REDDIT_USER_AGENT_CONTACT,
         },
+        ...wiring,
+      }),
+    );
+  }
+
+  if (env.DISCORD_BOT_TOKEN !== undefined) {
+    providers.push(
+      createDiscordToolkit({
+        credentialRef: "discord",
+        // `Bot <token>` — the word is part of the value, and omitting it fails with a bare 401.
+        resolver: createStaticCredentialResolver({
+          discord: { scheme: "custom-header", header: "Authorization", value: `Bot ${env.DISCORD_BOT_TOKEN}` },
+        }),
+        ...wiring,
+      }),
+    );
+  }
+
+  if (env.TELEGRAM_BOT_TOKEN !== undefined) {
+    providers.push(
+      createTelegramToolkit({
+        credentialRef: "telegram",
+        resolver: createStaticCredentialResolver({ telegram: env.TELEGRAM_BOT_TOKEN }),
         ...wiring,
       }),
     );

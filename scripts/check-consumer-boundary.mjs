@@ -137,6 +137,16 @@ export const PACKAGES = [
     deep: ["dist/index.js", "src/index.ts", "providers", "internal"],
   },
   {
+    name: "@retinue/tools-discord",
+    dir: "tools/discord",
+    deep: ["dist/index.js", "src/index.ts", "channels", "internal"],
+  },
+  {
+    name: "@retinue/tools-telegram",
+    dir: "tools/telegram",
+    deep: ["dist/index.js", "src/index.ts", "pacer", "internal"],
+  },
+  {
     name: "@retinue/tools-jira",
     dir: "tools/jira",
     // `adf` is the module a consumer would most plausibly reach for — the converter is genuinely useful on its

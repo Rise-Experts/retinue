@@ -14,7 +14,7 @@
 
 import {
   confirms,
-  createHttpClient,
+  createVendorTransport,
   defineTool,
   type CredentialRef,
   credentialHeader,
@@ -65,38 +65,27 @@ const unwrap = (payload: unknown): Json => {
 export const createSlackToolkit = (config: SlackToolkitConfig): ToolProvider => {
   const base = (config.baseUrl ?? API).replace(/\/$/, "");
 
-  const call = async (context: ExecutionContext, method: string, body: Json = {}): Promise<Json> => {
-    const credential = await config.resolver.resolve({ ref: config.credentialRef, context });
-    const [headerName, headerValue] = credentialHeader(credential);
-    const host = new URL(base).host;
-    const client = createHttpClient({
-      ...(config.fetchImpl === undefined ? {} : { fetchImpl: config.fetchImpl }),
-      headersFor: (requested) => (requested === host ? { [headerName.toLowerCase()]: headerValue } : undefined),
-    });
-    const outcome = await client.request({
-      url: `${base}/${method}`,
-      method: "POST",
-      headers: { "content-type": "application/json; charset=utf-8" },
-      body: JSON.stringify(body),
-      // Parsed here, never shown to the model verbatim. Message *text* is fenced downstream where it is read.
-      fence: false,
-    });
-    if (!outcome.ok) {
-      const failure = outcome as Extract<HttpOutcome, { ok: false }>;
-      const transport = failure.kind === "timeout" || failure.kind === "unreachable";
-      throw new AgentPlatformError({
-        code: transport ? "provider_unavailable" : "provider_error",
-        message: `Slack request failed (${failure.kind}): ${failure.reason}`,
-        retryable: transport,
-      });
-    }
-    try {
-      return unwrap(JSON.parse((outcome as Extract<HttpOutcome, { ok: true }>).body));
-    } catch (thrown) {
-      if (thrown instanceof AgentPlatformError) throw thrown;
-      throw new AgentPlatformError({ code: "provider_error", message: "Slack returned a body that is not JSON", retryable: false });
-    }
-  };
+  /**
+   * The shared transport — #231 AC-4.
+   *
+   * This function used to build its own `createHttpClient` with its own credential resolution, host pinning
+   * and failure mapping. `createVendorTransport` was extracted from `tools-github` in #225 and does all three,
+   * so keeping a copy here meant two implementations of one thing and a place for them to drift.
+   *
+   * What stays Slack's is the part that genuinely is: `unwrap`, because **Slack answers `200` with
+   * `ok: false`** and only Slack knows that shape.
+   */
+  const transport = createVendorTransport({
+    vendor: "Slack",
+    credentialRef: config.credentialRef,
+    resolver: config.resolver,
+    baseUrl: base,
+    headers: { "content-type": "application/json; charset=utf-8", accept: "application/json" },
+    ...(config.fetchImpl === undefined ? {} : { fetchImpl: config.fetchImpl }),
+  });
+
+  const call = async (context: ExecutionContext, method: string, body: Json = {}): Promise<Json> =>
+    unwrap((await transport.json(context, `/${method}`, { method: "POST", body })) ?? {});
 
   /** Cursor pagination, and it says when it stopped rather than implying it saw everything. */
   const paginate = async (context: ExecutionContext, method: string, body: Json, key: string): Promise<{ items: unknown[]; truncated: boolean }> => {

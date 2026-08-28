@@ -236,6 +236,9 @@ const TOOLKIT_READ_TOOLS = [
   "reddit_get_post",
   "reddit_list_subreddit",
   "reddit_get_user",
+  "discord_list_channels",
+  "discord_read_messages",
+  "telegram_get_chat",
 ] as const;
 
 /**
@@ -268,6 +271,10 @@ const TOOLKIT_WRITE_TOOLS = [
   "x_post",
   "x_delete_post",
   "reddit_comment",
+  "discord_send_message",
+  // Ungated by classification, and granted so the `internal-write` path is exercised by a real role.
+  "discord_add_reaction",
+  "telegram_send_message",
 ] as const;
 
 // The imported MCP tools come from `./mcp.ts`, derived from the administrator classification there.

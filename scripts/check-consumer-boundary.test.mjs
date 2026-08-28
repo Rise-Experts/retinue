@@ -133,6 +133,8 @@ test("every shipping package is covered, and each deep list has both halves of t
     "@retinue/tools-github",
     "@retinue/tools-slack",
     "@retinue/tools-search",
+    "@retinue/tools-discord",
+    "@retinue/tools-telegram",
     "@retinue/tools-jira",
     "@retinue/tools-confluence",
     "@retinue/tools-linear",

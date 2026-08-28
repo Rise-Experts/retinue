@@ -1,0 +1,52 @@
+{
+  "name": "@retinue/tools-telegram",
+  "version": "0.3.0",
+  "description": "Telegram Bot API tools for a Retinue agent: send, edit, pin and delete messages \u2014 gated, idempotent, and paced to the per-chat limit.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist/**/*.js",
+    "dist/**/*.d.ts",
+    "README.md",
+    "!dist/**/*.map"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b",
+    "test": "vitest run",
+    "clean": "rm -rf dist tsconfig.tsbuildinfo",
+    "prepublishOnly": "node ../../scripts/publish-guard.mjs"
+  },
+  "peerDependencies": {
+    "@retinue/agentkit": "^0.3.0"
+  },
+  "devDependencies": {
+    "@retinue/agentkit": "*",
+    "@types/node": "^20",
+    "typescript": "^5",
+    "vitest": "^4.1.9"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "sideEffects": false,
+  "author": "Rise Experts",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Rise-Experts/retinue.git",
+    "directory": "tools/telegram"
+  },
+  "homepage": "https://github.com/Rise-Experts/retinue#readme",
+  "bugs": {
+    "url": "https://github.com/Rise-Experts/retinue/issues"
+  }
+}

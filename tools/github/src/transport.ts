@@ -8,11 +8,11 @@
  */
 
 import {
-  createHttpClient,
-  credentialHeader,
+  createVendorTransport,
   type CredentialRef,
   type CredentialResolver,
-  type HttpOutcome,
+  type VendorClassifier,
+  type VendorFailure,
 } from "@retinue/agentkit/tools";
 import { AgentPlatformError, type ExecutionContext } from "@retinue/agentkit";
 
@@ -48,45 +48,37 @@ export type TransportConfig = {
  * obvious name and is not a code. Caught by `tsc -b` and *not* by the tests, because vitest transpiles without
  * typechecking.
  */
-export const describeFailure = (outcome: Extract<HttpOutcome, { ok: false }>): never => {
-  const rateLimited = outcome.status === 429 || /rate limit/i.test(outcome.reason);
-  const unauthorized = outcome.status === 401 || outcome.status === 403;
-  const transport = outcome.kind === "timeout" || outcome.kind === "unreachable";
-  throw new AgentPlatformError({
-    code: rateLimited
-      ? "rate_limited"
-      : // 401/403 without a rate-limit signal is a scope problem, and it is the single most common way a
-        // GitHub tool fails: a token that reads code cannot write a project. Saying `unauthorized` rather than
-        // `provider_error` is what stops the model retrying — AC-6.
-        unauthorized && !transport
-        ? "unauthorized"
-        : transport
-          ? "provider_unavailable"
-          : "provider_error",
-    message: rateLimited
-      ? `GitHub rate limit reached: ${outcome.reason}`
-      : unauthorized && !transport
-        ? `GitHub refused the credential (${outcome.status}): ${outcome.reason}. The token may lack the scope this tool needs.`
-        : `GitHub request failed (${outcome.kind}): ${outcome.reason}`,
-    retryable: rateLimited || transport,
-  });
-};
-
 /**
- * JSON, except when there is none.
+ * GitHub's own failure vocabulary, as a classifier for the shared transport — #269.
  *
- * **204 and 201-with-no-content are successes.** `github_dispatch_workflow` gets a 204 and `github_rerun_workflow`
- * a 201, both with an empty body — and `JSON.parse("")` throws, so both tools failed outright while reporting a
- * parse error about a response that was correct. Found by the tests, not by reading: every write in this
- * toolkit returns a body except the two that do not.
+ * Only the parts the default cannot know. **GitHub signals a rate limit as `403` with
+ * `x-ratelimit-remaining: 0`**, not as a `429`, which is the detail everybody misses and the one thing here
+ * that no generic default could guess: the shared classifier would call that `unauthorized` and stop a model
+ * that should have waited.
+ *
+ * Returning `undefined` accepts the default, which already handles timeouts, plain `401`/`403` and `429`.
  */
-const parse = (body: string): unknown => {
-  if (body.trim() === "") return undefined;
-  try {
-    return JSON.parse(body);
-  } catch {
-    throw new Error("GitHub returned a body that is not JSON");
+export const describeFailure = (failure: VendorFailure): ReturnType<VendorClassifier> => {
+  const exhausted = failure.headers?.["x-ratelimit-remaining"] === "0";
+  if (failure.status === 429 || /rate limit/i.test(failure.reason) || (failure.status === 403 && exhausted)) {
+    const reset = Number(failure.headers?.["x-ratelimit-reset"]);
+    const waitMs = Number.isFinite(reset) && reset > 0 ? Math.max(reset * 1000 - Date.now(), 0) : failure.retryAfterMs;
+    return {
+      code: "rate_limited",
+      message: `GitHub rate limit reached: ${failure.reason}`,
+      retryable: true,
+      ...(waitMs === undefined ? {} : { retryAfterMs: waitMs }),
+    };
   }
+  if (failure.status === 401 || failure.status === 403) {
+    // A token that reads code often cannot write a project, and this is the single most common GitHub failure.
+    return {
+      code: "unauthorized",
+      message: `GitHub refused the credential (${failure.status}): ${failure.reason}. The token may lack the scope this tool needs.`,
+      retryable: false,
+    };
+  }
+  return undefined;
 };
 
 export type Transport = {
@@ -115,55 +107,33 @@ export type Transport = {
 
 export const createTransport = (config: TransportConfig): Transport => {
   const base = (config.baseUrl ?? API).replace(/\/$/, "");
-  const host = new URL(base).host;
 
   /**
-   * One request, with the credential resolved now rather than at construction.
+   * The shared transport — #269, and the reuse #231's AC-4 asks to be real rather than claimed.
    *
-   * Per call so a rotated token takes effect without a restart — a credential read once at startup is one that
-   * survives its own rotation, and the failure looks like the vendor rejecting a token that "has not changed".
-   *
-   * The header goes in through `headersFor`, which the runtime calls with the *validated* hostname only: a
-   * token issued for `api.github.com` cannot be sent elsewhere by asking for a URL that merely mentions it.
+   * This file used to build its own `createHttpClient`: credential per call, `headersFor` pinned to the
+   * validated host, empty-body tolerance, `text()`. All four were extracted into `createVendorTransport` in
+   * #225 and are now in one place. What stays here is what is genuinely GitHub's — `paginate`, `graphql`, and
+   * the `403`-with-a-header rate-limit signal.
    */
-  const request = async (
-    context: ExecutionContext,
-    path: string,
-    init: { method?: string; body?: string } = {},
-  ): Promise<string> => {
-    const credential = await config.resolver.resolve({ ref: config.credentialRef, context });
-    // One helper, so twenty toolkits do not each write their own base64 and get the padding wrong — #260.
-    const [headerName, headerValue] = credentialHeader(credential);
-    const client = createHttpClient({
-      ...(config.fetchImpl === undefined ? {} : { fetchImpl: config.fetchImpl }),
-      headersFor: (requested) =>
-        requested === host
-          ? {
-              [headerName.toLowerCase()]: headerValue,
-              accept: "application/vnd.github+json",
-              "x-github-api-version": "2022-11-28",
-            }
-          : undefined,
-    });
-    const outcome = await client.request({
-      url: `${base}${path}`,
+  const vendor = createVendorTransport({
+    vendor: "GitHub",
+    credentialRef: config.credentialRef,
+    resolver: config.resolver,
+    baseUrl: base,
+    headers: { accept: "application/vnd.github+json", "x-github-api-version": "2022-11-28" },
+    classify: describeFailure,
+    ...(config.fetchImpl === undefined ? {} : { fetchImpl: config.fetchImpl }),
+  });
+
+  const call: Transport["call"] = (context, path, init = {}) =>
+    vendor.json(context, path, {
       ...(init.method === undefined ? {} : { method: init.method }),
       ...(init.body === undefined ? {} : { body: init.body }),
-      // Parsed here and never shown to the model verbatim, so the untrusted-content envelope would only corrupt
-      // the JSON. Anything rendered as prose keeps the default fence.
-      fence: false,
     });
-    if (!outcome.ok) describeFailure(outcome);
-    return (outcome as Extract<HttpOutcome, { ok: true }>).body;
-  };
 
-  const call: Transport["call"] = async (context, path, init = {}) =>
-    parse(
-      await request(context, path, {
-        ...(init.method === undefined ? {} : { method: init.method }),
-        ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) }),
-      }),
-    );
+  /** Plain text, for the endpoints that do not answer in JSON — workflow logs, today. */
+  const text: Transport["text"] = (context, path) => vendor.text(context, path);
 
   /**
    * Every page up to a ceiling, and **it says when it stopped**.
@@ -171,9 +141,10 @@ export const createTransport = (config: TransportConfig): Transport => {
    * A tool that returns page one and says nothing about page two loses data silently: the model concludes there
    * were thirty issues. The ceiling exists because "all of them" against a large repository is a call that
    * never returns, and reporting `truncated` is what keeps the difference visible.
+   *
+   * Stays here rather than in the shared transport: Slack pages by cursor, Discord by snowflake, GitHub by page
+   * number and Telegram not at all, so there is no one pagination to share.
    */
-  const text: Transport["text"] = (context, path) => request(context, path);
-
   const paginate: Transport["paginate"] = async (context, path, perPage) => {
     const size = Math.min(Math.max(perPage, 1), MAX_PER_PAGE);
     const items: unknown[] = [];
@@ -207,8 +178,10 @@ export const createTransport = (config: TransportConfig): Transport => {
     variables: Json,
     options: { readonly tolerateNotFound?: boolean } = {},
   ): Promise<T> => {
-    const body = await request(context, "/graphql", { method: "POST", body: JSON.stringify({ query, variables }) });
-    const envelope = parse(body) as { data?: unknown; errors?: unknown };
+    const envelope = ((await vendor.json(context, "/graphql", { method: "POST", body: { query, variables } })) ?? {}) as {
+      data?: unknown;
+      errors?: unknown;
+    };
     /**
      * `tolerateNotFound` exists for exactly one shape: a query that asks two ways at once.
      *
