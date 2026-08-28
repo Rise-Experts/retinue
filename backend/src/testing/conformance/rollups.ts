@@ -13,7 +13,8 @@
 import { describe, expect, it } from "vitest";
 import { asId } from "../../core/ids.js";
 import type { PrincipalId, RunId, TenantId } from "../../core/ids.js";
-import type { UsageEvent, UsageRollupStore, UsageStore } from "../../persistence/index.js";
+import type { UsageRollupStore, UsageStore } from "../../persistence/index.js";
+import type { UsageEvent } from "../../usage/index.js";
 
 const T1 = asId<TenantId>("conf-rollup-tenant-1");
 const T2 = asId<TenantId>("conf-rollup-tenant-2");

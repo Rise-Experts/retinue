@@ -50,7 +50,10 @@ export function conversationRunCoordinatorConformance(
   const open = async (): Promise<ConversationRunCoordinator> => {
     const fixture = openFixture(makeFixture());
     if (fixture.seedConversation) for (const c of CONVERSATIONS) await fixture.seedConversation(c);
-    return fixture.store;
+    // `openFixture` is generic over both fixture shapes, so `store` widens to the union. The narrowing is safe
+    // by construction — every branch of `FixtureOrStore<T>` yields a `T` — and was simply never checked, this
+    // directory having been excluded from `tsconfig` until #253.
+    return fixture.store as ConversationRunCoordinator;
   };
 
   describe("ConversationRunCoordinator conformance", () => {

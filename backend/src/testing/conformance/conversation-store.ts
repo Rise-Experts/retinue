@@ -7,8 +7,8 @@
  */
 
 import { describe, expect, it } from "vitest";
-import type { ConversationId, TenantId } from "../core/ids.js";
-import type { ConversationStore } from "../persistence/index.js";
+import type { ConversationId, TenantId } from "../../core/ids.js";
+import type { ConversationStore } from "../../persistence/index.js";
 
 export function conversationStoreConformance(makeStore: () => ConversationStore): void {
   const t1 = "tenant-1" as TenantId;

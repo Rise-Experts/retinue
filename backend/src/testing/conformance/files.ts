@@ -25,7 +25,14 @@ const C1 = asId<ConversationId>("conf-file-convo-1");
 const C2 = asId<ConversationId>("conf-file-convo-2");
 const P1 = asId<PrincipalId>("conf-file-principal-1");
 
-const file = (over: Partial<FileMetadata> & { id: string }): FileMetadata => ({
+/**
+ * `Omit<…, "id">` before the intersection, not `Partial<FileMetadata> & { id: string }`.
+ *
+ * The latter intersects `FileId | undefined` with `string`, so the parameter demanded a *branded* id and every
+ * call site passing `{ id: "f1" }` was a type error. Invisible until #253 put this directory under the compiler:
+ * it was excluded from `tsconfig`, and vitest transpiles without typechecking.
+ */
+const file = (over: Omit<Partial<FileMetadata>, "id"> & { id: string }): FileMetadata => ({
   conversationId: C1,
   filename: "notes.pdf",
   mediaType: "application/pdf",

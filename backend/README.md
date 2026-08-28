@@ -60,7 +60,7 @@ your own model catalogue when you need them — same code above.
 | **Injection containment** | Untrusted content is wrapped in a nonce-delimited envelope with delimiter forgery neutralised — structural, not a detector |
 | **Usage you can bill** | Per-model, per-principal token and cost accounting, with quotas enforced before a run is admitted |
 | **Flows and teams** | Durable multi-step workflows; a team compiles to a flow, and each member's turn is a child run with its own ceiling |
-| **Replaceable everything** | 31 ports, three adapter families, one conformance suite held over all of them |
+| **Replaceable everything** | 32 ports, three adapter families, one conformance suite held over all of them — [exported](https://docs.retinue.riseexperts.de/docs/getting-started/testing), so your adapter is held to it too |
 
 ## Composing it yourself
 

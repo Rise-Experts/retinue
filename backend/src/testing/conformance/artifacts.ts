@@ -8,14 +8,7 @@
 
 import { describe, expect, it } from "vitest";
 import { asId } from "../../core/ids.js";
-import type {
-  ArtifactId,
-  ArtifactVersionId,
-  BlobRef,
-  ConversationId,
-  PrincipalId,
-  TenantId,
-} from "../../core/ids.js";
+import type { ArtifactId, ArtifactVersionId, BlobRef, ConversationId, PrincipalId, RunId, TenantId } from "../../core/ids.js";
 import type { ArtifactStore, ArtifactVersion } from "../../persistence/index.js";
 import { withConversation, type FixtureOrStore } from "./parents.js";
 
@@ -193,7 +186,7 @@ export function artifactStoreConformance(
         version: version({
           id: asId<ArtifactVersionId>("v1"),
           provenance: {
-            runId: asId("run-7"),
+            runId: asId<RunId>("run-7"),
             producedBy: "summarize_document",
             inputs: { fileId: "file-3", sections: ["revenue"] },
             sourceFileIds: [asId("file-3")],

@@ -103,18 +103,6 @@ const fakeStorage = () => {
   return { fetchImpl, objects, calls };
 };
 
-const make = () => {
-  const storage = fakeStorage();
-  const store = createSupabaseStorageFileContentStore({
-    url: STORAGE_URL,
-    serviceKey: KEY,
-    bucket: STORAGE_BUCKET,
-    fetch: storage.fetchImpl,
-  });
-  return { store, ...storage };
-};
-
-
 /** The adapter over the double, plus the double's innards for the assertions that need them. */
 export const supabaseStorageDouble = (): {
   readonly store: FileContentStore;

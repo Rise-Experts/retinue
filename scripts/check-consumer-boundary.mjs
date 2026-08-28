@@ -354,6 +354,7 @@ const main = () => {
     const summaries = [];
     const readmeSummary = [];
     const binSummary = [];
+    const consumerSummary = [];
     const docsSummary = [];
     let checked = 0;
 
@@ -547,6 +548,102 @@ const main = () => {
       }
 
       /**
+       * ── 6a: the conformance suite catches a bad adapter — task #253 AC-2 ────────────────────────────────
+       *
+       * The README's headline is "Replaceable everything — one conformance suite held over all of them", and
+       * `@retinue/agentkit/testing` is the export that makes that checkable rather than an invitation. But a
+       * conformance suite nobody has watched **fail** has demonstrated nothing: an empty harness, a broken
+       * import, an export that resolves to `undefined` — all of those "pass".
+       *
+       * So a throwaway package installs the tarball, implements `ConversationStore` badly in exactly the way
+       * that matters, and the suite must reject it. The bug planted is the real one: `findById` ignoring
+       * `tenantId`, which is the `AgentStore` leak #91 found — a method that accepted `TenantScope` and
+       * destructured only the id.
+       */
+      if (shortName === "agentkit") {
+        const specPath = join(consumer, "conformance-negative.test.ts");
+        writeFileSync(
+          specPath,
+          [
+            `import { conversationStoreConformance } from "@retinue/agentkit/testing";`,
+            `/** Leaks across tenants: the exact shape of the #91 defect. */`,
+            `const leaky = () => {`,
+            `  const rows = new Map<string, any>();`,
+            `  return {`,
+            `    async create({ tenantId, id, title }: any) {`,
+            `      const row = { id, tenantId, title, version: 1, createdAt: new Date(0).toISOString(), updatedAt: new Date(0).toISOString(), deletedAt: null };`,
+            `      rows.set(id, row);`,
+            `      return row;`,
+            `    },`,
+            `    async findById({ id }: any) { return rows.get(id) ?? null; },`,
+            `    async list() { return { items: [...rows.values()] }; },`,
+            `    async update({ id, patch }: any) { const r = { ...rows.get(id), ...patch, version: rows.get(id).version + 1 }; rows.set(id, r); return r; },`,
+            `    async softDelete({ id }: any) { rows.delete(id); },`,
+            `  };`,
+            `};`,
+            `conversationStoreConformance(leaky as never);`,
+          ].join("\n"),
+        );
+        /**
+         * The positive control, and it is not optional.
+         *
+         * "Watched it fail" means nothing on its own: a broken import, a harness that throws on import, or an
+         * export resolving to `undefined` would all make the negative run non-zero and look like a pass. So the
+         * *correct* adapter must go through the same exported suite in the same scratch consumer and come back
+         * green — AC-3, "the export is the same suite and not a reduced copy".
+         */
+        const positivePath = join(consumer, "conformance-positive.test.ts");
+        writeFileSync(
+          positivePath,
+          [
+            `import { conversationStoreConformance } from "@retinue/agentkit/testing";`,
+            `import { createMemoryConversationStore } from "@retinue/agentkit/persistence";`,
+            `conversationStoreConformance(() => createMemoryConversationStore());`,
+          ].join("\n"),
+        );
+
+        const vitestBin = join(modules, "vitest", "vitest.mjs");
+        if (!existsSync(vitestBin)) {
+          fail(
+            "vitest is not reachable from the scratch consumer, so the conformance negative test cannot run",
+            "it is an optional peer of @retinue/agentkit and a devDependency of this workspace; the symlink\n" +
+              "step should have provided it",
+          );
+        } else {
+          const negative = spawnSync(process.execPath, [vitestBin, "run", "conformance-negative.test.ts"], {
+            cwd: consumer,
+            encoding: "utf8",
+            env: { ...process.env, CI: "1" },
+          });
+          if (negative.status === 0) {
+            fail(
+              "the exported conformance suite PASSED a ConversationStore that leaks across tenants",
+              "a suite nobody has watched fail has demonstrated nothing — this is the check that the export is\n" +
+                "the real suite and not an empty or partially-resolved copy",
+            );
+          } else {
+            const positive = spawnSync(process.execPath, [vitestBin, "run", "conformance-positive.test.ts"], {
+              cwd: consumer,
+              encoding: "utf8",
+              env: { ...process.env, CI: "1" },
+            });
+            if (positive.status !== 0) {
+              fail(
+                "the exported conformance suite FAILED the built-in in-memory adapter",
+                "so the negative result above means nothing — a broken import or an unresolved export would\n" +
+                  "also have made it non-zero:\n" +
+                  (positive.stdout || positive.stderr || "no output").split("\n").slice(-25).join("\n"),
+              );
+            } else {
+              consumerSummary.push(
+                "agentkit: exported conformance suite passes the in-memory adapter and rejects a cross-tenant leak",
+              );
+            }
+          }
+        }
+      }
+
+      /**
        * ── 6b: the `bin`, if the package declares one — task #252 AC-1 ──────────────────────────────────────
        *
        * Checked here rather than by running it in this repo, because the workspace hides exactly this class of
@@ -720,6 +817,7 @@ const main = () => {
       for (const summary of summaries) console.log(`  · ${summary}`);
       for (const summary of readmeSummary) console.log(`  · README ${summary}`);
       for (const summary of binSummary) console.log(`  · ${summary}`);
+      for (const summary of consumerSummary) console.log(`  · ${summary}`);
       for (const summary of docsSummary) console.log(`  · docs ${summary} sample(s) typecheck`);
     }
   } finally {

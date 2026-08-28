@@ -55,6 +55,10 @@
       "types": "./dist/entries/observability.d.ts",
       "default": "./dist/entries/observability.js"
     },
+    "./testing": {
+      "types": "./dist/entries/testing.d.ts",
+      "default": "./dist/entries/testing.js"
+    },
     "./providers": {
       "types": "./dist/entries/providers.d.ts",
       "default": "./dist/entries/providers.js"
@@ -137,7 +141,9 @@
     "graphql": "^16.9.0",
     "graphql-yoga": "^5.10.0",
     "ioredis": "^6.0.0",
-    "pg": "^8.23.0"
+    "pg": "^8.23.0",
+    "vitest": "^3.0.0 || ^4.0.0",
+    "@electric-sql/pglite": "^0.2.0 || ^0.3.0"
   },
   "peerDependenciesMeta": {
     "pg": {
@@ -174,6 +180,12 @@
       "optional": true
     },
     "@whatwg-node/server": {
+      "optional": true
+    },
+    "vitest": {
+      "optional": true
+    },
+    "@electric-sql/pglite": {
       "optional": true
     }
   },

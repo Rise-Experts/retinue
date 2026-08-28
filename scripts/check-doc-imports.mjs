@@ -16,31 +16,30 @@
  */
 
 import { readFileSync, readdirSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 const ROOTS = ["website/content", "backend", "examples", "services", "shareflow", "frontend", "docs"];
 const SKIP = new Set(["node_modules", "dist", "build", ".git", ".claude", ".docusaurus", "coverage"]);
 
-const SUBPATHS = [
-  ["", "../backend/dist/index.js"],
-  ["/runtime", "../backend/dist/entries/runtime.js"],
-  ["/tools", "../backend/dist/entries/tools.js"],
-  ["/flows", "../backend/dist/entries/flows.js"],
-  ["/persistence", "../backend/dist/entries/persistence.js"],
-  ["/context", "../backend/dist/entries/context.js"],
-  ["/knowledge", "../backend/dist/entries/knowledge.js"],
-  ["/hitl", "../backend/dist/entries/hitl.js"],
-  ["/guardrails", "../backend/dist/entries/guardrails.js"],
-  ["/usage", "../backend/dist/entries/usage.js"],
-  ["/mcp", "../backend/dist/entries/mcp.js"],
-  ["/observability", "../backend/dist/entries/observability.js"],
-  ["/server", "../backend/dist/entries/server.js"],
-  ["/providers", "../backend/dist/entries/providers.js"],
-  ["/adapters/postgres", "../backend/dist/entries/adapters-postgres.js"],
-  ["/adapters/redis", "../backend/dist/entries/adapters-redis.js"],
-  ["/adapters/bullmq", "../backend/dist/entries/adapters-bullmq.js"],
-  ["/adapters/otel", "../backend/dist/entries/adapters-otel.js"],
-];
+/**
+ * Every published subpath, **derived from the manifest** rather than listed here.
+ *
+ * It used to be a hardcoded list, which is a second copy of `exports` — and it drifted the first time a subpath
+ * was added: `./testing` (#253) landed and every documented import of it was reported as "not a published
+ * subpath", a checker firing on correct documentation. That is how a check gets loosened until it fires on
+ * nothing. `check:consumer` already reads the manifest for the same reason; this now does too.
+ *
+ * `./package.json` is skipped — it is an export, and it is not something a sample imports from.
+ */
+const MANIFEST = JSON.parse(readFileSync(resolve(import.meta.dirname, "../backend/package.json"), "utf8"));
+const SUBPATHS = Object.entries(MANIFEST.exports)
+  .filter(([key]) => key !== "./package.json")
+  .map(([key, value]) => {
+    const target = typeof value === "string" ? value : (value.default ?? value.import);
+    // `.` → "", `./runtime` → "/runtime": the suffix a sample writes after the package name.
+    return [key === "." ? "" : key.slice(1), `../backend/${target.replace(/^\.\//, "")}`];
+  });
+
 
 const walk = (dir, out = []) => {
   for (const entry of readdirSync(dir)) {
