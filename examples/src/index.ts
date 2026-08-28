@@ -202,6 +202,24 @@ const TOOLKIT_READ_TOOLS = [
   "github_list_issues",
   "slack_list_channels",
   "slack_read_history",
+  // The trackers — REQ-052 (#224). A working set rather than every read, for the reason above: a grant is a
+  // decision, and `tools-jira` gaining a tool should not widen what this app's roles may do.
+  //
+  // Each vendor's *state-model* read is included on purpose. `jira_list_transitions` and `linear_list_states`
+  // are not optional extras — a transition id is per workflow and a state is per team, so granting the write
+  // without the read that discovers its argument would leave a tool nobody can call correctly.
+  "jira_search_issues",
+  "jira_get_issue",
+  "jira_list_transitions",
+  "confluence_search",
+  "confluence_get_page",
+  "linear_search_issues",
+  "linear_get_issue",
+  "linear_list_states",
+  "notion_search",
+  "notion_get_page",
+  // The most useful Notion read: a database is the closest thing Notion has to an issue list.
+  "notion_query_database",
 ] as const;
 
 /**
@@ -217,6 +235,14 @@ const TOOLKIT_WRITE_TOOLS = [
   "github_merge_pull_request",
   "slack_post_message",
   "slack_reply_in_thread",
+  // The trackers' writes — REQ-052 (#224). One per vendor's characteristic act, each gated:
+  // Jira moves along a workflow, Linear sets a field, Confluence replaces a page with a version check, and
+  // Notion writes a row whose property names are validated before the call.
+  "jira_create_issue",
+  "jira_transition_issue",
+  "confluence_update_page",
+  "linear_update_issue",
+  "notion_create_page",
 ] as const;
 
 // The imported MCP tools come from `./mcp.ts`, derived from the administrator classification there.

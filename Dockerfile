@@ -29,9 +29,13 @@ COPY backend/package.json ./backend/
 COPY frontend/package.json ./frontend/
 COPY shareflow/package.json ./shareflow/
 COPY examples/package.json ./examples/
+COPY tools/confluence/package.json ./tools/confluence/
 COPY tools/github/package.json ./tools/github/
-COPY tools/slack/package.json ./tools/slack/
+COPY tools/jira/package.json ./tools/jira/
+COPY tools/linear/package.json ./tools/linear/
+COPY tools/notion/package.json ./tools/notion/
 COPY tools/search/package.json ./tools/search/
+COPY tools/slack/package.json ./tools/slack/
 RUN npm ci
 COPY tsconfig.json ./
 COPY backend ./backend
@@ -41,7 +45,7 @@ COPY examples ./examples
 # Named projects, not a bare `tsc -b`: the root config also references shareflow, whose sources this
 # image deliberately does not carry. `frontend` is here because the reference app imports its view
 # models; the host itself does not.
-RUN npx tsc -b backend tools/github tools/slack tools/search examples
+RUN npx tsc -b backend tools/confluence tools/github tools/jira tools/linear tools/notion tools/search tools/slack examples
 
 FROM node:20-slim AS runtime
 WORKDIR /app
@@ -54,15 +58,23 @@ COPY backend/package.json ./backend/
 COPY frontend/package.json ./frontend/
 COPY shareflow/package.json ./shareflow/
 COPY examples/package.json ./examples/
+COPY tools/confluence/package.json ./tools/confluence/
 COPY tools/github/package.json ./tools/github/
-COPY tools/slack/package.json ./tools/slack/
+COPY tools/jira/package.json ./tools/jira/
+COPY tools/linear/package.json ./tools/linear/
+COPY tools/notion/package.json ./tools/notion/
 COPY tools/search/package.json ./tools/search/
+COPY tools/slack/package.json ./tools/slack/
 RUN npm ci --omit=dev
 COPY --from=build /app/backend/dist ./backend/dist
 COPY --from=build /app/frontend/dist ./frontend/dist
+COPY --from=build /app/tools/confluence/dist ./tools/confluence/dist
 COPY --from=build /app/tools/github/dist ./tools/github/dist
-COPY --from=build /app/tools/slack/dist ./tools/slack/dist
+COPY --from=build /app/tools/jira/dist ./tools/jira/dist
+COPY --from=build /app/tools/linear/dist ./tools/linear/dist
+COPY --from=build /app/tools/notion/dist ./tools/notion/dist
 COPY --from=build /app/tools/search/dist ./tools/search/dist
+COPY --from=build /app/tools/slack/dist ./tools/slack/dist
 COPY --from=build /app/examples/dist ./examples/dist
 COPY examples/public ./examples/public
 # Non-root: nothing here needs to write to the filesystem.

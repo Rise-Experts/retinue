@@ -20,7 +20,11 @@
  */
 
 import { createStaticCredentialResolver } from "@retinue/agentkit/tools";
+import { createConfluenceToolkit } from "@retinue/tools-confluence";
 import { createGitHubToolkit } from "@retinue/tools-github";
+import { createJiraToolkit } from "@retinue/tools-jira";
+import { createLinearToolkit } from "@retinue/tools-linear";
+import { createNotionToolkit } from "@retinue/tools-notion";
 import { createSlackToolkit } from "@retinue/tools-slack";
 import { braveSearch, searxngSearch, serperSearch, tavilySearch } from "@retinue/tools-search";
 import type { SearchProvider, ToolProvider } from "@retinue/agentkit";
@@ -72,6 +76,48 @@ export const exampleToolkits = (env: ToolkitEnv, fetchImpl?: typeof fetch): read
       createSlackToolkit({
         credentialRef: "slack",
         resolver: createStaticCredentialResolver({ slack: env.SLACK_BOT_TOKEN }),
+        ...wiring,
+      }),
+    );
+  }
+
+  /**
+   * Jira and Confluence from **one** credential and one site host, which is why they ship together — REQ-052.
+   *
+   * Basic, not bearer: an account email plus an API token. The two toolkits are registered separately so a
+   * deployment can wire one without the other, but neither works without the site URL, and a token with no
+   * site is a configuration mistake rather than a partial one.
+   */
+  if (env.ATLASSIAN_EMAIL !== undefined && env.ATLASSIAN_API_TOKEN !== undefined && env.ATLASSIAN_SITE_URL !== undefined) {
+    const atlassian = {
+      credentialRef: "atlassian" as const,
+      resolver: createStaticCredentialResolver({
+        atlassian: { scheme: "basic" as const, username: env.ATLASSIAN_EMAIL, password: env.ATLASSIAN_API_TOKEN },
+      }),
+      siteUrl: env.ATLASSIAN_SITE_URL,
+      ...wiring,
+    };
+    providers.push(createJiraToolkit(atlassian), createConfluenceToolkit(atlassian));
+  }
+
+  if (env.LINEAR_API_KEY !== undefined) {
+    providers.push(
+      createLinearToolkit({
+        credentialRef: "linear",
+        // Raw, with no `Bearer` prefix — Linear rejects the prefixed form with an error that does not say why.
+        resolver: createStaticCredentialResolver({
+          linear: { scheme: "custom-header", header: "Authorization", value: env.LINEAR_API_KEY },
+        }),
+        ...wiring,
+      }),
+    );
+  }
+
+  if (env.NOTION_TOKEN !== undefined) {
+    providers.push(
+      createNotionToolkit({
+        credentialRef: "notion",
+        resolver: createStaticCredentialResolver({ notion: env.NOTION_TOKEN }),
         ...wiring,
       }),
     );
