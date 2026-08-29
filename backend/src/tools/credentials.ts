@@ -45,7 +45,7 @@
  */
 
 import type { ExecutionContext } from "../core/context.js";
-import type { PlatformError } from "../core/errors.js";
+import { AgentPlatformError, type PlatformError } from "../core/errors.js";
 
 /** An opaque handle. Its meaning belongs to the resolver, and no tool interprets it. */
 export type CredentialRef = string;
@@ -294,4 +294,251 @@ export const assertToolkitAuth = (
     const error = credentialSchemeMismatch(ref, auth.schemes, declared);
     throw Object.assign(new Error(error.message), error);
   }
+};
+
+// ---------------------------------------------------------------------------------------------------
+// Refreshable credentials — REQ-054 (#232), task #233
+// ---------------------------------------------------------------------------------------------------
+
+/**
+ * A credential that stops working at a known time.
+ *
+ * Additive by construction: `RefreshableCredential` is a `Credential` with one more field, so a resolver that
+ * returns a plain one is unchanged and the eight shipped toolkits compile untouched. That is AC-1, and it is a
+ * property of the *type* rather than a claim about the code.
+ *
+ * The refresh token is deliberately **not here.** It lives wherever the host keeps it — `ConnectionStore` seals
+ * it (#261) — and only the refresher ever sees it. Putting it on the credential would mean the longest-lived
+ * secret in an OAuth grant travelling through every toolkit that only needed the short-lived one.
+ */
+export type RefreshableCredential = Credential & {
+  /** ISO 8601. When the vendor stops accepting this. */
+  readonly expiresAt: string;
+};
+
+/**
+ * Adds an expiry to a credential **without losing its secret protection** — AC-6.
+ *
+ * This exists because the obvious way to build one is wrong, and wrong invisibly. A host writing a
+ * `CredentialRefresher` reaches for:
+ *
+ * ```ts
+ * return { ...bearer(accessToken), expiresAt };   // ← the secret is now enumerable
+ * ```
+ *
+ * `createCredential` defines the secret **non-enumerably**, which is precisely what makes it survive a
+ * `JSON.stringify` into a log line — and precisely what a spread drops. The result looks identical, works
+ * identically, and serialises the token into the first structured log that touches it.
+ *
+ * Found by the AC-6 test failing against this repository's own test helper, which had made exactly that
+ * mistake. If the helper made it, a host will.
+ */
+export const refreshable = (credential: Credential, expiresAt: string): RefreshableCredential => {
+  const secrets = SECRET_KEYS[credential.scheme];
+  /**
+   * Rebuilt **through** `createCredential`, with the expiry passed in rather than added after.
+   *
+   * Two reasons it has to be this way round. The protection must be *applied* rather than copied — a copy of a
+   * non-enumerable property is an enumerable one — and `createCredential` freezes what it returns, so there is
+   * no "after" to add a field in. The secrets are read back explicitly because the spread above cannot see
+   * them, which is the whole point of them.
+   */
+  return createCredential({
+    ...(credential as unknown as Record<string, unknown>),
+    ...Object.fromEntries(secrets.map((key) => [key, (credential as unknown as Record<string, unknown>)[key]])),
+    expiresAt,
+  } as unknown as Credential) as RefreshableCredential;
+};
+
+export const isRefreshable = (credential: Credential): credential is RefreshableCredential =>
+  typeof (credential as { expiresAt?: unknown }).expiresAt === "string";
+
+/**
+ * How early a token is replaced.
+ *
+ * Sixty seconds, and the number is a *commitment* rather than a guess: a tool call can take tens of seconds —
+ * a slow vendor, a large upload, a retry — and a token that was valid when the call started must still be
+ * valid when it arrives. Refreshing exactly at expiry makes "expired mid-flight" the common case rather than
+ * the rare one, and that failure looks like an intermittent authentication bug.
+ *
+ * AC-5. Configurable because a deployment whose calls are slower than this needs more.
+ */
+export const DEFAULT_REFRESH_SKEW_MS = 60_000;
+
+/** Whether a credential is expired, or close enough that it should be replaced before use. */
+export const isExpiring = (credential: Credential, skewMs: number, now: number): boolean => {
+  if (!isRefreshable(credential)) return false;
+  const expiresAt = Date.parse(credential.expiresAt);
+  // An unparseable expiry is treated as expiring. The alternative is using a credential whose lifetime is
+  // unknown, and the cost of an unnecessary refresh is one call.
+  return Number.isNaN(expiresAt) || expiresAt - now <= skewMs;
+};
+
+/**
+ * Obtains a fresh credential for a reference.
+ *
+ * A port, because how a token is renewed differs entirely by vendor and by where the grant is stored. The
+ * host's implementation reads its own `ConnectionStore`, calls the vendor's token endpoint, re-seals the new
+ * refresh token and returns the new access credential — none of which the runtime should know about.
+ *
+ * It is given the ref and the context, and **not** the expired credential: it has to look the grant up anyway,
+ * and handing it a dead secret would be one more copy of one for no purpose.
+ */
+export interface CredentialRefresher {
+  refresh(input: {
+    readonly ref: CredentialRef;
+    readonly context: ExecutionContext;
+  }): Promise<RefreshableCredential>;
+}
+
+/**
+ * A refresh that failed because the grant is gone, rather than because the network was.
+ *
+ * The distinction is the whole of AC-3, and it is not cosmetic: `invalid_grant` means a person must consent
+ * again and no amount of retrying will help, while a timeout means try again in a second. A runtime that
+ * conflates them either retries a dead grant forever or asks a user to re-authorise because of a blip.
+ */
+export const REFRESH_GRANT_ERRORS = ["invalid_grant", "invalid_client", "unauthorized_client", "access_denied"] as const;
+
+export const isGrantError = (error: unknown): boolean => {
+  const text = (error instanceof Error ? error.message : String(error)).toLowerCase();
+  return REFRESH_GRANT_ERRORS.some((code) => text.includes(code));
+};
+
+export type RefreshingResolverOptions = {
+  readonly skewMs?: number;
+  /** Injectable so a test can move time without waiting for it. */
+  readonly now?: () => number;
+  /**
+   * Told that a refresh happened. Never told the token — see `CredentialAudit`, same reasoning.
+   *
+   * `expiresAt` is included because it is not a secret and it is the one thing an operator debugging a
+   * refresh loop actually needs.
+   */
+  readonly onRefreshed?: (input: {
+    readonly ref: CredentialRef;
+    readonly tenantId: string;
+    readonly expiresAt: string;
+  }) => void;
+};
+
+/**
+ * Wraps a resolver so an expiring credential is renewed before it is handed out.
+ *
+ * A wrapper, like `withCredentialAudit`, and for the same reason: the eight shipped toolkits already resolve
+ * **per call**, so they pick this up without a line changing. A toolkit that cached a credential at
+ * construction would defeat it, which is why `createGitHubToolkit` and every sibling resolve inside `call()`.
+ *
+ * ## Time-driven, never 401-driven — AC-7
+ *
+ * The obvious design is to refresh when the vendor returns 401. It is wrong, and worth stating plainly because
+ * it is what most integrations do:
+ *
+ * A 401 is what a vendor returns for an expired token, a **revoked** grant, a token for the wrong tenant, and a
+ * scope the grant never had. Refreshing on 401 therefore turns a revoked grant into an infinite refresh loop
+ * against the vendor's token endpoint, and turns a missing scope into a refresh that succeeds and a call that
+ * fails again identically. Neither is diagnosable from the outside.
+ *
+ * Time is the only signal that means what it says: a token with an expiry in the past is expired, and nothing
+ * else is inferred from it. A 401 on a freshly-refreshed token is a real error and is surfaced as one.
+ *
+ * ## One refresh, not N — AC-2
+ *
+ * Twenty concurrent tool calls hitting an expired token must produce **one** refresh. Refresh endpoints rate
+ * limit, and — worse — several vendors invalidate the previous refresh token when one is used, so N concurrent
+ * refreshes race to invalidate each other and log the deployment out permanently.
+ *
+ * The in-flight promise is stored *before* the first await, so a second caller entering the function
+ * synchronously after the first still finds it.
+ */
+export const withRefreshingCredentials = (
+  resolver: CredentialResolver,
+  refresher: CredentialRefresher,
+  options: RefreshingResolverOptions = {},
+): CredentialResolver => {
+  const skewMs = Math.max(0, options.skewMs ?? DEFAULT_REFRESH_SKEW_MS);
+  const now = options.now ?? (() => Date.now());
+
+  /**
+   * Keyed by tenant **and** ref — AC-4.
+   *
+   * Two tenants naming the same credential `"google"` mean different grants, and a cache keyed by ref alone
+   * would hand one tenant the other's token after a refresh. A space separates them: a tenant id cannot
+   * contain one, so `a` + `b c` and `a b` + `c` cannot collide.
+   */
+  const cached = new Map<string, RefreshableCredential>();
+  const inFlight = new Map<string, Promise<RefreshableCredential>>();
+  const keyOf = (tenantId: string, ref: CredentialRef): string => `${tenantId} ${ref}`;
+
+  const refreshOnce = (
+    key: string,
+    input: { ref: CredentialRef; context: ExecutionContext },
+  ): Promise<RefreshableCredential> => {
+    const existing = inFlight.get(key);
+    if (existing !== undefined) return existing;
+
+    // Built and stored before the first await, so a synchronous second caller joins this one rather than
+    // starting a second refresh.
+    const attempt = (async () => {
+      try {
+        const fresh = await refresher.refresh({ ref: input.ref, context: input.context });
+        cached.set(key, fresh);
+        options.onRefreshed?.({
+          ref: input.ref,
+          tenantId: String(input.context.tenantId),
+          expiresAt: fresh.expiresAt,
+        });
+        return fresh;
+      } catch (thrown) {
+        /**
+         * Belt-and-braces, and **not** load-bearing — worth saying rather than implying otherwise.
+         *
+         * A cached credential that is expiring already fails the freshness guard in `resolve`, so the next
+         * caller would attempt a refresh whether or not this line ran. Removing it breaks no test, which is
+         * exactly what one should expect. It stays because the invariant it states — a credential known to be
+         * dead is never held — is one a future edit could otherwise quietly rely on being false.
+         */
+        cached.delete(key);
+        throw new AgentPlatformError(
+          isGrantError(thrown)
+            ? {
+                code: "unauthorized",
+                message:
+                  `The stored authorisation for "${input.ref}" is no longer valid and could not be renewed. ` +
+                  "Someone needs to connect the account again — retrying will not help.",
+                retryable: false,
+              }
+            : {
+                code: "provider_unavailable",
+                message: `Could not renew the authorisation for "${input.ref}" right now.`,
+                retryable: true,
+              },
+          { cause: thrown },
+        );
+      } finally {
+        inFlight.delete(key);
+      }
+    })();
+    inFlight.set(key, attempt);
+    return attempt;
+  };
+
+  return {
+    async resolve(input) {
+      const key = keyOf(String(input.context.tenantId), input.ref);
+
+      const held = cached.get(key);
+      if (held !== undefined && !isExpiring(held, skewMs, now())) return held;
+
+      // Ask the underlying resolver first: it is the source of truth, and on the common path the credential it
+      // returns is a plain one with no expiry, which is passed straight through.
+      const resolved = await resolver.resolve(input);
+      if (!isRefreshable(resolved)) return resolved;
+      if (!isExpiring(resolved, skewMs, now())) {
+        cached.set(key, resolved);
+        return resolved;
+      }
+      return refreshOnce(key, input);
+    },
+  };
 };

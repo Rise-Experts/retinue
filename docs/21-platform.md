@@ -157,6 +157,32 @@ work — not a softer version of it. Three of them shaped the design directly:
   `CredentialResolver` and therefore belongs with [#260](https://github.com/Rise-Experts/retinue/issues/260)'s
   breaking change rather than after it.
 
+### Refresh is time-driven, never 401-driven — #233
+
+An OAuth access token expires, so `CredentialResolver` gained a credential that carries an expiry and a
+`CredentialRefresher` that renews it. `withRefreshingCredentials` wraps a resolver the way
+`withCredentialAudit` does, which is why the shipped toolkits picked it up without a line changing — they
+already resolve **per call**, and a toolkit that cached a credential at construction would defeat it.
+
+Three decisions in it are worth recording, because the obvious alternative is wrong in each:
+
+- **Refresh on time, never on a 401.** Most integrations refresh when the vendor rejects a call. A 401 is what
+  a vendor returns for an expired token, a *revoked* grant, a token for the wrong tenant, and a scope the grant
+  never had. Refreshing on it turns a revoked grant into an infinite loop against the token endpoint, and turns
+  a missing scope into a refresh that succeeds and a call that fails again identically. An expiry in the past
+  means exactly one thing; a 401 means four.
+- **One refresh, not N.** Concurrent calls on an expired token share a single in-flight refresh, keyed per
+  tenant *and* per credential ref. Several vendors invalidate the previous refresh token when one is used, so
+  twenty concurrent refreshes race to invalidate each other and the grant becomes unrecoverable. The key
+  includes the tenant because two tenants naming a credential `"google"` mean different grants.
+- **A dead grant is not a dead network.** `invalid_grant` surfaces as non-retryable and says a person must
+  connect the account again; a timeout surfaces as retryable. Conflating them either retries a dead grant
+  forever or asks a user to re-authorise because of a blip.
+
+The refresh token itself never travels on the credential. It stays wherever the host sealed it — the connection
+store, per the section above — and only the refresher sees it. Putting it on the credential would send the
+longest-lived secret in a grant through every toolkit that needed only the short-lived one.
+
 One capability was added that this section did not anticipate: a run that needs a connection it does not have
 **pauses and asks**, returning a login URL the way an approval gate returns a decision request, and resuming
 when consent completes. That is the runtime's HITL machinery rather than a platform feature, which is a second
