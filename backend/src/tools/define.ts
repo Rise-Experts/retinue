@@ -23,6 +23,20 @@ export type ToolSpec<I = unknown, O = unknown> = {
   readonly inputSchema?: unknown;
   readonly outputSchema?: unknown;
   readonly requiresIdempotencyKey?: boolean;
+  /**
+   * The provider scopes this tool needs — #260's field, made settable by #234.
+   *
+   * It was declared on `ToolDescriptor` and had **no way to be set**: `ToolSpec` did not carry it, so nothing
+   * in the repository could populate it and nothing read it. A field that cannot be written is a field that
+   * documents an intention rather than expressing one, which is the defect class `check:reachability` exists
+   * for — it was missed because the check asks whether declared fields are *read*, and an unwritable field is
+   * never read either.
+   *
+   * Google is the first vendor where it matters: `gmail.send` and `gmail.readonly` are different consents, and
+   * asking for the wrong one is the difference between a security team approving an integration and refusing
+   * it.
+   */
+  readonly requiredScopes?: readonly string[];
   execute(input: I, context: ExecutionContext): Promise<O> | O;
 };
 
@@ -39,6 +53,9 @@ export const defineTool = <I = unknown, O = unknown>(spec: ToolSpec<I, O>): Tool
     effect,
     approvalPolicy: spec.approvalPolicy ?? (effect === "external-write" || effect === "destructive" ? "always" : "never"),
     requiresIdempotencyKey: spec.requiresIdempotencyKey ?? (effect === "external-write" || effect === "destructive"),
+    // Omitted rather than defaulted to `[]`: absent means "this vendor has no scopes", which is true of
+    // every wave-1 tool, and an empty array would read as "needs none" — a different claim.
+    ...(spec.requiredScopes === undefined ? {} : { requiredScopes: spec.requiredScopes }),
   };
   return {
     descriptor,

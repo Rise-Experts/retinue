@@ -47,6 +47,7 @@ export const RELEASABLE = {
   "tools-confluence": { workspace: "@retinue/tools-confluence", dir: "tools/confluence" },
   "tools-discord": { workspace: "@retinue/tools-discord", dir: "tools/discord" },
   "tools-github": { workspace: "@retinue/tools-github", dir: "tools/github" },
+  "tools-google": { workspace: "@retinue/tools-google", dir: "tools/google" },
   "tools-jira": { workspace: "@retinue/tools-jira", dir: "tools/jira" },
   "tools-linear": { workspace: "@retinue/tools-linear", dir: "tools/linear" },
   "tools-meta": { workspace: "@retinue/tools-meta", dir: "tools/meta" },

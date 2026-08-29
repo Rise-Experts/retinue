@@ -179,6 +179,13 @@ export const PACKAGES = [
     deep: ["dist/index.js", "src/index.ts", "comments", "internal"],
   },
   {
+    name: "@retinue/tools-google",
+    dir: "tools/google",
+    // `mime` is the module a consumer would most plausibly reach for — building an RFC 5322 message is useful
+    // on its own — which is exactly why it must not resolve. It is re-exported from the root.
+    deep: ["dist/index.js", "src/index.ts", "mime", "gmail"],
+  },
+  {
     name: "@retinue/tools-notion",
     dir: "tools/notion",
     // `blocks` is the module a consumer would most plausibly reach for, which is why it must not resolve.

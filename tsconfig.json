@@ -26,6 +26,9 @@
       "path": "./tools/github"
     },
     {
+      "path": "./tools/google"
+    },
+    {
       "path": "./tools/jira"
     },
     {
