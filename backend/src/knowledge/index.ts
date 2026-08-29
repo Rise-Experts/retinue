@@ -306,3 +306,5 @@ export * from "./navigate.js";
 export * from "./graph.js";
 
 export * from "./graph-retrieval.js";
+
+export * from "./communities.js";

@@ -151,6 +151,10 @@ const SEEDS: Readonly<Record<string, (tenant: string, principal: string) => stri
   knowledge_graph_entities: (t) =>
     `INSERT INTO knowledge_graph_entities (tenant_id, id, name, type, surface_forms, provenance)
      VALUES ('${t}', 'concept:budget', 'budget', 'concept', ARRAY['budget'], ARRAY['${t}-c1'])`,
+  knowledge_graph_communities: (t) =>
+    `INSERT INTO knowledge_graph_communities
+       (tenant_id, id, level, entity_ids, relationship_ids, chunk_ids, fingerprint, summary)
+     VALUES ('${t}', 'L0:budget', 0, ARRAY['concept:budget'], ARRAY[]::text[], ARRAY['${t}-c1'], 'fp', 'a summary')`,
   knowledge_graph_relationships: (t) =>
     `INSERT INTO knowledge_graph_relationships (tenant_id, id, from_id, to_id, type, weight, provenance)
      VALUES ('${t}', 'a|rel|b', 'concept:budget', 'concept:other', 'rel', 1, ARRAY['${t}-c1'])`,
@@ -296,11 +300,11 @@ describe("policy coverage is derived from MIGRATIONS, not transcribed", () => {
       expect(RLS_STATEMENTS).toContain(`ALTER TABLE ${table} ENABLE ROW LEVEL SECURITY`);
       expect(RLS_STATEMENTS).toContain(`ALTER TABLE ${table} FORCE ROW LEVEL SECURITY`);
     }
-    // 36 tables as of #271 (the five `knowledge_graph_*` tables); 31 at #261 (`connections`); 30 before that,
-    // from #187's flow tables. The count is asserted so a table silently dropping out is visible.
+    // 37 tables as of #272 (`knowledge_graph_communities`); 36 at #271 (the other five `knowledge_graph_*`
+    // tables); 31 at #261 (`connections`); 30 before that, from #187's flow tables. The count is asserted so a table silently dropping out is visible.
     // Updating this number is meant to be a moment of thought: it is the one place that notices a policy list
     // shrinking, which no per-table test can see.
-    expect(TENANT_SCOPED_TABLES).toHaveLength(36);
+    expect(TENANT_SCOPED_TABLES).toHaveLength(37);
 
     // #135. `knowledge_chunks` lives behind the optional pgvector migration, so its policies are a separate
     // list applied by whoever ran that migration -- `ALTER TABLE ... ENABLE ROW LEVEL SECURITY` on an absent

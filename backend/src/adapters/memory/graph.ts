@@ -20,6 +20,7 @@ import type {
   GraphSettings,
   GraphStore,
   KnowledgeEntity,
+  StoredCommunity,
   KnowledgeRelationship,
   KnowledgeSourceType,
 } from "../../persistence/index.js";
@@ -39,6 +40,7 @@ type TenantGraph = {
   settings: GraphSettings;
   readonly sourceFlags: Map<string, boolean>;
   readonly contributions: Map<string, Contribution>;
+  readonly communities: Map<string, StoredCommunity>;
 };
 
 const DEFAULT_SETTINGS: GraphSettings = { enabled: false, updatedAt: "1970-01-01T00:00:00.000Z" };
@@ -140,7 +142,10 @@ export const createMemoryGraphStore = (): GraphStore => {
   const graphOf = (tenantId: string): TenantGraph => {
     let graph = tenants.get(tenantId);
     if (!graph) {
-      tenants.set(tenantId, (graph = { settings: DEFAULT_SETTINGS, sourceFlags: new Map(), contributions: new Map() }));
+      tenants.set(
+        tenantId,
+        (graph = { settings: DEFAULT_SETTINGS, sourceFlags: new Map(), contributions: new Map(), communities: new Map() }),
+      );
     }
     return graph;
   };
@@ -244,6 +249,53 @@ export const createMemoryGraphStore = (): GraphStore => {
         // id so the order is total, which is what makes a truncated traversal reproducible.
         .sort((a, b) => (b.weight - a.weight) || byId(a, b))
         .slice(0, Math.max(0, limit));
+    },
+
+    async replaceCommunities({ tenantId, communities }) {
+      const graph = graphOf(tenantId);
+      const previous = new Map(graph.communities);
+      graph.communities.clear();
+      let summariesKept = 0;
+      for (const community of communities) {
+        const before = previous.get(community.id);
+        /**
+         * A summary survives a re-clustering **only when the membership is identical**.
+         *
+         * Carrying it over on id alone would attach a summary of the old members to the new ones — a
+         * confidently wrong description of a community that changed, which is worse than having none.
+         */
+        const keep = before?.summary !== undefined && before.summaryFingerprint === community.fingerprint;
+        if (keep) summariesKept += 1;
+        graph.communities.set(community.id, {
+          ...community,
+          ...(keep && before !== undefined
+            ? {
+                summary: before.summary as string,
+                summaryFingerprint: before.summaryFingerprint as string,
+                ...(before.summarisedAt === undefined ? {} : { summarisedAt: before.summarisedAt }),
+              }
+            : {}),
+        });
+      }
+      return { written: communities.length, summariesKept };
+    },
+
+    async listCommunities({ tenantId, limit, cursor, level }) {
+      const all = [...graphOf(tenantId).communities.values()]
+        .filter((community) => level === undefined || community.level === level)
+        .sort((a, b) => a.level - b.level || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+      return page(all, limit, cursor);
+    },
+
+    async getCommunity({ tenantId, id }) {
+      return graphOf(tenantId).communities.get(id) ?? null;
+    },
+
+    async setCommunitySummary({ tenantId, id, summary, fingerprint, at }) {
+      const graph = graphOf(tenantId);
+      const community = graph.communities.get(id);
+      if (community === undefined) return;
+      graph.communities.set(id, { ...community, summary, summaryFingerprint: fingerprint, summarisedAt: at });
     },
 
     async fingerprint({ tenantId }) {

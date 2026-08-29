@@ -22,7 +22,7 @@ import { describe, expect, it } from "vitest";
 
 import { asId } from "../../core/ids.js";
 import type { TenantId } from "../../core/ids.js";
-import type { GraphContribution, GraphStore, KnowledgeEntity } from "../../persistence/index.js";
+import type { GraphContribution, GraphStore, KnowledgeEntity, StoredCommunity } from "../../persistence/index.js";
 
 const T1 = asId<TenantId>("conf-graph-tenant-1");
 const T2 = asId<TenantId>("conf-graph-tenant-2");
@@ -347,6 +347,103 @@ export function graphStoreConformance(make: () => GraphStore): void {
       it("honours the neighbour limit", async () => {
         expect(await (await seeded()).neighbours({ tenantId: T1, entityIds: ["concept:hub"], limit: 1 })).toHaveLength(1);
         expect(await (await seeded()).neighbours({ tenantId: T1, entityIds: ["concept:hub"], limit: 0 })).toEqual([]);
+      });
+    });
+
+    describe("communities — #272", () => {
+      const community = (id: string, over: Partial<StoredCommunity> = {}): StoredCommunity => ({
+        id,
+        level: 0,
+        entityIds: ["concept:a"],
+        relationshipIds: [],
+        chunkIds: ["c1"],
+        fingerprint: `fp-${id}`,
+        ...over,
+      });
+
+      it("stores and lists a hierarchy, ordered by level then id", async () => {
+        const store = make();
+        await store.replaceCommunities({
+          tenantId: T1,
+          communities: [community("L1:a", { level: 1 }), community("L0:b"), community("L0:a")],
+        });
+        const listed = (await store.listCommunities({ tenantId: T1, limit: 10 })).items.map((c) => c.id);
+        expect(listed).toEqual(["L0:a", "L0:b", "L1:a"]);
+      });
+
+      it("filters by level, which is how graph-global picks its granularity", async () => {
+        const store = make();
+        await store.replaceCommunities({
+          tenantId: T1,
+          communities: [community("L0:a"), community("L1:a", { level: 1 })],
+        });
+        expect((await store.listCommunities({ tenantId: T1, limit: 10, level: 1 })).items.map((c) => c.id)).toEqual([
+          "L1:a",
+        ]);
+      });
+
+      it("records a summary against the fingerprint it was written for", async () => {
+        const store = make();
+        await store.replaceCommunities({ tenantId: T1, communities: [community("L0:a")] });
+        await store.setCommunitySummary({ tenantId: T1, id: "L0:a", summary: "about a", fingerprint: "fp-L0:a", at: AT });
+        const stored = await store.getCommunity({ tenantId: T1, id: "L0:a" });
+        expect(stored?.summary).toBe("about a");
+        expect(stored?.summaryFingerprint).toBe("fp-L0:a");
+        expect(stored?.summarisedAt).toBe(AT);
+      });
+
+      it("keeps a summary across a rebuild when the membership is identical", async () => {
+        // The incremental saving: one model call per community is the cost worth avoiding.
+        const store = make();
+        await store.replaceCommunities({ tenantId: T1, communities: [community("L0:a")] });
+        await store.setCommunitySummary({ tenantId: T1, id: "L0:a", summary: "kept", fingerprint: "fp-L0:a", at: AT });
+        const again = await store.replaceCommunities({ tenantId: T1, communities: [community("L0:a")] });
+        expect(again.summariesKept).toBe(1);
+        expect((await store.getCommunity({ tenantId: T1, id: "L0:a" }))?.summary).toBe("kept");
+      });
+
+      it("discards a summary when the membership changed, even though the id did not", async () => {
+        /**
+         * The dangerous case. A community's id comes from its smallest member, so it can keep its id while
+         * gaining members — and a summary of the old membership attached to the new one is a confidently wrong
+         * description, which is worse than none at all.
+         */
+        const store = make();
+        await store.replaceCommunities({ tenantId: T1, communities: [community("L0:a")] });
+        await store.setCommunitySummary({ tenantId: T1, id: "L0:a", summary: "stale", fingerprint: "fp-L0:a", at: AT });
+        const again = await store.replaceCommunities({
+          tenantId: T1,
+          communities: [community("L0:a", { entityIds: ["concept:a", "concept:z"], fingerprint: "fp-changed" })],
+        });
+        expect(again.summariesKept).toBe(0);
+        expect((await store.getCommunity({ tenantId: T1, id: "L0:a" }))?.summary).toBeUndefined();
+      });
+
+      it("replaces the whole hierarchy rather than merging into it", async () => {
+        // Clustering is global: a partial write leaves levels that disagree about who is in what.
+        const store = make();
+        await store.replaceCommunities({ tenantId: T1, communities: [community("L0:a"), community("L0:b")] });
+        await store.replaceCommunities({ tenantId: T1, communities: [community("L0:a")] });
+        expect((await store.listCommunities({ tenantId: T1, limit: 10 })).items.map((c) => c.id)).toEqual(["L0:a"]);
+      });
+
+      it("returns null for a community that does not exist", async () => {
+        expect(await make().getCommunity({ tenantId: T1, id: "nope" })).toBeNull();
+      });
+
+      it("ignores a summary written for a community that is gone", async () => {
+        // A rebuild can drop a community between the clustering and the summarisation of it. Writing the
+        // summary anyway would resurrect a row nothing else references.
+        const store = make();
+        await store.setCommunitySummary({ tenantId: T1, id: "vanished", summary: "s", fingerprint: "f", at: AT });
+        expect(await store.getCommunity({ tenantId: T1, id: "vanished" })).toBeNull();
+      });
+
+      it("keeps one tenant's communities away from another's", async () => {
+        const store = make();
+        await store.replaceCommunities({ tenantId: T1, communities: [community("L0:a")] });
+        expect((await store.listCommunities({ tenantId: T2, limit: 10 })).items).toEqual([]);
+        expect(await store.getCommunity({ tenantId: T2, id: "L0:a" })).toBeNull();
       });
     });
 

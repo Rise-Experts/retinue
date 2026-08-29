@@ -28,6 +28,7 @@ import type {
   KnowledgeEntity,
   KnowledgeRelationship,
   KnowledgeSourceType,
+  StoredCommunity,
 } from "../../persistence/index.js";
 import type { SqlExecutor } from "./sql.js";
 
@@ -51,6 +52,18 @@ type RelationshipRow = {
   provenance: string[];
 };
 
+type CommunityRow = {
+  id: string;
+  level: number | string;
+  entity_ids: string[];
+  relationship_ids: string[];
+  chunk_ids: string[];
+  fingerprint: string;
+  summary: string | null;
+  summary_fingerprint: string | null;
+  summarised_at: string | Date | null;
+};
+
 const iso = (value: string | Date): string => (value instanceof Date ? value.toISOString() : value);
 
 const toEntity = (row: EntityRow): KnowledgeEntity => ({
@@ -70,6 +83,18 @@ const toRelationship = (row: RelationshipRow): KnowledgeRelationship => ({
   ...(row.description === null ? {} : { description: row.description }),
   weight: Number(row.weight),
   provenance: row.provenance,
+});
+
+const toCommunity = (row: CommunityRow): StoredCommunity => ({
+  id: row.id,
+  level: Number(row.level),
+  entityIds: row.entity_ids,
+  relationshipIds: row.relationship_ids,
+  chunkIds: row.chunk_ids,
+  fingerprint: row.fingerprint,
+  ...(row.summary === null ? {} : { summary: row.summary }),
+  ...(row.summary_fingerprint === null ? {} : { summaryFingerprint: row.summary_fingerprint }),
+  ...(row.summarised_at === null ? {} : { summarisedAt: iso(row.summarised_at) }),
 });
 
 const uniqueSorted = (values: Iterable<string>): string[] => [...new Set(values)].sort();
@@ -341,6 +366,79 @@ export const createPostgresGraphStore = (sql: SqlExecutor): GraphStore => {
         [tenantId, [...entityIds], limit],
       );
       return rows.map(toRelationship);
+    },
+
+    async replaceCommunities({ tenantId, communities }) {
+      // Read before the delete, so summaries can be carried over. One query rather than per-community lookups.
+      const previous = new Map(
+        (
+          await sql.query<{ id: string; summary: string | null; summary_fingerprint: string | null; summarised_at: string | Date | null }>(
+            `SELECT id, summary, summary_fingerprint, summarised_at
+               FROM knowledge_graph_communities WHERE tenant_id = $1`,
+            [tenantId],
+          )
+        ).map((row) => [row.id, row]),
+      );
+      await sql.query(`DELETE FROM knowledge_graph_communities WHERE tenant_id = $1`, [tenantId]);
+      let summariesKept = 0;
+      for (const community of communities) {
+        const before = previous.get(community.id);
+        // Identical membership only — see the memory adapter for why an id match is not enough.
+        const keep = before?.summary != null && before.summary_fingerprint === community.fingerprint;
+        if (keep) summariesKept += 1;
+        await sql.query(
+          `INSERT INTO knowledge_graph_communities
+             (tenant_id, id, level, entity_ids, relationship_ids, chunk_ids, fingerprint,
+              summary, summary_fingerprint, summarised_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+          [
+            tenantId,
+            community.id,
+            community.level,
+            community.entityIds,
+            community.relationshipIds,
+            community.chunkIds,
+            community.fingerprint,
+            keep ? before?.summary ?? null : null,
+            keep ? before?.summary_fingerprint ?? null : null,
+            keep ? (before?.summarised_at === null || before?.summarised_at === undefined ? null : iso(before.summarised_at)) : null,
+          ],
+        );
+      }
+      return { written: communities.length, summariesKept };
+    },
+
+    async listCommunities({ tenantId, limit, cursor, level }) {
+      const offset = cursor === undefined ? 0 : Number.parseInt(cursor, 10) || 0;
+      const rows = await sql.query<CommunityRow>(
+        `SELECT id, level, entity_ids, relationship_ids, chunk_ids, fingerprint, summary, summary_fingerprint, summarised_at
+           FROM knowledge_graph_communities
+          WHERE tenant_id = $1 AND ($2::int IS NULL OR level = $2)
+          ORDER BY level, id
+          LIMIT $3 OFFSET $4`,
+        [tenantId, level ?? null, limit + 1, offset],
+      );
+      const items = rows.slice(0, limit).map(toCommunity);
+      return rows.length > limit ? { items, nextCursor: String(offset + limit) } : { items };
+    },
+
+    async getCommunity({ tenantId, id }) {
+      const rows = await sql.query<CommunityRow>(
+        `SELECT id, level, entity_ids, relationship_ids, chunk_ids, fingerprint, summary, summary_fingerprint, summarised_at
+           FROM knowledge_graph_communities WHERE tenant_id = $1 AND id = $2`,
+        [tenantId, id],
+      );
+      const row = rows[0];
+      return row === undefined ? null : toCommunity(row);
+    },
+
+    async setCommunitySummary({ tenantId, id, summary, fingerprint, at }) {
+      await sql.query(
+        `UPDATE knowledge_graph_communities
+            SET summary = $3, summary_fingerprint = $4, summarised_at = $5
+          WHERE tenant_id = $1 AND id = $2`,
+        [tenantId, id, summary, fingerprint, at],
+      );
     },
 
     async fingerprint({ tenantId }) {

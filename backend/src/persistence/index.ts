@@ -1584,6 +1584,31 @@ export type KnowledgeRelationship = {
 };
 
 /** What one source contributed, as written. The store merges these into entities and edges. */
+/**
+ * A community as stored: the cluster, and whatever summary has been written for it.
+ *
+ * `summaryFingerprint` is the mechanism behind visible staleness. A summary records the membership it was
+ * written against; when the graph changes and the community's `fingerprint` moves on, the two differ and the
+ * summary is knowably out of date — without a timestamp anybody has to interpret, and without re-reading the
+ * summary to guess.
+ */
+export type StoredCommunity = {
+  readonly id: string;
+  readonly level: number;
+  readonly entityIds: readonly string[];
+  readonly relationshipIds: readonly string[];
+  readonly chunkIds: readonly string[];
+  readonly fingerprint: string;
+  readonly summary?: string;
+  /** The `fingerprint` the summary was written against. Differs from `fingerprint` exactly when stale. */
+  readonly summaryFingerprint?: string;
+  readonly summarisedAt?: string;
+};
+
+/** True when a community has a summary that no longer describes its membership. */
+export const isCommunityStale = (community: StoredCommunity): boolean =>
+  community.summary !== undefined && community.summaryFingerprint !== community.fingerprint;
+
 export type GraphContribution = {
   readonly entities: readonly KnowledgeEntity[];
   readonly relationships: readonly KnowledgeRelationship[];
@@ -1663,6 +1688,27 @@ export interface GraphStore {
   neighbours(
     input: TenantScope & { entityIds: readonly string[]; limit: number },
   ): Promise<readonly KnowledgeRelationship[]>;
+
+  /**
+   * Replaces the whole community hierarchy — REQ-064 (#270), task #272.
+   *
+   * Whole rather than per level, because clustering is global: an entity moving between communities can change
+   * every level above it, and a partial write would leave a hierarchy whose levels disagree about who is in
+   * what. Summaries already written are carried over for communities whose fingerprint is unchanged, which is
+   * what makes re-summarisation incremental — the expensive half — while clustering stays global and cheap.
+   */
+  replaceCommunities(
+    input: TenantScope & { communities: readonly StoredCommunity[] },
+  ): Promise<{ readonly written: number; readonly summariesKept: number }>;
+
+  listCommunities(input: TenantScope & PageRequest & { level?: number }): Promise<Page<StoredCommunity>>;
+
+  getCommunity(input: TenantScope & { id: string }): Promise<StoredCommunity | null>;
+
+  /** Records a generated summary against the fingerprint it was written for. */
+  setCommunitySummary(
+    input: TenantScope & { id: string; summary: string; fingerprint: string; at: string },
+  ): Promise<void>;
 
   /**
    * A stable serialisation of the whole graph, for the determinism assertion — AC-6.

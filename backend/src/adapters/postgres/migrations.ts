@@ -1603,8 +1603,29 @@ export const MIGRATIONS: readonly Migration[] = [
          ON knowledge_graph_relationships (tenant_id, from_id)`,
       `CREATE INDEX IF NOT EXISTS knowledge_graph_relationships_to_idx
          ON knowledge_graph_relationships (tenant_id, to_id)`,
+      /*
+       * Communities — #272. `fingerprint` is what the cluster contains; `summary_fingerprint` is what the
+       * summary was written against. A community is stale exactly when they differ, which makes staleness a
+       * comparison rather than a timestamp somebody has to interpret.
+       */
+      `CREATE TABLE IF NOT EXISTS knowledge_graph_communities (
+         tenant_id text NOT NULL,
+         id text NOT NULL,
+         level integer NOT NULL,
+         entity_ids text[] NOT NULL,
+         relationship_ids text[] NOT NULL,
+         chunk_ids text[] NOT NULL,
+         fingerprint text NOT NULL,
+         summary text,
+         summary_fingerprint text,
+         summarised_at timestamptz,
+         PRIMARY KEY (tenant_id, id)
+       )`,
+      `CREATE INDEX IF NOT EXISTS knowledge_graph_communities_level_idx
+         ON knowledge_graph_communities (tenant_id, level, id)`,
     ],
     down: [
+      `DROP TABLE IF EXISTS knowledge_graph_communities`,
       `DROP TABLE IF EXISTS knowledge_graph_relationships`,
       `DROP TABLE IF EXISTS knowledge_graph_entities`,
       `DROP TABLE IF EXISTS knowledge_graph_contributions`,

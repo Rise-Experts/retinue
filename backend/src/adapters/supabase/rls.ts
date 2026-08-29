@@ -142,6 +142,12 @@ export const TENANT_SCOPED_TABLES: readonly RlsTable[] = [
   { table: "knowledge_graph_contributions" },
   { table: "knowledge_graph_entities" },
   { table: "knowledge_graph_relationships" },
+  /**
+   * #272. Community summaries are **generated prose about a tenant's corpus** — a paraphrase of what their
+   * documents say, which is if anything more sensitive than the entity names next door. A missing policy here
+   * would leak the substance of a corpus rather than its index.
+   */
+  { table: "knowledge_graph_communities" },
 ];
 
 /**
