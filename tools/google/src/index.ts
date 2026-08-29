@@ -23,6 +23,8 @@
 import type { CredentialRef, CredentialResolver, Tool, ToolProvider, ToolkitAuth } from "@retinue/agentkit/tools";
 
 import { calendarTools, CALENDAR_EVENTS, CALENDAR_READONLY } from "./calendar.js";
+import { docsTools, driveTools, DOCS_READONLY, DOCS_WRITE, DRIVE_FILE, DRIVE_FULL, DRIVE_READONLY } from "./drive.js";
+import { sheetsTools, SHEETS_READONLY, SHEETS_WRITE } from "./sheets.js";
 import { gmailTools, GMAIL_COMPOSE, GMAIL_MODIFY, GMAIL_READONLY, GMAIL_SEND } from "./gmail.js";
 import { createGoogleTransport, GOOGLE_API } from "./transport.js";
 
@@ -37,6 +39,10 @@ export {
   GMAIL_MODIFY,
 } from "./gmail.js";
 export { CALENDAR_READONLY, CALENDAR_EVENTS } from "./calendar.js";
+export { DRIVE_READONLY, DRIVE_FILE, DRIVE_FULL, DOCS_READONLY, DOCS_WRITE } from "./drive.js";
+export { SHEETS_READONLY, SHEETS_WRITE } from "./sheets.js";
+export { parseA1, isValidA1, splitSheet, InvalidRangeError } from "./a1.js";
+export type { A1Range } from "./a1.js";
 
 export type GoogleToolkitConfig = {
   /**
@@ -124,7 +130,13 @@ const withScopeGate = (tool: Tool, assertScopes: (context: never, name: string, 
 
 export const createGoogleToolkit = (config: GoogleToolkitConfig): ToolProvider => {
   const transport = createGoogleTransport(config);
-  const all: readonly Tool[] = [...gmailTools(transport), ...calendarTools(transport)].map((tool) =>
+  const all: readonly Tool[] = [
+    ...gmailTools(transport),
+    ...calendarTools(transport),
+    ...driveTools(transport),
+    ...docsTools(transport),
+    ...sheetsTools(transport),
+  ].map((tool) =>
     withScopeGate(tool, (context, name, scopes) => transport.assertScopes(context, name, scopes)),
   );
   const tools = select(all, config);
@@ -164,7 +176,25 @@ export const GOOGLE_SCOPES: readonly { readonly scope: string; readonly restrict
   // not. That is a materially smaller burden and worth distinguishing.
   { scope: CALENDAR_READONLY, restricted: false, why: "reads calendars the account can see" },
   { scope: CALENDAR_EVENTS, restricted: false, why: "creates, changes and cancels events, notifying attendees" },
+  // Drive, Docs and Sheets — #235. `drive.readonly` is restricted because it reads a whole Drive;
+  // `drive.file` is not, because it only reaches files this app made or the user picked. That difference is
+  // the reason every write here uses the narrow one.
+  { scope: DRIVE_READONLY, restricted: true, why: "reads every file in the user's Drive" },
+  { scope: DRIVE_FILE, restricted: false, why: "creates and edits only files this app made or the user picked" },
+  { scope: DOCS_READONLY, restricted: false, why: "reads Google Docs" },
+  { scope: DOCS_WRITE, restricted: false, why: "creates and appends to Google Docs" },
+  { scope: SHEETS_READONLY, restricted: false, why: "reads spreadsheet values" },
+  { scope: SHEETS_WRITE, restricted: false, why: "writes spreadsheet values, including overwriting them" },
 ];
+
+/**
+ * The whole-Drive scope, which this package **never** declares — AC-7.
+ *
+ * Exported beside `GOOGLE_SCOPES` rather than hidden, so the absence is checkable: a test asserts no tool asks
+ * for it. Scope creep in a constant is a one-word change that no review catches and no consent screen
+ * distinguishes from the narrow one at a glance.
+ */
+export const NEVER_REQUESTED: readonly string[] = [DRIVE_FULL];
 
 export const GOOGLE_TOOL_NAMES = [
   // Gmail.
@@ -183,6 +213,23 @@ export const GOOGLE_TOOL_NAMES = [
   "calendar_create_event",
   "calendar_update_event",
   "calendar_delete_event",
+  // Drive.
+  "drive_search_files",
+  "drive_get_file",
+  "drive_create_folder",
+  "drive_upload_file",
+  "drive_move_file",
+  "drive_share_file",
+  // Docs.
+  "docs_get_document",
+  "docs_create_document",
+  "docs_append_text",
+  // Sheets.
+  "sheets_list_sheets",
+  "sheets_get_values",
+  "sheets_append_rows",
+  "sheets_update_values",
+  "sheets_add_sheet",
 ] as const;
 
 export { GOOGLE_API };

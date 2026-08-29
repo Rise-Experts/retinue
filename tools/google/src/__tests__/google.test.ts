@@ -114,8 +114,13 @@ describe("the toolkit contract — AC-2, AC-7", () => {
     // Gmail's are restricted (security assessment); Calendar's are merely sensitive. That is a materially
     // different burden and the difference belongs somewhere machine-readable.
     const restricted = GOOGLE_SCOPES.filter((entry) => entry.restricted).map((entry) => entry.scope);
-    expect(restricted).toHaveLength(4);
-    expect(restricted.every((scope) => scope.includes("gmail"))).toBe(true);
+    // Gmail's four, plus `drive.readonly` — which reads a user's whole Drive and is restricted for the same
+    // reason. `drive.file` is not, because it reaches only files this app made or the user picked, and that
+    // distinction is exactly why every Drive write here uses the narrow one.
+    expect(restricted).toHaveLength(5);
+    expect(restricted.filter((scope) => scope.includes("gmail"))).toHaveLength(4);
+    expect(restricted).toContain("https://www.googleapis.com/auth/drive.readonly");
+    expect(restricted).not.toContain("https://www.googleapis.com/auth/drive.file");
     expect(GOOGLE_AUTH).toEqual({ modes: ["oauth2"], schemes: ["bearer"] });
   });
 

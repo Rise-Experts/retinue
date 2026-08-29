@@ -74,7 +74,19 @@ export type VendorTransport = {
   readonly text: (
     context: ExecutionContext,
     path: string,
-    init?: { readonly method?: string; readonly body?: unknown },
+    init?: {
+      readonly method?: string;
+      readonly body?: unknown;
+      /**
+       * Sent **as-is**, with `contentType`, instead of being JSON-encoded.
+       *
+       * For a media endpoint: Drive's `uploadType=media` wants the file's bytes, and `JSON.stringify` on a
+       * string produces a quoted string — a file whose contents are a JSON literal, uploaded successfully.
+       * Nothing errors, which is why this is a parameter rather than a caller's `JSON.parse` dance.
+       */
+      readonly rawBody?: string;
+      readonly contentType?: string;
+    },
   ) => Promise<string>;
 };
 
@@ -134,7 +146,13 @@ export const createVendorTransport = (config: VendorTransportConfig): VendorTran
   const request = async (
     context: ExecutionContext,
     path: string,
-    init: { readonly method?: string; readonly body?: unknown } = {},
+    init: {
+      readonly method?: string;
+      readonly body?: unknown;
+      /** Sent verbatim instead of JSON-encoded, with `contentType`. For media endpoints — see `text`. */
+      readonly rawBody?: string;
+      readonly contentType?: string;
+    } = {},
   ): Promise<string> => {
     const credential = await config.resolver.resolve({ ref: config.credentialRef, context });
     // One helper, so twenty toolkits do not each write their own base64 and get the padding wrong — #260.
@@ -142,12 +160,23 @@ export const createVendorTransport = (config: VendorTransportConfig): VendorTran
     const client = createHttpClient({
       ...(config.fetchImpl === undefined ? {} : { fetchImpl: config.fetchImpl }),
       headersFor: (requested) =>
-        requested === host ? { [headerName.toLowerCase()]: headerValue, ...(config.headers ?? {}) } : undefined,
+        requested === host
+          ? {
+              [headerName.toLowerCase()]: headerValue,
+              ...(config.headers ?? {}),
+              // Overrides the vendor's default, which is JSON for every other call this transport makes.
+              ...(init.contentType === undefined ? {} : { "content-type": init.contentType }),
+            }
+          : undefined,
     });
     const outcome = await client.request({
       url: `${base}${path}`,
       ...(init.method === undefined ? {} : { method: init.method }),
-      ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) }),
+      ...(init.rawBody !== undefined
+        ? { body: init.rawBody }
+        : init.body === undefined
+          ? {}
+          : { body: JSON.stringify(init.body) }),
       // Parsed here and never shown to the model verbatim, so the untrusted-content envelope would only corrupt
       // the JSON. Anything rendered as prose keeps the default fence.
       fence: false,
@@ -184,7 +213,7 @@ export const createVendorTransport = (config: VendorTransportConfig): VendorTran
     text(context, path, init) {
       // Not `json` with the parse failure caught: that discards the body, which is how a log-reading tool
       // shipped returning a placeholder on every success.
-      return request(context, path, init);
+      return request(context, path, init ?? {});
     },
   };
 };
