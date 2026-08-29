@@ -294,6 +294,28 @@ export function graphStoreConformance(make: () => GraphStore): void {
         expect(await (await seeded()).neighbours({ tenantId: T1, entityIds: [], limit: 10 })).toEqual([]);
       });
 
+      it("resolves an entity by normalised name across types — #273", async () => {
+        /**
+         * The query-side lookup. A question says "the retry budget" and cannot say which *type* the graph
+         * assigned, so resolution is by name alone. The adapter matches on everything after the first colon in
+         * the id, which is where the index-side normaliser already put the normalised name — so the two sides
+         * agree by construction rather than by two functions being kept in step.
+         */
+        const store = await seeded();
+        const found = await store.resolveEntities({ tenantId: T1, normalisedNames: ["hub", "heavy"] });
+        // Both types come back, which is the point: the caller did not have to know `concept` from `person`.
+        expect(found.map((e) => e.id).sort()).toEqual(["concept:hub", "person:heavy"]);
+      });
+
+      it("returns nothing for an empty name list rather than everything", async () => {
+        expect(await (await seeded()).resolveEntities({ tenantId: T1, normalisedNames: [] })).toEqual([]);
+      });
+
+      it("does not resolve a name from another tenant", async () => {
+        const store = await seeded();
+        expect(await store.resolveEntities({ tenantId: T2, normalisedNames: ["hub"] })).toEqual([]);
+      });
+
       it("filters entities by type", async () => {
         const found = await (await seeded()).listEntities({ tenantId: T1, limit: 50, type: "person" });
         expect(found.items.map((e) => e.id)).toEqual(["person:heavy"]);

@@ -300,6 +300,21 @@ export const createPostgresGraphStore = (sql: SqlExecutor): GraphStore => {
       return rows.map(toEntity);
     },
 
+    async resolveEntities({ tenantId, normalisedNames }) {
+      if (normalisedNames.length === 0) return [];
+      const rows = await sql.query<EntityRow>(
+        `SELECT id, name, type, description, surface_forms, provenance
+           FROM knowledge_graph_entities
+          -- The id is \`type:normalisedName\`, and \`normaliseName\` cannot produce a colon, so everything after
+          -- the first one is the name. Matching on that keeps query-side and index-side resolution identical
+          -- without a second stored column to drift.
+          WHERE tenant_id = $1 AND substring(id from position(':' in id) + 1) = ANY($2)
+          ORDER BY id`,
+        [tenantId, [...normalisedNames]],
+      );
+      return rows.map(toEntity);
+    },
+
     async listEntities({ tenantId, limit, cursor, type }) {
       const offset = cursor === undefined ? 0 : Number.parseInt(cursor, 10) || 0;
       const rows = await sql.query<EntityRow>(

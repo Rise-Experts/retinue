@@ -304,3 +304,5 @@ export * from "./retrieval.js";
 export * from "./navigate.js";
 
 export * from "./graph.js";
+
+export * from "./graph-retrieval.js";

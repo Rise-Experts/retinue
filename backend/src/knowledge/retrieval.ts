@@ -48,6 +48,7 @@ import type {
 } from "../persistence/index.js";
 import type { EmbeddingProvider } from "./index.js";
 import type { Navigator } from "./navigate.js";
+import type { GraphLocalSearch } from "./graph-retrieval.js";
 
 /** The rank-fusion constant. See the note above on why 60 and why rank rather than score. */
 export const RRF_K = 60;
@@ -75,7 +76,14 @@ export const DEFAULT_RELEVANCE_FLOOR = 0.4;
  *
  * See `navigate.ts` for what it is and `docs/26-retrieval-quality.md` for what it scored.
  */
-export type RetrievalMode = "semantic" | "keyword" | "hybrid" | "navigate";
+/**
+ * `graph-local` joins the union in REQ-064 (#270), task #273.
+ *
+ * A closed union read in several places, so a new member is threaded rather than cast past — the same
+ * discipline #219 applied when it added `not-configured`. Like `navigate`, it is *delegated whole*: it shares
+ * no step with the fusion path, because it answers a different kind of question.
+ */
+export type RetrievalMode = "semantic" | "keyword" | "hybrid" | "navigate" | "graph-local";
 
 /** What a citation needs, derived from a hit so there is one shape rather than each caller's own (AC-6). */
 export type SourceReference = {
@@ -172,6 +180,14 @@ export type RetrieverDeps = {
    * mechanism, which is the only way this spike could have done harm.
    */
   readonly navigator?: Navigator;
+  /**
+   * Serves `mode: "graph-local"` — REQ-064 (#270), task #273.
+   *
+   * Optional for the same reason `navigator` is, and its absence is the same named refusal. GraphRAG is opt-in
+   * and expensive to index, so a deployment that never enabled it supplies nothing here and asking for the
+   * mode says so rather than quietly returning embeddings.
+   */
+  readonly graphLocal?: GraphLocalSearch;
 };
 
 export type RetrieveInput = {
@@ -273,6 +289,47 @@ export const createRetriever = (deps: RetrieverDeps) => {
       input: RetrieveInput,
     ): Promise<RetrievalOutcome> {
       const mode = input.mode ?? "hybrid";
+
+      /**
+       * The graph mode, delegated whole — task #273.
+       *
+       * Before the `authSubjects` check below only because it does its own: an empty subject list means the
+       * same thing here, and the graph search returns an empty result for it rather than traversing first and
+       * filtering after. Placed with `navigate` because both are delegated modes rather than fusion inputs.
+       */
+      if (mode === "graph-local") {
+        if (deps.graphLocal === undefined)
+          return { found: false, reason: "not-configured", message: NO_RESULT_MESSAGES["not-configured"], mode };
+        if (input.authSubjects.length === 0)
+          return { found: false, reason: "no-access", message: NO_RESULT_MESSAGES["no-access"], mode };
+
+        const result = await deps.graphLocal.search(context, {
+          query: input.query,
+          authSubjects: input.authSubjects,
+          limit: input.limit,
+          ...(input.sourceTypes === undefined ? {} : { sourceTypes: input.sourceTypes }),
+        });
+        if (result.hits.length === 0)
+          /**
+           * An honest empty result, and the reason distinguishes the two ways it happens.
+           *
+           * Nothing in the question named an entity the graph knows is `no-match` — rephrasing might work.
+           * Entities matched but reached no readable chunk is also `no-match` rather than `no-access`, because
+           * the principal may genuinely have access to a corpus that simply says nothing more.
+           */
+          return { found: false, reason: "no-match", message: NO_RESULT_MESSAGES["no-match"], mode };
+
+        return {
+          found: true,
+          mode,
+          hits: result.hits.map((hit) => ({
+            chunk: hit.chunk,
+            score: hit.score,
+            signals: ["graph-local"] as const,
+            reference: referenceFor(hit.chunk),
+          })),
+        };
+      }
 
       // The spike's mode, delegated whole: it shares no step with the fusion path below.
       if (mode === "navigate") {

@@ -1644,6 +1644,19 @@ export interface GraphStore {
   /** Entities by exact id, for a query-side resolver that has already normalised. */
   getEntities(input: TenantScope & { ids: readonly string[] }): Promise<readonly KnowledgeEntity[]>;
 
+  /**
+   * Entities whose **normalised name** matches, across every type — REQ-064 (#270), task #273.
+   *
+   * A query says "the retry budget" and the graph holds `concept:retry budget`; the type is not in the
+   * question and cannot be. So resolution is by name, and the caller supplies names already normalised by
+   * `normaliseName`.
+   *
+   * That the id *is* `type:normalisedName` is what makes this a suffix match rather than a second stored
+   * column, and it is why query-side and index-side resolution agree by construction: the id was built by the
+   * same function the caller just called. A separate `normalised_name` column would be a second copy to drift.
+   */
+  resolveEntities(input: TenantScope & { normalisedNames: readonly string[] }): Promise<readonly KnowledgeEntity[]>;
+
   listEntities(input: TenantScope & PageRequest & { type?: string }): Promise<Page<KnowledgeEntity>>;
 
   /** Every edge touching any of `entityIds`, in either direction. The traversal primitive. */

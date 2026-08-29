@@ -221,6 +221,15 @@ export const createMemoryGraphStore = (): GraphStore => {
       return mergeAll(graphOf(tenantId).contributions.values()).entities.filter((entity) => wanted.has(entity.id));
     },
 
+    async resolveEntities({ tenantId, normalisedNames }) {
+      if (normalisedNames.length === 0) return [];
+      // The name is everything after the first colon; `normaliseName` cannot produce one, so the split is safe.
+      const wanted = new Set(normalisedNames);
+      return mergeAll(graphOf(tenantId).contributions.values()).entities.filter((entity) =>
+        wanted.has(entity.id.slice(entity.id.indexOf(":") + 1)),
+      );
+    },
+
     async listEntities({ tenantId, limit, cursor, type }) {
       const all = mergeAll(graphOf(tenantId).contributions.values()).entities;
       return page(type === undefined ? all : all.filter((entity) => entity.type === type), limit, cursor);
