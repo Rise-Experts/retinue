@@ -147,6 +147,13 @@ elsewhere in it: the judgements named terms rather than answers. Fixing the phra
 22.2% to 88.9% (83.3% after the front-matter fix). A harness reporting a bad number is a claim about the harness until somebody has read the misses —
 which is the second time in this sprint that turned out to be true.
 
+## A later measurement, on the same corpus
+
+`docs/29-graphrag-quality.md` measures GraphRAG's two modes against these numbers — same corpus, same harness,
+six added queries in two new classes. The short version: **semantic wins every class**, `graph-local` manages
+20.8% success@5 against semantic's 75.0%, and `graph-global` could not run inside a sane cost ceiling at all.
+GraphRAG stays off by default because of it.
+
 ## Re-running it
 
 ```bash

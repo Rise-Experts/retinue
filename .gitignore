@@ -27,3 +27,4 @@ backend/.conformance/
 examples/public/composer.js
 examples/public/composer.js.map
 reports/
+evals/graphrag-graph-cache.json

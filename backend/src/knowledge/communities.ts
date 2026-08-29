@@ -315,6 +315,19 @@ export type CommunityBuilderDeps = {
   readonly levels?: number;
   /** Chunk excerpts handed to the summariser per community. A ceiling, because a community can span hundreds. */
   readonly maxExcerpts?: number;
+  /**
+   * Which levels to summarise. Absent means all of them.
+   *
+   * **Worth setting, because summarising a level nobody queries is pure cost.** `graph-global` reads *one*
+   * level per query — the coarsest by default — and a two-level hierarchy over a real corpus has far more
+   * fine-grained communities than coarse ones. Summarising every level can therefore multiply the bill several
+   * times over for content no query will ever reduce across.
+   *
+   * Not defaulted to the coarsest, deliberately: a deployment that lets callers ask at a finer granularity
+   * needs those summaries, and silently not writing them would make `graph-global` at that level return
+   * nothing with no explanation. The cost is real either way; this makes it a decision.
+   */
+  readonly summariseLevels?: readonly number[];
   readonly clock?: () => string;
   readonly log?: (message: string, detail?: Readonly<Record<string, unknown>>) => void;
 };
@@ -404,7 +417,10 @@ export const createCommunityBuilder = (deps: CommunityBuilderDeps) => {
       let inputTokens = 0;
       let outputTokens = 0;
 
+      const wantedLevels = deps.summariseLevels === undefined ? null : new Set(deps.summariseLevels);
       for (const community of communities) {
+        // A level nobody queries costs nothing — see `summariseLevels`.
+        if (wantedLevels !== null && !wantedLevels.has(community.level)) continue;
         // Only what changed. `replaceCommunities` already carried over the summaries that survived, so a
         // community that still has one is one this pass must not pay for again.
         const stored = await deps.store.getCommunity({ tenantId: context.tenantId, id: community.id });

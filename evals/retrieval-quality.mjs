@@ -427,7 +427,33 @@ const main = async () => {
   if (withGraph && !offline) {
     const graphModel = arg("--graph-model", "gpt-4o-mini");
     const started = Date.now();
-    process.stdout.write(`\nbuilding the graph with ${graphModel}`);
+    /**
+     * The extracted graph, cached on disk — task #275.
+     *
+     * Extraction is one call per chunk: 768 calls and about twenty minutes for this corpus, paid again on every
+     * iteration of the harness. That is a strong disincentive to re-run a measurement, which is the opposite of
+     * what a measurement harness should be. The cache is keyed by nothing clever — delete the file to rebuild —
+     * because the corpus and the prompt are the only inputs and both change deliberately.
+     */
+    const CACHE = "evals/graphrag-graph-cache.json";
+    /**
+     * Six levels, not the runtime default of two.
+     *
+     * Measured, and it is a finding rather than a knob: two levels over this corpus left **741 communities at
+     * the coarsest level**, which is barely aggregated at all. A `graph-global` query reads one call per
+     * community, so 741 × 24 queries is ~17,800 calls — the mode is unusable at that shape, and the ceiling
+     * correctly refuses it.
+     *
+     * The cause is a sparse graph: most entities appear in one chunk and link to few others, so each Louvain
+     * pass merges only a little. More passes keep aggregating until they stop merging, which the loop detects.
+     */
+    const GRAPH_LEVELS = 6;
+    const { existsSync } = await import("node:fs");
+    const cached = process.argv.includes("--graph-cache") && existsSync(CACHE)
+      ? JSON.parse(readFileSync(CACHE, "utf8"))
+      : null;
+    if (cached !== null) console.log(`\nreusing the cached graph (${CACHE}) — delete it to rebuild`);
+    else process.stdout.write(`\nbuilding the graph with ${graphModel}`);
     await graphStore.setEnabled({ tenantId: TENANT, enabled: true, at: new Date().toISOString() });
     for (const outline of outlines) {
       await graphStore.setSourceEnabled({
@@ -454,7 +480,16 @@ const main = async () => {
       },
     });
     const indexer = createGraphIndexer({ store: graphStore, extractor });
-    for (const outline of outlines) {
+    if (cached !== null) {
+      await graphStore.replaceSourceGraph({
+        tenantId: TENANT,
+        sourceType: "file",
+        sourceId: "__cached__",
+        contribution: { entities: cached.entities, relationships: cached.relationships },
+      });
+      Object.assign(graphCost, cached.cost ?? {});
+    }
+    for (const outline of cached === null ? outlines : []) {
       const chunks = (
         await backend.store.listBySource({
           tenantId: TENANT,
@@ -473,37 +508,112 @@ const main = async () => {
       });
     }
 
-    const builder = createCommunityBuilder({
+    /**
+     * Cluster first with no summariser, then summarise **only the coarsest level**.
+     *
+     * `graph-global` reads one level per query and defaults to the coarsest, so summarising the fine-grained
+     * ones is money spent on content no query in this dataset will ever reduce across. A first attempt without
+     * this sat for eighteen minutes writing summaries the harness never asked for, and was killed.
+     *
+     * Two passes rather than one because the level numbers are not known until the graph is clustered, and
+     * clustering is free — it is arithmetic over ids with no model calls.
+     */
+    const summariser = {
+      id: graphModel,
+      async summarise({ excerpts, entityNames, relationshipDescriptions }) {
+        const result = await openAiJson({
+          apiKey,
+          modelId: graphModel,
+          maxTokens: 400,
+          prompt: [
+            "Summarise what this group of related things is about, in three sentences. Answer with JSON:",
+            '{"summary":"<your three sentences>"}',
+            "",
+            `Things: ${entityNames.slice(0, 60).join(", ")}`,
+            `Connections: ${relationshipDescriptions.slice(0, 40).join("; ")}`,
+            `Text: ${excerpts.slice(0, 6).join("\n---\n").slice(0, 6000)}`,
+          ].join("\n"),
+        });
+        graphCost.summaryCalls += 1;
+        graphCost.inputTokens += result.usage.inputTokens;
+        graphCost.outputTokens += result.usage.outputTokens;
+        if (graphCost.summaryCalls % 10 === 0) process.stdout.write("s");
+        return {
+          summary: typeof result.extraction.summary === "string" ? result.extraction.summary : "",
+          usage: result.usage,
+        };
+      },
+    };
+
+    if (cached?.communities !== undefined) {
+      // Summaries are the expensive half; restoring them is what makes an iteration minutes rather than an hour.
+      await graphStore.replaceCommunities({ tenantId: TENANT, communities: cached.communities });
+      for (const community of cached.communities) {
+        if (community.summary === undefined) continue;
+        await graphStore.setCommunitySummary({
+          tenantId: TENANT,
+          id: community.id,
+          summary: community.summary,
+          fingerprint: community.fingerprint,
+          at: community.summarisedAt ?? new Date().toISOString(),
+        });
+      }
+    }
+    const shape =
+      cached?.communities !== undefined
+        ? { communities: cached.communities.length, levels: new Set(cached.communities.map((c) => c.level)).size }
+        : await createCommunityBuilder({
+            store: graphStore,
+            knowledge: backend.store,
+            levels: GRAPH_LEVELS,
+          }).rebuild({ tenantId: TENANT });
+    const levels = (await graphStore.listCommunities({ tenantId: TENANT, limit: 20_000 })).items;
+    const coarsest = levels.length === 0 ? 0 : Math.max(...levels.map((community) => community.level));
+    const atCoarsest = levels.filter((community) => community.level === coarsest).length;
+    console.log(
+      `\n  ${shape.communities} communities across ${shape.levels} level(s); ` +
+        `summarising ${atCoarsest} at level ${coarsest}`,
+    );
+
+    const built = await createCommunityBuilder({
       store: graphStore,
       knowledge: backend.store,
-      summariser: {
-        id: graphModel,
-        async summarise({ community, excerpts, entityNames, relationshipDescriptions }) {
-          const result = await openAiJson({
-            apiKey,
-            modelId: graphModel,
-            maxTokens: 400,
-            prompt: [
-              "Summarise what this group of related things is about, in three sentences. Answer with JSON:",
-              '{"summary":"<your three sentences>"}',
-              "",
-              `Things: ${entityNames.slice(0, 60).join(", ")}`,
-              `Connections: ${relationshipDescriptions.slice(0, 40).join("; ")}`,
-              `Text: ${excerpts.slice(0, 6).join("\n---\n").slice(0, 6000)}`,
-            ].join("\n"),
-          });
-          graphCost.summaryCalls += 1;
-          graphCost.inputTokens += result.usage.inputTokens;
-          graphCost.outputTokens += result.usage.outputTokens;
-          return {
-            summary: typeof result.extraction.summary === "string" ? result.extraction.summary : "",
-            usage: result.usage,
-          };
-        },
-      },
-    });
-    const built = await builder.rebuild({ tenantId: TENANT });
+      levels: GRAPH_LEVELS,
+      summariseLevels: [coarsest],
+      summariser,
+    }).rebuild({ tenantId: TENANT });
     graphCost.communities = built.communities;
+
+    // Cache the extracted graph, so the next iteration of this harness is minutes rather than an afternoon.
+    const { writeFileSync: writeCache } = await import("node:fs");
+    if (cached === null) {
+      const allEntities = [];
+      let entityCursor;
+      do {
+        const page = await graphStore.listEntities({
+          tenantId: TENANT,
+          limit: 1000,
+          ...(entityCursor === undefined ? {} : { cursor: entityCursor }),
+        });
+        allEntities.push(...page.items);
+        entityCursor = page.nextCursor;
+      } while (entityCursor !== undefined);
+      const allEdges = await graphStore.neighbours({
+        tenantId: TENANT,
+        entityIds: allEntities.map((entity) => entity.id),
+        limit: 100_000,
+      });
+      const allCommunities = (await graphStore.listCommunities({ tenantId: TENANT, limit: 20_000 })).items;
+      writeCache(
+        CACHE,
+        `${JSON.stringify(
+          { entities: allEntities, relationships: allEdges, communities: allCommunities, cost: graphCost },
+          null,
+          0,
+        )}\n`,
+      );
+      console.log(`  cached the graph to ${CACHE}`);
+    }
     graphCost.elapsedMs = Date.now() - started;
     console.log(
       `\n  ${built.communities} communities at ${built.levels} level(s); ` +
@@ -615,16 +725,30 @@ const main = async () => {
     }
     const retriever = retrieverFor(arm.reranker, name === "navigate");
     const results = [];
+    const refusals = [];
     let elapsed = 0;
     process.stdout.write(`\n${name.padEnd(9)}`);
     for (const testCase of cases.cases) {
       const started = Date.now();
-      const outcome = await retriever.retrieve({ tenantId: TENANT }, {
-        query: testCase.query,
-        authSubjects: [SUBJECT],
-        limit: LIMIT,
-        mode: arm.mode,
-      });
+      /**
+       * A refusal is a *result*, not a crash.
+       *
+       * `graph-global` throws when a query would pass its cost ceiling — correctly, since a partial map-reduce
+       * must not be reported as a whole-corpus answer. In a measurement run that would abort the arm and lose
+       * every other query's number, so it is recorded and counted instead.
+       */
+      let outcome;
+      try {
+        outcome = await retriever.retrieve({ tenantId: TENANT }, {
+          query: testCase.query,
+          authSubjects: [SUBJECT],
+          limit: LIMIT,
+          mode: arm.mode,
+        });
+      } catch (error) {
+        refusals.push(`${testCase.id}: ${String(error).slice(0, 140)}`);
+        outcome = { found: false };
+      }
       elapsed += Date.now() - started;
       const hits = outcome.found ? outcome.hits : [];
       void started;
@@ -654,6 +778,13 @@ const main = async () => {
         `recall ${percent(scored.recall)}  ` +
         `MRR ${scored.mrr.toFixed(3)}  ${Math.round(elapsed / cases.cases.length)} ms`,
     );
+    if (refusals.length > 0) {
+      // Named, and counted into the report — an arm that refused every query has a real number of zero, and it
+      // must not be readable as "found nothing".
+      console.log(`    ⚠ ${refusals.length}/${cases.cases.length} queries refused: ${refusals[0]}`);
+      report[report.length - 1].refused = refusals.length;
+      report[report.length - 1].refusalExample = refusals[0];
+    }
     for (const [klass, stats] of Object.entries(byClass)) {
       console.log(
         stats.coverage === undefined

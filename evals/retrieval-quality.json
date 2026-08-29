@@ -1,7 +1,7 @@
 {
   "corpus": {
-    "documents": 57,
-    "chunks": 603,
+    "documents": 71,
+    "chunks": 768,
     "embeddingModel": {
       "modelId": "text-embedding-3-small",
       "version": "1",
@@ -9,66 +9,197 @@
     },
     "chunking": "default (400/800/1)"
   },
-  "cases": 18,
+  "cases": 24,
   "arms": [
     {
       "arm": "keyword",
-      "cases": 18,
-      "success5": 0.6111111111111112,
-      "docSuccess5": 0.8333333333333334,
-      "p1": 0.3333333333333333,
-      "p5": 0.17777777777777778,
-      "recall": 0.6111111111111112,
-      "mrr": 0.4324074074074074,
-      "msPerQuery": 6
+      "cases": 24,
+      "success5": 0.5833333333333334,
+      "docSuccess5": 0.75,
+      "p1": 0.25,
+      "p5": 0.18333333333333335,
+      "recall": 0.4930555555555556,
+      "mrr": 0.36527777777777776,
+      "byClass": {
+        "chunk": {
+          "cases": 18,
+          "success5": 0.5,
+          "docSuccess5": 0.7222222222222222,
+          "p1": 0.2777777777777778,
+          "p5": 0.15555555555555556,
+          "recall": 0.5,
+          "mrr": 0.36296296296296293
+        },
+        "multihop": {
+          "cases": 3,
+          "success5": 1,
+          "docSuccess5": 1,
+          "p1": 0,
+          "p5": 0.3333333333333333,
+          "recall": 0.5,
+          "mrr": 0.3444444444444444
+        },
+        "corpus": {
+          "cases": 3,
+          "coverage": 0.4444444444444444
+        }
+      },
+      "msPerQuery": 7
     },
     {
       "arm": "semantic",
-      "cases": 18,
-      "success5": 0.8333333333333334,
-      "docSuccess5": 0.9444444444444444,
-      "p1": 0.2777777777777778,
-      "p5": 0.24444444444444446,
-      "recall": 0.7777777777777778,
-      "mrr": 0.49259259259259264,
-      "msPerQuery": 188
+      "cases": 24,
+      "success5": 0.75,
+      "docSuccess5": 0.875,
+      "p1": 0.375,
+      "p5": 0.25833333333333336,
+      "recall": 0.6666666666666666,
+      "mrr": 0.5277777777777778,
+      "byClass": {
+        "chunk": {
+          "cases": 18,
+          "success5": 0.7777777777777778,
+          "docSuccess5": 0.9444444444444444,
+          "p1": 0.3333333333333333,
+          "p5": 0.2333333333333334,
+          "recall": 0.7222222222222222,
+          "mrr": 0.5092592592592592
+        },
+        "multihop": {
+          "cases": 3,
+          "success5": 1,
+          "docSuccess5": 1,
+          "p1": 0.6666666666666666,
+          "p5": 0.46666666666666673,
+          "recall": 0.6666666666666666,
+          "mrr": 0.8333333333333334
+        },
+        "corpus": {
+          "cases": 3,
+          "coverage": 0.3333333333333333
+        }
+      },
+      "msPerQuery": 281
     },
     {
       "arm": "hybrid",
-      "cases": 18,
-      "success5": 0.7222222222222222,
-      "docSuccess5": 0.8888888888888888,
-      "p1": 0.3333333333333333,
-      "p5": 0.22222222222222227,
-      "recall": 0.7222222222222222,
-      "mrr": 0.4740740740740741,
-      "msPerQuery": 196
-    },
-    {
-      "arm": "rerank",
-      "cases": 18,
-      "success5": 0.6666666666666666,
+      "cases": 24,
+      "success5": 0.625,
       "docSuccess5": 0.8333333333333334,
       "p1": 0.3333333333333333,
-      "p5": 0.21111111111111117,
-      "recall": 0.6666666666666666,
-      "mrr": 0.4462962962962963,
-      "msPerQuery": 182
+      "p5": 0.25833333333333336,
+      "recall": 0.6041666666666666,
+      "mrr": 0.4458333333333333,
+      "byClass": {
+        "chunk": {
+          "cases": 18,
+          "success5": 0.6666666666666666,
+          "docSuccess5": 0.9444444444444444,
+          "p1": 0.3333333333333333,
+          "p5": 0.24444444444444452,
+          "recall": 0.6666666666666666,
+          "mrr": 0.4555555555555555
+        },
+        "multihop": {
+          "cases": 3,
+          "success5": 0.6666666666666666,
+          "docSuccess5": 0.6666666666666666,
+          "p1": 0.3333333333333333,
+          "p5": 0.4000000000000001,
+          "recall": 0.5,
+          "mrr": 0.5
+        },
+        "corpus": {
+          "cases": 3,
+          "coverage": 0.3333333333333333
+        }
+      },
+      "msPerQuery": 327
     },
     {
-      "arm": "navigate",
-      "cases": 18,
-      "success5": 0.6666666666666666,
-      "docSuccess5": 0.7777777777777778,
-      "p1": 0.4444444444444444,
-      "p5": 0.24444444444444446,
-      "recall": 0.6111111111111112,
-      "mrr": 0.5203703703703703,
-      "msPerQuery": 1297
+      "arm": "graph-local",
+      "cases": 24,
+      "success5": 0.20833333333333334,
+      "docSuccess5": 0.4583333333333333,
+      "p1": 0,
+      "p5": 0.06666666666666667,
+      "recall": 0.14583333333333334,
+      "mrr": 0.07083333333333333,
+      "byClass": {
+        "chunk": {
+          "cases": 18,
+          "success5": 0.1111111111111111,
+          "docSuccess5": 0.4444444444444444,
+          "p1": 0,
+          "p5": 0.022222222222222223,
+          "recall": 0.1111111111111111,
+          "mrr": 0.02962962962962963
+        },
+        "multihop": {
+          "cases": 3,
+          "success5": 0.6666666666666666,
+          "docSuccess5": 0.6666666666666666,
+          "p1": 0,
+          "p5": 0.20000000000000004,
+          "recall": 0.3333333333333333,
+          "mrr": 0.2222222222222222
+        },
+        "corpus": {
+          "cases": 3,
+          "coverage": 0.16666666666666666
+        }
+      },
+      "msPerQuery": 2
+    },
+    {
+      "arm": "graph-global",
+      "cases": 24,
+      "success5": 0,
+      "docSuccess5": 0,
+      "p1": 0,
+      "p5": 0,
+      "recall": 0,
+      "mrr": 0,
+      "byClass": {
+        "chunk": {
+          "cases": 18,
+          "success5": 0,
+          "docSuccess5": 0,
+          "p1": 0,
+          "p5": 0,
+          "recall": 0,
+          "mrr": 0
+        },
+        "multihop": {
+          "cases": 3,
+          "success5": 0,
+          "docSuccess5": 0,
+          "p1": 0,
+          "p5": 0,
+          "recall": 0,
+          "mrr": 0
+        },
+        "corpus": {
+          "cases": 3,
+          "coverage": 0
+        }
+      },
+      "msPerQuery": 3,
+      "refused": 24,
+      "refusalExample": "rq-01: AgentPlatformError: A corpus-wide answer at level 4 would read 539 community summaries, and the ceiling is 200 model calls. Raise the ceilin"
     }
   ],
   "navigateCost": {
-    "prompt": 60890,
-    "completion": 558
-  }
+    "prompt": 0,
+    "completion": 0
+  },
+  "graphCost": {
+    "calls": 768,
+    "inputTokens": 445099,
+    "outputTokens": 388443,
+    "elapsedMs": 234,
+    "communities": 3368,
+    "summaryCalls": 539
+  },
+  "graphGlobalQueryCost": null
 }
