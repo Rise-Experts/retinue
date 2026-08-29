@@ -308,3 +308,5 @@ export * from "./graph.js";
 export * from "./graph-retrieval.js";
 
 export * from "./communities.js";
+
+export * from "./graph-global.js";

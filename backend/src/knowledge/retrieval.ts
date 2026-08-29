@@ -49,6 +49,7 @@ import type {
 import type { EmbeddingProvider } from "./index.js";
 import type { Navigator } from "./navigate.js";
 import type { GraphLocalSearch } from "./graph-retrieval.js";
+import type { GraphGlobalSearch } from "./graph-global.js";
 
 /** The rank-fusion constant. See the note above on why 60 and why rank rather than score. */
 export const RRF_K = 60;
@@ -83,7 +84,7 @@ export const DEFAULT_RELEVANCE_FLOOR = 0.4;
  * discipline #219 applied when it added `not-configured`. Like `navigate`, it is *delegated whole*: it shares
  * no step with the fusion path, because it answers a different kind of question.
  */
-export type RetrievalMode = "semantic" | "keyword" | "hybrid" | "navigate" | "graph-local";
+export type RetrievalMode = "semantic" | "keyword" | "hybrid" | "navigate" | "graph-local" | "graph-global";
 
 /** What a citation needs, derived from a hit so there is one shape rather than each caller's own (AC-6). */
 export type SourceReference = {
@@ -188,6 +189,14 @@ export type RetrieverDeps = {
    * mode says so rather than quietly returning embeddings.
    */
   readonly graphLocal?: GraphLocalSearch;
+  /**
+   * Serves `mode: "graph-global"` — REQ-064 (#270), task #274.
+   *
+   * Separate from `graphLocal` rather than one graph dependency, because they are independently useful: a
+   * deployment can run entity-centric retrieval without paying for community summaries at all, and #273 landed
+   * before #272 for exactly that reason.
+   */
+  readonly graphGlobal?: GraphGlobalSearch;
 };
 
 export type RetrieveInput = {
@@ -326,6 +335,41 @@ export const createRetriever = (deps: RetrieverDeps) => {
             chunk: hit.chunk,
             score: hit.score,
             signals: ["graph-local"] as const,
+            reference: referenceFor(hit.chunk),
+          })),
+        };
+      }
+
+      /**
+       * The corpus-level mode — task #274.
+       *
+       * Its cost ceiling **throws** rather than returning an outcome, and that is deliberate: exceeding it is
+       * not "found nothing", it is "this question is too expensive to answer this way", and the two want
+       * different responses. `RetrievalOutcome`'s `found: false` reasons are all about the corpus; this is
+       * about the request.
+       */
+      if (mode === "graph-global") {
+        if (deps.graphGlobal === undefined)
+          return { found: false, reason: "not-configured", message: NO_RESULT_MESSAGES["not-configured"], mode };
+        if (input.authSubjects.length === 0)
+          return { found: false, reason: "no-access", message: NO_RESULT_MESSAGES["no-access"], mode };
+
+        const result = await deps.graphGlobal.search(context, {
+          query: input.query,
+          authSubjects: input.authSubjects,
+          limit: input.limit,
+          ...(input.sourceTypes === undefined ? {} : { sourceTypes: input.sourceTypes }),
+        });
+        if (result.hits.length === 0)
+          return { found: false, reason: "no-match", message: NO_RESULT_MESSAGES["no-match"], mode };
+
+        return {
+          found: true,
+          mode,
+          hits: result.hits.map((hit) => ({
+            chunk: hit.chunk,
+            score: hit.score,
+            signals: ["graph-global"] as const,
             reference: referenceFor(hit.chunk),
           })),
         };
