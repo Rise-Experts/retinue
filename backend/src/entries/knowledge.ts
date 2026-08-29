@@ -26,3 +26,12 @@ export * from "../export/markdown.js";
  */
 export { DEFAULT_EMBEDDING_BATCH, DEFAULT_EMBEDDING_MODEL, createOpenAiEmbeddings } from "../adapters/embeddings/openai.js";
 export type { OpenAiEmbeddingsConfig } from "../adapters/embeddings/openai.js";
+
+/**
+ * The extraction prompt, exported so a harness can use the same one the runtime does — task #275.
+ *
+ * `extractGraph` itself is not exported here: it takes a `LanguageModel` from the AI SDK, and a consumer that
+ * wanted it would be pulling a provider package through the knowledge entrypoint. The prompt is the part worth
+ * sharing — a measurement run against a *different* prompt is measuring a different system.
+ */
+export { DEFAULT_EXTRACTION_PROMPT } from "../models/extraction.js";

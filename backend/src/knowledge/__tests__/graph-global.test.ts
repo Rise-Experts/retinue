@@ -10,7 +10,7 @@ import { describe, expect, it } from "vitest";
 
 import { asId } from "../../core/ids.js";
 import { createMemoryGraphStore } from "../../adapters/memory/graph.js";
-import { createMemoryKnowledgeStore, createMemoryVectorIndex, createMemoryKeywordIndex } from "../../adapters/memory/knowledge.js";
+import { createMemoryKnowledgeBackend } from "../../adapters/memory/knowledge.js";
 import type { GraphStore, KnowledgeStore, StoredCommunity } from "../../persistence/index.js";
 import {
   chooseLevel,
@@ -51,7 +51,9 @@ const chunk = (id: string, content: string, authSubject = OPEN) => ({
 const seeded = async (options: { authSubjectFor?: (chunkId: string) => string; summarise?: boolean } = {}) => {
   const authSubjectFor = options.authSubjectFor ?? (() => OPEN);
   const graph: GraphStore = createMemoryGraphStore();
-  const knowledge: KnowledgeStore = createMemoryKnowledgeStore();
+  // One backend, so the vector index and the store hold the same chunks — see the note in graph-retrieval.test.
+  const backend = createMemoryKnowledgeBackend();
+  const knowledge: KnowledgeStore = backend.store;
 
   const themes = [
     { id: "retries", chunks: ["retries:0", "retries:1"], summary: "How the retry budget governs outbound calls." },
@@ -90,7 +92,7 @@ const seeded = async (options: { authSubjectFor?: (chunkId: string) => string; s
     summarisedAt: AT,
   });
   await graph.replaceCommunities({ ...context, communities });
-  return { graph, knowledge };
+  return { graph, knowledge, backend };
 };
 
 /** Scores a community by whether its summary shares a word with the question. Deterministic, no model. */
@@ -471,11 +473,11 @@ describe("a summary must not leak what the principal cannot read — AC-8", () =
 
 describe("through the retriever — AC-1", () => {
   const retrieverFor = async (over: Parameters<typeof createGraphGlobalSearch>[0] | null = null) => {
-    const { graph, knowledge } = await seeded();
+    const { graph, knowledge, backend } = await seeded();
     const { mapper } = wordMapper();
     return createRetriever({
-      vector: createMemoryVectorIndex(knowledge),
-      keyword: createMemoryKeywordIndex(knowledge),
+      vector: backend.index,
+      keyword: backend.keyword,
       embeddings,
       ...(over === null ? { graphGlobal: createGraphGlobalSearch({ graph, knowledge, mapper }) } : { graphGlobal: createGraphGlobalSearch(over) }),
     });
@@ -499,12 +501,8 @@ describe("through the retriever — AC-1", () => {
   });
 
   it("says not-configured when the mode was never wired", async () => {
-    const knowledge = createMemoryKnowledgeStore();
-    const retriever = createRetriever({
-      vector: createMemoryVectorIndex(knowledge),
-      keyword: createMemoryKeywordIndex(knowledge),
-      embeddings,
-    });
+    const bare = createMemoryKnowledgeBackend();
+    const retriever = createRetriever({ vector: bare.index, keyword: bare.keyword, embeddings });
     const result = await retriever.retrieve(context, {
       query: "themes",
       authSubjects: [OPEN],
@@ -522,11 +520,11 @@ describe("through the retriever — AC-1", () => {
      * nothing", and `RetrievalOutcome`'s reasons are all about the corpus. Flattening it into `no-match` would
      * tell a user their documents say nothing about a subject they are full of.
      */
-    const { graph, knowledge } = await seeded();
+    const { graph, knowledge, backend } = await seeded();
     const { mapper } = wordMapper();
     const retriever = createRetriever({
-      vector: createMemoryVectorIndex(knowledge),
-      keyword: createMemoryKeywordIndex(knowledge),
+      vector: backend.index,
+      keyword: backend.keyword,
       embeddings,
       graphGlobal: createGraphGlobalSearch({ graph, knowledge, mapper, callCeiling: 1 }),
     });

@@ -366,5 +366,159 @@
     "tags": [
       "docs-corpus"
     ]
+  },
+  {
+    "id": "rq-mh-01",
+    "dimension": "retrieval",
+    "title": "Which parts of the platform require an idempotency key",
+    "input": {
+      "message": "which kinds of tool require an idempotency key and what decides that"
+    },
+    "expect": {
+      "kind": "retrieves",
+      "relevant": [
+        {
+          "source": "docs/23-tool-catalogue.md",
+          "mustContain": "idempotency"
+        },
+        {
+          "source": "docs/04-durable-runtime-and-hitl.md",
+          "mustContain": "idempotency key"
+        }
+      ]
+    },
+    "tags": [
+      "docs-corpus",
+      "multihop"
+    ]
+  },
+  {
+    "id": "rq-mh-02",
+    "dimension": "retrieval",
+    "title": "What measurement contradicted",
+    "input": {
+      "message": "which beliefs about retrieval and tool selection did measurement turn out to contradict"
+    },
+    "expect": {
+      "kind": "retrieves",
+      "relevant": [
+        {
+          "source": "docs/26-retrieval-quality.md",
+          "mustContain": "hybrid"
+        },
+        {
+          "source": "docs/24-tool-selection-at-scale.md",
+          "mustContain": "selection"
+        }
+      ]
+    },
+    "tags": [
+      "docs-corpus",
+      "multihop"
+    ]
+  },
+  {
+    "id": "rq-mh-03",
+    "dimension": "retrieval",
+    "title": "Where credentials are resolved and why never from the environment",
+    "input": {
+      "message": "which components resolve credentials and why do none of them read the environment"
+    },
+    "expect": {
+      "kind": "retrieves",
+      "relevant": [
+        {
+          "source": "docs/21-platform.md",
+          "mustContain": "credential"
+        },
+        {
+          "source": "website/content/integrations/github.md",
+          "mustContain": "resolver"
+        }
+      ]
+    },
+    "tags": [
+      "docs-corpus",
+      "multihop"
+    ]
+  },
+  {
+    "id": "rq-cl-01",
+    "dimension": "retrieval",
+    "title": "The main areas this documentation covers",
+    "input": {
+      "message": "what are the main areas this documentation covers"
+    },
+    "expect": {
+      "kind": "retrieves",
+      "relevant": [
+        {
+          "source": "docs/04-durable-runtime-and-hitl.md",
+          "mustContain": "run"
+        },
+        {
+          "source": "docs/23-tool-catalogue.md",
+          "mustContain": "tool"
+        },
+        {
+          "source": "docs/26-retrieval-quality.md",
+          "mustContain": "retrieval"
+        }
+      ]
+    },
+    "tags": [
+      "docs-corpus",
+      "corpus-level"
+    ]
+  },
+  {
+    "id": "rq-cl-02",
+    "dimension": "retrieval",
+    "title": "Which parts of the system are about permission and safety",
+    "input": {
+      "message": "which parts of this system are about permissions, approval and keeping tenants apart"
+    },
+    "expect": {
+      "kind": "retrieves",
+      "relevant": [
+        {
+          "source": "docs/04-durable-runtime-and-hitl.md",
+          "mustContain": "approval"
+        },
+        {
+          "source": "docs/23-tool-catalogue.md",
+          "mustContain": "approval"
+        }
+      ]
+    },
+    "tags": [
+      "docs-corpus",
+      "corpus-level"
+    ]
+  },
+  {
+    "id": "rq-cl-03",
+    "dimension": "retrieval",
+    "title": "What the project has measured rather than assumed",
+    "input": {
+      "message": "what has this project measured rather than assumed, across all of its documentation"
+    },
+    "expect": {
+      "kind": "retrieves",
+      "relevant": [
+        {
+          "source": "docs/26-retrieval-quality.md",
+          "mustContain": "measured"
+        },
+        {
+          "source": "docs/24-tool-selection-at-scale.md",
+          "mustContain": "measured"
+        }
+      ]
+    },
+    "tags": [
+      "docs-corpus",
+      "corpus-level"
+    ]
   }
 ]

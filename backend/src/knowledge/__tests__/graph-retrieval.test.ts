@@ -15,7 +15,7 @@ import { describe, expect, it, vi } from "vitest";
 import { asId } from "../../core/ids.js";
 import type { DocumentBlock } from "../../documents/index.js";
 import { createMemoryGraphStore } from "../../adapters/memory/graph.js";
-import { createMemoryKnowledgeStore, createMemoryVectorIndex, createMemoryKeywordIndex } from "../../adapters/memory/knowledge.js";
+import { createMemoryKnowledgeBackend } from "../../adapters/memory/knowledge.js";
 import type { GraphStore, KnowledgeStore } from "../../persistence/index.js";
 import {
   createEmbeddingPipeline,
@@ -71,6 +71,44 @@ const CORPUS: readonly { id: string; text: string; extraction: RawExtraction }[]
       relationships: [{ from: "Team Cygnus", to: "retry-budget", type: "depends-on" }],
     },
   },
+  /**
+   * Distractors: they use the question's words and have nothing to do with its answer.
+   *
+   * Without these the corpus is four documents and top-5 returns all of it, so *any* mode "finds all three"
+   * and the comparison below decides nothing. Adding documents that talk about teams and budgets without the
+   * retry-budget relationship is what makes similarity have to rank rather than merely enumerate — which is a
+   * more realistic corpus, not a rigged one.
+   */
+  {
+    id: "doc-e",
+    text: "Every team submits a travel budget each quarter. The finance team reviews the budget requests.",
+    extraction: {
+      entities: [
+        { name: "travel budget", type: "concept" },
+        { name: "finance team", type: "organisation" },
+      ],
+      relationships: [{ from: "finance team", to: "travel budget", type: "reviews" }],
+    },
+  },
+  {
+    id: "doc-f",
+    text: "The platform team depends on the shared build cache for its outbound release pipeline.",
+    extraction: {
+      entities: [
+        { name: "platform team", type: "organisation" },
+        { name: "build cache", type: "concept" },
+      ],
+      relationships: [{ from: "platform team", to: "build cache", type: "depends-on" }],
+    },
+  },
+  {
+    id: "doc-g",
+    text: "Which teams depend on which services is tracked in the ownership registry, updated each quarter.",
+    extraction: {
+      entities: [{ name: "ownership registry", type: "concept" }],
+      relationships: [],
+    },
+  },
   {
     id: "doc-d",
     text: "The office coffee machine is descaled every second Tuesday by the facilities team.",
@@ -95,6 +133,8 @@ const CORPUS: readonly { id: string; text: string; extraction: RawExtraction }[]
 const VOCAB = [
   "team", "atlas", "borealis", "cygnus", "retry", "budget", "depends", "checkout", "ingest", "billing",
   "coffee", "machine", "facilities", "which", "teams", "throughput", "ceiling", "reconciler", "outbound",
+  "travel", "finance", "quarter", "reviews", "platform", "build", "cache", "release", "pipeline",
+  "ownership", "registry", "services", "tracked", "submits", "requests", "shared", "each",
 ];
 const embeddings = {
   model: { modelId: "test-embed", version: "1", dimensions: 1536 },
@@ -128,9 +168,18 @@ const indexed = async (
   authSubjectFor: (id: string) => string = () => OPEN,
 ) => {
   const graph: GraphStore = createMemoryGraphStore();
-  const knowledge: KnowledgeStore = createMemoryKnowledgeStore();
-  const vector = createMemoryVectorIndex(knowledge);
-  const keyword = createMemoryKeywordIndex(knowledge);
+  /**
+   * **One backend, so the vector index searches the chunks that were actually written.**
+   *
+   * `createMemoryVectorIndex()` takes no argument and builds its *own* backend — passing it a store, as the
+   * first version of this did, silently gave the retriever an empty index. The semantic arm then found nothing
+   * and the AC-7 comparison below passed vacuously: "semantic finds fewer" is not evidence when semantic was
+   * searching an empty corpus. Caught while wiring the eval harness, which needed the same shape.
+   */
+  const backend = createMemoryKnowledgeBackend();
+  const knowledge: KnowledgeStore = backend.store;
+  const vector = backend.index;
+  const keyword = backend.keyword;
   await graph.setEnabled({ ...context, enabled: true, at: NOW });
 
   const pipeline = createEmbeddingPipeline({
@@ -188,13 +237,24 @@ describe("finding the entities a question names — AC-3", () => {
 });
 
 describe("the question no single chunk answers — AC-7", () => {
-  it("finds all three teams, where semantic search finds fewer", async () => {
+  it("returns exactly the connected documents, where semantic returns them mixed with distractors", async () => {
     /**
-     * The test that justifies the REQ.
+     * **What this test does and does not prove — worth being exact about, because it is the REQ's key claim.**
      *
-     * No document says which teams depend on the retry budget. Each says one thing, and the connection between
-     * them exists only in the graph. Semantic search is given the same corpus, the same embedder and a fair
-     * question — and cannot assemble it, because assembly is not what similarity does.
+     * The first version asserted "graph-local finds all three and semantic finds fewer". Two things were wrong
+     * with it. It passed for the wrong reason at first — the vector index was a *separate* backend, so semantic
+     * searched an empty corpus. And once that was fixed, the assertion turned out to be **false**: with a
+     * working index, semantic finds all three documents too.
+     *
+     * That is the honest result at this scale and it is not surprising. Recall is easy on nine documents; a
+     * stub embedder over a fixed vocabulary is not a real semantic model; and the answer's three documents all
+     * literally contain the question's words.
+     *
+     * What *is* demonstrable here, and is a real difference: **graph-local returns exactly the connected set,
+     * and semantic returns it padded with documents that merely share vocabulary.** Precision, not recall.
+     *
+     * Whether GraphRAG beats semantic retrieval on questions like this over a real corpus with a real embedder
+     * is #275's question, and this test deliberately does not pretend to answer it.
      */
     const { retriever } = await indexed();
     const question = "which teams depend on the retry budget";
@@ -207,6 +267,7 @@ describe("the question no single chunk answers — AC-7", () => {
     });
     expect(graph.found).toBe(true);
     const graphSources = graph.found ? new Set(graph.hits.map((hit) => hit.reference.sourceId)) : new Set();
+    // Exactly the three the graph connects — no distractor, no coffee machine.
     expect([...graphSources].sort()).toEqual(["doc-a", "doc-b", "doc-c"]);
 
     const semantic = await retriever.retrieve(context, {
@@ -216,9 +277,10 @@ describe("the question no single chunk answers — AC-7", () => {
       mode: "semantic",
     });
     const semanticSources = semantic.found ? new Set(semantic.hits.map((hit) => hit.reference.sourceId)) : new Set();
-    // The point is not that semantic finds nothing — it finds what shares words. It is that it does not find
-    // the set, because two of the three documents never use the question's phrasing.
-    expect(semanticSources.size).toBeLessThan(3);
+    // Semantic finds them — and also finds documents about travel budgets and build caches, because they use
+    // the same words. That is what similarity does, and it is why precision is the difference at this scale.
+    expect(semanticSources.size).toBeGreaterThan(graphSources.size);
+    expect([...semanticSources].some((id) => !graphSources.has(id))).toBe(true);
   });
 
   it("leaves the unrelated document out", async () => {
@@ -306,12 +368,8 @@ describe("ordinary hits, so nothing downstream changes — AC-1", () => {
 
 describe("refusals are honest — AC-2, AC-4", () => {
   it("says not-configured when GraphRAG was never wired", async () => {
-    const knowledge = createMemoryKnowledgeStore();
-    const retriever = createRetriever({
-      vector: createMemoryVectorIndex(knowledge),
-      keyword: createMemoryKeywordIndex(knowledge),
-      embeddings,
-    });
+    const bare = createMemoryKnowledgeBackend();
+    const retriever = createRetriever({ vector: bare.index, keyword: bare.keyword, embeddings });
     const result = await retriever.retrieve(context, {
       query: "retry budget",
       authSubjects: [OPEN],

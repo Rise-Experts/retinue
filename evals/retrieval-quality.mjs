@@ -38,8 +38,14 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createMemoryKnowledgeBackend } from "@retinue/agentkit/persistence";
+import { createMemoryKnowledgeBackend, createMemoryGraphStore } from "@retinue/agentkit/persistence";
 import {
+  createCommunityBuilder,
+  createGraphGlobalSearch,
+  createGraphIndexer,
+  createGraphLocalSearch,
+  createModelEntityExtractor,
+  DEFAULT_EXTRACTION_PROMPT,
   createEmbeddingPipeline,
   createExactTermReranker,
   createNavigator,
@@ -120,6 +126,67 @@ const offlineEmbedder = (dimensions = 1536) => ({
 });
 
 /** The chooser for the `navigate` arm: one chat call, asked for document ids and nothing else. */
+/**
+ * One JSON-mode chat call — REQ-064 (#270), task #275.
+ *
+ * Raw fetch, like `openAiChooser` below, because this harness deliberately imports no model provider: it runs
+ * from a checkout with an API key and nothing else. `extractGraph` in the runtime takes a `LanguageModel` from
+ * the AI SDK, which would pull a provider package in here for no benefit.
+ */
+const openAiJson = async (config) => {
+  /**
+   * **A timeout and a retry, because a run of this length will otherwise hang.**
+   *
+   * The first version had neither, and it hung: after ~750 of 768 extraction calls the process sat at 0% CPU
+   * with no open sockets — a `fetch` promise that never settled, which `await` waits on forever. Thirty-five
+   * minutes of a paid run were lost to one dropped connection.
+   *
+   * `AbortSignal.timeout` bounds each call and the retries absorb the transient failures that are *expected*
+   * across a thousand requests. Three attempts with a widening pause; a call that fails all three throws, and
+   * the extractor above turns that into a chunk that contributes nothing rather than a failed run.
+   */
+  const attempt = async (signal) => {
+    const response = await fetch(`${config.baseUrl ?? "https://api.openai.com/v1"}/chat/completions`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${config.apiKey}`, "content-type": "application/json" },
+      signal,
+      body: JSON.stringify({
+        model: config.modelId,
+        temperature: 0,
+        response_format: { type: "json_object" },
+        max_tokens: config.maxTokens ?? 800,
+        messages: [{ role: "user", content: config.prompt }],
+      }),
+    });
+    if (!response.ok) throw new Error(`${config.modelId} returned ${response.status}: ${await response.text()}`);
+    return response.json();
+  };
+
+  let body;
+  let lastError;
+  for (let tries = 0; tries < 3; tries += 1) {
+    try {
+      body = await attempt(AbortSignal.timeout(config.timeoutMs ?? 60_000));
+      break;
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 500 * (tries + 1)));
+    }
+  }
+  if (body === undefined) throw lastError ?? new Error("the model call failed");
+  const usage = body.usage ?? {};
+  let parsed = {};
+  try {
+    parsed = JSON.parse(body.choices?.[0]?.message?.content ?? "{}");
+  } catch {
+    // A chunk that produced unparseable output contributes nothing — the same rule the runtime applies.
+  }
+  return {
+    extraction: parsed,
+    usage: { inputTokens: usage.prompt_tokens ?? 0, outputTokens: usage.completion_tokens ?? 0 },
+  };
+};
+
 const openAiChooser = (config) => ({
   id: config.modelId,
   async choose({ query, catalogue, limit }) {
@@ -220,6 +287,31 @@ export const score = (results) => {
 };
 
 const percent = (value) => `${(value * 100).toFixed(1)}%`;
+/**
+ * Coverage over documents, which is how a corpus-level question is graded — AC-3.
+ *
+ * `success@5` does not apply: "what are the main areas this documentation covers" has no single right chunk,
+ * and asking whether a relevant one appeared in the top five measures the wrong thing entirely.
+ *
+ * So the metric is **which documents the answer reached**, as a fraction of the documents the case expects. It
+ * is deterministic, needs no judge model, and grades the thing that is actually checkable.
+ *
+ * **Its limitation, stated rather than left for a reader to find:** it measures whether the right *areas*
+ * surfaced, not whether the summary of them is any good. A run could cover every expected document and produce
+ * three useless sentences about each, and this would score it perfectly. Judging synthesis quality needs a
+ * model judge, which costs a call per case and is not reproducible across model versions — worth adding when
+ * there is a reason to trust one, and not worth pretending to now.
+ */
+export const themeCoverage = (results) => {
+  let sum = 0;
+  for (const { hits, judgements } of results) {
+    const reached = new Set(hits.map((hit) => hit.reference.sourceId));
+    const wanted = new Set(judgements.map((judgement) => judgement.source));
+    sum += wanted.size === 0 ? 0 : [...wanted].filter((doc) => reached.has(doc)).length / wanted.size;
+  }
+  return results.length === 0 ? 0 : sum / results.length;
+};
+
 const arg = (flag, fallback) => {
   const at = process.argv.indexOf(flag);
   return at === -1 ? fallback : process.argv[at + 1];
@@ -242,7 +334,22 @@ const main = async () => {
    * coverage gate — so `input.message` is the query and `expect.relevant` the judgements. A bespoke file shape
    * would have been shorter here and would have left the dataset uncounted, which is how one goes stale.
    */
-  const cases = { cases: JSON.parse(readFileSync(CASES, "utf8")).map((entry) => ({ id: entry.id, query: entry.input.message, relevant: entry.expect.relevant })) };
+  /**
+   * The class comes off the tags, so the case file's schema is unchanged — REQ-064 (#270), task #275.
+   *
+   * The eighteen original cases were written for chunk-level retrieval: each has an answer that lives
+   * *somewhere*. GraphRAG exists for questions whose answers do not, so the new ones are kept in their own
+   * classes and **reported separately**. Averaging them together would let a gain on three multi-hop questions
+   * hide a regression on eighteen ordinary ones, which is the comparison that actually matters.
+   */
+  const cases = {
+    cases: JSON.parse(readFileSync(CASES, "utf8")).map((entry) => ({
+      id: entry.id,
+      query: entry.input.message,
+      relevant: entry.expect.relevant,
+      klass: entry.tags?.includes("corpus-level") ? "corpus" : entry.tags?.includes("multihop") ? "multihop" : "chunk",
+    })),
+  };
   const arms = (arg("--arms", "keyword,semantic,hybrid,rerank,navigate") ?? "").split(",");
 
   /**
@@ -271,6 +378,9 @@ const main = async () => {
 
   // ── the corpus ────────────────────────────────────────────────────────────────────────────────────────────
   const backend = createMemoryKnowledgeBackend();
+  // `createMemoryKnowledgeBackend` predates the graph, so its store is built separately rather than pretending
+  // the backend has a fourth member it does not.
+  const graphStore = createMemoryGraphStore();
   const pipeline = createEmbeddingPipeline({
     knowledge: backend.store,
     embeddings,
@@ -300,6 +410,159 @@ const main = async () => {
   }
   console.log(`\n  ${chunkCount} chunks, ~${Math.round(charCount / 4).toLocaleString()} tokens embedded`);
 
+  /**
+   * The graph, built only when asked — task #275.
+   *
+   * Off by default because it is the expensive half of this harness by two orders of magnitude: one extraction
+   * call per chunk, against a corpus of several hundred. A baseline run must stay cheap enough that somebody
+   * actually runs it.
+   */
+  const withGraph = process.argv.includes("--graph");
+  const graphCost = { calls: 0, inputTokens: 0, outputTokens: 0, elapsedMs: 0, communities: 0, summaryCalls: 0 };
+  let graphLocal;
+  let graphGlobal;
+  const mapperUsage = { calls: 0, prompt: 0, completion: 0 };
+  const mapperFailures = [];
+
+  if (withGraph && !offline) {
+    const graphModel = arg("--graph-model", "gpt-4o-mini");
+    const started = Date.now();
+    process.stdout.write(`\nbuilding the graph with ${graphModel}`);
+    await graphStore.setEnabled({ tenantId: TENANT, enabled: true, at: new Date().toISOString() });
+    for (const outline of outlines) {
+      await graphStore.setSourceEnabled({
+        tenantId: TENANT,
+        sourceType: "file",
+        sourceId: outline.sourceId,
+        enabled: true,
+      });
+    }
+    const extractor = createModelEntityExtractor({
+      id: graphModel,
+      extract: async (text) => {
+        const result = await openAiJson({
+          apiKey,
+          modelId: graphModel,
+          maxTokens: 900,
+          prompt: `${DEFAULT_EXTRACTION_PROMPT}\n\n---\n\n${text}`,
+        });
+        graphCost.calls += 1;
+        graphCost.inputTokens += result.usage.inputTokens;
+        graphCost.outputTokens += result.usage.outputTokens;
+        if (graphCost.calls % 25 === 0) process.stdout.write(".");
+        return result;
+      },
+    });
+    const indexer = createGraphIndexer({ store: graphStore, extractor });
+    for (const outline of outlines) {
+      const chunks = (
+        await backend.store.listBySource({
+          tenantId: TENANT,
+          sourceType: "file",
+          sourceId: outline.sourceId,
+          limit: 1000,
+        })
+      ).items;
+      // Concurrency 8: the default of 1 is right for a production re-index and would make this harness take an
+      // hour. Stated rather than silently raised.
+      await indexer.indexSource({ tenantId: TENANT }, {
+        sourceType: "file",
+        sourceId: outline.sourceId,
+        chunks: chunks.map((chunk) => ({ id: chunk.id, content: chunk.content })),
+        concurrency: 8,
+      });
+    }
+
+    const builder = createCommunityBuilder({
+      store: graphStore,
+      knowledge: backend.store,
+      summariser: {
+        id: graphModel,
+        async summarise({ community, excerpts, entityNames, relationshipDescriptions }) {
+          const result = await openAiJson({
+            apiKey,
+            modelId: graphModel,
+            maxTokens: 400,
+            prompt: [
+              "Summarise what this group of related things is about, in three sentences. Answer with JSON:",
+              '{"summary":"<your three sentences>"}',
+              "",
+              `Things: ${entityNames.slice(0, 60).join(", ")}`,
+              `Connections: ${relationshipDescriptions.slice(0, 40).join("; ")}`,
+              `Text: ${excerpts.slice(0, 6).join("\n---\n").slice(0, 6000)}`,
+            ].join("\n"),
+          });
+          graphCost.summaryCalls += 1;
+          graphCost.inputTokens += result.usage.inputTokens;
+          graphCost.outputTokens += result.usage.outputTokens;
+          return {
+            summary: typeof result.extraction.summary === "string" ? result.extraction.summary : "",
+            usage: result.usage,
+          };
+        },
+      },
+    });
+    const built = await builder.rebuild({ tenantId: TENANT });
+    graphCost.communities = built.communities;
+    graphCost.elapsedMs = Date.now() - started;
+    console.log(
+      `\n  ${built.communities} communities at ${built.levels} level(s); ` +
+        `${graphCost.calls} extraction + ${graphCost.summaryCalls} summary calls, ` +
+        `${(graphCost.inputTokens + graphCost.outputTokens).toLocaleString()} tokens, ` +
+        `${Math.round(graphCost.elapsedMs / 1000)}s`,
+    );
+
+    graphLocal = createGraphLocalSearch({ graph: graphStore, knowledge: backend.store });
+    graphGlobal = createGraphGlobalSearch({
+      graph: graphStore,
+      knowledge: backend.store,
+      // Generous, so the ceiling does not become the thing being measured. The real default is 40.
+      callCeiling: 200,
+      tokenCeiling: 2_000_000,
+      mapper: {
+        id: graphModel,
+        async map({ query, community }) {
+          /**
+           * A map failure scores zero rather than killing the arm.
+           *
+           * `graph-global` propagates a mapper error, which is right in production — a partial map-reduce must
+           * not be reported as a whole-corpus answer. In a measurement run over a thousand calls it would mean
+           * one transient failure discarding twenty minutes of work, so the harness absorbs it here and the
+           * coverage numbers below record what was actually read.
+           */
+          const result = await openAiJson({
+            apiKey,
+            modelId: graphModel,
+            maxTokens: 200,
+            prompt: [
+              `Question: ${query}`,
+              "",
+              "How relevant is the summary below to that question? Answer with JSON:",
+              '{"score": <0-10>, "point": "<one sentence on what in it bears on the question>"}',
+              "",
+              community.summary ?? "",
+            ].join("\n"),
+          }).catch((error) => {
+            mapperFailures.push(String(error).slice(0, 120));
+            return { extraction: {}, usage: { inputTokens: 0, outputTokens: 0 } };
+          });
+          mapperUsage.calls += 1;
+          mapperUsage.prompt += result.usage.inputTokens;
+          mapperUsage.completion += result.usage.outputTokens;
+          const score = Number(result.extraction.score) || 0;
+          return {
+            relevance: {
+              communityId: community.id,
+              score,
+              points: typeof result.extraction.point === "string" ? [result.extraction.point] : [],
+            },
+            usage: result.usage,
+          };
+        },
+      },
+    });
+  }
+
   const chooserUsage = { prompt: 0, completion: 0 };
   const navigator = offline
     ? undefined
@@ -320,6 +583,8 @@ const main = async () => {
       embeddings,
       ...(withReranker ? { reranker: createExactTermReranker() } : {}),
       ...(withNavigator && navigator !== undefined ? { navigator } : {}),
+      ...(graphLocal === undefined ? {} : { graphLocal }),
+      ...(graphGlobal === undefined ? {} : { graphGlobal }),
     });
 
   const ARMS = {
@@ -328,6 +593,8 @@ const main = async () => {
     hybrid: { mode: "hybrid", reranker: false },
     rerank: { mode: "hybrid", reranker: true },
     navigate: { mode: "navigate", reranker: false },
+    "graph-local": { mode: "graph-local", reranker: false, needsGraph: true },
+    "graph-global": { mode: "graph-global", reranker: false, needsGraph: true },
   };
 
   const report = [];
@@ -339,6 +606,11 @@ const main = async () => {
     }
     if (name === "navigate" && navigator === undefined) {
       console.log(`\n  navigate: skipped — it needs a model, and this is an offline run`);
+      continue;
+    }
+    if (arm.needsGraph && graphLocal === undefined) {
+      // Named rather than silently absent: a missing arm in the table must not read as a zero.
+      console.log(`\n  ${name}: skipped — pass --graph to build the graph first (it costs one call per chunk)`);
       continue;
     }
     const retriever = retrieverFor(arm.reranker, name === "navigate");
@@ -355,17 +627,40 @@ const main = async () => {
       });
       elapsed += Date.now() - started;
       const hits = outcome.found ? outcome.hits : [];
+      void started;
       results.push({ hits, judgements: testCase.relevant });
       const relevant = hits.some((hit) => testCase.relevant.some((judgement) => satisfies(hit, judgement)));
       process.stdout.write(relevant ? "." : "✗");
     }
     const scored = score(results);
-    report.push({ arm: name, ...scored, msPerQuery: Math.round(elapsed / cases.cases.length) });
+    /**
+     * Per class, kept apart — AC-2, AC-4.
+     *
+     * The eighteen original cases are the regression check: a mode that gains on multi-hop questions and loses
+     * on ordinary ones has not improved retrieval, and one average would hide exactly that.
+     */
+    const byClass = {};
+    for (const klass of ["chunk", "multihop", "corpus"]) {
+      const subset = results.filter((_, at) => cases.cases[at].klass === klass);
+      if (subset.length === 0) continue;
+      byClass[klass] =
+        klass === "corpus"
+          ? { cases: subset.length, coverage: themeCoverage(subset) }
+          : { cases: subset.length, ...score(subset) };
+    }
+    report.push({ arm: name, ...scored, byClass, msPerQuery: Math.round(elapsed / cases.cases.length) });
     console.log(
       `  success@5 ${percent(scored.success5)}  doc ${percent(scored.docSuccess5)}  P@1 ${percent(scored.p1)}  ` +
         `recall ${percent(scored.recall)}  ` +
         `MRR ${scored.mrr.toFixed(3)}  ${Math.round(elapsed / cases.cases.length)} ms`,
     );
+    for (const [klass, stats] of Object.entries(byClass)) {
+      console.log(
+        stats.coverage === undefined
+          ? `    ${klass.padEnd(9)} n=${stats.cases}  success@5 ${percent(stats.success5)}  recall ${percent(stats.recall)}`
+          : `    ${klass.padEnd(9)} n=${stats.cases}  document coverage ${percent(stats.coverage)}`,
+      );
+    }
     if (process.argv.includes("--misses")) {
       for (const [at, { hits, judgements }] of results.entries()) {
         if (hits.some((hit) => judgements.some((judgement) => satisfies(hit, judgement)))) continue;
@@ -384,6 +679,34 @@ const main = async () => {
       `| ${row.arm} | ${percent(row.success5)} | ${percent(row.docSuccess5)} | ${percent(row.p1)} | ` +
         `${percent(row.recall)} | ${row.mrr.toFixed(3)} | ${row.msPerQuery} |`,
     );
+  }
+  /**
+   * Cost, printed beside quality rather than below it — AC-5.
+   *
+   * A mode that gains five points for six hundred index-time calls and four-second queries is a *different
+   * decision* from one that gains five points for free, and a quality-only table hides which one this is.
+   */
+  if (graphCost.calls > 0) {
+    const price = (input, output) => (input / 1e6) * 0.15 + (output / 1e6) * 0.6; // gpt-4o-mini list
+    console.log(`\nGraphRAG index-time cost`);
+    console.log(`  ${graphCost.calls} extraction calls + ${graphCost.summaryCalls} summary calls`);
+    console.log(
+      `  ${graphCost.inputTokens.toLocaleString()} in + ${graphCost.outputTokens.toLocaleString()} out ` +
+        `≈ $${price(graphCost.inputTokens, graphCost.outputTokens).toFixed(4)}`,
+    );
+    console.log(`  ${Math.round(graphCost.elapsedMs / 1000)}s wall clock, ${graphCost.communities} communities`);
+    if (mapperFailures.length > 0) {
+      // Named, not swallowed: a run with failures read less of the corpus than the coverage suggests.
+      console.log(`\n⚠ ${mapperFailures.length} map call(s) failed and scored zero: ${mapperFailures[0]}`);
+    }
+    if (mapperUsage.calls > 0) {
+      console.log(`\ngraph-global query-time cost`);
+      console.log(
+        `  ${mapperUsage.calls} map calls across the run, ` +
+          `${(mapperUsage.prompt + mapperUsage.completion).toLocaleString()} tokens ` +
+          `≈ $${price(mapperUsage.prompt, mapperUsage.completion).toFixed(4)}`,
+      );
+    }
   }
   if (chooserUsage.prompt > 0) {
     // gpt-4o list pricing, so the number is comparable with docs/24's.
@@ -414,6 +737,8 @@ const main = async () => {
         cases: cases.cases.length,
         arms: report,
         navigateCost: chooserUsage,
+        graphCost: graphCost.calls > 0 ? graphCost : null,
+        graphGlobalQueryCost: mapperUsage.calls > 0 ? mapperUsage : null,
       },
       null,
       2,
