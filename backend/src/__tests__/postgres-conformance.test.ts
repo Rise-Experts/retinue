@@ -18,6 +18,7 @@
 import { PGlite } from "@electric-sql/pglite";
 import { afterAll, describe, expect, it } from "vitest";
 import { createPostgresConnectionStore,
+  createPostgresGraphStore,
   createPostgresArtifactExportStore,
   createPostgresKeywordIndex,
   createPostgresKnowledgeStore,
@@ -61,6 +62,7 @@ import { createPostgresConnectionStore,
 } from "../adapters/postgres/index.js";
 import { asId } from "../core/ids.js";
 import { connectionStoreConformance } from "../testing/conformance/connections.js";
+import { graphStoreConformance } from "../testing/conformance/graph.js";
 import type { AgentId, ConversationId, MessageId, MessagePartId, SkillId } from "../core/ids.js";
 import type { AgentManifest } from "../agents/index.js";
 import { ADAPTER_COVERAGE } from "../testing/conformance/index.js";
@@ -410,6 +412,12 @@ idempotencyStoreConformance(() => createPostgresIdempotencyStore(freshExecutor()
  */
 connectionStoreConformance(() => createPostgresConnectionStore(freshExecutor()));
 
+/**
+ * `GraphStore` — #271. Ungated: entities and edges are ordinary rows, so this runs on PGlite without pgvector,
+ * which is the configuration most local `npm test` runs use.
+ */
+graphStoreConformance(() => createPostgresGraphStore(freshExecutor()));
+
 // Tenant configuration, #101. Neither table references a run or a conversation, so no seeders.
 skillStoreConformance(
   () => createPostgresSkillStore(freshExecutor()),
@@ -642,6 +650,8 @@ describe("postgres adapter coverage", () => {
       "KnowledgeStore",
       "VectorIndex",
       "KeywordIndex",
+      // #271 — the knowledge graph. Unlike the three above it needs no pgvector, so it runs here on PGlite.
+      "GraphStore",
       "UsageRollupStore",
       // #175 — admin-configured per-person and per-tenant spend limits.
       "UsageLimitStore",

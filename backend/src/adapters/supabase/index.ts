@@ -93,6 +93,8 @@ export {
   createPostgresVectorIndex as createSupabaseVectorIndex,
   createPostgresKeywordIndex as createSupabaseKeywordIndex,
 } from "../postgres/knowledge.js";
+// #271. Aliased like the three above: the graph is ordinary Postgres rows, so Supabase needs no second one.
+export { createPostgresGraphStore as createSupabaseGraphStore } from "../postgres/graph.js";
 
 export * from "./rls.js";
 export * from "./realtime.js";

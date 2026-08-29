@@ -34,6 +34,7 @@ export * from "./files.js";
 export * from "./artifacts.js";
 export * from "./artifact-exports.js";
 export * from "./knowledge.js";
+export * from "./graph.js";
 export * from "./rollups.js";
 export * from "./evaluation.js";
 export * from "./retention.js";

@@ -122,6 +122,26 @@ export const TENANT_SCOPED_TABLES: readonly RlsTable[] = [
    */
   { table: "flow_definitions" },
   { table: "flow_executions" },
+  /**
+   * #271. The knowledge graph, all five tables, and they belong here rather than beside `knowledge_chunks`
+   * in the vector list: none of them needs pgvector, so they exist in every deployment and can be protected
+   * unconditionally.
+   *
+   * Worth stating why the *settings* table needs a policy as much as the content ones. `knowledge_graph_settings`
+   * holds one boolean, so it looks harmless — but it is the switch that decides whether a tenant is paying for
+   * extraction, and a missing policy would let one tenant read, and worse write, another's. Turning a
+   * neighbour's GraphRAG on is a bill they did not agree to.
+   */
+  { table: "knowledge_graph_settings" },
+  { table: "knowledge_graph_sources" },
+  /**
+   * The contributions table is the one to get right. It holds the entities and relationships each source
+   * asserted, as JSON — which is to say, the substance of the documents themselves in condensed form. A leak
+   * here is a leak of what a tenant's corpus says, not merely of which entities exist.
+   */
+  { table: "knowledge_graph_contributions" },
+  { table: "knowledge_graph_entities" },
+  { table: "knowledge_graph_relationships" },
 ];
 
 /**

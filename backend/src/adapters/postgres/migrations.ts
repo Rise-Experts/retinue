@@ -1532,6 +1532,86 @@ export const MIGRATIONS: readonly Migration[] = [
        ))`,
     ],
   },
+  {
+    /**
+     * The knowledge graph — REQ-064 (#270), task #271.
+     *
+     * In `MIGRATIONS` rather than beside the pgvector ones, because none of this needs the extension: entities
+     * and edges are ordinary rows, and the embeddings they were derived from live in `knowledge_chunks`. A
+     * deployment without pgvector can still run GraphRAG's `graph-local`, which is a real configuration.
+     *
+     * **Contributions are the stored truth; the merged rows are a cache.** `knowledge_graph_contributions`
+     * records what each source asserted, and the entity and relationship tables are rebuilt from it on write.
+     * That is what makes pruning correct with no reference counting: an entity exists exactly while some
+     * contribution names it, and re-indexing one document withdraws only that document's claims.
+     */
+    id: "0035_knowledge_graph",
+    up: [
+      `CREATE TABLE IF NOT EXISTS knowledge_graph_settings (
+         tenant_id text PRIMARY KEY,
+         enabled boolean NOT NULL DEFAULT false,
+         updated_at timestamptz NOT NULL DEFAULT now()
+       )`,
+      // Stored independently of the tenant switch — a source marked while GraphRAG is off keeps its flag, so
+      // enabling the tenant later picks it up without re-marking anything.
+      `CREATE TABLE IF NOT EXISTS knowledge_graph_sources (
+         tenant_id text NOT NULL,
+         source_type text NOT NULL,
+         source_id text NOT NULL,
+         enabled boolean NOT NULL DEFAULT false,
+         PRIMARY KEY (tenant_id, source_type, source_id)
+       )`,
+      `CREATE TABLE IF NOT EXISTS knowledge_graph_contributions (
+         tenant_id text NOT NULL,
+         source_type text NOT NULL,
+         source_id text NOT NULL,
+         entities jsonb NOT NULL,
+         relationships jsonb NOT NULL,
+         updated_at timestamptz NOT NULL DEFAULT now(),
+         PRIMARY KEY (tenant_id, source_type, source_id)
+       )`,
+      `CREATE TABLE IF NOT EXISTS knowledge_graph_entities (
+         tenant_id text NOT NULL,
+         id text NOT NULL,
+         name text NOT NULL,
+         type text NOT NULL,
+         description text,
+         surface_forms text[] NOT NULL,
+         provenance text[] NOT NULL,
+         PRIMARY KEY (tenant_id, id),
+         -- Provenance is structural, so the database says so too. A graph claim with no chunk behind it is one
+         -- the retriever would present as cited, and an application-level check is one a future writer skips.
+         CONSTRAINT knowledge_graph_entities_provenance CHECK (cardinality(provenance) > 0)
+       )`,
+      `CREATE TABLE IF NOT EXISTS knowledge_graph_relationships (
+         tenant_id text NOT NULL,
+         id text NOT NULL,
+         from_id text NOT NULL,
+         to_id text NOT NULL,
+         type text NOT NULL,
+         description text,
+         weight integer NOT NULL DEFAULT 1,
+         provenance text[] NOT NULL,
+         PRIMARY KEY (tenant_id, id),
+         CONSTRAINT knowledge_graph_relationships_provenance CHECK (cardinality(provenance) > 0)
+       )`,
+      `CREATE INDEX IF NOT EXISTS knowledge_graph_entities_type_idx
+         ON knowledge_graph_entities (tenant_id, type)`,
+      // Traversal reads edges by either endpoint, so both directions are indexed. One index on `from_id` would
+      // make half of every neighbourhood query a sequential scan.
+      `CREATE INDEX IF NOT EXISTS knowledge_graph_relationships_from_idx
+         ON knowledge_graph_relationships (tenant_id, from_id)`,
+      `CREATE INDEX IF NOT EXISTS knowledge_graph_relationships_to_idx
+         ON knowledge_graph_relationships (tenant_id, to_id)`,
+    ],
+    down: [
+      `DROP TABLE IF EXISTS knowledge_graph_relationships`,
+      `DROP TABLE IF EXISTS knowledge_graph_entities`,
+      `DROP TABLE IF EXISTS knowledge_graph_contributions`,
+      `DROP TABLE IF EXISTS knowledge_graph_sources`,
+      `DROP TABLE IF EXISTS knowledge_graph_settings`,
+    ],
+  },
 ];
 
 /**

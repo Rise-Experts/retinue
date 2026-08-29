@@ -27,6 +27,7 @@ import {
 } from "../adapters/postgres/index.js";
 import { asId } from "../core/ids.js";
 import { connectionStoreConformance } from "../testing/conformance/connections.js";
+import { graphStoreConformance } from "../testing/conformance/graph.js";
 import type { AgentId, ConversationId, MessageId, MessagePartId, SkillId } from "../core/ids.js";
 import type { AgentManifest } from "../agents/index.js";
 import { ADAPTER_COVERAGE, REGISTERED_PORTS, SUPABASE_NATIVE,
@@ -402,6 +403,9 @@ flowExecutionStoreConformance(() => supabase.createSupabaseFlowExecutionStore(fr
 /** #261. Aliased to the Postgres store, so this runs the same code the postgres column does — by identity. */
 connectionStoreConformance(() => supabase.createSupabaseConnectionStore(freshExecutor()));
 
+/** `GraphStore` — #271. Aliased from Postgres, and run here so the matrix has a real result rather than a claim. */
+graphStoreConformance(() => supabase.createSupabaseGraphStore(freshExecutor()));
+
 // ---------------------------------------------------------------------------------------------
 // The alias contract and the registry contract.
 // ---------------------------------------------------------------------------------------------
@@ -437,6 +441,8 @@ const ALIASES: readonly (readonly [keyof typeof supabase, keyof typeof postgres]
   ["createSupabaseKnowledgeStore", "createPostgresKnowledgeStore"],
   ["createSupabaseVectorIndex", "createPostgresVectorIndex"],
   ["createSupabaseKeywordIndex", "createPostgresKeywordIndex"],
+  // #271. Ordinary rows, so aliased rather than reimplemented.
+  ["createSupabaseGraphStore", "createPostgresGraphStore"],
   ["createSupabaseUsageRollupStore", "createPostgresUsageRollupStore"],
   // #175. Ordinary SQL over an ordinary table, so Supabase aliases it rather than implementing a second one.
   ["createSupabaseUsageLimitStore", "createPostgresUsageLimitStore"],

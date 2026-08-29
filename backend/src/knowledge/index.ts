@@ -23,6 +23,7 @@ import type {
   KnowledgeStore,
 } from "../persistence/index.js";
 import { DEFAULT_CHUNKING_LIMITS, chunkDocument, type ChunkingLimits } from "./chunking.js";
+import { GRAPH_NOT_RUN, type GraphIndexResult, type GraphIndexer } from "./graph.js";
 
 /**
  * How long newly added material may take to become findable — AC-4.
@@ -71,6 +72,14 @@ export type IndexResult = {
   /** Wall-clock, so the freshness target can be measured rather than assumed. */
   readonly elapsedMs: number;
   readonly model: EmbeddingModelRef;
+  /**
+   * What the graph cost, when GraphRAG ran — REQ-064 (#270), task #271.
+   *
+   * Always present, never optional, and `ran: false` with every counter zero when it did not. An optional field
+   * would let a caller read "no graph work" and "GraphRAG is off" as the same thing, and they are not: the
+   * first is a source with nothing extractable, the second is a deployment that never asked.
+   */
+  readonly graph: GraphIndexResult;
 };
 
 export type EmbeddingPipelineDeps = {
@@ -82,6 +91,17 @@ export type EmbeddingPipelineDeps = {
   /** Injectable so a test measures elapsed time without waiting for it. */
   readonly now?: () => number;
   readonly log?: (message: string, detail?: Readonly<Record<string, unknown>>) => void;
+  /**
+   * The graph indexer — REQ-064 (#270). **Absent means GraphRAG cannot run at all.**
+   *
+   * Optional at the type level rather than switched at run time, so a deployment that never enables it supplies
+   * no `EntityExtractor` and therefore configures no language model to index a document. That is the outermost
+   * of the three gates behind AC-4's "off costs nothing": absent here, off for the tenant, unflagged for the
+   * source. The first is free, and the second costs one settings read.
+   */
+  readonly graph?: GraphIndexer;
+  /** Chunks extracted concurrently. See `DEFAULT_EXTRACTION_CONCURRENCY` — the default is 1, deliberately. */
+  readonly graphConcurrency?: number;
 };
 
 /** Deterministic chunk id, so re-indexing the same source overwrites its own rows rather than duplicating. */
@@ -119,12 +139,24 @@ export const createEmbeddingPipeline = (deps: EmbeddingPipelineDeps) => {
           sourceType: input.sourceType,
           sourceId: input.sourceId,
         });
+        // The graph goes with the content. A document extracted down to nothing must not leave entities
+        // asserting what it used to say — the same reasoning as removing its chunks.
+        let graph = GRAPH_NOT_RUN;
+        if (deps.graph !== undefined && (await deps.graph.shouldIndex(context, input))) {
+          const pruned = await deps.graph.indexSource(context, {
+            sourceType: input.sourceType,
+            sourceId: input.sourceId,
+            chunks: [],
+          });
+          graph = pruned;
+        }
         return {
           written: 0,
           removed: cleared.removed,
           batches: 0,
           elapsedMs: now() - started,
           model: deps.embeddings.model,
+          graph,
         };
       }
 
@@ -165,6 +197,25 @@ export const createEmbeddingPipeline = (deps: EmbeddingPipelineDeps) => {
         sourceId: input.sourceId,
         chunks: embedded,
       });
+      /**
+       * The graph, after the chunks are written and only if asked — AC-1, AC-4.
+       *
+       * After, because the graph's provenance is chunk ids: writing edges that point at chunks which then fail
+       * to persist would leave the graph asserting sources that are not there.
+       *
+       * `shouldIndex` is one settings read when GraphRAG is off for the tenant, and zero model calls. When
+       * `deps.graph` is absent it is not even that.
+       */
+      let graph = GRAPH_NOT_RUN;
+      if (deps.graph !== undefined && (await deps.graph.shouldIndex(context, input))) {
+        graph = await deps.graph.indexSource(context, {
+          sourceType: input.sourceType,
+          sourceId: input.sourceId,
+          chunks: embedded.map((chunk) => ({ id: chunk.id, content: chunk.content })),
+          ...(deps.graphConcurrency === undefined ? {} : { concurrency: deps.graphConcurrency }),
+        });
+      }
+
       const elapsedMs = now() - started;
       if (elapsedMs > FRESHNESS_TARGET_MS)
         // Reported rather than thrown: the material *is* indexed, and the useful action is to know the target
@@ -174,7 +225,7 @@ export const createEmbeddingPipeline = (deps: EmbeddingPipelineDeps) => {
           elapsedMs,
           targetMs: FRESHNESS_TARGET_MS,
         });
-      return { ...written, batches, elapsedMs, model: deps.embeddings.model };
+      return { ...written, batches, elapsedMs, model: deps.embeddings.model, graph };
     },
 
     /**
@@ -251,3 +302,5 @@ export * from "./chunking.js";
 export * from "./retrieval.js";
 
 export * from "./navigate.js";
+
+export * from "./graph.js";

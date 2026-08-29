@@ -132,6 +132,28 @@ const SEEDS: Readonly<Record<string, (tenant: string, principal: string) => stri
     `INSERT INTO connections
        (tenant_id, id, provider, mode, scheme, metadata, secret_key_id, secret_algorithm, secret_nonce, secret_ciphertext)
      VALUES ('${t}', '${t}-conn1', 'github', 'token', 'bearer', '{}'::jsonb, 'k1', 'aes-256-gcm', 'bm9uY2U=', 'Y2lwaGVy')`,
+  /**
+   * #271. The knowledge graph.
+   *
+   * Seeded with a coherent little graph rather than five unrelated rows, because the isolation case reads each
+   * table from the other tenant's context and a row that fails its own `CHECK` would make the case pass by
+   * being absent — which is precisely the "no isolation case can pass on an empty table" failure this seeding
+   * requirement exists to prevent.
+   */
+  knowledge_graph_settings: (t) =>
+    `INSERT INTO knowledge_graph_settings (tenant_id, enabled, updated_at) VALUES ('${t}', true, now())`,
+  knowledge_graph_sources: (t) =>
+    `INSERT INTO knowledge_graph_sources (tenant_id, source_type, source_id, enabled)
+     VALUES ('${t}', 'file', '${t}-doc', true)`,
+  knowledge_graph_contributions: (t) =>
+    `INSERT INTO knowledge_graph_contributions (tenant_id, source_type, source_id, entities, relationships)
+     VALUES ('${t}', 'file', '${t}-doc', '[]'::jsonb, '[]'::jsonb)`,
+  knowledge_graph_entities: (t) =>
+    `INSERT INTO knowledge_graph_entities (tenant_id, id, name, type, surface_forms, provenance)
+     VALUES ('${t}', 'concept:budget', 'budget', 'concept', ARRAY['budget'], ARRAY['${t}-c1'])`,
+  knowledge_graph_relationships: (t) =>
+    `INSERT INTO knowledge_graph_relationships (tenant_id, id, from_id, to_id, type, weight, provenance)
+     VALUES ('${t}', 'a|rel|b', 'concept:budget', 'concept:other', 'rel', 1, ARRAY['${t}-c1'])`,
   mcp_connections: (t) =>
     `INSERT INTO mcp_connections (tenant_id, id, label, transport, endpoint, auth_kind, enabled, created_at)
      VALUES ('${t}', '${t}-mc1', 'srv', 'streamable-http', 'https://x/y', 'none', true, now())`,
@@ -274,11 +296,11 @@ describe("policy coverage is derived from MIGRATIONS, not transcribed", () => {
       expect(RLS_STATEMENTS).toContain(`ALTER TABLE ${table} ENABLE ROW LEVEL SECURITY`);
       expect(RLS_STATEMENTS).toContain(`ALTER TABLE ${table} FORCE ROW LEVEL SECURITY`);
     }
-    // 31 tables as of #261 (`connections`); 30 before that, from #187's flow tables. The count is asserted so
-    // a table silently dropping out is visible.
+    // 36 tables as of #271 (the five `knowledge_graph_*` tables); 31 at #261 (`connections`); 30 before that,
+    // from #187's flow tables. The count is asserted so a table silently dropping out is visible.
     // Updating this number is meant to be a moment of thought: it is the one place that notices a policy list
     // shrinking, which no per-table test can see.
-    expect(TENANT_SCOPED_TABLES).toHaveLength(31);
+    expect(TENANT_SCOPED_TABLES).toHaveLength(36);
 
     // #135. `knowledge_chunks` lives behind the optional pgvector migration, so its policies are a separate
     // list applied by whoever ran that migration -- `ALTER TABLE ... ENABLE ROW LEVEL SECURITY` on an absent

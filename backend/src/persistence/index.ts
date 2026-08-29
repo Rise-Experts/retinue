@@ -1526,6 +1526,141 @@ export interface KeywordIndex {
 }
 
 
+// ---------------------------------------------------------------------------------------------------
+// The knowledge graph — REQ-064 (#270), task #271
+// ---------------------------------------------------------------------------------------------------
+
+/**
+ * Entities and relationships extracted from chunks, so retrieval can answer what no chunk says.
+ *
+ * A fourth port beside `KnowledgeStore`, `VectorIndex` and `KeywordIndex`, for the same reason those are three
+ * rather than one: it answers a different question and can be backed by a different system. A deployment on
+ * Postgres satisfies all four with one database; one that later wants a graph database swaps this alone.
+ *
+ * **Provenance is structural, not decorative.** Every entity and every edge records the chunk ids it was
+ * extracted from, and a row without provenance cannot be written. The retriever surfaces graph-derived material
+ * as *citable* hits, so a claim with no traceable chunk is one the model would present as though a document
+ * said it. `SEMANTIC_RELEVANCE_FLOOR` exists so retrieval can say "nothing"; this exists so the graph cannot say
+ * "something" without saying where from.
+ *
+ * **A source's contribution is what gets replaced, not the entity.** An entity like "retry budget" is mentioned
+ * by many sources, so re-indexing one document must not delete it — it must withdraw *that document's* claims
+ * and leave the rest. Hence the split: contributions are per source and per chunk, and an entity exists exactly
+ * as long as some contribution still names it. Deleting a source therefore prunes the entities only that source
+ * knew about, automatically, with no reference counting for anybody to get wrong.
+ */
+
+/** An entity's type as the extractor named it — free text, lowercased. Not a union: a corpus decides its own. */
+export type KnowledgeEntity = {
+  /** Deterministic and readable: `type:normalised-name`. See `entityId` in `knowledge/graph.ts`. */
+  readonly id: string;
+  /** The canonical surface form — the one chosen deterministically from everything merged into it. */
+  readonly name: string;
+  readonly type: string;
+  readonly description?: string;
+  /**
+   * Every distinct spelling merged into this entity, sorted — AC-6.
+   *
+   * Resolution merges things that are not the same, and the mistake is invisible unless the merges are
+   * recorded. Storing the surface forms turns "why is this entity called that" from an archaeology problem
+   * into a lookup.
+   */
+  readonly surfaceForms: readonly string[];
+  /** Chunk ids this entity was extracted from, sorted. Never empty. */
+  readonly provenance: readonly string[];
+};
+
+export type KnowledgeRelationship = {
+  /** Deterministic: `fromId|type|toId`. */
+  readonly id: string;
+  readonly fromId: string;
+  readonly toId: string;
+  readonly type: string;
+  readonly description?: string;
+  /** How many chunks asserted this edge. The obvious traversal ordering, and it needs no calibration. */
+  readonly weight: number;
+  /** Chunk ids this edge was extracted from, sorted. Never empty. */
+  readonly provenance: readonly string[];
+};
+
+/** What one source contributed, as written. The store merges these into entities and edges. */
+export type GraphContribution = {
+  readonly entities: readonly KnowledgeEntity[];
+  readonly relationships: readonly KnowledgeRelationship[];
+};
+
+/**
+ * Whether this tenant uses the graph at all, and which of its sources do.
+ *
+ * Two levels, because the cost is per chunk and paid at index time. A tenant switch alone would mean enabling
+ * the feature silently multiplies every tenant's indexing bill — including for the ad-hoc PDF somebody attached
+ * to one conversation. A per-source flag alone would leave no single place to say "this deployment does not use
+ * GraphRAG", which is the guarantee AC-1 rests on.
+ *
+ * A source flag is stored and honoured **independently** of the tenant switch, so a deployment can mark its
+ * handbook today and enable the tenant next week without re-marking anything.
+ */
+export type GraphSettings = {
+  readonly enabled: boolean;
+  /** When it was last changed, for an operator wondering why a bill moved. */
+  readonly updatedAt: string;
+};
+
+export interface GraphStore {
+  getSettings(input: TenantScope): Promise<GraphSettings>;
+  setEnabled(input: TenantScope & { enabled: boolean; at: string }): Promise<GraphSettings>;
+
+  /** Marks one source. Independent of the tenant switch — see `GraphSettings`. */
+  setSourceEnabled(
+    input: TenantScope & { sourceType: KnowledgeSourceType; sourceId: string; enabled: boolean },
+  ): Promise<void>;
+  isSourceEnabled(input: TenantScope & { sourceType: KnowledgeSourceType; sourceId: string }): Promise<boolean>;
+  listEnabledSources(
+    input: TenantScope & PageRequest,
+  ): Promise<Page<{ readonly sourceType: KnowledgeSourceType; readonly sourceId: string }>>;
+
+  /**
+   * Replaces one source's contribution to the graph.
+   *
+   * Replace rather than append, for the reason `replaceSource` is: re-indexing a changed document must not
+   * leave its old claims in the graph. Entities and edges no source names any more are pruned by this call.
+   *
+   * Refuses a row with empty provenance rather than storing an untraceable claim.
+   */
+  replaceSourceGraph(
+    input: TenantScope & {
+      sourceType: KnowledgeSourceType;
+      sourceId: string;
+      contribution: GraphContribution;
+    },
+  ): Promise<{ readonly entities: number; readonly relationships: number; readonly pruned: number }>;
+
+  deleteSourceGraph(
+    input: TenantScope & { sourceType: KnowledgeSourceType; sourceId: string },
+  ): Promise<{ readonly pruned: number }>;
+
+  getEntity(input: TenantScope & { id: string }): Promise<KnowledgeEntity | null>;
+
+  /** Entities by exact id, for a query-side resolver that has already normalised. */
+  getEntities(input: TenantScope & { ids: readonly string[] }): Promise<readonly KnowledgeEntity[]>;
+
+  listEntities(input: TenantScope & PageRequest & { type?: string }): Promise<Page<KnowledgeEntity>>;
+
+  /** Every edge touching any of `entityIds`, in either direction. The traversal primitive. */
+  neighbours(
+    input: TenantScope & { entityIds: readonly string[]; limit: number },
+  ): Promise<readonly KnowledgeRelationship[]>;
+
+  /**
+   * A stable serialisation of the whole graph, for the determinism assertion — AC-6.
+   *
+   * On the port rather than built by the test, so *every* adapter is held to it. A test that serialised the
+   * graph itself would prove the reference adapter deterministic and say nothing about Postgres, where row
+   * order is the thing most likely to differ.
+   */
+  fingerprint(input: TenantScope): Promise<string>;
+}
+
 /**
  * Content-addressable blob storage for spilled tool output (`docs/03` → Tool results). A large
  * result is offloaded here and referenced by an authorized `BlobRef`, read back via

@@ -84,6 +84,8 @@ export const REGISTERED_PORTS: readonly PortCoverage[] = [
   { port: "KnowledgeStore", harness: "knowledgeStoreConformance" },
   { port: "VectorIndex", harness: "vectorIndexConformance" },
   { port: "KeywordIndex", harness: "keywordIndexConformance" },
+  /** #271. Ordinary rows, so it needs no pgvector — a deployment without the extension still runs graph-local. */
+  { port: "GraphStore", harness: "graphStoreConformance" },
   { port: "UsageRollupStore", harness: "usageRollupStoreConformance" },
   { port: "UsageLimitStore", harness: "usageLimitStoreConformance" },
   { port: "EvaluationStore", harness: "evaluationStoreConformance" },
@@ -291,6 +293,8 @@ export const ADAPTER_COVERAGE: readonly AdapterCoverage[] = [
       "KnowledgeStore",
       "VectorIndex",
       "KeywordIndex",
+      // #271. Unlike the three above it needs no pgvector, so it runs on PGlite in the default local suite.
+      "GraphStore",
       "UsageRollupStore",
       "UsageLimitStore",
       "EvaluationStore",
@@ -366,8 +370,10 @@ export const HARNESS_MODULES: readonly string[] = [
   "src/testing/conformance/artifacts.ts",
   "src/testing/conformance/artifact-exports.ts",
   "src/testing/conformance/knowledge.ts",
+  "src/testing/conformance/graph.ts",
   "src/testing/conformance/rollups.ts",
   "src/testing/conformance/usage-limits.ts",
   "src/testing/conformance/evaluation.ts",
 ];
+export * from "./graph.js";
 export * from "./flows.js";

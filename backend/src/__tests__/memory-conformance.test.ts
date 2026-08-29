@@ -9,6 +9,7 @@ import { asId } from "../core/ids.js";
 import { createMemoryRateLimitStore } from "../adapters/memory/rate-limit.js";
 import { rateLimitStoreConformance } from "../testing/conformance/rate-limit.js";
 import { connectionStoreConformance } from "../testing/conformance/connections.js";
+import { graphStoreConformance } from "../testing/conformance/graph.js";
 import { createMemoryConnectionStore } from "../adapters/memory/connections.js";
 import type {
   AgentId,
@@ -47,6 +48,7 @@ import {
   createMemoryThreadSummaryStore,
   createMemoryUsageLimitStore,
   createMemoryUsageStore,
+  createMemoryGraphStore,
 } from "../adapters/memory/index.js";
 import {
   createMemoryConversationBindingStore,
@@ -245,3 +247,6 @@ rateLimitStoreConformance("memory", () => createMemoryRateLimitStore(), () => "m
 
 /** `ConnectionStore` — #261. */
 connectionStoreConformance(() => createMemoryConnectionStore());
+
+/** `GraphStore` — #271. No seeders: entities reference chunks by id and nothing enforces that they exist. */
+graphStoreConformance(() => createMemoryGraphStore());
