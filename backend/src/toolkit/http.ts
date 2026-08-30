@@ -158,10 +158,19 @@ const MAX_RETRY_AFTER_MS = 5 * 60_000;
  * The response headers a failure carries, by prefix.
  *
  * These are the shapes vendors actually use: `x-ratelimit-*` (GitHub, Reddit), `x-rate-limit-*` (X's
- * per-15-minute window), and `x-user-limit-24hour-*` / `x-app-limit-24hour-*` (X's daily caps, which are a
- * different limit with a different remedy).
+ * per-15-minute window), `x-user-limit-24hour-*` / `x-app-limit-24hour-*` (X's daily caps, which are a
+ * different limit with a different remedy), and `x-ms-ratelimit-*` (Azure Resource Manager, whose
+ * `remaining-subscription-reads` counts *down* rather than reporting a ceiling — the only one of these that
+ * lets a client see a throttle approaching instead of discovering it).
  */
-const RATE_LIMIT_HEADERS = ["retry-after", "x-ratelimit-", "x-rate-limit-", "x-user-limit-", "x-app-limit-"];
+const RATE_LIMIT_HEADERS = [
+  "retry-after",
+  "x-ratelimit-",
+  "x-rate-limit-",
+  "x-user-limit-",
+  "x-app-limit-",
+  "x-ms-ratelimit-",
+];
 
 export const rateLimitHeadersOf = (headers: Headers): { headers?: Readonly<Record<string, string>> } => {
   const kept: Record<string, string> = {};

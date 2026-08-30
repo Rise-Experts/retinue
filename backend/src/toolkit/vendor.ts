@@ -45,7 +45,16 @@ export type VendorFailure = Extract<HttpOutcome, { ok: false }>;
  * same afternoon: `409`/`412` is a `conflict`, which is a real platform code and was not on the list. Naming a
  * subset means guessing which codes vendors will need, and the platform union is already the right constraint.
  */
-export type VendorClassifier = (failure: VendorFailure) => Pick<PlatformError, "code" | "message" | "retryable"> | undefined;
+/**
+ * `retryAfterMs` is part of the return type, and its absence was a live bug.
+ *
+ * The default 429 arm below has always *set* it — inside an object typed as `Pick<…, "code"|"message"|"retryable">`,
+ * where a spread makes an excess property legal and unreadable. So the field was written, typechecked, and could
+ * not be read by the one line that needed it. See the propagation note in `request`.
+ */
+export type VendorClassifier = (
+  failure: VendorFailure,
+) => Pick<PlatformError, "code" | "message" | "retryable" | "retryAfterMs"> | undefined;
 
 export type VendorTransportConfig = {
   /** Resolved per call, by the host. A toolkit must never read the environment. */
@@ -97,7 +106,10 @@ export type VendorTransport = {
  * *retryable*, not how precisely the words describe the HTTP status. `unauthorized` on a `403` is the important
  * one: told "forbidden", a model retries with different arguments, which is never the fix for a missing scope.
  */
-const defaultClassification = (failure: VendorFailure, vendor: string): Pick<PlatformError, "code" | "message" | "retryable"> => {
+const defaultClassification = (
+  failure: VendorFailure,
+  vendor: string,
+): Pick<PlatformError, "code" | "message" | "retryable" | "retryAfterMs"> => {
   const transport = failure.kind === "timeout" || failure.kind === "unreachable";
   if (transport) {
     return {
@@ -185,13 +197,25 @@ export const createVendorTransport = (config: VendorTransportConfig): VendorTran
     const failure = outcome;
     const described = config.classify?.(failure) ?? defaultClassification(failure, config.vendor);
     /**
+     * `Retry-After`, carried through — and it was being dropped.
+     *
+     * `HttpFailure` parses the header and `PlatformError` has a field for it, and this transport joined them by
+     * building an error that mentioned neither. Every toolkit on it therefore ignored a vendor that had said
+     * *exactly* how long to wait, and fell back to a generic backoff — which is both slower than necessary and,
+     * against a service that counts requests during the window, a way to stay throttled.
+     *
+     * A classifier may override it; otherwise the server's own number wins over any default, because the server
+     * is the only party that knows.
+     */
+    const retryAfterMs = described.retryAfterMs ?? failure.retryAfterMs;
+    /**
      * `AgentPlatformError`, not a decorated `Error`.
      *
      * `toPlatformError` maps anything else to `{ code: "internal", retryable: false }` — so a rate limit thrown
      * as `Object.assign(new Error(…), { retryable: true })` arrives at the model as permanently broken. The
      * extra properties simply vanish and nothing warns you.
      */
-    throw new AgentPlatformError(described);
+    throw new AgentPlatformError(retryAfterMs === undefined ? described : { ...described, retryAfterMs });
   };
 
   return {
