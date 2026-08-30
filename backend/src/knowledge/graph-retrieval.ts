@@ -40,6 +40,8 @@ import type {
   KnowledgeSourceType,
   KnowledgeStore,
 } from "../persistence/index.js";
+// Type-only, so it is erased and the `index.js` ↔ here cycle never exists at runtime.
+import type { EmbeddingProvider } from "./index.js";
 import { normaliseName } from "./graph.js";
 
 /**
@@ -119,6 +121,13 @@ export type GraphLocalResult = {
   readonly relationships: readonly KnowledgeRelationship[];
   /** True when the traversal hit a bound. Reported, never silent — the same rule pagination follows. */
   readonly truncated: boolean;
+  /**
+   * Which ranking produced the order — #277, AC-1.
+   *
+   * Reported because the two are not interchangeable and a measurement of one must never be mistaken for a
+   * measurement of the other. `connectivity` means no embedder was configured.
+   */
+  readonly rankedBy: "relevance" | "connectivity";
 };
 
 export type GraphLocalSearchDeps = {
@@ -126,6 +135,66 @@ export type GraphLocalSearchDeps = {
   readonly knowledge: KnowledgeStore;
   readonly depth?: number;
   readonly neighbourLimit?: number;
+  /**
+   * Ranks the chunks the traversal gathered — #277.
+   *
+   * **Optional, and the mode is materially worse without it.** Measured on this repository's corpus,
+   * connectivity-only ranking scored 20.8% success@5 against semantic search's 75%. The gap between its own
+   * columns was the tell: it found the right *document* 45.8% of the time and the right *chunk* half as often
+   * again, because an entity's provenance is every chunk that mentioned it and counting entity touches cannot
+   * tell two chunks of one document apart.
+   *
+   * So the graph is used for **selection** and embeddings for **ranking**, which is what Microsoft's local
+   * search does and what ours did not.
+   *
+   * Left optional rather than required because a deployment that has a graph and no embedder still gets a
+   * working traversal, and `docs/29` says plainly what it costs. `rankedBy` in the result reports which
+   * happened, so a measurement can never silently be of the other one.
+   */
+  readonly embeddings?: EmbeddingProvider;
+  /**
+   * How many candidates to gather before ranking, as a multiple of the caller's limit.
+   *
+   * Ranking can only reorder what selection handed it, so a pool of exactly `limit` makes the re-rank a no-op
+   * — which is precisely the bug: the old code stopped gathering at `limit`, so the top-k by connectivity were
+   * the only chunks that could ever be returned.
+   */
+  readonly poolFactor?: number;
+};
+
+/** Gathered wide, then ranked. Below this a re-rank has too little to choose between. */
+export const DEFAULT_POOL_FACTOR = 8;
+export const MIN_POOL = 40;
+
+/**
+ * How much an entity's breadth discounts it — the hub problem, in one line.
+ *
+ * `docs/01-architecture.md` and `concepts/architecture.md` appeared in miss after miss. Generic entities
+ * ("run", "tool", "platform") are extracted from nearly every chunk, link to nearly everything, and drag the
+ * architecture overview into every traversal. An entity that touches half the corpus tells you almost nothing
+ * about *which* chunk you want, and counting it equally with a specific one is the mechanism by which the
+ * overview outranks the page that answers the question.
+ *
+ * A logarithmic discount rather than an IDF proper, because IDF needs the corpus size and this needs only what
+ * is already in hand. An entity in 2 chunks keeps most of its weight; one in 200 keeps about a seventh of it.
+ */
+export const hubDiscount = (provenanceSize: number): number => 1 / Math.log2(2 + Math.max(0, provenanceSize));
+
+/** Cosine similarity. Vectors from one provider share a dimension, and a mismatch is a bug worth surfacing. */
+export const cosine = (a: readonly number[], b: readonly number[]): number => {
+  if (a.length !== b.length) return 0;
+  let dot = 0;
+  let normA = 0;
+  let normB = 0;
+  for (let index = 0; index < a.length; index += 1) {
+    const x = a[index] as number;
+    const y = b[index] as number;
+    dot += x * y;
+    normA += x * x;
+    normB += y * y;
+  }
+  const magnitude = Math.sqrt(normA) * Math.sqrt(normB);
+  return magnitude === 0 ? 0 : dot / magnitude;
 };
 
 export interface GraphLocalSearch {
@@ -146,7 +215,14 @@ export const createGraphLocalSearch = (deps: GraphLocalSearchDeps): GraphLocalSe
 
   return {
     async search(context, input) {
-      const empty: GraphLocalResult = { hits: [], matchedEntities: [], relationships: [], truncated: false };
+      const rankedBy: GraphLocalResult["rankedBy"] = deps.embeddings === undefined ? "connectivity" : "relevance";
+      const empty: GraphLocalResult = {
+        hits: [],
+        matchedEntities: [],
+        relationships: [],
+        truncated: false,
+        rankedBy,
+      };
       if (input.authSubjects.length === 0) return empty;
 
       const candidates = entityCandidates(input.query);
@@ -214,7 +290,15 @@ export const createGraphLocalSearch = (deps: GraphLocalSearchDeps): GraphLocalSe
       const seedIdSet = new Set(seedIds);
       const reachedEntities = await deps.graph.getEntities({ tenantId: context.tenantId, ids: [...reached].sort() });
       for (const entity of reachedEntities) {
-        const weight = seedIdSet.has(entity.id) ? SEED_WEIGHT : 1;
+        /**
+         * Discounted by how many chunks the entity appears in — #277, AC-2.
+         *
+         * Without it, an entity extracted from nearly every chunk contributes to nearly every chunk's score,
+         * and the documents that mention everything — the architecture overviews — win by breadth. The
+         * discount is applied to seeds too: a question that names "run" has named a hub, and the hub is no
+         * more discriminating for having been asked about.
+         */
+        const weight = (seedIdSet.has(entity.id) ? SEED_WEIGHT : 1) * hubDiscount(entity.provenance.length);
         for (const chunkId of entity.provenance) credit(chunkId, entity.name, weight);
       }
       for (const edge of edges.values()) {
@@ -223,6 +307,7 @@ export const createGraphLocalSearch = (deps: GraphLocalSearchDeps): GraphLocalSe
         for (const chunkId of edge.provenance) credit(chunkId, `${edge.fromId} → ${edge.toId}`, 1);
       }
 
+      const poolSize = Math.max(input.limit, MIN_POOL, input.limit * Math.max(1, deps.poolFactor ?? DEFAULT_POOL_FACTOR));
       const wantedTypes = input.sourceTypes === undefined ? null : new Set(input.sourceTypes);
       const allowed = new Set(input.authSubjects);
       const gathered: { chunk: KnowledgeChunk; score: number; via: readonly string[] }[] = [];
@@ -244,7 +329,14 @@ export const createGraphLocalSearch = (deps: GraphLocalSearchDeps): GraphLocalSe
         if (!allowed.has(chunk.authSubject)) continue;
         if (wantedTypes !== null && !wantedTypes.has(chunk.sourceType)) continue;
         gathered.push({ chunk, score: scored.score, via: [...scored.via].sort() });
-        if (gathered.length >= input.limit) {
+        /**
+         * A **pool**, not the answer — #277.
+         *
+         * This used to stop at `input.limit`, which meant the top-k by connectivity were the only chunks that
+         * could ever be returned and no re-ranking could reach past them. Gathering wider costs a few more
+         * primary-key reads and is what makes ranking able to change anything.
+         */
+        if (gathered.length >= poolSize) {
           if (ranked.length > gathered.length) truncated = true;
           break;
         }
@@ -252,10 +344,42 @@ export const createGraphLocalSearch = (deps: GraphLocalSearchDeps): GraphLocalSe
 
       if (gathered.length === 0) return { ...empty, matchedEntities: matched.map((entity) => entity.name) };
 
+      /**
+       * **The graph selected; embeddings rank** — #277, AC-1.
+       *
+       * The candidate set is exactly what the traversal found: this changes the order, never the membership.
+       * That is the whole claim of the mode — these chunks are connected to what you asked about — and
+       * replacing the candidates with a semantic search would be a different mode wearing this one's label.
+       *
+       * **The vector-privacy constraint is respected rather than worked around.** `KnowledgeStore` read paths
+       * deliberately never return vectors, so the stored embeddings are not available here and the port is not
+       * widened to leak them. The chunk *text* is already in hand — it was fetched to be returned — so the
+       * candidates are embedded from their text, in one batched call alongside the query.
+       *
+       * The cost is one extra embedding call per query, and it is real: see `docs/29`. A mode whose selling
+       * point was two milliseconds does not get to spend that silently.
+       */
+      let ordered = gathered;
+      if (deps.embeddings !== undefined) {
+        const vectors = await deps.embeddings.embed([input.query, ...gathered.map((entry) => entry.chunk.content)]);
+        const queryVector = vectors[0];
+        if (queryVector !== undefined && vectors.length === gathered.length + 1) {
+          ordered = gathered
+            .map((entry, index) => ({ ...entry, score: cosine(queryVector, vectors[index + 1] as readonly number[]) }))
+            // Ties broken by chunk id, so the order is reproducible across runs like every other mode's.
+            .sort((a, b) => b.score - a.score || (a.chunk.id < b.chunk.id ? -1 : a.chunk.id > b.chunk.id ? 1 : 0));
+        }
+        // A provider that returned the wrong count is a bug, and the connectivity order is a worse answer
+        // rather than a wrong one — so the traversal still returns something rather than throwing.
+      }
+
+      const hits = ordered.slice(0, input.limit);
+      if (ordered.length > hits.length) truncated = true;
+
       // Normalised against the best, so the score means the same thing it does in every other mode.
-      const best = gathered[0]?.score ?? 1;
+      const best = hits[0]?.score ?? 1;
       return {
-        hits: gathered.map((entry) => ({
+        hits: hits.map((entry) => ({
           chunk: entry.chunk,
           score: best === 0 ? 0 : entry.score / best,
           viaEntities: entry.via,
@@ -264,6 +388,7 @@ export const createGraphLocalSearch = (deps: GraphLocalSearchDeps): GraphLocalSe
         // Only the edges whose endpoints were both reached, sorted so the output is stable.
         relationships: [...edges.values()].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)),
         truncated,
+        rankedBy,
       };
     },
   };

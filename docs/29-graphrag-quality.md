@@ -23,7 +23,8 @@ Same corpus and same harness as `docs/26`: this repository's own documentation, 
 | keyword | 58.3% | 75.0% | 25.0% | 49.3% | 0.365 | 7 |
 | **semantic** | **75.0%** | **87.5%** | **37.5%** | **66.7%** | **0.528** | 281 |
 | hybrid | 62.5% | 83.3% | 33.3% | 60.4% | 0.446 | 327 |
-| graph-local | 20.8% | 45.8% | 0.0% | 14.6% | 0.071 | 2 |
+| graph-local *(as measured, connectivity ranking)* | 20.8% | 45.8% | 0.0% | 14.6% | 0.071 | 2 |
+| **graph-local after [#277](https://github.com/Rise-Experts/retinue/issues/277)** | **45.8%** | **62.5%** | **33.3%** | **39.6%** | **0.373** | ~600–1400 |
 | graph-global | 0.0% | 0.0% | 0.0% | 0.0% | 0.000 | 3 |
 
 By class, which is the comparison that matters — the eighteen original queries are the regression check, and
@@ -33,7 +34,8 @@ the six new ones are what GraphRAG exists for:
 |---|---|---|---|
 | semantic | **77.8%** | **100%** | **33.3%** coverage |
 | hybrid | 66.7% | 66.7% | 33.3% coverage |
-| graph-local | 11.1% | 66.7% | 16.7% coverage |
+| graph-local *(connectivity)* | 11.1% | 66.7% | 16.7% coverage |
+| **graph-local after #277** | **44.4%** | 66.7% | 16.7% coverage |
 | graph-global | 0% | 0% | 0% coverage |
 
 `corpus-level` is graded by **document coverage**, not success@5 — see *How corpus-level questions are graded*.
@@ -104,6 +106,47 @@ discriminate between two chunks of the same document.
 **hub entities**: generic concepts like "run", "tool" and "platform" are extracted from nearly every chunk, link
 to nearly everything, and drag the architecture overview into every traversal.
 
+### What #277 changed, and what it did not
+
+Two changes, both following from the diagnosis above:
+
+- **The graph selects, embeddings rank.** The traversal now gathers a *pool* — eight times the requested limit
+  — and the pool is ranked by cosine similarity to the query. The candidate set is unchanged: this reorders
+  what the graph found and never substitutes a semantic search for it, because "these chunks are connected to
+  what you asked about" is the mode's whole claim. `KnowledgeStore` still never returns vectors; the chunk text
+  is already in hand, so the candidates are embedded from their text in one batched call.
+- **Hub entities are discounted by their own breadth.** An entity appearing in 200 chunks keeps about a
+  seventh of the weight of one appearing in 2. Seeds are discounted too — a question that names "run" has named
+  a hub, and the hub is no more discriminating for having been asked about.
+
+The result more than doubles on the class it was worst at:
+
+| | success@5 | right document | P@1 | recall | MRR |
+|---|---|---|---|---|---|
+| before | 20.8% | 45.8% | 0.0% | 14.6% | 0.071 |
+| after | **45.8%** | **62.5%** | **33.3%** | **39.6%** | **0.373** |
+| *semantic, for reference* | *75.0%* | *87.5%* | *37.5%* | *66.7%* | *0.521* |
+
+The `chunk` class — the eighteen queries where connectivity ranking was worst — went from 11.1% to 44.4%. P@1
+went from **zero** to 33.3%: it had never once put the right chunk first, and now does a third of the time.
+
+**It still loses to semantic on every class**, and the gap between its own two columns has narrowed rather than
+closed (45.8% against 62.5%). The remaining gap is the same mechanism, not a different one: ranking can only
+reorder what the traversal selected, and when the answering chunk is not in the pool at all, no ranking
+recovers it.
+
+### The cost, which is the other half of the answer
+
+`graph-local`'s one clear advantage was **2 ms/query** against semantic's 281. That is gone. It now runs at
+roughly 600–1400 ms/query — the figure swings because it is dominated by one embedding round-trip per query,
+batched over the whole candidate pool, and network latency varies more than the computation does.
+
+So the mode that was *much faster and much worse* is now *slower than semantic and still worse*. That is a
+worthwhile trade for anyone who needs the traversal's explainability — the `viaEntities` on every hit — and it
+is not a reason to switch it on for retrieval quality.
+
+The index-time cost is unchanged at **≈ $0.30** for this corpus against about two cents for embeddings alone.
+
 The one case where it is not close to the answer at all is instructive too:
 
 ```
@@ -156,12 +199,24 @@ to trust one, and not worth pretending to now.
 - `graph-global` should not be enabled at all until community detection produces a workable number of
   communities. Its ceiling correctly refuses, so the failure is safe rather than expensive — but a mode that
   always refuses is a mode nobody should switch on.
-- `graph-local` has a **known, diagnosed defect** — connectivity ranking — and is worth re-measuring after
-  [#277](https://github.com/Rise-Experts/retinue/issues/277). It should not be judged finally on this number.
+- `graph-local`'s diagnosed defect — connectivity ranking — **was fixed and re-measured** in
+  [#277](https://github.com/Rise-Experts/retinue/issues/277). It more than doubled, from 20.8% to 45.8%
+  success@5, and still loses to semantic's 75%. It also gave up its speed advantage doing so. The
+  recommendation is therefore unchanged, but it now rests on a measured answer rather than on a known defect.
 - The corpus shape matters more than anything else here, and this measurement covers exactly one shape.
 
 ## Honest limits of this measurement
 
+- **The #277 re-measurement ran on a corpus that had grown.** 78 documents and 848 chunks against the original
+  71 and 768 — this repository's documentation gained pages between the two runs, including this one. The
+  comparison is still sound, and the evidence is `semantic` re-run on the new corpus in the same session:
+  75.0% / 87.5% / 37.5% / 66.7%, identical to the original on every metric but MRR (0.521 against 0.528). A
+  corpus that moves the baseline by 0.007 does not explain a jump from 20.8% to 45.8%. It is stated because
+  "same corpus and harness" is what the acceptance criterion asked for, and this is *nearly* that rather than
+  exactly it.
+- **`ms/query` is not a stable number.** It is dominated by network round-trips, and the same code measured
+  571 ms and 1407 ms in two consecutive runs. Treat the timings as an order of magnitude — 2 ms became
+  "roughly a second" — and not as a benchmark.
 - **One corpus, and the wrong one for GraphRAG's case.** Self-referential technical documentation is close to
   the worst case for a knowledge graph: pages are self-contained and cross-linked, which is what semantic
   search is good at. GraphRAG's claimed strength is corpora of many small independent documents. This

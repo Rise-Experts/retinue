@@ -622,7 +622,23 @@ const main = async () => {
         `${Math.round(graphCost.elapsedMs / 1000)}s`,
     );
 
-    graphLocal = createGraphLocalSearch({ graph: graphStore, knowledge: backend.store });
+    /**
+     * The embedder is passed in — #277.
+     *
+     * Without it `graph-local` ranks by connectivity, which is what scored 20.8% in `docs/29`. Measuring the
+     * fix means measuring the mode as it is actually configured, and `rankedBy` in the result is asserted
+     * below so a run can never quietly be of the other one.
+     */
+    graphLocal = createGraphLocalSearch({ graph: graphStore, knowledge: backend.store, embeddings });
+    {
+      // Asserted, not assumed. A run that quietly measured connectivity ranking and reported it as the fix
+      // would be exactly the kind of result this harness exists to prevent.
+      const probe = await graphLocal.search({ tenantId: TENANT }, { query: "retry budget", authSubjects: [SUBJECT], limit: 1 });
+      if (probe.rankedBy !== "relevance") {
+        console.error(`✗ graph-local is ranking by ${probe.rankedBy}; the embedder was not wired in`);
+        return 2;
+      }
+    }
     graphGlobal = createGraphGlobalSearch({
       graph: graphStore,
       knowledge: backend.store,

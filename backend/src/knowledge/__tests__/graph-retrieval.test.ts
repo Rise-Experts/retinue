@@ -23,6 +23,7 @@ import {
   createGraphIndexer,
   createGraphLocalSearch,
   createRetriever,
+  hubDiscount,
   entityCandidates,
   type EntityExtractor,
   type RawExtraction,
@@ -131,28 +132,39 @@ const CORPUS: readonly { id: string; text: string; extraction: RawExtraction }[]
  * AC-7 comparison meaningful — semantic search is given a fair chance and still cannot assemble the answer,
  * because the answer is not in any one document.
  */
-const VOCAB = [
-  "team", "atlas", "borealis", "cygnus", "retry", "budget", "depends", "checkout", "ingest", "billing",
-  "coffee", "machine", "facilities", "which", "teams", "throughput", "ceiling", "reconciler", "outbound",
-  "travel", "finance", "quarter", "reviews", "platform", "build", "cache", "release", "pipeline",
-  "ownership", "registry", "services", "tracked", "submits", "requests", "shared", "each",
-];
+/**
+ * A bag-of-words embedder that hashes terms into dimensions.
+ *
+ * It replaced a fixed `VOCAB` list, and the reason is worth recording: a fixed vocabulary means any test whose
+ * corpus uses different words gets **all-zero vectors**, every cosine is zero, and the ranking under test does
+ * nothing at all — while the test still passes if it only asserts that something came back. The #277 hub test
+ * hit exactly that. Hashing means every word contributes, so a corpus written later cannot silently fall
+ * outside the fixture.
+ *
+ * Deterministic, and crude on purpose: it is a stand-in for a real embedder, and the tests assert orderings
+ * that word overlap is enough to produce.
+ */
 const embeddings = {
   model: { modelId: "test-embed", version: "1", dimensions: 1536 },
   async embed(texts: readonly string[]) {
+    const bucket = (term: string): number => {
+      let hash = 2166136261;
+      for (let index = 0; index < term.length; index += 1) {
+        hash ^= term.charCodeAt(index);
+        hash = Math.imul(hash, 16777619);
+      }
+      return Math.abs(hash) % 1536;
+    };
     return texts.map((text) => {
-      const words = new Set(text.toLowerCase().split(/[^a-z]+/).filter(Boolean));
+      const words = new Set(text.toLowerCase().split(/[^a-z]+/).filter((word) => word.length > 2));
       const vector = Array.from({ length: 1536 }, () => 0);
-      VOCAB.forEach((term, i) => {
-        if (words.has(term)) vector[i] = 1;
-      });
+      for (const word of words) vector[bucket(word)] = 1;
       // Normalised, so cosine is comparable across documents of different lengths.
       const norm = Math.sqrt(vector.reduce((sum, v) => sum + v * v, 0)) || 1;
       return vector.map((v) => v / norm);
     });
   },
 };
-
 const blocks = (text: string): DocumentBlock[] => [{ kind: "paragraph", text }];
 
 const extractorFor = (corpus: readonly { text: string; extraction: RawExtraction }[]): EntityExtractor => ({
@@ -198,7 +210,9 @@ const indexed = async (
     });
   }
 
-  const graphLocal = createGraphLocalSearch({ graph, knowledge });
+  // The embedder is wired in, because that is the production shape after #277: the graph selects and
+  // embeddings rank. A search built without it ranks by connectivity, which is what scored 20.8%.
+  const graphLocal = createGraphLocalSearch({ graph, knowledge, embeddings });
   const retriever = createRetriever({ vector, keyword, embeddings, graphLocal });
   return { graph, knowledge, graphLocal, retriever, vector, keyword };
 };
@@ -558,5 +572,196 @@ describe("the other modes are untouched", () => {
     });
     await retriever.retrieve(context, { query: "retry budget", authSubjects: [OPEN], limit: 5, mode: "hybrid" });
     expect(spy).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Hub entities, and the ranking that stopped them winning — #277.
+ *
+ * The measured failure in `docs/29` was not subtle once the misses were read: `docs/01-architecture.md` and
+ * `concepts/architecture.md` appeared in miss after miss. Generic entities are extracted from nearly every
+ * chunk, link to nearly everything, and drag the overview into every traversal — and connectivity scoring
+ * counted that breadth as relevance.
+ */
+describe("hub entities do not dominate — #277, AC-2", () => {
+  /**
+   * An overview that mentions the hub *and* every specific concept, plus one document that actually answers
+   * the question. This is the shape that beat the real corpus: the overview is connected to everything, so it
+   * scores well on connectivity while saying nothing about checkpoints.
+   */
+  const HUB_CORPUS: readonly { id: string; text: string; extraction: RawExtraction }[] = [
+    {
+      id: "architecture-overview",
+      text:
+        "The platform is built from a runtime, a registry and a pipeline. The platform coordinates the " +
+        "checkpoint, the retry budget, the ingest pipeline and the checkout service across every team.",
+      extraction: {
+        entities: [
+          { name: "platform", type: "concept" },
+          { name: "checkpoint", type: "concept" },
+          { name: "retry budget", type: "concept" },
+          { name: "ingest pipeline", type: "concept" },
+          { name: "checkout service", type: "concept" },
+        ],
+        relationships: [
+          { from: "platform", to: "checkpoint", type: "coordinates" },
+          { from: "platform", to: "retry budget", type: "coordinates" },
+          { from: "platform", to: "ingest pipeline", type: "coordinates" },
+          { from: "platform", to: "checkout service", type: "coordinates" },
+        ],
+      },
+    },
+    {
+      id: "durable-runtime",
+      text:
+        "A run survives a worker being killed because the checkpoint is written before each step. On restart " +
+        "the checkpoint is read back and the run resumes from it rather than starting again.",
+      extraction: {
+        entities: [
+          { name: "checkpoint", type: "concept" },
+          { name: "platform", type: "concept" },
+        ],
+        relationships: [{ from: "checkpoint", to: "platform", type: "part-of" }],
+      },
+    },
+    {
+      id: "budgets",
+      text: "The retry budget governs outbound calls made by the platform on behalf of the checkout service.",
+      extraction: {
+        entities: [
+          { name: "retry budget", type: "concept" },
+          { name: "platform", type: "concept" },
+        ],
+        relationships: [{ from: "retry budget", to: "platform", type: "part-of" }],
+      },
+    },
+    {
+      id: "ingest",
+      text: "The ingest pipeline is scheduled by the platform and writes into the registry.",
+      extraction: {
+        entities: [
+          { name: "ingest pipeline", type: "concept" },
+          { name: "platform", type: "concept" },
+        ],
+        relationships: [{ from: "ingest pipeline", to: "platform", type: "scheduled-by" }],
+      },
+    },
+  ];
+
+  it("puts the document that answers the question above the overview that mentions everything", async () => {
+    const { graphLocal } = await indexed(HUB_CORPUS);
+    const outcome = await graphLocal.search(context, {
+      query: "how does a run survive the worker being killed, using the checkpoint",
+      authSubjects: [OPEN],
+      limit: 5,
+    });
+
+    expect(outcome.rankedBy).toBe("relevance");
+    const sources = outcome.hits.map((hit) => hit.chunk.sourceId);
+    expect(sources).toContain("durable-runtime");
+    /**
+     * The assertion the AC asks for, stated as a comparison rather than an absence: the overview is legitimately
+     * *connected* to the question and may well appear. What it must not do is outrank the document that answers
+     * it.
+     */
+    const answer = sources.indexOf("durable-runtime");
+    const overview = sources.indexOf("architecture-overview");
+    expect(answer).toBeGreaterThanOrEqual(0);
+    if (overview >= 0) expect(answer).toBeLessThan(overview);
+  });
+
+  it("discounts an entity by how much of the corpus it touches", () => {
+    // A specific entity keeps most of its weight; a hub in two hundred chunks keeps about a seventh.
+    expect(hubDiscount(2)).toBeGreaterThan(hubDiscount(200));
+    expect(hubDiscount(200)).toBeGreaterThan(0);
+    // Monotone, so "appears in more chunks" is never worth more.
+    for (const [fewer, more] of [[1, 5], [5, 50], [50, 500]] as const) {
+      expect(hubDiscount(fewer)).toBeGreaterThan(hubDiscount(more));
+    }
+  });
+
+  it("ranks by connectivity, and says so, when no embedder is configured", async () => {
+    // The mode still works without one — and the result reports which ranking ran, so a measurement of one can
+    // never be mistaken for a measurement of the other.
+    const { graph, knowledge } = await indexed(HUB_CORPUS);
+    const withoutEmbedder = createGraphLocalSearch({ graph, knowledge });
+    const outcome = await withoutEmbedder.search(context, {
+      query: "how does a run survive the worker being killed, using the checkpoint",
+      authSubjects: [OPEN],
+      limit: 5,
+    });
+    expect(outcome.rankedBy).toBe("connectivity");
+    expect(outcome.hits.length).toBeGreaterThan(0);
+  });
+
+  it("ranking reorders the candidates and never changes which ones they are", async () => {
+    // The claim of the mode is "these chunks are connected to what you asked about". Replacing the candidate
+    // set with a semantic search would be a different mode wearing this one's label.
+    const { graph, knowledge } = await indexed(HUB_CORPUS);
+    const query = "how does a run survive the worker being killed, using the checkpoint";
+    const input = { query, authSubjects: [OPEN], limit: 10 };
+    const byConnectivity = await createGraphLocalSearch({ graph, knowledge }).search(context, input);
+    const byRelevance = await createGraphLocalSearch({ graph, knowledge, embeddings }).search(context, input);
+
+    const ids = (result: { hits: readonly { chunk: { id: string } }[] }) =>
+      [...result.hits.map((hit) => hit.chunk.id)].sort();
+    expect(ids(byRelevance)).toEqual(ids(byConnectivity));
+  });
+});
+
+/**
+ * The pool, which is the change that lets ranking reach anything — #277.
+ *
+ * A sabotage run found this uncovered: narrowing the pool back to `input.limit` broke nothing, because the
+ * other fixtures are small enough that the pool and the limit are the same set. That is a test suite agreeing
+ * with itself. This corpus is built so the answering chunk is deliberately *outside* the connectivity top-k
+ * and inside the pool — which is exactly the case the old code could never return.
+ */
+describe("selection gathers a pool, not the answer — #277", () => {
+  /**
+   * Nine decoys that all name both query entities, and one answer that names one of them plus the words the
+   * question actually uses. On connectivity the decoys win: they touch more of the query's entities.
+   */
+  const POOL_CORPUS: readonly { id: string; text: string; extraction: RawExtraction }[] = [
+    ...Array.from({ length: 9 }, (_, index) => ({
+      id: `decoy-${index}`,
+      text:
+        `Release note ${index}: the scheduler and the dispatcher were both touched. ` +
+        "The scheduler calls the dispatcher during rollout.",
+      extraction: {
+        entities: [
+          { name: "scheduler", type: "concept" },
+          { name: "dispatcher", type: "concept" },
+        ],
+        relationships: [{ from: "scheduler", to: "dispatcher", type: "calls" }],
+      } as RawExtraction,
+    })),
+    {
+      id: "answer",
+      text:
+        "Backpressure is applied when the dispatcher queue exceeds its high water mark, and the producer is " +
+        "paused until the queue drains below the low water mark.",
+      extraction: {
+        entities: [{ name: "dispatcher", type: "concept" }],
+        relationships: [],
+      },
+    },
+  ];
+
+  it("returns a chunk the connectivity ranking would never have reached", async () => {
+    const { graph, knowledge } = await indexed(POOL_CORPUS);
+    const input = {
+      query: "what happens to the dispatcher queue when backpressure is applied at the high water mark",
+      authSubjects: [OPEN],
+      limit: 3,
+    };
+
+    // Connectivity alone: the decoys touch both entities, so they fill the top three.
+    const byConnectivity = await createGraphLocalSearch({ graph, knowledge }).search(context, input);
+    expect(byConnectivity.hits.map((hit) => hit.chunk.sourceId)).not.toContain("answer");
+
+    // With a pool and a re-rank, the answer is reachable — and it is what comes first.
+    const byRelevance = await createGraphLocalSearch({ graph, knowledge, embeddings }).search(context, input);
+    expect(byRelevance.hits[0]?.chunk.sourceId).toBe("answer");
   });
 });
