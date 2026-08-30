@@ -143,6 +143,7 @@ test("every shipping package is covered, and each deep list has both halves of t
     "@retinue/tools-reddit",
     "@retinue/tools-google",
     "@retinue/tools-notion",
+    "@retinue/tools-scrape",
     "@retinue/tools-azure",
   ]);
   for (const shipped of PACKAGES) {

@@ -192,6 +192,13 @@ export const PACKAGES = [
     deep: ["dist/index.js", "src/index.ts", "blocks", "internal"],
   },
   {
+    name: "@retinue/tools-scrape",
+    dir: "tools/scrape",
+    // `ssrf` is the module a consumer would most plausibly reach for — a hardened fetch is useful on its own —
+    // which is exactly why it must not resolve. It is re-exported from the root.
+    deep: ["dist/index.js", "src/index.ts", "ssrf", "html"],
+  },
+  {
     name: "@retinue/tools-azure",
     dir: "tools/azure",
     // `resource-id` is the module a consumer would most plausibly reach for — parsing an ARM id is useful on

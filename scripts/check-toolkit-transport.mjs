@@ -39,6 +39,14 @@ export const EXEMPT = new Map([
     "Not a vendor toolkit: it is several search providers behind one contract, each with its own auth shape " +
       "and no credentialRef of its own. It predates the shared transport and has no host to pin.",
   ],
+  [
+    "scrape",
+    "Fetches URLs a model chose, which is the one case the shared transport cannot serve. Two reasons, both " +
+      "load-bearing. It must connect to an address it has already validated — `node:https` accepts a `lookup`, " +
+      "`fetch` has no equivalent — and without that pinning there is a second DNS resolution between the check " +
+      "and the socket, which is the rebinding window. And it must follow redirects, re-running the whole check " +
+      "on each hop, where `createHttpClient` refuses them outright. See tools/scrape/src/ssrf.ts.",
+  ],
 ]);
 
 const sourceFiles = (dir) => {

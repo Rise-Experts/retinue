@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Array.prototype.flatMap() - JavaScript | Docs</title>
+  <link rel="canonical" href="/en-US/docs/Web/JavaScript/Reference/flatMap">
+  <meta name="description" content="The flatMap() method returns a new array formed by applying a callback.">
+  <style>.sidebar{display:none}.token.keyword{color:#07a}</style>
+  <script>window.__DATA__ = {locale:"en-US", ads: true}; if (a < b) { document.write("x"); }</script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="/">Docs</a>
+    <form role="search"><input name="q" placeholder="Search"><button>Go</button></form>
+  </header>
+  <nav class="sidebar" aria-label="Reference">
+    <ul>
+      <li><a href="/en-US/docs/Web/JavaScript/Reference/map">map()</a></li>
+      <li><a href="/en-US/docs/Web/JavaScript/Reference/filter">filter()</a></li>
+      <li><a href="/en-US/docs/Web/JavaScript/Reference/reduce">reduce()</a></li>
+    </ul>
+  </nav>
+  <main>
+    <h1>Array.prototype.flatMap()</h1>
+    <p>The <code>flatMap()</code> method returns a new array formed by applying a given callback function to
+      each element, and then flattening the result by one level. See also <a href="./flat">flat()</a>.</p>
+    <h2>Syntax</h2>
+    <pre><code class="language-js">flatMap(callbackFn)
+flatMap(callbackFn, thisArg)</code></pre>
+    <h2>Parameters</h2>
+    <dl>
+      <dt>callbackFn</dt>
+      <dd>A function to execute for each element. Its return value is added to the new array, flattened.</dd>
+      <dt>thisArg <em>(optional)</em></dt>
+      <dd>A value to use as <code>this</code> when executing <code>callbackFn</code>.</dd>
+    </dl>
+    <h2>Browser compatibility</h2>
+    <table>
+      <thead><tr><th>Browser</th><th>Version</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td>Chrome</td><td>69</td><td>Full support</td></tr>
+        <tr><td>Firefox</td><td>62</td><td>Full support</td></tr>
+        <tr><td>Safari</td><td>12</td><td>See <a href="/bugs/1234">bug 1234</a></td></tr>
+      </tbody>
+    </table>
+    <h2>See also</h2>
+    <ul>
+      <li><a href="./flat">Array.prototype.flat()</a>
+        <ul>
+          <li><a href="./flat#depth">The depth argument</a></li>
+          <li>Nested behaviour</li>
+        </ul>
+      </li>
+      <li><a href="./map">Array.prototype.map()</a></li>
+    </ul>
+  </main>
+  <footer><p>© 2026 Docs contributors. Licensed under CC-BY-SA.</p></footer>
+  <script src="/static/analytics.js"></script>
+</body>
+</html>

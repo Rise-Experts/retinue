@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html>
+<head><title>List of HTTP status codes - Reference</title></head>
+<body>
+<div id="mw-navigation">
+  <nav><ul><li><a href="/wiki/Main_Page">Main page</a></li><li><a href="/wiki/Random">Random</a></li></ul></nav>
+</div>
+<div id="content">
+  <h1>List of HTTP status codes</h1>
+  <p>This is a list of Hypertext Transfer Protocol response status codes. Status codes are issued by a server
+     in response to a client's request.<sup><a href="#cite_note-1">[1]</a></sup></p>
+  <h2>4xx client errors</h2>
+  <table class="wikitable">
+    <tr><th>Code</th><th>Reason phrase</th><th>Retryable</th></tr>
+    <tr><td>403</td><td>Forbidden</td><td>No</td></tr>
+    <tr><td>404</td><td>Not Found</td><td>No</td></tr>
+    <tr><td>429</td><td>Too Many Requests</td><td>Yes &mdash; honour <code>Retry-After</code></td></tr>
+    <tr><td>451</td><td>Unavailable For Legal Reasons</td></tr>
+  </table>
+  <h2>Notes</h2>
+  <ol start="1">
+    <li>The 4xx class is intended for cases in which the client seems to have erred.</li>
+    <li>Codes in the 5xx range indicate a server error.
+      <ul><li>500 is the generic case.</li><li>503 usually carries <code>Retry-After</code>.</li></ul>
+    </li>
+  </ol>
+  <p>Compare the <a href="/wiki/List_of_FTP_server_return_codes">FTP return codes</a>.</p>
+</div>
+<div id="footer"><ul><li>Text is available under CC BY-SA.</li></ul></div>
+<script>mw.loader.load("ext.gadget");</script>
+</body>
+</html>
