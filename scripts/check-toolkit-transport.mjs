@@ -48,6 +48,13 @@ export const EXEMPT = new Map([
       "own client: it uses `safeFetch` from @retinue/agentkit/tools, which is shared with tools-browser.",
   ],
   [
+    "email",
+    "Speaks SMTP over a socket, which is not HTTP at all, and its HTTP provider posts a composed MIME message " +
+      "to a fixed endpoint with a platform credential rather than a per-tenant one. The shared transport " +
+      "resolves a credentialRef per call against one pinned host — right for a vendor API, and not the shape " +
+      "of either provider here. See tools/email/src/smtp.ts.",
+  ],
+  [
     "browser",
     "Makes no HTTP requests of its own: a driver the operator supplies talks to the browser, and the browser " +
       "talks to the network. Its URL validation is the shared `refuseUrl`/`resolvePublicly` from " +

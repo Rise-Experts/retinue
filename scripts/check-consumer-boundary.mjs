@@ -199,6 +199,13 @@ export const PACKAGES = [
     deep: ["dist/index.js", "src/index.ts", "ssrf", "html"],
   },
   {
+    name: "@retinue/tools-email",
+    dir: "tools/email",
+    // `smtp` is the module a consumer would most plausibly reach for — a minimal SMTP client is useful on its
+    // own — which is exactly why it must not resolve. It is re-exported from the root.
+    deep: ["dist/index.js", "src/index.ts", "smtp", "providers"],
+  },
+  {
     name: "@retinue/tools-browser",
     dir: "tools/browser",
     // `supervisor` is the module a consumer would most plausibly reach for — a process-group killer is useful

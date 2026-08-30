@@ -24,6 +24,24 @@ export type { HttpClient, HttpClientConfig, HttpFailure, HttpOutcome, HttpReques
 
 export { createVendorTransport } from "./vendor.js";
 /**
+ * RFC 5322 message building, shared — REQ-056 (#240), task #241.
+ *
+ * It began in `tools-google` and moved here when `tools-email` needed the same encoder. The header rules are
+ * the kind that fail *silently* — an unencoded non-ASCII subject arrives as mojibake, a header with a line
+ * break becomes two headers and the second copies the mail to somebody — so there is one implementation, and
+ * `tools-google` re-exports it rather than keeping a copy.
+ */
+export {
+  assertHeaderSafe,
+  boundaryFor,
+  buildMessage,
+  encodeHeader,
+  HeaderInjectionError,
+  headerOf,
+  stripBcc,
+} from "./mime.js";
+export type { Attachment, OutgoingMessage } from "./mime.js";
+/**
  * The SSRF-hardened fetch, shared — REQ-055 (#237), tasks #238 and #239.
  *
  * It was written for `tools-scrape` and lives here because `tools-browser` needs the *same* implementation

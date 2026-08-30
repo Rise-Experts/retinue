@@ -144,6 +144,7 @@ test("every shipping package is covered, and each deep list has both halves of t
     "@retinue/tools-google",
     "@retinue/tools-notion",
     "@retinue/tools-scrape",
+    "@retinue/tools-email",
     "@retinue/tools-browser",
     "@retinue/tools-azure",
   ]);
