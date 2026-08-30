@@ -17,6 +17,7 @@ import { asId, type ExecutionContext } from "@retinue/agentkit";
 import {
   buildMessage,
   bodyOf,
+  CALENDAR_READONLY,
   createGoogleToolkit,
   encodeHeader,
   GMAIL_READONLY,
@@ -572,5 +573,97 @@ describe("a header cannot be injected from untrusted content", () => {
     expect(raw).toContain("Subject: Quarterly update");
     const body = raw.split("\r\n\r\n")[1] ?? "";
     expect(Buffer.from(body.replaceAll("\r\n", ""), "base64").toString("utf8")).toBe("line one\nline two");
+  });
+});
+
+/**
+ * A narrow deployment needs only its own scopes — REQ-054 (#232), parent AC-6.
+ *
+ * The AC says **verified, not asserted**, and the distinction is the whole reason this block exists. Declaring
+ * `requiredScopes` per tool and writing them into a documentation table is the *asserting* half; both were
+ * already done. Neither establishes the property an operator actually cares about, which is that a consent
+ * screen limited to the scopes of the tools they enabled will not produce a toolkit that refuses its own work.
+ *
+ * The failure this catches is a tool quietly needing a scope beyond the ones it declares — a helper call added
+ * later against a different API, say. It typechecks, it works in development where the token was granted
+ * everything, and it fails only for the operator who granted the narrow set. Exactly the shape #245 exists for.
+ */
+describe("a subset of tools needs only that subset's scopes — parent AC-6", () => {
+  /** The scopes a chosen set of tools declares between them, which is what a narrow grant would contain. */
+  const scopesFor = async (include: readonly string[]): Promise<string[]> => {
+    const tools = await createGoogleToolkit({
+      credentialRef: "google",
+      resolver: resolverWith(ALL_SCOPES),
+      fetchImpl: vi.fn() as unknown as typeof fetch,
+      include,
+    }).listTools(context);
+    return [...new Set(tools.flatMap((tool) => tool.descriptor.requiredScopes ?? []))];
+  };
+
+  it("a calendar-only deployment works with only the calendar scopes", async () => {
+    const include = ["calendar_list_events", "calendar_get_event", "calendar_find_free_time"];
+    const granted = await scopesFor(include);
+    // The narrow grant is genuinely narrow: no Gmail, no Drive, and none of Google's restricted scopes.
+    expect(granted).toEqual([CALENDAR_READONLY]);
+    for (const scope of granted) {
+      expect(GOOGLE_SCOPES.find((entry) => entry.scope === scope)?.restricted, scope).toBe(false);
+    }
+
+    const fetchImpl = vi.fn(async () => jsonResponse({ items: [], calendars: {} })) as unknown as typeof fetch;
+    const tools = await createGoogleToolkit({
+      credentialRef: "google",
+      resolver: resolverWith(granted.join(" ")),
+      fetchImpl,
+      include,
+    }).listTools(context);
+
+    // Every included tool runs. A refusal here would mean a tool needs a scope it does not declare.
+    for (const tool of tools) {
+      const outcome = (await tool.execute({
+        context,
+        input: {
+          timeMin: "2026-09-01T00:00:00Z",
+          timeMax: "2026-09-02T00:00:00Z",
+          eventId: "e1",
+          attendees: ["a@example.com"],
+        },
+      })) as { ok: boolean; error?: { code: string } };
+      expect(outcome.ok, `${tool.descriptor.name}: ${outcome.error?.code}`).toBe(true);
+    }
+  });
+
+  it("the same narrow grant refuses a tool outside the subset, naming the scope", async () => {
+    // The other half: the grant is narrow because the gate is real, not because nothing checks it.
+    const fetchImpl = vi.fn() as unknown as typeof fetch;
+    const outcome = (await run(
+      "gmail_send_message",
+      fetchImpl,
+      { to: ["a@example.com"], subject: "hi", body: "hello" },
+      resolverWith(CALENDAR_READONLY),
+    )) as { ok: false; error: { code: string; message: string } };
+    expect(outcome.ok).toBe(false);
+    expect(outcome.error.code).toBe("unauthorized");
+    expect(outcome.error.message).toContain(GMAIL_SEND);
+    // Nothing was sent, so a missing scope costs a refusal rather than a rejected API call.
+    expect((fetchImpl as unknown as { mock: { calls: unknown[] } }).mock.calls).toHaveLength(0);
+  });
+
+  it("every scope a tool declares is documented, and every documented scope is used", async () => {
+    // The table an operator reads when deciding what to consent to has to match what the tools ask for, in
+    // both directions: an undocumented scope surprises them at the consent screen, and a documented one no
+    // tool needs is a scope they were talked into granting for nothing.
+    const tools = await createGoogleToolkit({
+      credentialRef: "google",
+      resolver: resolverWith(ALL_SCOPES),
+      fetchImpl: vi.fn() as unknown as typeof fetch,
+    }).listTools(context);
+    const declared = new Set(tools.flatMap((tool) => tool.descriptor.requiredScopes ?? []));
+    const documented = new Set(GOOGLE_SCOPES.map((entry) => entry.scope));
+    expect([...declared].filter((scope) => !documented.has(scope))).toEqual([]);
+    expect([...documented].filter((scope) => !declared.has(scope))).toEqual([]);
+    // And no tool ships with no scope at all, which would slip past both lists.
+    for (const tool of tools) {
+      expect((tool.descriptor.requiredScopes ?? []).length, tool.descriptor.name).toBeGreaterThan(0);
+    }
   });
 });
