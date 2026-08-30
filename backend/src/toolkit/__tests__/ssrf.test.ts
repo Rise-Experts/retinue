@@ -1,5 +1,5 @@
 /**
- * The three SSRF vectors, each with its own test — REQ-055 (#237), task #238, AC-3.
+ * The three SSRF vectors, each with its own test — REQ-055 (#237), task #238, AC-3 — and #239 AC-3, which is why it lives here.
  *
  * The AC is explicit that one "blocks localhost" test does not satisfy it, and it is right: the three vectors
  * fail differently and a defence against one is no defence against the others. Each block below asserts the

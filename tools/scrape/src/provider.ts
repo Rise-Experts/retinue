@@ -19,7 +19,7 @@
  */
 
 import { htmlToMarkdown, linksIn } from "./html.js";
-import { DEFAULT_USER_AGENT, safeFetch, type Resolve, type SafeTransport } from "./ssrf.js";
+import { DEFAULT_USER_AGENT, safeFetch, type Resolve, type SafeTransport } from "@retinue/agentkit/tools";
 
 /** What every provider returns, whatever it did to get there. */
 export type PageContent = {

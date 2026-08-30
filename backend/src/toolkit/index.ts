@@ -23,6 +23,31 @@ export {
 export type { HttpClient, HttpClientConfig, HttpFailure, HttpOutcome, HttpRequest, HttpSuccess } from "./http.js";
 
 export { createVendorTransport } from "./vendor.js";
+/**
+ * The SSRF-hardened fetch, shared — REQ-055 (#237), tasks #238 and #239.
+ *
+ * It was written for `tools-scrape` and lives here because `tools-browser` needs the *same* implementation
+ * rather than a second copy: a browser navigating to `169.254.169.254` is the same hole as a fetch doing it,
+ * and two copies of an address classifier is how one of them ends up missing the IPv6-mapped forms.
+ *
+ * **Not a replacement for `mcp/egress.ts`, which is deliberately stricter.** That one denies *every* IPv6
+ * literal unless explicitly allowed, which is right for an MCP endpoint an operator configures once and wrong
+ * for scraping the open web, where a great many real sites are v6-only. They differ because the questions
+ * differ, and merging them would mean picking one answer for both.
+ */
+export {
+  BlockedError,
+  DEFAULT_USER_AGENT,
+  isPrivateAddress,
+  isPrivateV4,
+  isPrivateV6,
+  nodeTransport,
+  refuseUrl,
+  resolvePublicly,
+  safeFetch,
+  systemResolve,
+} from "./ssrf.js";
+export type { Refusal, Resolve, SafeFetchOptions, SafeResponse, SafeTransport } from "./ssrf.js";
 export type { VendorClassifier, VendorFailure, VendorTransport, VendorTransportConfig } from "./vendor.js";
 
 export {

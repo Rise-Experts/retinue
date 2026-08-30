@@ -21,9 +21,16 @@ import type { Tool, ToolProvider } from "@retinue/agentkit/tools";
 
 import { createGate, type Gate, type PolitenessOptions } from "./politeness.js";
 import { directProvider, type ScrapeProvider } from "./provider.js";
-import { safeFetch } from "./ssrf.js";
+import { safeFetch } from "@retinue/agentkit/tools";
 import { scrapeTools, type ScrapeToolsConfig } from "./tools.js";
 
+/**
+ * The SSRF-hardened fetch now lives in `@retinue/agentkit/tools`, and is re-exported here.
+ *
+ * It moved when `tools-browser` (#239) needed the same implementation rather than a second copy — a browser
+ * navigating to a metadata address is the same hole as a fetch doing it. Re-exported so this package's public
+ * surface is unchanged and a reader looking for it here still finds it.
+ */
 export {
   BlockedError,
   DEFAULT_USER_AGENT,
@@ -35,8 +42,8 @@ export {
   resolvePublicly,
   safeFetch,
   systemResolve,
-} from "./ssrf.js";
-export type { Resolve, SafeFetchOptions, SafeResponse, SafeTransport } from "./ssrf.js";
+} from "@retinue/agentkit/tools";
+export type { Resolve, SafeFetchOptions, SafeResponse, SafeTransport } from "@retinue/agentkit/tools";
 export { decodeEntities, findElement, htmlToMarkdown, linksIn, parseHtml, textOf } from "./html.js";
 export type { Extraction, Node } from "./html.js";
 export { crawlDelayOf, EMPTY_ROBOTS, groupFor, isAllowed, matchesRule, parseRobots } from "./robots.js";

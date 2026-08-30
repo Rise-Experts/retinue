@@ -41,11 +41,17 @@ export const EXEMPT = new Map([
   ],
   [
     "scrape",
-    "Fetches URLs a model chose, which is the one case the shared transport cannot serve. Two reasons, both " +
-      "load-bearing. It must connect to an address it has already validated — `node:https` accepts a `lookup`, " +
-      "`fetch` has no equivalent — and without that pinning there is a second DNS resolution between the check " +
-      "and the socket, which is the rebinding window. And it must follow redirects, re-running the whole check " +
-      "on each hop, where `createHttpClient` refuses them outright. See tools/scrape/src/ssrf.ts.",
+    "Fetches URLs a model chose, which the shared transport cannot serve: it must connect to an address it has " +
+      "already validated (`node:https` accepts a `lookup`; `fetch` has no equivalent, and without pinning there " +
+      "is a second DNS resolution between the check and the socket — the rebinding window), and it must follow " +
+      "redirects re-checking every hop, where `createHttpClient` refuses them outright. It does not build its " +
+      "own client: it uses `safeFetch` from @retinue/agentkit/tools, which is shared with tools-browser.",
+  ],
+  [
+    "browser",
+    "Makes no HTTP requests of its own: a driver the operator supplies talks to the browser, and the browser " +
+      "talks to the network. Its URL validation is the shared `refuseUrl`/`resolvePublicly` from " +
+      "@retinue/agentkit/tools — the same implementation tools-scrape uses, which is why it lives there.",
   ],
 ]);
 

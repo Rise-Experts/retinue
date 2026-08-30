@@ -27,7 +27,7 @@ import { encloseUntrusted, makeNonce } from "@retinue/agentkit/context";
 import { crawl, CRAWL_CEILINGS, CRAWL_DEFAULTS } from "./crawl.js";
 import type { Gate } from "./politeness.js";
 import type { ScrapeProvider } from "./provider.js";
-import { BlockedError, DEFAULT_USER_AGENT } from "./ssrf.js";
+import { BlockedError, DEFAULT_USER_AGENT } from "@retinue/agentkit/tools";
 
 const CATEGORY = "web";
 
