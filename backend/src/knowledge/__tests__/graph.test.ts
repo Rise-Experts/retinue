@@ -9,6 +9,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { asId } from "../../core/ids.js";
+import type { TenantScope } from "../../core/context.js";
 import type { DocumentBlock } from "../../documents/index.js";
 import { createMemoryGraphStore } from "../../adapters/memory/graph.js";
 import { createMemoryKnowledgeStore } from "../../adapters/memory/knowledge.js";
@@ -26,8 +27,8 @@ import {
   type RawExtraction,
 } from "../index.js";
 
-const context = { tenantId: asId("t1") };
-const other = { tenantId: asId("t2") };
+const context: TenantScope = { tenantId: asId("t1") };
+const other: TenantScope = { tenantId: asId("t2") };
 const NOW = "2026-08-28T00:00:00.000Z";
 
 /**

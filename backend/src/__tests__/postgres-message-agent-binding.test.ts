@@ -9,6 +9,7 @@
  */
 
 import { PGlite } from "@electric-sql/pglite";
+import { DEFAULT_EXECUTION_LIMITS } from "../agents/define.js";
 import { describe, expect, it } from "vitest";
 import { asId } from "../core/ids.js";
 import type {
@@ -265,13 +266,13 @@ describe("agent and binding specifics", () => {
     name: `agent ${id} v${version}`,
     description: "fixture",
     instructions: "be useful",
-    modelPolicy: { preferred: "claude-opus-5" },
+    modelPolicy: { role: "smart" },
     responseFormat: { kind: "text" },
     toolPolicy: { preloaded: [], categories: [], excluded: [] },
     skillPolicy: { assigned: [], allowTenantSkills: false },
     authorizationPolicyId: "default",
     contextProviderIds: [],
-    limits: { maxSteps: 4, maxToolCalls: 8, maxWallClockMs: 60_000 },
+    limits: { ...DEFAULT_EXECUTION_LIMITS, maxSteps: 4, maxToolCalls: 8, wallClockTimeoutMs: 60_000 },
   });
 
   it("keeps v1 resolvable after v2 is registered", async () => {

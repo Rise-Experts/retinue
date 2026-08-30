@@ -10,7 +10,7 @@ import { describe, expect, it } from "vitest";
 import { createHttpClient } from "../http.js";
 
 /** Records every URL it is asked for, so "did not send" is provable rather than assumed. */
-const spyFetch = (response?: Partial<Response> & { headers?: Record<string, string> }) => {
+const spyFetch = (response?: Omit<Partial<Response>, "headers"> & { headers?: Record<string, string> }) => {
   const calls: string[] = [];
   const impl = (async (url: string | URL, init?: RequestInit) => {
     calls.push(String(url));

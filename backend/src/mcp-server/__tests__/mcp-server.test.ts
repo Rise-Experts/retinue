@@ -64,8 +64,8 @@ const allowAll = {
   async filterTools(_c: ExecutionContext, tools: readonly ToolDescriptor[]) {
     return tools;
   },
-  async scope() {
-    return {};
+  async scope(context: ExecutionContext) {
+    return { tenantId: String(context.tenantId), roleIds: [] };
   },
 };
 

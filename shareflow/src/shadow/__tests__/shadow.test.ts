@@ -7,6 +7,8 @@
  * would prove only that the existing tool was wired.
  */
 import { beforeEach, describe, expect, it } from "vitest";
+import type { SocialAccountId } from "../../services/ids.js";
+import type { ConversationId } from "@retinue/agentkit";
 import { asId, type AuthorizationPolicy, type ExecutionContext, type IdempotencyStore, type PrincipalId, type RunId, type SuppressedWrite, type TenantId, type Tool, type ToolResult } from "@retinue/agentkit";
 import { createApprovalGate } from "@retinue/agentkit/hitl";
 import { createMemoryApprovalGrantStore, createMemoryIdempotencyStore } from "@retinue/agentkit/persistence";
@@ -27,7 +29,7 @@ const context = (over: Partial<ExecutionContext> = {}): ExecutionContext =>
   ({
     tenantId: T1,
     principalId: asId<PrincipalId>("p1"),
-    conversationId: asId("c1"),
+    conversationId: asId<ConversationId>("c1"),
     runId: RUN,
     ...over,
   }) as unknown as ExecutionContext;
@@ -65,7 +67,7 @@ const publishingServices = (): ShareFlowServices =>
       },
       async schedule(_c: ExecutionContext, args: unknown) {
         published.push(args);
-        return [{ id: asId("t-a1"), accountId: asId("a1"), state: "published" }];
+        return [{ id: asId("t-a1"), accountId: asId<SocialAccountId>("a1"), state: "published" }];
       },
     },
   }) as unknown as ShareFlowServices;
@@ -380,7 +382,7 @@ describe("the recorder", () => {
     recorder.record(null, write({ runId: "r2", toolName: "schedule_post" }));
     expect(recorder.written("r1").map((w) => w.toolName)).toEqual(["publish_post_now"]);
     expect(recorder.written("r2").map((w) => w.toolName)).toEqual(["schedule_post"]);
-    expect(recorder.runIds().sort()).toEqual(["r1", "r2"]);
+    expect([...recorder.runIds()].sort()).toEqual(["r1", "r2"]);
   });
 
   it("keeps order within a run, since order is a difference the report reports", () => {

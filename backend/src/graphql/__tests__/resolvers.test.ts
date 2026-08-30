@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ExecutionContext } from "../../core/context.js";
 import { asId } from "../../core/ids.js";
-import type { ConversationId, RunId, TenantId } from "../../core/ids.js";
+import type { AgentId, ConversationId, InteractionId, RunId, TenantId } from "../../core/ids.js";
 import { createAuthorizationPolicy } from "../../authorization/index.js";
 import {
   createMemoryConversationRunCoordinator,
@@ -95,7 +95,7 @@ describe("graphql resolvers — thin delegation", () => {
 
   it("sendMessage claims the conversation and enqueues the run", async () => {
     const { resolvers, runs, enqueued } = build();
-    await runs.create({ tenantId: T, id: asId<RunId>("run1"), conversationId: asId<ConversationId>("c1"), agentId: asId("a1"), agentVersion: 1 });
+    await runs.create({ tenantId: T, id: asId<RunId>("run1"), conversationId: asId<ConversationId>("c1"), agentId: asId<AgentId>("a1"), agentVersion: 1 });
     const run = await resolvers.Mutation.sendMessage({}, { conversationId: "c1", runId: "run1" }, ctx);
     expect(run.status).toBe("queued"); // memory run starts queued
     expect(enqueued).toEqual(["run1"]);
@@ -103,7 +103,7 @@ describe("graphql resolvers — thin delegation", () => {
 
   it("cancelRun requests durable cancellation", async () => {
     const { resolvers, runs } = build();
-    await runs.create({ tenantId: T, id: asId<RunId>("run1"), conversationId: asId<ConversationId>("c1"), agentId: asId("a1"), agentVersion: 1 });
+    await runs.create({ tenantId: T, id: asId<RunId>("run1"), conversationId: asId<ConversationId>("c1"), agentId: asId<AgentId>("a1"), agentVersion: 1 });
     expect(await resolvers.Mutation.cancelRun({}, { runId: "run1" }, ctx)).toBe(true);
     const run = await runs.findById({ tenantId: T, id: asId<RunId>("run1") });
     expect(run?.cancelRequestedAt).toBeDefined();

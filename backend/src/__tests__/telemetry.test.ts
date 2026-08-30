@@ -319,8 +319,8 @@ describe("one request is one trace — AC-1", () => {
     };
     const dispatcher = instrumentDispatcher(rawDispatcher, { telemetry, now: () => 1_000 });
 
-    let deliver: ((job: RunJob) => Promise<void>) | null = null;
-    const rawConsumer: JobConsumer = { start(h) { deliver = h; }, stop: async () => {} };
+    const captured: { deliver: ((job: RunJob) => Promise<void>) | null } = { deliver: null };
+    const rawConsumer: JobConsumer = { start(h) { captured.deliver = h; }, stop: async () => {} };
     const consumer = instrumentConsumer(rawConsumer, { telemetry, workerId: "w1", now: () => 1_400 });
     consumer.start(async () => {});
 
@@ -332,7 +332,7 @@ describe("one request is one trace — AC-1", () => {
 
     const job = enqueued[0];
     expect(job?.traceparent, "the job must carry a traceparent or nothing can join the trace").toBeDefined();
-    await deliver?.(job as RunJob);
+    await captured.deliver?.(job as RunJob);
 
     const claim = telemetry.spans.find((s) => s.name === BOUNDARY_SPANS.claim);
     expect(claim?.traceId).toBe(requestTraceId);
@@ -345,11 +345,11 @@ describe("one request is one trace — AC-1", () => {
 
   it("a job with no traceparent starts its own trace instead of failing", async () => {
     const telemetry = createRecordingTelemetry();
-    let deliver: ((job: RunJob) => Promise<void>) | null = null;
-    const consumer = instrumentConsumer({ start(h) { deliver = h; }, stop: async () => {} }, { telemetry });
+    const captured: { deliver: ((job: RunJob) => Promise<void>) | null } = { deliver: null };
+    const consumer = instrumentConsumer({ start(h) { captured.deliver = h; }, stop: async () => {} }, { telemetry });
     consumer.start(async () => {});
     // A job already on the queue from before propagation existed. It must run.
-    await deliver?.({ tenantId: t1, runId: r1 });
+    await captured.deliver?.({ tenantId: t1, runId: r1 });
     const claim = telemetry.spans.find((s) => s.name === BOUNDARY_SPANS.claim);
     expect(claim).toBeDefined();
     expect(claim?.parentSpanId).toBeNull();
@@ -360,10 +360,10 @@ describe("one request is one trace — AC-1", () => {
 
   it("a malformed traceparent is treated as absent, not as a failure", async () => {
     const telemetry = createRecordingTelemetry();
-    let deliver: ((job: RunJob) => Promise<void>) | null = null;
-    const consumer = instrumentConsumer({ start(h) { deliver = h; }, stop: async () => {} }, { telemetry });
+    const captured: { deliver: ((job: RunJob) => Promise<void>) | null } = { deliver: null };
+    const consumer = instrumentConsumer({ start(h) { captured.deliver = h; }, stop: async () => {} }, { telemetry });
     consumer.start(async () => {});
-    await expect(deliver?.({ tenantId: t1, runId: r1, traceparent: "garbage" })).resolves.toBeUndefined();
+    await expect(captured.deliver?.({ tenantId: t1, runId: r1, traceparent: "garbage" })).resolves.toBeUndefined();
     expect(telemetry.spans.find((s) => s.name === BOUNDARY_SPANS.claim)?.attributes["queue.trace_continued"]).toBe(false);
   });
 
@@ -390,11 +390,11 @@ describe("one request is one trace — AC-1", () => {
     const telemetry = createRecordingTelemetry();
     const enqueued: RunJob[] = [];
     const dispatcher = instrumentDispatcher({ async enqueueRun(i) { enqueued.push(i as RunJob); } }, { telemetry });
-    let deliver: ((job: RunJob) => Promise<void>) | null = null;
-    const consumer = instrumentConsumer({ start(h) { deliver = h; }, stop: async () => {} }, { telemetry });
+    const captured: { deliver: ((job: RunJob) => Promise<void>) | null } = { deliver: null };
+    const consumer = instrumentConsumer({ start(h) { captured.deliver = h; }, stop: async () => {} }, { telemetry });
     consumer.start(async () => {});
     await dispatcher.enqueueRun({ tenantId: t1, runId: r1 });
-    await deliver?.(enqueued[0] as RunJob);
+    await captured.deliver?.(enqueued[0] as RunJob);
     // The pair is how a collector draws a queue hop. Without the kinds it renders as a nested call, and a
     // producer span ending long before its child then looks like a broken trace.
     expect(telemetry.spans.find((s) => s.name === BOUNDARY_SPANS.enqueue)?.kind).toBe("producer");
@@ -456,42 +456,42 @@ describe("metrics answer the operational questions — AC-3", () => {
 
   it("records claim latency from the producer's stamp", async () => {
     const telemetry = createRecordingTelemetry();
-    let deliver: ((job: RunJob) => Promise<void>) | null = null;
+    const captured: { deliver: ((job: RunJob) => Promise<void>) | null } = { deliver: null };
     const consumer = instrumentConsumer(
-      { start(h) { deliver = h; }, stop: async () => {} },
+      { start(h) { captured.deliver = h; }, stop: async () => {} },
       { telemetry, now: () => Date.parse("2026-08-23T12:00:03.000Z") },
     );
     consumer.start(async () => {});
-    await deliver?.({ tenantId: t1, runId: r1, enqueuedAt: "2026-08-23T12:00:00.000Z" });
+    await captured.deliver?.({ tenantId: t1, runId: r1, enqueuedAt: "2026-08-23T12:00:00.000Z" });
     const claim = telemetry.metrics.find((m) => m.instrument === RUN_INSTRUMENTS.claimLatencyMs.name);
     expect(claim?.value).toBe(3_000);
   });
 
   it("drops a negative claim latency rather than clamping it to zero", async () => {
     const telemetry = createRecordingTelemetry();
-    let deliver: ((job: RunJob) => Promise<void>) | null = null;
+    const captured: { deliver: ((job: RunJob) => Promise<void>) | null } = { deliver: null };
     const consumer = instrumentConsumer(
-      { start(h) { deliver = h; }, stop: async () => {} },
+      { start(h) { captured.deliver = h; }, stop: async () => {} },
       { telemetry, now: () => Date.parse("2026-08-23T12:00:00.000Z") },
     );
     consumer.start(async () => {});
     // Clock skew between two hosts. A zero is indistinguishable from a genuinely instant claim, and a p99 built
     // from fabricated zeros reads healthy — the absence is the honest answer.
-    await deliver?.({ tenantId: t1, runId: r1, enqueuedAt: "2026-08-23T12:00:05.000Z" });
+    await captured.deliver?.({ tenantId: t1, runId: r1, enqueuedAt: "2026-08-23T12:00:05.000Z" });
     expect(telemetry.metrics.filter((m) => m.instrument === RUN_INSTRUMENTS.claimLatencyMs.name)).toEqual([]);
   });
 
   it("records claim latency even when the run then fails", async () => {
     const telemetry = createRecordingTelemetry();
-    let deliver: ((job: RunJob) => Promise<void>) | null = null;
+    const captured: { deliver: ((job: RunJob) => Promise<void>) | null } = { deliver: null };
     const consumer = instrumentConsumer(
-      { start(h) { deliver = h; }, stop: async () => {} },
+      { start(h) { captured.deliver = h; }, stop: async () => {} },
       { telemetry, now: () => Date.parse("2026-08-23T12:00:02.000Z") },
     );
     consumer.start(async () => {
       throw new Error("boom");
     });
-    await expect(deliver?.({ tenantId: t1, runId: r1, enqueuedAt: "2026-08-23T12:00:00.000Z" })).rejects.toThrow();
+    await expect(captured.deliver?.({ tenantId: t1, runId: r1, enqueuedAt: "2026-08-23T12:00:00.000Z" })).rejects.toThrow();
     // A queue backing up and a run failing are different incidents. A metric that only appeared on success would
     // hide the first behind the second.
     expect(telemetry.metrics.some((m) => m.instrument === RUN_INSTRUMENTS.claimLatencyMs.name)).toBe(true);
@@ -500,12 +500,12 @@ describe("metrics answer the operational questions — AC-3", () => {
   it("records run duration and outcome on both the success and the failure path", async () => {
     for (const shouldFail of [false, true]) {
       const telemetry = createRecordingTelemetry();
-      let deliver: ((job: RunJob) => Promise<void>) | null = null;
-      const consumer = instrumentConsumer({ start(h) { deliver = h; }, stop: async () => {} }, { telemetry });
+      const captured: { deliver: ((job: RunJob) => Promise<void>) | null } = { deliver: null };
+      const consumer = instrumentConsumer({ start(h) { captured.deliver = h; }, stop: async () => {} }, { telemetry });
       consumer.start(async () => {
         if (shouldFail) throw Object.assign(new Error("x"), { code: "unavailable" });
       });
-      const call = deliver?.({ tenantId: t1, runId: r1 });
+      const call = captured.deliver?.({ tenantId: t1, runId: r1 });
       if (shouldFail) await expect(call).rejects.toThrow();
       else await call;
       const total = telemetry.metrics.find((m) => m.instrument === RUN_INSTRUMENTS.runsTotal.name);

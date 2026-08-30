@@ -11,6 +11,7 @@
  *   grandchild, and asserts the grandchild is gone.
  */
 import { mkdtempSync, readFileSync, existsSync } from "node:fs";
+import type { ConversationId } from "@retinue/agentkit";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -41,7 +42,7 @@ const context: ExecutionContext = {
   locale: "en",
   timezone: "UTC",
   requestId: asId("req1"),
-  conversationId: asId("c1"),
+  conversationId: asId<ConversationId>("c1"),
 };
 
 const element = (over: Partial<ElementHandle> & { ref: string }): ElementHandle => ({

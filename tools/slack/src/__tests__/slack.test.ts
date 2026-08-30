@@ -6,7 +6,8 @@
  * describe block, and it is the mistake this integration exists to not make.
  */
 import { describe, expect, it, vi } from "vitest";
-import { createStaticCredentialResolver } from "@retinue/agentkit/tools";
+import type { ConversationId } from "@retinue/agentkit";
+import { bearer, createStaticCredentialResolver } from "@retinue/agentkit/tools";
 import { asId, type ExecutionContext } from "@retinue/agentkit";
 import { createSlackToolkit, SLACK_TOOL_NAMES } from "../index.js";
 
@@ -17,7 +18,7 @@ const context: ExecutionContext = {
   locale: "en",
   timezone: "UTC",
   requestId: asId("req1"),
-  conversationId: asId("c1"),
+  conversationId: asId<ConversationId>("c1"),
 };
 
 const json = (body: unknown, status = 200) =>
@@ -74,7 +75,7 @@ describe("the same guarantees as the first toolkit", () => {
   });
 
   it("resolves the token on every call, so a rotated bot token works without a restart", async () => {
-    const resolve = vi.fn(async () => "xoxb-rotating");
+    const resolve = vi.fn(async () => bearer("xoxb-rotating"));
     const fetchImpl = vi.fn(async () => json({ ok: true, channels: [] }));
     const provider = createSlackToolkit({ credentialRef: "slack", resolver: { resolve }, fetchImpl: fetchImpl as unknown as typeof fetch });
     const tool = (await provider.listTools(context)).find((t) => t.descriptor.name === "slack_list_channels")!;

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { MessagePartId } from "@retinue/agentkit";
 import {
   citationHref,
   citationLabel,
@@ -73,7 +74,7 @@ describe("attachment references (#130)", () => {
 describe("citations (#137)", () => {
   const retrievalCitation = (overrides: Record<string, unknown> = {}) =>
     p({
-      id: "c1",
+      id: ("c1" as MessagePartId),
       type: "citation",
       schemaVersion: 2,
       createdAt: "t",
@@ -87,20 +88,20 @@ describe("citations (#137)", () => {
       },
       excerpt: "Revenue rose nine percent across EMEA.",
       retrievedAt: "2026-08-23T09:30:00.000Z",
-      supports: ["t1"],
+      supports: [("t1" as MessagePartId)],
       ...overrides,
     } as MessagePart);
 
   const webCitation = (overrides: Record<string, unknown> = {}) =>
     p({
-      id: "c2",
+      id: ("c2" as MessagePartId),
       type: "citation",
       schemaVersion: 2,
       createdAt: "t",
       origin: { kind: "web", url: "https://example.test/report", title: "Annual report" },
       excerpt: "Revenue rose nine percent.",
       retrievedAt: "2026-08-23T09:30:00.000Z",
-      supports: ["t1"],
+      supports: [("t1" as MessagePartId)],
       ...overrides,
     } as MessagePart);
 

@@ -19,7 +19,7 @@ import { createFlowRunner } from "../runner.js";
 import type { FlowEffectHandler } from "../runner.js";
 import type { FlowDefinition, TeamDefinition } from "../index.js";
 import type { ExecutionContext } from "../../core/context.js";
-import type { AgentId, PrincipalId, RequestId, RunId, TenantId } from "../../core/ids.js";
+import type { AgentId, ConversationId, PrincipalId, RequestId, RunId, TenantId } from "../../core/ids.js";
 
 const context = (): ExecutionContext => ({
   tenantId: asId<TenantId>("t1"),
@@ -266,7 +266,7 @@ describe("the conversation run slot", () => {
     const definition = compileTeam(team());
     const { runner, created } = await setup(definition);
     await runner.start(
-      { ...context(), conversationId: asId("conv-1") } as ExecutionContext,
+      { ...context(), conversationId: asId<ConversationId>("conv-1") } as ExecutionContext,
       { flowId: definition.id, runId: asId<RunId>("parent-1"), state: { brief: "b" } },
     );
 

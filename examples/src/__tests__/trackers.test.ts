@@ -12,7 +12,8 @@
  * new packages with nothing importing them would have been the next instance.
  */
 import { afterEach, describe, expect, it } from "vitest";
-import { asId, type ExecutionContext } from "@retinue/agentkit";
+import type { ConversationId } from "@retinue/agentkit";
+import { asId, type ExecutionContext, type RoleId } from "@retinue/agentkit";
 
 import { exampleRegistry } from "../index.js";
 import { asExampleBackend } from "../memory-composition.js";
@@ -22,11 +23,11 @@ import { exampleToolkits } from "../toolkits.js";
 const context: ExecutionContext = {
   tenantId: asId("t-trackers"),
   principalId: asId("p-trackers"),
-  roleIds: ["editor"],
+  roleIds: [asId<RoleId>("editor")],
   locale: "en",
   timezone: "UTC",
   requestId: asId("req-trackers"),
-  conversationId: asId("c-trackers"),
+  conversationId: asId<ConversationId>("c-trackers"),
 };
 
 /** Every tracker credential at once — the configuration this test exists to exercise. */

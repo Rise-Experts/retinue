@@ -7,7 +7,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ExecutionContext } from "../../core/context.js";
 import { asId } from "../../core/ids.js";
-import type { RunId } from "../../core/ids.js";
+import type { AgentId, ConversationId, RunId } from "../../core/ids.js";
 import type { ModelTurnRequest, NeutralStreamChunk, ResolvedModel } from "../../models/index.js";
 import type { EngineEvent, Run } from "../../runtime/index.js";
 import type { Guardrail } from "../../guardrails/index.js";
@@ -18,8 +18,8 @@ const RUN = asId<RunId>("r1");
 const run: Run = {
   id: RUN,
   tenantId: asId("t1"),
-  conversationId: asId("c1"),
-  agentId: asId("a1"),
+  conversationId: asId<ConversationId>("c1"),
+  agentId: asId<AgentId>("a1"),
   agentVersion: 1,
   status: "running",
   createdAt: "t",
@@ -31,7 +31,7 @@ const context: ExecutionContext = {
   locale: "en",
   timezone: "UTC",
   requestId: asId("req1"),
-  conversationId: asId("c1"),
+  conversationId: asId<ConversationId>("c1"),
   runId: RUN,
 };
 const manifest = defineAgent({ id: "a1", name: "A", instructions: "be helpful", modelPolicy: { role: "smart" } });

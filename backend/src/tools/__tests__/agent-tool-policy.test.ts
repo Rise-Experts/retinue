@@ -17,6 +17,7 @@ import type { RunId, TenantId } from "../../core/ids.js";
 import { createToolRegistry } from "../registry.js";
 import type { Tool, ToolDescriptor, ToolProvider, ToolSearch } from "../index.js";
 
+import { compactEntry } from "../find.js";
 const T = asId<TenantId>("t1");
 
 const ctx = (excluded: readonly string[] = []): ExecutionContext => ({
@@ -61,7 +62,7 @@ const provider: ToolProvider = {
 /** A search that returns everything it is given, so filtering can only come from the registry. */
 const search: ToolSearch = {
   async search({ tools }) {
-    return { hits: tools.map((t) => ({ name: t.name, score: 1 })), modes: ["keyword"] };
+    return { hits: tools.map((t) => ({ entry: compactEntry(t), score: 1, signals: ["keyword" as const] })), modes: ["keyword"] };
   },
 };
 
@@ -72,8 +73,8 @@ const allowAll = {
   async filterTools(_c: ExecutionContext, tools: readonly ToolDescriptor[]) {
     return tools;
   },
-  async scope() {
-    return {};
+  async scope(context: ExecutionContext) {
+    return { tenantId: String(context.tenantId), roleIds: [] };
   },
 };
 

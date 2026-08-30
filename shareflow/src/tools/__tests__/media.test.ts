@@ -6,6 +6,7 @@
  * results, because "we did not hardcode a limit" is not something a stub can demonstrate.
  */
 import { beforeEach, describe, expect, it } from "vitest";
+import type { SocialAccountId } from "../../services/ids.js";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
@@ -182,7 +183,7 @@ describe("checking media against destinations", () => {
     const result = await run(
       build(checkMediaForPlatformsTool, {
         checkPlatformCompatibility: async () => [
-          issue({ platformId: undefined, accountId: asId("a1"), code: "media-too-large", repairable: false }),
+          issue({ platformId: undefined, accountId: asId<SocialAccountId>("a1"), code: "media-too-large", repairable: false }),
         ],
       }),
       { mediaAssetIds: ["m1"], platformIds: ["x"] },

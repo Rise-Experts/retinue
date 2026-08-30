@@ -78,9 +78,9 @@ describe("the real OTel pipeline", () => {
 
     const enqueued: RunJob[] = [];
     const dispatcher = instrumentDispatcher({ async enqueueRun(i) { enqueued.push(i as RunJob); } }, { telemetry });
-    let deliver: ((job: RunJob) => Promise<void>) | null = null;
+    const captured: { deliver: ((job: RunJob) => Promise<void>) | null } = { deliver: null };
     const consumer: JobConsumer = instrumentConsumer(
-      { start(h) { deliver = h; }, stop: async () => {} },
+      { start(h) { captured.deliver = h; }, stop: async () => {} },
       { telemetry, workerId: "w1" },
     );
     consumer.start(async () => {});
@@ -92,7 +92,7 @@ describe("the real OTel pipeline", () => {
         traceparent: traceparentOf(request),
       });
     });
-    await deliver?.(enqueued[0] as RunJob);
+    await captured.deliver?.(enqueued[0] as RunJob);
 
     const exported = tracing.exporter.getFinishedSpans();
     const byName = new Map(exported.map((s) => [s.name, s]));
@@ -200,7 +200,7 @@ describe("the real OTel pipeline", () => {
     const points = collected
       .flatMap((b) => b.scopeMetrics.flatMap((s) => s.metrics))
       .filter((m) => m.descriptor.name === RUN_INSTRUMENTS.runDurationMs.name)
-      .flatMap((m) => m.dataPoints);
+      .flatMap((m) => m.dataPoints as readonly { attributes: Record<string, unknown> }[]);
     // Three runs, **one** series. Read out of the exporter, because this is the assertion that would otherwise
     // be about our own bookkeeping rather than about what a metrics backend is billed for.
     expect(points).toHaveLength(1);

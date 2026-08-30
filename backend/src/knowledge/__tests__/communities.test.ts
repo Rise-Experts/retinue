@@ -8,6 +8,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { asId } from "../../core/ids.js";
+import type { TenantScope } from "../../core/context.js";
 import { createMemoryGraphStore } from "../../adapters/memory/graph.js";
 import { createMemoryKnowledgeStore } from "../../adapters/memory/knowledge.js";
 import { isCommunityStale, type GraphStore, type KnowledgeRelationship } from "../../persistence/index.js";
@@ -18,7 +19,7 @@ import {
   type CommunitySummariser,
 } from "../index.js";
 
-const context = { tenantId: asId("t1") };
+const context: TenantScope = { tenantId: asId("t1") };
 const AT = "2026-08-28T00:00:00.000Z";
 
 const edge = (from: string, to: string, weight = 1): KnowledgeRelationship => ({

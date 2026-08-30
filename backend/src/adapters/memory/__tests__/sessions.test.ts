@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { asId } from "../../../core/ids.js";
-import type { ConversationId, RunId, TenantId } from "../../../core/ids.js";
+import type { AgentId, ConversationId, RunId, TenantId } from "../../../core/ids.js";
 import { createMemoryConversationBindingStore, createMemoryConversationRunCoordinator, createMemorySessionStateStore, createMemoryUnitOfWork } from "../index.js";
 import {
   advanceConversation,
@@ -89,14 +89,14 @@ describe("session state — optimistic concurrency & bounds", () => {
 describe("bound-agent resume", () => {
   it("a pinned thread resumes its recorded version even when a newer one exists", async () => {
     const bindings = createMemoryConversationBindingStore();
-    await bindings.bind({ tenantId: T, conversationId: C, agentId: asId("agent-1"), agentVersionPolicy: "pinned", agentVersion: 3 });
+    await bindings.bind({ tenantId: T, conversationId: C, agentId: asId<AgentId>("agent-1"), agentVersionPolicy: "pinned", agentVersion: 3 });
     const binding = await bindings.get({ tenantId: T, conversationId: C });
     expect(resolveAgentVersionForResume(binding!, 7)).toBe(3);
   });
 
   it("a latest-policy thread tracks the newest version", async () => {
     const bindings = createMemoryConversationBindingStore();
-    await bindings.bind({ tenantId: T, conversationId: C, agentId: asId("agent-1"), agentVersionPolicy: "latest" });
+    await bindings.bind({ tenantId: T, conversationId: C, agentId: asId<AgentId>("agent-1"), agentVersionPolicy: "latest" });
     const binding = await bindings.get({ tenantId: T, conversationId: C });
     expect(resolveAgentVersionForResume(binding!, 7)).toBe(7);
   });

@@ -44,6 +44,11 @@ const JENKINSFILE = "Jenkinsfile";
  */
 export const STEPS = [
   ["typecheck", "npm run typecheck"],
+  // Its own step, deliberately. `tsc -b` excludes test files by design — they must not reach `dist` — so a
+  // type error in one was invisible until an assertion happened to fail at runtime. Folding this into
+  // `typecheck` would hide which of the two failed, and a failure here means something quite specific: a test
+  // may be proving something other than what it claims.
+  ["typecheck tests", "npm run check:test-types"],
   ["build", "npm run build"],
   ["package boundary as installed", "npm run check:consumer"],
   ["tests · boundaries · reachability · scripts · docs", "npm test"],

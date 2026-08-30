@@ -236,7 +236,7 @@ describe("the migrated content matches implemented behaviour", () => {
     // versioned, not offered — which is what `status: "draft"` is for, now that the resolver honours it
     // for built-ins as the store already did for tenant skills.
     const drafts = SHAREFLOW_BUILT_IN_SKILLS.filter((s) => s.status === "draft").map((s) => s.name);
-    expect(drafts.sort()).toEqual(["document-generation", "mermaid-diagrams"]);
+    expect([...drafts].sort()).toEqual(["document-generation", "mermaid-diagrams"]);
     expect(SHAREFLOW_ASSIGNED_SKILLS).not.toContain("mermaid-diagrams");
     expect(SHAREFLOW_ASSIGNED_SKILLS).toHaveLength(5);
 

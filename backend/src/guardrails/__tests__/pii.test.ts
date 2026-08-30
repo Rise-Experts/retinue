@@ -14,7 +14,7 @@
 import { describe, expect, it } from "vitest";
 import type { ExecutionContext } from "../../core/context.js";
 import { asId } from "../../core/ids.js";
-import type { RunId } from "../../core/ids.js";
+import type { ConversationId, RunId } from "../../core/ids.js";
 import { createPiiGuardrail, findPii, placeholderFor, redactText, PII_ENTITIES, type PiiEntity } from "../pii.js";
 
 const context: ExecutionContext = {
@@ -24,7 +24,7 @@ const context: ExecutionContext = {
   locale: "en",
   timezone: "UTC",
   requestId: asId("req1"),
-  conversationId: asId("c1"),
+  conversationId: asId<ConversationId>("c1"),
   runId: asId<RunId>("r1"),
 };
 
@@ -78,13 +78,13 @@ describe("referential consistency — AC-2", () => {
 describe("all three paths — AC-3", () => {
   const guardrail = createPiiGuardrail();
 
-  it("finds it in the turn", () => {
-    const verdict = guardrail.inspectInput!({ text: "reach me at a@b.com" }, context);
+  it("finds it in the turn", async () => {
+    const verdict = await guardrail.inspectInput!({ text: "reach me at a@b.com" }, context);
     expect(verdict.kind).toBe("redacted");
   });
 
-  it("finds it in a tool argument, nested", () => {
-    const verdict = guardrail.inspectOutput!(
+  it("finds it in a tool argument, nested", async () => {
+    const verdict = await guardrail.inspectOutput!(
       { kind: "tool-call", toolName: "create_lead", input: { lead: { contact: { email: "a@b.com" } } } },
       context,
     );
@@ -92,10 +92,10 @@ describe("all three paths — AC-3", () => {
     expect(JSON.stringify(verdict.value)).not.toContain("a@b.com");
   });
 
-  it("finds it in a tool result — the likeliest source in a whole run", () => {
+  it("finds it in a tool result — the likeliest source in a whole run", async () => {
     // A document read by a tool contains whatever the document contains. Guarding arguments and not results
     // checks the direction data leaves and ignores the direction it arrives.
-    const verdict = guardrail.inspectOutput!(
+    const verdict = await guardrail.inspectOutput!(
       { kind: "tool-result", toolName: "read_document", output: { text: "Contact: a@b.com" } },
       context,
     );
@@ -104,32 +104,32 @@ describe("all three paths — AC-3", () => {
     expect(verdict.what).toEqual(["email"]);
   });
 
-  it("passes clean content through untouched", () => {
-    expect(guardrail.inspectInput!({ text: "what is the weather" }, context).kind).toBe("pass");
+  it("passes clean content through untouched", async () => {
+    expect((await guardrail.inspectInput!({ text: "what is the weather" }, context)).kind).toBe("pass");
   });
 });
 
 describe("redact versus refuse is a decision — AC-5", () => {
-  it("redacts by default", () => {
-    expect(createPiiGuardrail().inspectInput!({ text: "a@b.com" }, context).kind).toBe("redacted");
+  it("redacts by default", async () => {
+    expect((await createPiiGuardrail().inspectInput!({ text: "a@b.com" }, context)).kind).toBe("redacted");
   });
 
-  it("refuses per entity when configured, and names the type without the value", () => {
+  it("refuses per entity when configured, and names the type without the value", async () => {
     const strict = createPiiGuardrail({ actions: { card_number: "refuse" } });
-    const verdict = strict.inspectInput!({ text: "my card is 4111111111111111" }, context);
+    const verdict = await strict.inspectInput!({ text: "my card is 4111111111111111" }, context);
     if (verdict.kind !== "refused") throw new Error("expected a refusal");
     expect(verdict.message).toContain("card_number");
     expect(verdict.message).not.toContain("4111111111111111");
   });
 
-  it("still only redacts an entity whose action is redact, in the same text", () => {
+  it("still only redacts an entity whose action is redact, in the same text", async () => {
     const mixed = createPiiGuardrail({ actions: { card_number: "refuse" } });
-    expect(mixed.inspectInput!({ text: "mail a@b.com" }, context).kind).toBe("redacted");
+    expect((await mixed.inspectInput!({ text: "mail a@b.com" }, context)).kind).toBe("redacted");
   });
 
-  it("honours an entity list, so a deployment can look for one thing", () => {
+  it("honours an entity list, so a deployment can look for one thing", async () => {
     const emailsOnly = createPiiGuardrail({ entities: ["email"] });
-    const verdict = emailsOnly.inspectInput!({ text: "card 4111111111111111" }, context);
+    const verdict = await emailsOnly.inspectInput!({ text: "card 4111111111111111" }, context);
     expect(verdict.kind).toBe("pass");
   });
 });

@@ -8,30 +8,32 @@ import {
   type MessagePart,
 } from "../core/index.js";
 
+import { asId } from "../core/ids.js";
+import type { ArtifactId, ArtifactVersionId, FileId, InteractionId, MessagePartId } from "../core/ids.js";
 // A valid sample for every part type, so the round-trip test covers all 13.
 const samples: Record<string, MessagePart> = {
-  text: { id: "p1", type: "text", schemaVersion: 1, createdAt: "t", text: "hi" } as MessagePart,
-  reasoning: { id: "p2", type: "reasoning", schemaVersion: 1, createdAt: "t", text: "think", redacted: true } as MessagePart,
-  "tool-call": { id: "p3", type: "tool-call", schemaVersion: 1, createdAt: "t", toolCallId: "tc1", toolName: "create_post", input: { a: 1 } } as MessagePart,
-  "tool-result": { id: "p4", type: "tool-result", schemaVersion: 1, createdAt: "t", toolCallId: "tc1", toolName: "create_post", output: { ok: true }, truncated: false } as MessagePart,
-  question: { id: "p5", type: "question", schemaVersion: 1, createdAt: "t", interactionId: "i1", questions: [{ key: "q", prompt: "why?", options: ["a", "b"] }] } as MessagePart,
-  approval: { id: "p6", type: "approval", schemaVersion: 1, createdAt: "t", interactionId: "i2", toolName: "publish_post", summary: "publish", riskCategory: "external-write" } as MessagePart,
-  file: { id: "p7", type: "file", schemaVersion: 1, createdAt: "t", fileId: "f1", filename: "a.pdf", mediaType: "application/pdf", byteSize: 10 } as MessagePart,
-  image: { id: "p8", type: "image", schemaVersion: 1, createdAt: "t", fileId: "f2", mediaType: "image/png", width: 100, height: 50 } as MessagePart,
+  text: { id: asId<MessagePartId>("p1"), type: "text", schemaVersion: 1, createdAt: "t", text: "hi" } as MessagePart,
+  reasoning: { id: asId<MessagePartId>("p2"), type: "reasoning", schemaVersion: 1, createdAt: "t", text: "think", redacted: true } as MessagePart,
+  "tool-call": { id: asId<MessagePartId>("p3"), type: "tool-call", schemaVersion: 1, createdAt: "t", toolCallId: "tc1", toolName: "create_post", input: { a: 1 } } as MessagePart,
+  "tool-result": { id: asId<MessagePartId>("p4"), type: "tool-result", schemaVersion: 1, createdAt: "t", toolCallId: "tc1", toolName: "create_post", output: { ok: true }, truncated: false } as MessagePart,
+  question: { id: asId<MessagePartId>("p5"), type: "question", schemaVersion: 1, createdAt: "t", interactionId: asId<InteractionId>("i1"), questions: [{ key: "q", prompt: "why?", options: ["a", "b"] }] } as MessagePart,
+  approval: { id: asId<MessagePartId>("p6"), type: "approval", schemaVersion: 1, createdAt: "t", interactionId: asId<InteractionId>("i2"), toolName: "publish_post", summary: "publish", riskCategory: "external-write" } as MessagePart,
+  file: { id: asId<MessagePartId>("p7"), type: "file", schemaVersion: 1, createdAt: "t", fileId: asId<FileId>("f1"), filename: "a.pdf", mediaType: "application/pdf", byteSize: 10 } as MessagePart,
+  image: { id: asId<MessagePartId>("p8"), type: "image", schemaVersion: 1, createdAt: "t", fileId: asId<FileId>("f2"), mediaType: "image/png", width: 100, height: 50 } as MessagePart,
   // #137. Self-contained on purpose: the excerpt and the retrieval time live on the part so an audit months
   // later works after the source is gone.
   citation: {
-    id: "p9", type: "citation", schemaVersion: 2, createdAt: "t",
+    id: asId<MessagePartId>("p9"), type: "citation", schemaVersion: 2, createdAt: "t",
     origin: { kind: "retrieval", sourceType: "file", sourceId: "s1", chunkId: "file:s1:2", chunkIndex: 2, locator: "Report > Findings" },
-    excerpt: "Revenue rose nine percent.", retrievedAt: "2026-08-23T10:00:00.000Z", supports: ["p1"],
+    excerpt: "Revenue rose nine percent.", retrievedAt: "2026-08-23T10:00:00.000Z", supports: [asId<MessagePartId>("p1")],
   } as MessagePart,
-  source: { id: "p10", type: "source", schemaVersion: 1, createdAt: "t", sourceId: "s1", title: "Doc", url: "https://x" } as MessagePart,
-  artifact: { id: "p11", type: "artifact", schemaVersion: 1, createdAt: "t", artifactId: "a1", versionId: "v1", title: "Report" } as MessagePart,
-  status: { id: "p12", type: "status", schemaVersion: 1, createdAt: "t", status: "running", detail: "step 1" } as MessagePart,
-  error: { id: "p13", type: "error", schemaVersion: 1, createdAt: "t", error: { code: "internal", message: "boom", retryable: false } } as MessagePart,
+  source: { id: asId<MessagePartId>("p10"), type: "source", schemaVersion: 1, createdAt: "t", sourceId: "s1", title: "Doc", url: "https://x" } as MessagePart,
+  artifact: { id: asId<MessagePartId>("p11"), type: "artifact", schemaVersion: 1, createdAt: "t", artifactId: asId<ArtifactId>("a1"), versionId: asId<ArtifactVersionId>("v1"), title: "Report" } as MessagePart,
+  status: { id: asId<MessagePartId>("p12"), type: "status", schemaVersion: 1, createdAt: "t", status: "running", detail: "step 1" } as MessagePart,
+  error: { id: asId<MessagePartId>("p13"), type: "error", schemaVersion: 1, createdAt: "t", error: { code: "internal", message: "boom", retryable: false } } as MessagePart,
   // A structured agent's validated answer — #243. The value is arbitrary JSON by design: the schema that
   // constrains it belongs to the agent, not to the part.
-  structured: { id: "p14", type: "structured", schemaVersion: 1, createdAt: "t", value: { sentiment: "mixed", score: 0.5, tags: ["a", "b"] } } as MessagePart,
+  structured: { id: asId<MessagePartId>("p14"), type: "structured", schemaVersion: 1, createdAt: "t", value: { sentiment: "mixed", score: 0.5, tags: ["a", "b"] } } as MessagePart,
 };
 
 describe("message part validation", () => {
@@ -54,9 +56,9 @@ describe("message part validation", () => {
    */
   const variants: readonly MessagePart[] = [
     {
-      id: "p9w", type: "citation", schemaVersion: 2, createdAt: "t",
+      id: asId<MessagePartId>("p9w"), type: "citation", schemaVersion: 2, createdAt: "t",
       origin: { kind: "web", url: "https://example.test/report", title: "Annual report" },
-      excerpt: "Revenue rose nine percent.", retrievedAt: "2026-08-23T10:00:00.000Z", supports: ["p1"],
+      excerpt: "Revenue rose nine percent.", retrievedAt: "2026-08-23T10:00:00.000Z", supports: [asId<MessagePartId>("p1")],
       charRange: { start: 10, end: 40 },
     } as MessagePart,
   ];
@@ -107,12 +109,12 @@ describe("a structured part must carry a value — #243", () => {
     // `z.unknown()` accepts `undefined`, so without the refinement a part claiming to be a validated answer
     // could round-trip carrying nothing: the empty version of the defect #243 fixed.
     expect(() =>
-      parseMessagePart({ id: "p14", type: "structured", schemaVersion: 1, createdAt: "t" }),
+      parseMessagePart({ id: asId<MessagePartId>("p14"), type: "structured", schemaVersion: 1, createdAt: "t" }),
     ).toThrow(/must carry a value/);
   });
 
   it("accepts null, which is a legal JSON value a schema may permit", () => {
-    const part = parseMessagePart({ id: "p14", type: "structured", schemaVersion: 1, createdAt: "t", value: null });
+    const part = parseMessagePart({ id: asId<MessagePartId>("p14"), type: "structured", schemaVersion: 1, createdAt: "t", value: null });
     expect((part as { value: unknown }).value).toBeNull();
   });
 
@@ -120,7 +122,7 @@ describe("a structured part must carry a value — #243", () => {
     // The value is the agent's, not this layer's. Anything that normalises it here would silently change what a
     // caller validated against their own schema.
     const value = { a: [1, { b: "two" }], c: { d: null }, e: false };
-    const part = { id: "p14", type: "structured" as const, schemaVersion: 1, createdAt: "t", value };
+    const part = { id: asId<MessagePartId>("p14"), type: "structured" as const, schemaVersion: 1, createdAt: "t", value };
     expect(parseMessagePart(serializeMessagePart(part as never))).toEqual(part);
   });
 });

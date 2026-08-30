@@ -73,8 +73,33 @@ export type RedisLockOptions = {
   readonly newToken?: () => string;
 };
 
-export type RedisLockStore = DistributedLockStore & {
-  acquire(key: string, ttlMs: number): Promise<LockHandle | null>;
+/**
+ * What this adapter's handle actually carries — declared, because it was not.
+ *
+ * `acquire` was typed as returning the port's `LockHandle`, which is `{ released }` and nothing else, while the
+ * implementation returned `token`, `key` and `renew` as well. Three real capabilities, invisible to every typed
+ * caller: `renew` in particular is the whole lease-extension mechanism and could not be called at all without
+ * casting. The port stays narrow on purpose — a Postgres advisory lock has no token or namespaced key in this
+ * sense — so the *adapter* is the right place to say what it adds.
+ */
+export type RedisLockHandle = LockHandle & {
+  /** Per acquisition, never per store — see `newToken`. Releasing checks it, so it is the ownership proof. */
+  readonly token: string;
+  /** The namespaced key, so a lock cannot collide with the queue's own keys in a shared Redis. */
+  readonly key: string;
+  /** Extends the lease. Returns false once released, and false if another holder has taken the key. */
+  renew(nextTtlMs?: number): Promise<boolean>;
+};
+
+/**
+ * `Omit` rather than an intersection, and the difference is not cosmetic.
+ *
+ * `DistributedLockStore & { acquire(...) }` makes `acquire` an *overload set*, and a call resolves against the
+ * first signature — the port's, returning the narrow `LockHandle`. So the widened return type was written,
+ * compiled, and had no effect on any caller. Omitting the member first replaces it instead of adding to it.
+ */
+export type RedisLockStore = Omit<DistributedLockStore, "acquire"> & {
+  acquire(key: string, ttlMs: number): Promise<RedisLockHandle | null>;
 };
 
 export const createRedisLockStore = (
@@ -87,7 +112,7 @@ export const createRedisLockStore = (
   const newToken = options.newToken ?? (() => randomUUID());
 
   return {
-    async acquire(key: string, ttlMs: number): Promise<LockHandle | null> {
+    async acquire(key: string, ttlMs: number): Promise<RedisLockHandle | null> {
       const namespaced = `${prefix}${key}`;
       const token = newToken();
       // NX is the mutual exclusion; PX is AC-3. Together they mean a dead holder's lock frees itself

@@ -4,6 +4,10 @@ import type { ContextInspection } from "../types/index.js";
 
 const inspection: ContextInspection = {
   totalTokens: 90,
+  // Added by #168. The fixture predated them, and nothing typechecked it — so whatever the panel derives from
+  // these was being derived from `undefined`.
+  modelContextTokens: 1_000,
+  remainingTokens: 910,
   budget: { basePolicyTokens: 100, userContextTokens: 100, toolTokens: 50, skillTokens: 50, knowledgeTokens: 50, historyTokens: 200 },
   sections: [
     { title: "policy", providerId: "sys", kind: "base-policy", provenance: "agent:1", estimatedTokens: 30, sensitivity: "internal", included: true },

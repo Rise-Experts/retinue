@@ -160,7 +160,7 @@ describe("a run keeps the runtime it started with", () => {
 
     const report = await c.rollback({ tenantId: T1, workflow: WORKFLOW, changedBy: OPERATOR });
     expect(report.mode).toBe("complete-in-flight");
-    expect(report.inFlight.sort()).toEqual(["r1", "r2"]);
+    expect([...report.inFlight].sort()).toEqual(["r1", "r2"]);
     expect(report.abandoned).toEqual([]);
     // The number an operator needs, and it is not the cache bound: nothing is fully settled until these
     // finish.

@@ -11,7 +11,7 @@
 
 import { describe, expect, it } from "vitest";
 import { asId } from "../core/ids.js";
-import type { MessageId, MessagePartId, PrincipalId, RequestId, TenantId } from "../core/ids.js";
+import type { ConversationId, MessageId, MessagePartId, PrincipalId, RequestId, TenantId } from "../core/ids.js";
 import type { ExecutionContext } from "../core/context.js";
 import type { CitationPart, MessagePart } from "../core/content-parts.js";
 import { MAX_CITATION_EXCERPT, parseMessagePart, serializeMessagePart } from "../core/validation.js";
@@ -398,7 +398,7 @@ describe("AC-4: provenance is durable and auditable months later", () => {
       tenantId: T1,
       message: {
         id: asId<MessageId>("msg-1"),
-        conversationId: asId("convo-1"),
+        conversationId: asId<ConversationId>("convo-1"),
         role: "assistant",
         parts: [
           { id: CLAIM, type: "text", schemaVersion: 1, createdAt: "t", text: "Revenue rose." } as MessagePart,
@@ -407,7 +407,7 @@ describe("AC-4: provenance is durable and auditable months later", () => {
         createdAt: "2026-08-23T10:00:00.000Z",
       },
     });
-    const stored = (await messages.listByConversation({ tenantId: T1, conversationId: asId("convo-1"), limit: 5 }))
+    const stored = (await messages.listByConversation({ tenantId: T1, conversationId: asId<ConversationId>("convo-1"), limit: 5 }))
       .items[0]?.parts;
     const reparsed = (stored ?? []).map((p) => parseMessagePart(serializeMessagePart(p)));
     expect(reparsed[1]).toEqual(parts[0]);

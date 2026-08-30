@@ -10,6 +10,7 @@
  *   carefully — the encoded subject, the multipart ordering, the bcc line.
  */
 import { readFileSync, readdirSync } from "node:fs";
+import type { ConversationId } from "@retinue/agentkit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { asId, type ExecutionContext } from "@retinue/agentkit";
 import { createCredential, type CredentialResolver } from "@retinue/agentkit/tools";
@@ -35,7 +36,7 @@ const context: ExecutionContext = {
   locale: "en",
   timezone: "UTC",
   requestId: asId("req1"),
-  conversationId: asId("c1"),
+  conversationId: asId<ConversationId>("c1"),
 };
 
 const basicResolver: CredentialResolver = {

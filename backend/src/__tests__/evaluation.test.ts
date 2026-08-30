@@ -46,7 +46,7 @@ const ctx = (): ExecutionContext => ({
 
 let partSeq = 0;
 const part = <T extends MessagePart>(p: Omit<T, "id" | "schemaVersion" | "createdAt">): MessagePart =>
-  ({ id: asId<MessagePartId>(`p${++partSeq}`), schemaVersion: 1, createdAt: "t", ...p }) as MessagePart;
+  ({ id: asId<MessagePartId>(`p${++partSeq}`), schemaVersion: 1, createdAt: "t", ...p }) as unknown as MessagePart;
 
 const text = (body: string): MessagePart => part({ type: "text", text: body } as never);
 const toolCall = (name: string): MessagePart =>

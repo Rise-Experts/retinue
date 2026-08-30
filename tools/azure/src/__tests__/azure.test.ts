@@ -14,6 +14,7 @@
  * - **AC-6** Azure's two meanings for 403 get different platform codes.
  */
 import { describe, expect, it, vi } from "vitest";
+import type { ConversationId } from "@retinue/agentkit";
 import {
   bearer,
   refreshable,
@@ -47,7 +48,7 @@ const context: ExecutionContext = {
   locale: "en",
   timezone: "UTC",
   requestId: asId("req1"),
-  conversationId: asId("c1"),
+  conversationId: asId<ConversationId>("c1"),
 };
 
 const SUB = "00000000-1111-2222-3333-444444444444";
@@ -81,7 +82,8 @@ const headerOf = (call: Call, name: string): string | undefined => {
   return found?.[1];
 };
 
-const failed = (outcome: Awaited<ReturnType<Awaited<ReturnType<typeof run>>["then"]>> | unknown) =>
+/** Narrows a tool outcome to its failure shape, which is what most of these assertions are about. */
+const failed = (outcome: unknown) =>
   outcome as { ok: false; error: { code: string; message: string; retryable: boolean; retryAfterMs?: number } };
 
 describe("the surface is read-first — AC-2", () => {
@@ -448,7 +450,7 @@ describe("the write tools do what their classification claims", () => {
     const fetchImpl = vi.fn(async () => new Response("", { status: 202 })) as unknown as typeof fetch;
     const outcome = (await run("azure_restart_resource", fetchImpl, { resourceId: VM })) as {
       ok: true;
-      output: { restarted: boolean; note: string };
+      data: { restarted: boolean; note: string };
     };
     expect(outcome.ok).toBe(true);
     const [url, init] = calls(fetchImpl)[0]!;

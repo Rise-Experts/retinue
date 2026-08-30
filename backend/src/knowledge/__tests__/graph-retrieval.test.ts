@@ -13,6 +13,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { asId } from "../../core/ids.js";
+import type { TenantScope } from "../../core/context.js";
 import type { DocumentBlock } from "../../documents/index.js";
 import { createMemoryGraphStore } from "../../adapters/memory/graph.js";
 import { createMemoryKnowledgeBackend } from "../../adapters/memory/knowledge.js";
@@ -27,7 +28,7 @@ import {
   type RawExtraction,
 } from "../index.js";
 
-const context = { tenantId: asId("t1") };
+const context: TenantScope = { tenantId: asId("t1") };
 const NOW = "2026-08-28T00:00:00.000Z";
 const OPEN = "workspace";
 

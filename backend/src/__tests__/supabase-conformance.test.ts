@@ -15,6 +15,8 @@
  */
 
 import { PGlite } from "@electric-sql/pglite";
+import type { ArtifactId, RunId, TenantId } from "../core/ids.js";
+import { DEFAULT_EXECUTION_LIMITS } from "../agents/define.js";
 import { describe, expect, it } from "vitest";
 import * as supabase from "../adapters/supabase/index.js";
 import * as postgres from "../adapters/postgres/index.js";
@@ -115,13 +117,13 @@ const agentManifest = (id: string, version: number): AgentManifest => ({
   name: `agent ${id} v${version}`,
   description: "conformance fixture",
   instructions: "be useful",
-  modelPolicy: { preferred: "claude-opus-5" },
+  modelPolicy: { role: "smart" },
   responseFormat: { kind: "text" },
   toolPolicy: { preloaded: [], categories: [], excluded: [] },
   skillPolicy: { assigned: [], allowTenantSkills: false },
   authorizationPolicyId: "default",
   contextProviderIds: [],
-  limits: { maxSteps: 4, maxToolCalls: 8, maxWallClockMs: 60_000 },
+  limits: { ...DEFAULT_EXECUTION_LIMITS, maxSteps: 4, maxToolCalls: 8, wallClockTimeoutMs: 60_000 },
 });
 
 const coverage = ADAPTER_COVERAGE.find((a) => a.adapter === "supabase");
@@ -162,7 +164,7 @@ const withConversationSeeder = <T>(make: (sql: SqlExecutor) => T, title: string)
   const sql = freshExecutor();
   return {
     store: make(sql),
-    async seedConversation({ tenantId, conversationId }: { tenantId: never; conversationId: never }) {
+    async seedConversation({ tenantId, conversationId }: { tenantId: TenantId; conversationId: ConversationId }) {
       await supabase.createSupabaseConversationStore(sql).create({ tenantId, id: conversationId, title });
     },
   };
@@ -227,7 +229,7 @@ const withRunSeeder = <T>(make: (sql: SqlExecutor) => T) => () => {
   const sql = freshExecutor();
   return {
     store: make(sql),
-    async seedRun({ tenantId, runId }: { tenantId: never; runId: never }) {
+    async seedRun({ tenantId, runId }: { tenantId: TenantId; runId: RunId }) {
       await supabase.createSupabaseRunStore(sql).create({
         tenantId,
         id: runId,
@@ -350,7 +352,7 @@ usageRollupStoreConformance(() => {
         tenantId,
         id: runId,
         conversationId,
-        agentId: asId("conf-rollup-agent"),
+        agentId: asId<AgentId>("conf-rollup-agent"),
         agentVersion: 1,
       });
     },
@@ -361,7 +363,7 @@ artifactExportStoreConformance(() => {
   const sql = freshExecutor();
   return {
     store: supabase.createSupabaseArtifactExportStore(sql),
-    async seedArtifact({ tenantId, artifactId, conversationId }) {
+    async seedArtifact({ tenantId, artifactId, conversationId }: { tenantId: TenantId; artifactId: ArtifactId; conversationId: ConversationId }) {
       await supabase.createSupabaseConversationStore(sql).create({ tenantId, id: conversationId, title: "exports" });
       await supabase.createSupabaseArtifactStore(sql).create({
         tenantId,

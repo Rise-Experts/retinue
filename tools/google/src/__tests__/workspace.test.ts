@@ -11,6 +11,7 @@
  * - **AC-7** the whole-Drive scope is never asked for. Scope creep in a constant is a one-word change.
  */
 import { describe, expect, it, vi } from "vitest";
+import type { ConversationId } from "@retinue/agentkit";
 import { bearer, type CredentialResolver } from "@retinue/agentkit/tools";
 import { asId, type ExecutionContext } from "@retinue/agentkit";
 
@@ -32,7 +33,7 @@ const context: ExecutionContext = {
   locale: "en",
   timezone: "UTC",
   requestId: asId("req1"),
-  conversationId: asId("c1"),
+  conversationId: asId<ConversationId>("c1"),
 };
 
 const jsonResponse = (body: unknown, status = 200): Response =>

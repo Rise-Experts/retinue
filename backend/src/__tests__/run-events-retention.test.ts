@@ -6,7 +6,7 @@ import { DEFAULT_RUN_EVENT_RETENTION_DAYS, PRUNABLE_RUN_STATUSES, cutoffFor, dra
 import { RUN_STATUSES } from "../runtime/index.js";
 import { MIGRATIONS, createPostgresConversationStore, createPostgresRunEventLog, createPostgresRunEventPruner, createPostgresRunStore, migrate, rollback, type SqlExecutor } from "../adapters/postgres/index.js";
 import { asId } from "../core/ids.js";
-import type { ConversationId, RunId, TenantId } from "../core/ids.js";
+import type { AgentId, ConversationId, RunId, TenantId } from "../core/ids.js";
 
 /**
  * Retention for `run_events` — #151.
@@ -19,7 +19,7 @@ import type { ConversationId, RunId, TenantId } from "../core/ids.js";
 const T1 = asId<TenantId>("ret-t1");
 const T2 = asId<TenantId>("ret-t2");
 const C1 = asId<ConversationId>("ret-c1");
-const AGENT = asId("ret-agent");
+const AGENT = asId<AgentId>("ret-agent");
 const PG_URL = process.env["RETINUE_TEST_PG_URL"];
 
 const pglite = (db: PGlite): SqlExecutor => ({

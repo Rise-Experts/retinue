@@ -12,6 +12,7 @@
 import { describe, expect, it } from "vitest";
 import { asId } from "../core/ids.js";
 import type { TenantId } from "../core/ids.js";
+import type { ExecutionContext } from "../core/context.js";
 import { freshPgliteSchema } from "../testing/pglite.js";
 import { createPostgresConnectionStore } from "../adapters/postgres/connections.js";
 import { createAesGcmCipher, createConnectionCredentialResolver, resealConnections } from "../connections/index.js";
@@ -21,7 +22,7 @@ const SECRET = "sk-live-DO-NOT-STORE-ME";
 const T1 = asId<TenantId>("at-rest-t1");
 const T2 = asId<TenantId>("at-rest-t2");
 
-const context = (tenantId: TenantId) => ({
+const context = (tenantId: TenantId): ExecutionContext => ({
   tenantId,
   principalId: asId("p1"),
   roleIds: [],

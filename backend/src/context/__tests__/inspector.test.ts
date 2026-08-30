@@ -6,7 +6,11 @@ const budget: ContextBudget = {
   basePolicyTokens: 100, userContextTokens: 100, toolTokens: 100, skillTokens: 100, knowledgeTokens: 100, historyTokens: 100,
 };
 const section = (over: Partial<ContextSection> & { title: string; estimatedTokens: number }): ContextSection => ({
-  providerId: "p", body: over.title, priority: 1, provenance: "test", sensitivity: "internal", cacheable: false, ...over,
+  providerId: "p", body: over.title, priority: 1, provenance: "test", sensitivity: "internal", cacheable: false,
+  // Required with no default: a section that does not say whether it may instruct is the case the field
+  // exists to prevent. These fixtures are the platform's own text.
+  origin: "platform",
+  ...over,
 });
 
 describe("inspectAssembledPrompt", () => {

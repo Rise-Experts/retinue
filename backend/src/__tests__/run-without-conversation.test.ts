@@ -70,7 +70,8 @@ describe("admission without a conversation", () => {
     // #170: `run.queued` was in the event union, mapped by the reducer, and emitted by nothing. An automation
     // admitted invisibly would be the same defect with a new shape.
     const { coordinator } = recordingCoordinator();
-    const append = vi.fn(async () => undefined);
+    // Parameters declared, so `mock.calls` carries the arguments the assertions below read.
+    const append = vi.fn(async (_input: unknown) => undefined);
     await startOrEnqueueRun(coordinator, {
       tenantId: T1,
       runId: run("r3"),

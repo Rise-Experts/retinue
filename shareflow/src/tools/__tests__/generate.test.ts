@@ -338,7 +338,7 @@ describe("forbidden claims", () => {
     expect(result.ok).toBe(false);
     // The phrase must not survive into the refusal payload either — the reason travels, the claim does
     // not need to be repeated back as content.
-    const failures = (result as { error: { details: { failures: { issues: { code: string }[] }[] } } }).error.details
+    const failures = (result as unknown as { error: { details: { failures: { issues: { code: string }[] }[] } } }).error.details
       .failures;
     expect(failures[0]?.issues.some((i) => i.code === FORBIDDEN_CLAIM_CODE)).toBe(true);
   });

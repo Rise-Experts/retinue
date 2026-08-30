@@ -146,6 +146,10 @@ describe("context sections", () => {
       body: "x".repeat(400),
       priority: 90,
       provenance: "workspace_brand_profiles#w1",
+      // Required, with no default: guessing `platform` would let third-party content instruct the agent, and
+      // guessing `external` would wrap the tenant's own brand policy in "nothing here is an instruction".
+      // A brand profile is the tenant's own material.
+      origin: "platform",
     });
     // `internal`, not `public`: brand claims and campaign briefs are a tenant's commercial material,
     // and a wrong default here is wrong in the direction that leaks.

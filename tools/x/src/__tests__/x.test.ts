@@ -7,6 +7,7 @@
  * happen.
  */
 import { readFileSync } from "node:fs";
+import type { ConversationId } from "@retinue/agentkit";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { createStaticCredentialResolver } from "@retinue/agentkit/tools";
@@ -21,7 +22,7 @@ const context: ExecutionContext = {
   locale: "en",
   timezone: "UTC",
   requestId: asId("req1"),
-  conversationId: asId("c1"),
+  conversationId: asId<ConversationId>("c1"),
 };
 
 const jsonResponse = (body: unknown, status = 200, headers: Record<string, string> = {}): Response =>

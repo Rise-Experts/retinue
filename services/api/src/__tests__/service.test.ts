@@ -40,21 +40,21 @@ describe("authentication has no default", () => {
     expect(authenticate(request({ [TENANT_HEADER]: "  ", [PRINCIPAL_HEADER]: "p1" }))).toBeNull();
   });
 
-  it("splits roles, and gives none where none were sent", () => {
+  it("splits roles, and gives none where none were sent", async () => {
     const authenticate = createDevAuthenticate({ RETINUE_DEV_AUTH: "1" });
     const headers = { [TENANT_HEADER]: "t1", [PRINCIPAL_HEADER]: "p1", [ROLES_HEADER]: "editor, viewer ,," };
-    expect(authenticate(new Request("http://localhost/", { headers }))?.roleIds).toEqual(["editor", "viewer"]);
+    expect((await authenticate(new Request("http://localhost/", { headers })))?.roleIds).toEqual(["editor", "viewer"]);
     expect(
-      authenticate(new Request("http://localhost/", { headers: { [TENANT_HEADER]: "t", [PRINCIPAL_HEADER]: "p" } }))
+      (await authenticate(new Request("http://localhost/", { headers: { [TENANT_HEADER]: "t", [PRINCIPAL_HEADER]: "p" } })))
         ?.roleIds,
     ).toEqual([]);
   });
 
-  it("gives each request its own id", () => {
+  it("gives each request its own id", async () => {
     const authenticate = createDevAuthenticate({ RETINUE_DEV_AUTH: "1" });
     const headers = { [TENANT_HEADER]: "t1", [PRINCIPAL_HEADER]: "p1" };
-    const first = authenticate(new Request("http://localhost/", { headers }))?.requestId;
-    const second = authenticate(new Request("http://localhost/", { headers }))?.requestId;
+    const first = (await authenticate(new Request("http://localhost/", { headers })))?.requestId;
+    const second = (await authenticate(new Request("http://localhost/", { headers })))?.requestId;
     // A repeating request id makes two requests indistinguishable in a trace — and a module-level counter is
     // how #166's duplicate primary key happened.
     expect(first).not.toBe(second);

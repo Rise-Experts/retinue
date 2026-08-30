@@ -1,6 +1,7 @@
 import { PGlite } from "@electric-sql/pglite";
+import type { RealtimeBroadcaster } from "../adapters/supabase/realtime.js";
 import { describe, expect, it } from "vitest";
-import { type RealtimeBroadcaster, type RunEvent } from "../index.js";
+import { type RunEvent } from "../index.js";
 import { applyRls, setTenantContext } from "../entries/adapters-postgres.js";
 import { createSupabaseConversationStore, createSupabaseRealtimePublisher, migrate, type SqlExecutor } from "../entries/adapters-postgres.js";
 import { conversationStoreConformance } from "../testing/conformance.js";

@@ -317,7 +317,7 @@ describe("AC-2: hybrid measurably beats either signal alone", () => {
     });
     expect(outcome.found && outcome.hits[0]?.reference.sourceId).toBe("wanted");
     // Both signals found it, which is exactly why it wins.
-    expect(outcome.found && outcome.hits[0]?.signals.sort()).toEqual(["keyword", "semantic"]);
+    expect(outcome.found && [...(outcome.hits[0]?.signals ?? [])].sort()).toEqual(["keyword", "semantic"]);
   });
 
   it("prefers a document both signals agree on", async () => {

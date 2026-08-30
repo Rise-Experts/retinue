@@ -6,6 +6,7 @@
  * read from the environment. Neither is visible in a diff that looks otherwise correct.
  */
 import { describe, expect, it } from "vitest";
+import type { ConversationId } from "../../core/ids.js";
 import type { ExecutionContext } from "../../core/context.js";
 import { asId } from "../../core/ids.js";
 import { confirms, destroys, defineTool } from "../define.js";
@@ -18,7 +19,7 @@ const context: ExecutionContext = {
   locale: "en",
   timezone: "UTC",
   requestId: asId("req1"),
-  conversationId: asId("c1"),
+  conversationId: asId<ConversationId>("c1"),
 };
 
 describe("confirms / destroys — AC-9", () => {

@@ -9,7 +9,7 @@ const tool = (name: string, category: string): ToolDescriptor =>
   ({
     name, label: name, description: "", category,
     inputSchema: {}, outputSchema: {}, effect: "external-write",
-    approvalPolicy: "required", requiresIdempotencyKey: true,
+    approvalPolicy: "always", requiresIdempotencyKey: true,
   }) as ToolDescriptor;
 
 const audit = vi.fn<(e: AuditEvent) => void>();

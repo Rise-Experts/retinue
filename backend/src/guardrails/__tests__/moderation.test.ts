@@ -8,7 +8,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ExecutionContext } from "../../core/context.js";
 import { asId } from "../../core/ids.js";
-import type { RunId } from "../../core/ids.js";
+import type { ConversationId, RunId } from "../../core/ids.js";
 import { applyInputGuardrails, applyOutputGuardrails } from "../index.js";
 import { createModerationGuardrail } from "../moderation.js";
 
@@ -19,7 +19,7 @@ const context: ExecutionContext = {
   locale: "en",
   timezone: "UTC",
   requestId: asId("req1"),
-  conversationId: asId("c1"),
+  conversationId: asId<ConversationId>("c1"),
   runId: asId<RunId>("r1"),
 };
 

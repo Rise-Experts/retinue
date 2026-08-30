@@ -1,0 +1,21 @@
+{
+  "//": "Typechecks the test files, which the build deliberately excludes \u2014 #276. Extends the package's own config so lib, jsx and strictness are identical to the code under test; a separate set of options here would be checking the tests against rules the sources do not have.",
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "composite": false,
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false,
+    "allowJs": true,
+    "checkJs": false,
+    "rootDir": "../.."
+  },
+  "include": [
+    "src/**/*"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist"
+  ]
+}

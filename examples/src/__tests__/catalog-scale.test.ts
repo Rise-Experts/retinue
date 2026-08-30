@@ -7,7 +7,8 @@
  * be reachable from nothing, which has happened seven times in this repository.
  */
 import { afterEach, describe, expect, it } from "vitest";
-import { asId, type ExecutionContext } from "@retinue/agentkit";
+import type { ConversationId } from "@retinue/agentkit";
+import { asId, type ExecutionContext, type RoleId } from "@retinue/agentkit";
 import {
   exampleCapabilities,
   exampleCatalogBudget,
@@ -24,11 +25,11 @@ import { createMemoryBackend } from "../memory-app.js";
 const context: ExecutionContext = {
   tenantId: asId("t-scale"),
   principalId: asId("p-scale"),
-  roleIds: ["editor"],
+  roleIds: [asId<RoleId>("editor")],
   locale: "en",
   timezone: "UTC",
   requestId: asId("req-scale"),
-  conversationId: asId("c-scale"),
+  conversationId: asId<ConversationId>("c-scale"),
 };
 
 const backend = () => asExampleBackend(createMemoryBackend());
@@ -75,7 +76,7 @@ describe("find_tools is wired into the app", () => {
   it("cannot find a tool the role may not use", async () => {
     // `viewer` has no `share_note`. A search that surfaced it would tell an unprivileged caller exactly what the
     // deployment can do — worse than not hiding it, because it looks hidden.
-    const asViewer = { ...context, roleIds: ["viewer"] } as ExecutionContext;
+    const asViewer = { ...context, roleIds: [asId<RoleId>("viewer")] } as ExecutionContext;
     const result = await exampleRegistry(backend()).execute(asViewer, {
       name: "find_tools",
       input: { query: "share a note with someone outside" },

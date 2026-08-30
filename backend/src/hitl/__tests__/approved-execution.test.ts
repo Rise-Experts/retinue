@@ -17,7 +17,7 @@ import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import type { ExecutionContext } from "../../core/context.js";
 import { asId } from "../../core/ids.js";
-import type { InteractionId, PrincipalId, RunId, TenantId } from "../../core/ids.js";
+import type { ConversationId, InteractionId, PrincipalId, RunId, TenantId } from "../../core/ids.js";
 import {
   createMemoryApprovalGrantStore,
   createMemoryIdempotencyStore,
@@ -49,7 +49,7 @@ const ctx = (): ExecutionContext =>
   ({
     tenantId: T,
     principalId: asId<PrincipalId>("p1"),
-    conversationId: asId("c1"),
+    conversationId: asId<ConversationId>("c1"),
     roleIds: [],
     locale: "en",
     timezone: "UTC",

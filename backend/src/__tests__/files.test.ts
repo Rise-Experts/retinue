@@ -15,6 +15,7 @@ import { createMemoryFileContentStore, createMemoryFileMetadataStore } from "../
 import type { AuthorizationPolicy } from "../authorization/index.js";
 import type { FileContentStore, FileMetadataStore } from "../persistence/index.js";
 import {
+
   DEFAULT_UPLOAD_LIMITS,
   MAX_SIGNED_URL_SECONDS,
   createFileService,
@@ -22,6 +23,19 @@ import {
   streamWithCap,
   validateUpload,
 } from "../files/index.js";
+
+
+/**
+ * The value a `.catch((e) => e)` produced, asserted to actually be an error.
+ *
+ * Without this, `expect(a.message).toBe(b.message)` passes **vacuously** when neither call rejected: both
+ * `.message` reads are `undefined`, and `undefined === undefined`. The test would then be asserting that two
+ * successful calls are indistinguishable, which is the opposite of what it says.
+ */
+const thrown = (value: unknown): Error => {
+  if (!(value instanceof Error)) throw new Error(`expected the call to reject, and it returned ${JSON.stringify(value)}`);
+  return value;
+};
 
 const T1 = asId<TenantId>("tenant-1");
 const T2 = asId<TenantId>("tenant-2");
@@ -376,7 +390,7 @@ describe("createFileService reads", () => {
 
     const forbidden = await restricted.get(ctx(), file.id).catch((e: Error) => e);
     const absent = await restricted.get(ctx(), asId<FileId>("no-such-id")).catch((e: Error) => e);
-    expect(forbidden.message).toBe(absent.message);
+    expect(thrown(forbidden).message).toBe(thrown(absent).message);
     expect(forbidden).toMatchObject({ code: "not_found" });
     expect(absent).toMatchObject({ code: "not_found" });
   });

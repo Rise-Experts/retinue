@@ -216,14 +216,14 @@ describe("evaluating a workflow", () => {
     // A judgement worth naming: blocking forever on something nobody can measure is how a gate gets quietly
     // removed. It is surfaced separately so proceeding without it is a visible decision.
     const evaluation = evaluateParity({});
-    expect(evaluation.unmeasurable.sort()).toEqual(["analytics", "engagement-read"]);
+    expect([...evaluation.unmeasurable].sort()).toEqual(["analytics", "engagement-read"]);
     expect(evaluation.blocking).not.toContain("analytics");
   });
 
   it("blocks on every unpassed measurable workflow today", () => {
     const evaluation = evaluateParity({});
     expect(evaluation.allMeasurablePassed).toBe(false);
-    expect(evaluation.blocking.sort()).toEqual([
+    expect([...evaluation.blocking].sort()).toEqual([
       "campaign-planning",
       "create-post",
       "engagement-reply",

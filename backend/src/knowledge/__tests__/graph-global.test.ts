@@ -9,6 +9,7 @@
 import { describe, expect, it } from "vitest";
 
 import { asId } from "../../core/ids.js";
+import type { TenantScope } from "../../core/context.js";
 import { createMemoryGraphStore } from "../../adapters/memory/graph.js";
 import { createMemoryKnowledgeBackend } from "../../adapters/memory/knowledge.js";
 import type { GraphStore, KnowledgeStore, StoredCommunity } from "../../persistence/index.js";
@@ -19,7 +20,20 @@ import {
   type CommunityMapper,
 } from "../index.js";
 
-const context = { tenantId: asId("t1") };
+
+/**
+ * The value a `.catch((e) => e)` produced, asserted to actually be an error.
+ *
+ * Without it, `expect(error.message).toContain(...)` reads `undefined` when the call *succeeded* — and
+ * `expect(undefined).toContain(...)` fails, so this particular shape is not vacuous. It is still worth
+ * narrowing: the failure then names what came back instead of reporting a missing property.
+ */
+const thrown = (value: unknown): Error => {
+  if (!(value instanceof Error)) throw new Error(`expected the call to reject, and it returned ${JSON.stringify(value)}`);
+  return value;
+};
+
+const context: TenantScope = { tenantId: asId("t1") };
 const AT = "2026-08-28T00:00:00.000Z";
 const OPEN = "workspace";
 
@@ -312,9 +326,9 @@ describe("the ceiling refuses before spending — AC-3, AC-4", () => {
     const error = await search
       .search(context, { query: "retry budget", authSubjects: [OPEN], limit: 10 })
       .catch((e: unknown) => e as Error);
-    expect(error.message).toContain("ceiling is 1 model calls");
-    expect(error.message).toContain("coarser level");
-    expect(error.message).toContain("Nothing was spent");
+    expect(thrown(error).message).toContain("ceiling is 1 model calls");
+    expect(thrown(error).message).toContain("coarser level");
+    expect(thrown(error).message).toContain("Nothing was spent");
   });
 
   it("refuses rather than truncating when the token ceiling is passed mid-flight", async () => {

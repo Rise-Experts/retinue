@@ -110,7 +110,9 @@ describe("attack 1: a state not bound to the session", () => {
   it("does not contact the provider when the state is bad", async () => {
     // Every check that can be made without the provider is made first, so probing the callback never causes an
     // outbound request — and never spends a real code.
-    const fetchImpl = vi.fn(async () => tokenResponse());
+    // Parameters declared, so `mock.calls` is a tuple of the arguments rather than of nothing — the
+    // assertions below read the request init out of it.
+    const fetchImpl = vi.fn(async (_url: string | URL, _init?: RequestInit) => tokenResponse());
     const oauth = flow({ fetchImpl: fetchImpl as unknown as typeof fetch });
     await oauth.callback({ state: "nope", code: "c", context: context() }).catch(() => undefined);
     expect(fetchImpl).not.toHaveBeenCalled();
@@ -146,7 +148,9 @@ describe("attack 2: an unallowlisted redirect_uri", () => {
 
   it("exchanges with the recorded redirect, never one from the request", async () => {
     // Taking it from the request would let an attacker choose both halves of the pair the provider checks.
-    const fetchImpl = vi.fn(async () => tokenResponse());
+    // Parameters declared, so `mock.calls` is a tuple of the arguments rather than of nothing — the
+    // assertions below read the request init out of it.
+    const fetchImpl = vi.fn(async (_url: string | URL, _init?: RequestInit) => tokenResponse());
     const oauth = flow({ fetchImpl: fetchImpl as unknown as typeof fetch });
     const { state } = await oauth.start({ context: context(), redirectUri: REDIRECT });
     await oauth.callback({ state, code: "c", context: context() });
@@ -157,7 +161,9 @@ describe("attack 2: an unallowlisted redirect_uri", () => {
 
 describe("attack 3: no PKCE", () => {
   it("sends an S256 challenge and keeps the verifier server-side", async () => {
-    const fetchImpl = vi.fn(async () => tokenResponse());
+    // Parameters declared, so `mock.calls` is a tuple of the arguments rather than of nothing — the
+    // assertions below read the request init out of it.
+    const fetchImpl = vi.fn(async (_url: string | URL, _init?: RequestInit) => tokenResponse());
     const oauth = flow({ fetchImpl: fetchImpl as unknown as typeof fetch });
     const { url } = await oauth.start({ context: context(), redirectUri: REDIRECT });
     const params = new URL(url).searchParams;
@@ -170,7 +176,9 @@ describe("attack 3: no PKCE", () => {
   });
 
   it("sends the verifier on the exchange, and it matches the challenge", async () => {
-    const fetchImpl = vi.fn(async () => tokenResponse());
+    // Parameters declared, so `mock.calls` is a tuple of the arguments rather than of nothing — the
+    // assertions below read the request init out of it.
+    const fetchImpl = vi.fn(async (_url: string | URL, _init?: RequestInit) => tokenResponse());
     const oauth = flow({ fetchImpl: fetchImpl as unknown as typeof fetch });
     const { url, state } = await oauth.start({ context: context(), redirectUri: REDIRECT });
     const challenge = new URL(url).searchParams.get("code_challenge");
@@ -281,7 +289,9 @@ describe("the token exchange", () => {
   });
 
   it("refuses an empty code without contacting the provider", async () => {
-    const fetchImpl = vi.fn(async () => tokenResponse());
+    // Parameters declared, so `mock.calls` is a tuple of the arguments rather than of nothing — the
+    // assertions below read the request init out of it.
+    const fetchImpl = vi.fn(async (_url: string | URL, _init?: RequestInit) => tokenResponse());
     const oauth = flow({ fetchImpl: fetchImpl as unknown as typeof fetch });
     const { state } = await oauth.start({ context: context(), redirectUri: REDIRECT });
     await expect(oauth.callback({ state, code: "", context: context() })).rejects.toThrow(/no authorization code/);

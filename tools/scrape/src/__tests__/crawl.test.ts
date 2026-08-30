@@ -7,6 +7,7 @@
  * assertion is about what came back.
  */
 import { describe, expect, it, vi } from "vitest";
+import type { ConversationId } from "@retinue/agentkit";
 import { asId, type ExecutionContext } from "@retinue/agentkit";
 
 import {
@@ -35,7 +36,7 @@ const context: ExecutionContext = {
   locale: "en",
   timezone: "UTC",
   requestId: asId("req1"),
-  conversationId: asId("c1"),
+  conversationId: asId<ConversationId>("c1"),
 };
 
 /** A synthetic site: a map of URL to links, every page 100 bytes of markdown unless stated. */

@@ -10,7 +10,7 @@
 
 import { describe, expect, it, vi } from "vitest";
 import { asId } from "../core/ids.js";
-import type { RunId, TenantId } from "../core/ids.js";
+import type { AgentId, ConversationId, RunId, TenantId } from "../core/ids.js";
 import type { JobDispatcher, Run } from "../runtime/index.js";
 import type { DurableWorker, ProcessResult } from "../runtime/worker.js";
 import {
@@ -26,8 +26,8 @@ const run = (id: string, over: Partial<Run> = {}): Run =>
   ({
     id: asId<RunId>(id),
     tenantId: T1,
-    conversationId: asId("wrk-c1"),
-    agentId: asId("wrk-a1"),
+    conversationId: asId<ConversationId>("wrk-c1"),
+    agentId: asId<AgentId>("wrk-a1"),
     agentVersion: 1,
     status: "running",
     createdAt: "2020-01-01T00:00:00.000Z",

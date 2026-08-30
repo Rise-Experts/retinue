@@ -13,6 +13,7 @@
  * through decision to a single publish, with no grant involved anywhere.
  */
 import { beforeEach, describe, expect, it } from "vitest";
+import type { ConversationId } from "@retinue/agentkit";
 import { asId, type ApprovalGate, type AuthorizationPolicy, type ExecutionContext, type IdempotencyStore, type PrincipalId, type RunId, type TenantId, type Tool, type ToolResult } from "@retinue/agentkit";
 import { createApprovalGate, createApprovalService, createRunApprovals } from "@retinue/agentkit/hitl";
 import { createMemoryApprovalGrantStore, createMemoryIdempotencyStore, createMemoryInteractionStore } from "@retinue/agentkit/persistence";
@@ -45,7 +46,7 @@ const T1 = asId<TenantId>("t1");
 const CONTEXT = {
   tenantId: T1,
   principalId: asId<PrincipalId>("p1"),
-  conversationId: asId("c1"),
+  conversationId: asId<ConversationId>("c1"),
 } as unknown as ExecutionContext;
 const D1 = asId<PostDraftId>("d1");
 
@@ -249,7 +250,7 @@ describe("the per-destination idempotency key", () => {
   it("sends one key per destination, not one for the call", async () => {
     const tool = build(publishPostNowTool, {
       approvals: await grantedGate("publishing"),
-      publishing: { schedule: () => [target(), target({ id: asId("t-a2"), accountId: asId("a2") })] },
+      publishing: { schedule: () => [target(), target({ id: asId<PublishTargetId>("t-a2"), accountId: asId<SocialAccountId>("a2") })] },
     });
     await run(tool, { postDraftId: "d1", accountIds: ["a1", "a2"] });
     const args = recorder.calls.find((c) => c.method === "schedule")?.args as {
@@ -333,12 +334,12 @@ describe("validation runs before the approval gate", () => {
       publishing: {
         validate: () => ({
           ok: false,
-          issues: [issue({ code: "media-too-large", repairable: false, accountId: asId("a1") })],
+          issues: [issue({ code: "media-too-large", repairable: false, accountId: asId<SocialAccountId>("a1") })],
         }),
       },
     });
     const result = await run(tool, { postDraftId: "d1", accountIds: ["a1"] });
-    const issues = (result as { error: { details: { issues: Record<string, unknown>[] } } }).error.details
+    const issues = (result as unknown as { error: { details: { issues: Record<string, unknown>[] } } }).error.details
       .issues;
     expect(issues[0]).toMatchObject({ code: "media-too-large", repairable: false, accountId: "a1" });
   });
@@ -385,8 +386,8 @@ describe("the outcome is derived, and unconfirmed outranks published", () => {
         schedule: () => [
           target(),
           target({
-            id: asId("t-a2"),
-            accountId: asId("a2"),
+            id: asId<PublishTargetId>("t-a2"),
+            accountId: asId<SocialAccountId>("a2"),
             state: "failed",
             failure: { code: "rate_limited", message: "too many posts today" },
           }),
@@ -408,7 +409,7 @@ describe("the outcome is derived, and unconfirmed outranks published", () => {
     // re-read the status, not to retry and risk a second post.
     const tool = build(getPublishStatusTool, {
       publishing: {
-        getStatus: () => [target(), target({ id: asId("t-a2"), accountId: asId("a2"), state: "awaiting-platform" })],
+        getStatus: () => [target(), target({ id: asId<PublishTargetId>("t-a2"), accountId: asId<SocialAccountId>("a2"), state: "awaiting-platform" })],
       },
     });
     const result = await run(tool, { postDraftId: "d1" });
@@ -561,7 +562,7 @@ describe("REQ-021 — an approved publish runs once, on a one-time decision", ()
   const RUN_CONTEXT = {
     tenantId: T1,
     principalId: asId<PrincipalId>("p1"),
-    conversationId: asId("c1"),
+    conversationId: asId<ConversationId>("c1"),
     roleIds: [],
     runId: RUN,
   } as unknown as ExecutionContext;

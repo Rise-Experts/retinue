@@ -6,7 +6,8 @@
  * will be held to.
  */
 import { describe, expect, it, vi } from "vitest";
-import { createStaticCredentialResolver } from "@retinue/agentkit/tools";
+import type { ConversationId } from "@retinue/agentkit";
+import { bearer, createStaticCredentialResolver } from "@retinue/agentkit/tools";
 import type { ExecutionContext } from "@retinue/agentkit";
 import { asId } from "@retinue/agentkit";
 import { createGitHubToolkit, GITHUB_TOOL_NAMES } from "../index.js";
@@ -18,7 +19,7 @@ const context: ExecutionContext = {
   locale: "en",
   timezone: "UTC",
   requestId: asId("req1"),
-  conversationId: asId("c1"),
+  conversationId: asId<ConversationId>("c1"),
 };
 
 const jsonResponse = (body: unknown, status = 200): Response =>
@@ -67,7 +68,7 @@ describe("credentials are resolved per call, never held — AC-5", () => {
   });
 
   it("resolves on every call, so a rotated token takes effect without a restart", async () => {
-    const resolve = vi.fn(async () => "ghp_rotating");
+    const resolve = vi.fn(async () => bearer("ghp_rotating"));
     const fetchImpl = vi.fn(async () => jsonResponse({ total_count: 0, items: [] }));
     const provider = createGitHubToolkit({ credentialRef: "github", resolver: { resolve }, fetchImpl: fetchImpl as unknown as typeof fetch });
     const tools = await provider.listTools(context);

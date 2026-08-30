@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { ROLE_TOOL_NAMES, exampleRegistry } from "../index.js";
 import type { ExecutionContext } from "@retinue/agentkit";
+import type { SqlExecutor } from "@retinue/agentkit/adapters/postgres";
 import { DevAuthNotEnabled, createDevAuthenticate, PRINCIPAL_HEADER, ROLES_HEADER, TENANT_HEADER } from "../auth.js";
 import { ModelNotConfigured, resolveExampleModel, definitionFor, DEFAULT_MODEL_ID } from "../model.js";
 import { MAX_MEMORY_ENTRIES, NoteNotFound, createExampleStore, createExampleTools } from "../tools.js";

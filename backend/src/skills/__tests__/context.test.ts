@@ -137,7 +137,7 @@ describe("load_skill through the registry", () => {
   const allowAll = {
     async can() { return { allow: true as const }; },
     async filterTools(_c: ExecutionContext, t: readonly ToolDescriptor[]) { return t; },
-    async scope() { return {}; },
+    async scope(context: ExecutionContext) { return { tenantId: String(context.tenantId), roleIds: [] }; },
   };
   const withSkills = (names: readonly string[]) =>
     createToolRegistry({
@@ -211,7 +211,7 @@ describe("the registry's load_skill is a default, not a claim on the name", () =
   const allowAll = {
     async can() { return { allow: true as const }; },
     async filterTools(_c: ExecutionContext, t: readonly ToolDescriptor[]) { return t; },
-    async scope() { return {}; },
+    async scope(context: ExecutionContext) { return { tenantId: String(context.tenantId), roleIds: [] }; },
   };
 
   it("falls through to a provider's own load_skill when no resolver is wired", async () => {

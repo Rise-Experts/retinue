@@ -16,6 +16,7 @@
  */
 
 import { PGlite } from "@electric-sql/pglite";
+import { DEFAULT_EXECUTION_LIMITS } from "../agents/define.js";
 import { afterAll, describe, expect, it } from "vitest";
 import { createPostgresConnectionStore,
   createPostgresGraphStore,
@@ -63,7 +64,7 @@ import { createPostgresConnectionStore,
 import { asId } from "../core/ids.js";
 import { connectionStoreConformance } from "../testing/conformance/connections.js";
 import { graphStoreConformance } from "../testing/conformance/graph.js";
-import type { AgentId, ConversationId, MessageId, MessagePartId, SkillId } from "../core/ids.js";
+import type { AgentId, ArtifactId, ConversationId, MessageId, MessagePartId, SkillId, TenantId } from "../core/ids.js";
 import type { AgentManifest } from "../agents/index.js";
 import { ADAPTER_COVERAGE } from "../testing/conformance/index.js";
 import { freshPgliteSchema } from "../testing/pglite.js";
@@ -239,13 +240,13 @@ const agentManifest = (id: string, version: number): AgentManifest => ({
   name: `agent ${id} v${version}`,
   description: "conformance fixture",
   instructions: "be useful",
-  modelPolicy: { preferred: "claude-opus-5" },
+  modelPolicy: { role: "smart" },
   responseFormat: { kind: "text" },
   toolPolicy: { preloaded: [], categories: [], excluded: [] },
   skillPolicy: { assigned: [], allowTenantSkills: false },
   authorizationPolicyId: "default",
   contextProviderIds: [],
-  limits: { maxSteps: 4, maxToolCalls: 8, maxWallClockMs: 60_000 },
+  limits: { ...DEFAULT_EXECUTION_LIMITS, maxSteps: 4, maxToolCalls: 8, wallClockTimeoutMs: 60_000 },
 });
 
 const coverage = ADAPTER_COVERAGE.find((a) => a.adapter === "postgres");
@@ -543,7 +544,7 @@ usageRollupStoreConformance(() => {
         tenantId,
         id: runId,
         conversationId,
-        agentId: asId("conf-rollup-agent"),
+        agentId: asId<AgentId>("conf-rollup-agent"),
         agentVersion: 1,
       });
     },
@@ -555,7 +556,7 @@ artifactExportStoreConformance(() => {
   return {
     store: createPostgresArtifactExportStore(sql),
     // Two parents deep: an export belongs to an artifact, which belongs to a conversation.
-    async seedArtifact({ tenantId, artifactId, conversationId }) {
+    async seedArtifact({ tenantId, artifactId, conversationId }: { tenantId: TenantId; artifactId: ArtifactId; conversationId: ConversationId }) {
       await createPostgresConversationStore(sql).create({ tenantId, id: conversationId, title: "exports" });
       await createPostgresArtifactStore(sql).create({
         tenantId,

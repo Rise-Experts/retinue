@@ -27,6 +27,19 @@ import { runJobId } from "../adapters/bullmq/dispatcher.js";
 import { EXPORT_JOB_NAME, createBullMqExportDispatcher, exportJobId } from "../adapters/bullmq/export.js";
 import { createExportWorker } from "../worker/export.js";
 
+
+/**
+ * The value a `.catch((e) => e)` produced, asserted to actually be an error.
+ *
+ * Without it, `expect(error.message).toContain(...)` reads `undefined` when the call *succeeded* — and
+ * `expect(undefined).toContain(...)` fails, so this particular shape is not vacuous. It is still worth
+ * narrowing: the failure then names what came back instead of reporting a missing property.
+ */
+const thrown = (value: unknown): Error => {
+  if (!(value instanceof Error)) throw new Error(`expected the call to reject, and it returned ${JSON.stringify(value)}`);
+  return value;
+};
+
 const T1 = asId<TenantId>("tenant-1");
 const F1 = asId<FileId>("file-1");
 
@@ -198,7 +211,7 @@ describe("the BullMQ extraction dispatcher", () => {
       .enqueueExtraction({ tenantId: T1, fileId: F1 })
       .catch((e: AgentPlatformError) => e);
     expect(error).toMatchObject({ code: "provider_unavailable" });
-    expect(error.message).toMatch(/job queue is unreachable/);
+    expect(thrown(error).message).toMatch(/job queue is unreachable/);
   });
 });
 

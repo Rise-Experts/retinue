@@ -1,8 +1,9 @@
 import { turnText } from "../../models/streaming.js";
+import type { ModelTurnRequest, TurnMessage } from "../../models/streaming.js";
 import { describe, expect, it, vi } from "vitest";
 import type { ExecutionContext } from "../../core/context.js";
 import { asId } from "../../core/ids.js";
-import type { InteractionId, MessagePartId, RunId } from "../../core/ids.js";
+import type { AgentId, ConversationId, InteractionId, MessagePartId, RunId } from "../../core/ids.js";
 import { AgentPlatformError } from "../../core/errors.js";
 import { questionPending } from "../../hitl/service.js";
 import type { PendingQuestion } from "../../hitl/index.js";
@@ -16,8 +17,8 @@ const RUN = asId<RunId>("r1");
 const run: Run = {
   id: RUN,
   tenantId: asId("t1"),
-  conversationId: asId("c1"),
-  agentId: asId("a1"),
+  conversationId: asId<ConversationId>("c1"),
+  agentId: asId<AgentId>("a1"),
   agentVersion: 1,
   status: "running",
   createdAt: "t",
@@ -29,7 +30,7 @@ const context: ExecutionContext = {
   locale: "en",
   timezone: "UTC",
   requestId: asId("req1"),
-  conversationId: asId("c1"),
+  conversationId: asId<ConversationId>("c1"),
   runId: RUN,
 };
 const manifest = defineAgent({ id: "a1", name: "A", instructions: "be helpful", modelPolicy: { role: "smart" } });
@@ -328,8 +329,8 @@ describe("default engine — resuming after a question is answered (#163)", () =
 
   /** Captures the messages the engine actually sends, which is where the answer has to appear. */
   const capture = async (over: Record<string, unknown>) => {
-    let sent: readonly { role: string; text: string }[] = [];
-    async function* chunks(req: { messages: readonly { role: string; text: string }[] }) {
+    let sent: readonly TurnMessage[] = [];
+    async function* chunks(req: { messages: readonly TurnMessage[] }) {
       sent = req.messages;
       yield { type: "text-delta", id: "t", text: "ok" } as NeutralStreamChunk;
     }
@@ -456,7 +457,10 @@ describe("default engine — citations from a tool (#165)", () => {
       }),
     );
     const events = await collect(engine);
-    const lastText = events.findLastIndex((e) => (e as { part?: { type?: string } }).part?.type === "text");
+    // Not `findLastIndex`: that is ES2023 and this package targets ES2022, so relying on it in a test would
+    // let the tests assume a runtime the sources may not.
+    const isText = (e: unknown) => (e as { part?: { type?: string } }).part?.type === "text";
+    const lastText = events.reduce((last, event, index) => (isText(event) ? index : last), -1);
     const firstCite = events.findIndex((e) => (e as { part?: { type?: string } }).part?.type === "citation");
     expect(firstCite).toBeGreaterThan(lastText);
   });

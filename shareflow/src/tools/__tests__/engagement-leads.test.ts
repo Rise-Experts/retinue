@@ -6,6 +6,8 @@
  * in**, so an assistant cannot tell the user it captured someone who opted out.
  */
 import { beforeEach, describe, expect, it } from "vitest";
+import type { PostDraftId } from "../../services/ids.js";
+import type { ConversationId } from "@retinue/agentkit";
 import { asId, type ApprovalGate, type AuthorizationPolicy, type ExecutionContext, type IdempotencyStore, type PrincipalId, type TenantId, type Tool, type ToolResult } from "@retinue/agentkit";
 import { createApprovalGate } from "@retinue/agentkit/hitl";
 import { createMemoryApprovalGrantStore, createMemoryIdempotencyStore } from "@retinue/agentkit/persistence";
@@ -38,7 +40,7 @@ const T1 = asId<TenantId>("t1");
 const CONTEXT = {
   tenantId: T1,
   principalId: asId<PrincipalId>("p1"),
-  conversationId: asId("c1"),
+  conversationId: asId<ConversationId>("c1"),
 } as unknown as ExecutionContext;
 const C1 = asId<InboxCommentId>("cm1");
 
@@ -58,7 +60,7 @@ const lead = (over: Partial<Lead> = {}): Lead => ({
   email: "dana@acme.test",
   status: "new",
   valueMinorUnits: 250_000,
-  attribution: { postDraftId: asId("d1"), platformId: "linkedin" },
+  attribution: { postDraftId: asId<PostDraftId>("d1"), platformId: "linkedin" },
   createdAt: "2026-08-23T11:05:00.000Z",
   ...over,
 });

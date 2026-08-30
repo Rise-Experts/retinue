@@ -12,7 +12,7 @@ import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import type { ExecutionContext } from "../../core/context.js";
 import { asId } from "../../core/ids.js";
-import type { PrincipalId, RunId, TenantId } from "../../core/ids.js";
+import type { AgentId, ConversationId, PrincipalId, RunId, TenantId } from "../../core/ids.js";
 import type { AuthorizationPolicy } from "../../authorization/index.js";
 import {
   createMemoryApprovalGrantStore,
@@ -33,8 +33,8 @@ const RUN = asId<RunId>("run1");
 const run: Run = {
   id: RUN,
   tenantId: T,
-  conversationId: asId("c1"),
-  agentId: asId("a1"),
+  conversationId: asId<ConversationId>("c1"),
+  agentId: asId<AgentId>("a1"),
   agentVersion: 1,
   status: "running",
   createdAt: "t",
@@ -46,7 +46,7 @@ const context: ExecutionContext = {
   locale: "en",
   timezone: "UTC",
   requestId: asId("req1"),
-  conversationId: asId("c1"),
+  conversationId: asId<ConversationId>("c1"),
   runId: RUN,
 };
 const manifest = defineAgent({ id: "a1", name: "A", instructions: "be helpful", modelPolicy: { role: "smart" } });
@@ -118,7 +118,7 @@ const harness = () => {
     const e = createDefaultEngine({
       loadManifest: async () => manifest,
       resolveModel: () => ({ model: {} as ResolvedModel, modelId: "claude-sonnet-5" }),
-      loadHistory: async () => history.map((text) => ({ role: "user" as const, text })),
+      loadHistory: async () => history.map((text) => ({ role: "user" as const, content: text })),
       buildTools: async () => [
         {
           name: "publish_post",

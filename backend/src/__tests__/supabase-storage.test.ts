@@ -18,6 +18,19 @@ import {
   supabaseStorageDouble,
 } from "../testing/supabase-storage-double.js";
 
+
+/**
+ * The value a `.catch((e) => e)` produced, asserted to actually be an error.
+ *
+ * Without it, `expect(error.message).toContain(...)` reads `undefined` when the call *succeeded* — and
+ * `expect(undefined).toContain(...)` fails, so this particular shape is not vacuous. It is still worth
+ * narrowing: the failure then names what came back instead of reporting a missing property.
+ */
+const thrown = (value: unknown): Error => {
+  if (!(value instanceof Error)) throw new Error(`expected the call to reject, and it returned ${JSON.stringify(value)}`);
+  return value;
+};
+
 const make = supabaseStorageDouble;
 
 const bytes = (text: string): AsyncIterable<Uint8Array> =>
@@ -192,7 +205,7 @@ describe("Supabase Storage FileContentStore", () => {
       }),
     });
     const error = await put(failing, "t", "k1").catch((e: Error) => e);
-    expect(error.message).toContain("500");
-    expect(error.message).not.toContain(STORAGE_KEY);
+    expect(thrown(error).message).toContain("500");
+    expect(thrown(error).message).not.toContain(STORAGE_KEY);
   });
 });

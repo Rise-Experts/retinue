@@ -37,12 +37,12 @@ const entry = (over: Partial<CapabilityEntry> = {}): CapabilityEntry => ({
 });
 
 /** A shadow run that agrees perfectly, which is what a missing capability produces. */
-const agreeing = (tools: readonly string[]): ParityReport =>
+const agreeing = (tools: readonly string[]): ParityReport & { readonly toolsCalled: readonly string[] } =>
   ({
     identical: true,
     approvalBearingWrites: { old: 0, new: 0 },
     toolsCalled: tools,
-  }) as unknown as ParityReport;
+  }) as unknown as ParityReport & { readonly toolsCalled: readonly string[] };
 
 describe("the verdict a missing capability produces", () => {
   it("is incomplete, not passed — the whole point of the issue", () => {
@@ -178,7 +178,7 @@ describe("instructions are accounted for — AC-5", () => {
     const unknown: string[] = [];
     for (const candidate of CAPABILITY_INVENTORY) {
       for (const [, name] of (candidate.instructions ?? "").matchAll(/skills\/([a-z0-9-]+)/g)) {
-        if (!known.has(name)) unknown.push(`${candidate.capability} → ${name}`);
+        if (name !== undefined && !known.has(name)) unknown.push(`${candidate.capability} → ${name}`);
       }
     }
     expect(unknown).toEqual([]);

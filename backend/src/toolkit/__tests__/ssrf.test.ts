@@ -147,9 +147,10 @@ describe("vector 3: a redirect to somewhere private", () => {
     const calls: string[] = [];
     const transport: SafeTransport = async ({ url }) => {
       calls.push(url.toString());
+      const headers: Record<string, string> = calls.length === 1 ? { location: to } : {};
       return calls.length === 1
-        ? { status: 302, headers: { location: to }, body: "", truncated: false }
-        : { status: 200, headers: {}, body: "<h1>ok</h1>", truncated: false };
+        ? { status: 302, headers, body: "", truncated: false }
+        : { status: 200, headers, body: "<h1>ok</h1>", truncated: false };
     };
     return { transport, calls };
   };

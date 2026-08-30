@@ -5,7 +5,10 @@ import { describe, expect, it } from "vitest";
 import { budgetSkillCatalogue, skillEntryTokens, truncationNotice } from "../catalogue.js";
 import type { SkillCatalogEntry } from "../index.js";
 
+import { asId } from "../../core/ids.js";
+import type { SkillId } from "../../core/ids.js";
 const entry = (name: string, description: string): SkillCatalogEntry => ({
+  id: asId<SkillId>(`skill-${name}`),
   name,
   description,
   source: "built-in",

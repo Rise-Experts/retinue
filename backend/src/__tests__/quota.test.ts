@@ -13,7 +13,7 @@ import type { ExecutionContext } from "../core/context.js";
 import { AgentPlatformError } from "../core/errors.js";
 import { createMemoryUsageBackend } from "../adapters/memory/usage.js";
 import { createMemoryUsageLimitStore } from "../adapters/memory/usage-limits.js";
-import type { RollupPeriod, UsageEvent } from "../persistence/index.js";
+import type { QuotaWindow, RollupPeriod } from "../persistence/index.js";
 import {
   DEFAULT_RECONCILIATION_TOLERANCE,
   DEFAULT_WARN_AT,
@@ -27,7 +27,7 @@ import {
   reconcileUsage,
   type QuotaLimits,
   type QuotaWarning,
-  type QuotaWindow,
+  type UsageEvent,
 } from "../usage/index.js";
 
 const T1 = asId<TenantId>("tenant-1");
@@ -108,7 +108,7 @@ describe("AC-1: consumption is queryable by period without scanning raw records"
     // The read path must not get slower as a tenant uses more. Asserted by counting ledger reads during a
     // query: a `sum` that touched raw records would show up here.
     const backend = await seeded([event(1), event(2)]);
-    await backend.rollups.rebuild({ tenantId: T1, period: "hour", bucketStart: HOUR, computedAt: NOW });
+    await backend.rollups.rebuild({ tenantId: T1, period: "hour", bucketStart: HOUR });
     let ledgerReads = 0;
     const watched = {
       ...backend.usage,
@@ -133,7 +133,7 @@ describe("AC-1: consumption is queryable by period without scanning raw records"
       event(1, { occurredAt: "2026-08-23T10:10:00.000Z" }),
       event(2, { occurredAt: "2026-08-23T11:10:00.000Z", runId: asId<RunId>("run-2") }),
     ]);
-    const job = createRollupJob({ rollups: backend.rollups, clock: () => NOW });
+    const job = createRollupJob({ rollups: backend.rollups});
     await job.rebuildRange({ tenantId: T1 }, { period: "hour", from: HOUR, to: "2026-08-23T12:00:00.000Z" });
     const page = await backend.rollups.list({
       tenantId: T1,
@@ -158,7 +158,6 @@ describe("AC-4: rollups are idempotent and correct under load", () => {
       tenantId: T1,
       period: "hour",
       bucketStart: HOUR,
-      computedAt: NOW,
     });
     const direct = await backend.usage.totals({ tenantId: T1 });
     expect(row.eventCount).toBe(10_000);
@@ -172,7 +171,7 @@ describe("AC-4: rollups are idempotent and correct under load", () => {
     const backend = await seeded(Array.from({ length: 100 }, (_, i) => event(i, { runId: asId<RunId>(`run-${i}`) })));
     const rows = await Promise.all(
       Array.from({ length: 20 }, () =>
-        backend.rollups.rebuild({ tenantId: T1, period: "hour", bucketStart: HOUR, computedAt: NOW }),
+        backend.rollups.rebuild({ tenantId: T1, period: "hour", bucketStart: HOUR }),
       ),
     );
     expect(new Set(rows.map((r) => r.costMinorUnits)).size).toBe(1);
@@ -186,7 +185,7 @@ describe("AC-4: rollups are idempotent and correct under load", () => {
       event(2, { occurredAt: "2026-08-23T11:10:00.000Z", runId: asId<RunId>("run-2") }),
       event(3, { occurredAt: "2026-08-23T12:10:00.000Z", runId: asId<RunId>("run-3") }),
     ]);
-    const job = createRollupJob({ rollups: backend.rollups, clock: () => "2026-08-23T13:00:00.000Z" });
+    const job = createRollupJob({ rollups: backend.rollups});
     let guard = 0;
     let remaining = 1;
     while (remaining > 0 && guard < 10) {
@@ -206,13 +205,13 @@ describe("AC-4: rollups are idempotent and correct under load", () => {
   it("re-runs a bucket that gained an event after it was computed", async () => {
     // Otherwise a rollup computed a second before an event is permanently wrong and nothing notices.
     const backend = await seeded([event(1)]);
-    const job = createRollupJob({ rollups: backend.rollups, clock: () => "2026-08-23T11:00:00.000Z" });
+    const job = createRollupJob({ rollups: backend.rollups});
     await job.run({ tenantId: T1 }, { period: "hour", since: DAY, limit: 10 });
     await backend.usage.append({
       tenantId: T1,
       event: event(2, { runId: asId<RunId>("run-2"), occurredAt: "2026-08-23T10:45:00.000Z" }),
     });
-    const second = createRollupJob({ rollups: backend.rollups, clock: () => "2026-08-23T12:00:00.000Z" });
+    const second = createRollupJob({ rollups: backend.rollups});
     const result = await second.run({ tenantId: T1 }, { period: "hour", since: DAY, limit: 10 });
     expect(result.rebuilt).toBe(1);
     expect(
@@ -244,7 +243,6 @@ describe("AC-2: a limit is enforced before work starts", () => {
         // hiding the bug.
         period: limits?.window.kind === "calendar" ? limits.window.period : "day",
         bucketStart: bucketStartFor(limits?.window.kind === "calendar" ? limits.window.period : "day", NOW),
-        computedAt: NOW,
       });
     return createQuotaGuard({
       rollups: backend.rollups,
@@ -313,7 +311,7 @@ describe("AC-2: a limit is enforced before work starts", () => {
   it("does not see another tenant's consumption", async () => {
     // AC-6 from the enforcement side: one tenant's spend must not refuse another's run.
     const backend = await seeded([event(1, { tenantId: T2, costMinorUnits: 10_000 })]);
-    await backend.rollups.rebuild({ tenantId: T2, period: "hour", bucketStart: HOUR, computedAt: NOW });
+    await backend.rollups.rebuild({ tenantId: T2, period: "hour", bucketStart: HOUR });
     const guard = createQuotaGuard({
       rollups: backend.rollups,
       resolveLimits: () => [{ window: calendar("hour"), costMinorUnits: 100 }],
@@ -331,7 +329,6 @@ describe("AC-3: a warning fires before the hard limit", () => {
       tenantId: T1,
       period: limits.window.kind === "calendar" ? limits.window.period : "day",
       bucketStart: bucketStartFor(limits.window.kind === "calendar" ? limits.window.period : "day", NOW),
-      computedAt: NOW,
     });
     const warnings: QuotaWarning[] = [];
     const refusals: unknown[] = [];
@@ -414,7 +411,7 @@ describe("AC-3: a warning fires before the hard limit", () => {
   it("does not refuse a run because a warning could not be delivered", async () => {
     // A failed notification must not become a service outage.
     const backend = await seeded([event(1, { costMinorUnits: 90 })]);
-    await backend.rollups.rebuild({ tenantId: T1, period: "hour", bucketStart: HOUR, computedAt: NOW });
+    await backend.rollups.rebuild({ tenantId: T1, period: "hour", bucketStart: HOUR });
     const guard = createQuotaGuard({
       rollups: backend.rollups,
       resolveLimits: () => [{ window: calendar("hour"), costMinorUnits: 100 }],
@@ -432,7 +429,7 @@ describe("AC-3: a warning fires before the hard limit", () => {
     // The other direction: the point of a refusal is to stop work, and a broken notification is not a reason
     // to let it through.
     const backend = await seeded([event(1, { costMinorUnits: 200 })]);
-    await backend.rollups.rebuild({ tenantId: T1, period: "hour", bucketStart: HOUR, computedAt: NOW });
+    await backend.rollups.rebuild({ tenantId: T1, period: "hour", bucketStart: HOUR });
     const guard = createQuotaGuard({
       rollups: backend.rollups,
       resolveLimits: () => [{ window: calendar("hour"), costMinorUnits: 100 }],
@@ -455,7 +452,7 @@ describe("AC-5: reconciliation against provider figures", () => {
     options: { currency?: string; ledgerCurrency?: string } = {},
   ) => {
     const backend = await seeded(ledgerCost === 0 ? [] : [event(1, { costMinorUnits: ledgerCost })]);
-    await backend.rollups.rebuild({ tenantId: T1, period: "day", bucketStart: DAY, computedAt: NOW });
+    await backend.rollups.rebuild({ tenantId: T1, period: "day", bucketStart: DAY });
     return reconcileUsage(
       ctx(),
       { rollups: backend.rollups },
@@ -519,7 +516,7 @@ describe("AC-5: reconciliation against provider figures", () => {
   it("covers the day a statement ends mid-way through", async () => {
     // Truncating the upper bound would drop that day's spend and report every statement as under-recorded.
     const backend = await seeded([event(1, { costMinorUnits: 5000, occurredAt: "2026-08-23T18:00:00.000Z" })]);
-    await backend.rollups.rebuild({ tenantId: T1, period: "day", bucketStart: DAY, computedAt: NOW });
+    await backend.rollups.rebuild({ tenantId: T1, period: "day", bucketStart: DAY });
     const report = await reconcileUsage(
       ctx(),
       { rollups: backend.rollups },
@@ -545,7 +542,7 @@ describe("AC-5: reconciliation against provider figures", () => {
 
   it("does not read another tenant's ledger", async () => {
     const backend = await seeded([event(1, { tenantId: T2, costMinorUnits: 999_999 })]);
-    await backend.rollups.rebuild({ tenantId: T2, period: "day", bucketStart: DAY, computedAt: NOW });
+    await backend.rollups.rebuild({ tenantId: T2, period: "day", bucketStart: DAY });
     const report = await reconcileUsage(
       ctx(T1),
       { rollups: backend.rollups },

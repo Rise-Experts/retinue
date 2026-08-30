@@ -17,6 +17,7 @@ import { deriveIdempotencyKey } from "../../idempotency/index.js";
 import { AgentPlatformError } from "../../core/errors.js";
 import { defineDelegatingTool, fallbackIdempotencyKey } from "../delegating.js";
 
+import type { IdempotencyKey } from "../../idempotency/index.js";
 const T1 = asId<TenantId>("env-t1");
 const CONVO = asId<ConversationId>("env-c1");
 const RUN = asId<RunId>("env-r1");
@@ -90,11 +91,11 @@ const capability = (options: {
     },
   };
   const tracedIdempotency = {
-    async get<T>(input: { tenantId: string; key: never }) {
+    async get<T>(input: { tenantId: TenantId; key: IdempotencyKey }) {
       trace.push("idempotency-get");
       return idempotency.get<T>(input);
     },
-    async put<T>(input: { tenantId: string; key: never; result: T }) {
+    async put<T>(input: { tenantId: TenantId; key: IdempotencyKey; result: T }) {
       trace.push("idempotency-put");
       return idempotency.put<T>(input);
     },

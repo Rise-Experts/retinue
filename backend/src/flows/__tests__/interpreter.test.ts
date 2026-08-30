@@ -10,7 +10,7 @@ import { describe, expect, it } from "vitest";
 import { asId } from "../../core/ids.js";
 import { advance, beginExecution, interpolate, readPath } from "../interpreter.js";
 import type { FlowDefinition, FlowExecution, FlowStep } from "../index.js";
-import type { PrincipalId, RunId, TenantId } from "../../core/ids.js";
+import type { AgentId, PrincipalId, RunId, TenantId } from "../../core/ids.js";
 
 const NOW = 1_700_000_000_000;
 const ISO = "2026-08-26T12:00:00.000Z";
@@ -61,7 +61,7 @@ describe("state paths", () => {
 describe("a step at a time", () => {
   it("asks for the first step, then the next, then settles", () => {
     const definition = flow([
-      { name: "a", kind: "agent", agentId: asId("ag"), prompt: "do a", next: "b", assignTo: "first" },
+      { name: "a", kind: "agent", agentId: asId<AgentId>("ag"), prompt: "do a", next: "b", assignTo: "first" },
       { name: "b", kind: "done" },
     ]);
     const first = step(definition, start(definition));
@@ -77,7 +77,7 @@ describe("a step at a time", () => {
   it("interpolates a prompt from state written by an earlier step", () => {
     const definition = flow([
       { name: "a", kind: "tool", tool: "lookup", input: {}, next: "b", assignTo: "customer" },
-      { name: "b", kind: "agent", agentId: asId("ag"), prompt: "Write to {{$.customer.name}}", next: "c" },
+      { name: "b", kind: "agent", agentId: asId<AgentId>("ag"), prompt: "Write to {{$.customer.name}}", next: "c" },
       { name: "c", kind: "done" },
     ]);
     const first = step(definition, start(definition));

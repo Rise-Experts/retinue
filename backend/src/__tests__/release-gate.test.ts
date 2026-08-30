@@ -20,10 +20,14 @@ const result = (
   score: number,
   extra: Partial<EvalCaseResult> = {},
 ): EvalCaseResult => ({
-  runId: "run",
   caseId,
   dimension,
-  verdict: { score, passed: score >= 1, reason: `${caseId} scored ${score}`, graderId: "contains", graderVersion: "1" },
+  expectKind: "contains",
+  graderId: "contains",
+  graderVersion: "1",
+  // Zero for a deterministic grader, which the type asks to be stated rather than assumed.
+  costMinorUnits: 0,
+  verdict: { score, pass: score >= 1, reason: `${caseId} scored ${score}` },
   ...extra,
 });
 
@@ -38,7 +42,7 @@ const runOf = (input: {
     return {
       dimension,
       total: rows.length,
-      passed: rows.filter((r) => r.verdict.passed).length,
+      passed: rows.filter((r) => r.verdict.pass).length,
       meanScore: rows.reduce((a, r) => a + r.verdict.score, 0) / rows.length,
     };
   });
@@ -48,7 +52,7 @@ const runOf = (input: {
     startedAt: "2026-08-23T10:00:00.000Z",
     finishedAt: "2026-08-23T10:05:00.000Z",
     total: input.results.length,
-    passed: input.results.filter((r) => r.verdict.passed).length,
+    passed: input.results.filter((r) => r.verdict.pass).length,
     meanScore: input.results.reduce((a, r) => a + r.verdict.score, 0) / input.results.length,
     byDimension,
     costMinorUnits: input.costMinorUnits ?? 0,

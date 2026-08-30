@@ -21,10 +21,24 @@ import type { ExecutionContext } from "../core/context.js";
 import { createMemoryArtifactStore, createMemoryBlobStore } from "../adapters/memory/index.js";
 import type { AuthorizationPolicy } from "../authorization/index.js";
 import {
+
   MAX_ARTIFACT_BYTES,
   contentByteSize,
   createArtifactService,
 } from "../artifacts/index.js";
+
+
+/**
+ * The value a `.catch((e) => e)` produced, asserted to actually be an error.
+ *
+ * Without this, `expect(a.message).toBe(b.message)` passes **vacuously** when neither call rejected: both
+ * `.message` reads are `undefined`, and `undefined === undefined`. The test would then be asserting that two
+ * successful calls are indistinguishable, which is the opposite of what it says.
+ */
+const thrown = (value: unknown): Error => {
+  if (!(value instanceof Error)) throw new Error(`expected the call to reject, and it returned ${JSON.stringify(value)}`);
+  return value;
+};
 
 const T1 = asId<TenantId>("tenant-1");
 const T2 = asId<TenantId>("tenant-2");
@@ -363,7 +377,7 @@ describe("AC-4: access follows conversation entitlement", () => {
     });
     const forbidden = await restricted.read(ctx(), { id: created.id }).catch((e: Error) => e);
     const absent = await restricted.read(ctx(), { id: asId<ArtifactId>("nope") }).catch((e: Error) => e);
-    expect(forbidden.message).toBe(absent.message);
+    expect(thrown(forbidden).message).toBe(thrown(absent).message);
     expect(forbidden).toMatchObject({ code: "not_found" });
   });
 

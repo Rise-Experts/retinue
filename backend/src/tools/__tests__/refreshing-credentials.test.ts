@@ -7,6 +7,7 @@
  * credential must never see each other's token, which is the failure #91 already found once in another store.
  */
 import { describe, expect, it, vi } from "vitest";
+import type { ConversationId } from "../../core/ids.js";
 
 import { asId } from "../../core/ids.js";
 import type { ExecutionContext } from "../../core/context.js";
@@ -33,7 +34,7 @@ const contextFor = (tenant: string): ExecutionContext => ({
   locale: "en",
   timezone: "UTC",
   requestId: asId("req1"),
-  conversationId: asId("c1"),
+  conversationId: asId<ConversationId>("c1"),
 });
 
 const T1 = contextFor("tenant-1");

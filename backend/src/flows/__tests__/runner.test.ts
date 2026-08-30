@@ -16,7 +16,7 @@ import { createFlowRunner } from "../runner.js";
 import type { FlowEffectHandler } from "../runner.js";
 import type { FlowDefinition, FlowStep } from "../index.js";
 import type { ExecutionContext } from "../../core/context.js";
-import type { PrincipalId, RequestId, RunId, TenantId } from "../../core/ids.js";
+import type { AgentId, PrincipalId, RequestId, RunId, TenantId } from "../../core/ids.js";
 
 const context = (): ExecutionContext => ({
   tenantId: asId<TenantId>("t1"),
@@ -82,7 +82,7 @@ describe("running a flow to completion", () => {
   it("performs each step and settles", async () => {
     const definition = flow([
       { name: "look", kind: "tool", tool: "lookup", input: {}, next: "write", assignTo: "found" },
-      { name: "write", kind: "agent", agentId: asId("ag"), prompt: "write it up", next: "end", assignTo: "draft" },
+      { name: "write", kind: "agent", agentId: asId<AgentId>("ag"), prompt: "write it up", next: "end", assignTo: "draft" },
       { name: "end", kind: "done" },
     ]);
     const { runner, calls, executions } = await setup(definition);

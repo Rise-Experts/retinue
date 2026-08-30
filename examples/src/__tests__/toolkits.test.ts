@@ -12,8 +12,9 @@
  * `exampleToolkits(env, stubFetch)` — the same function the app calls, with one extra argument.
  */
 import { afterEach, describe, expect, it } from "vitest";
+import type { ConversationId } from "@retinue/agentkit";
 import { readFileSync } from "node:fs";
-import { asId, type ExecutionContext } from "@retinue/agentkit";
+import { asId, type ExecutionContext, type RoleId } from "@retinue/agentkit";
 import { exampleRegistry } from "../index.js";
 import { asExampleBackend } from "../memory-composition.js";
 import { createMemoryBackend } from "../memory-app.js";
@@ -22,11 +23,11 @@ import { exampleToolkits, searchProviderFrom } from "../toolkits.js";
 const context: ExecutionContext = {
   tenantId: asId("t-toolkits"),
   principalId: asId("p-toolkits"),
-  roleIds: ["editor"],
+  roleIds: [asId<RoleId>("editor")],
   locale: "en",
   timezone: "UTC",
   requestId: asId("req-toolkits"),
-  conversationId: asId("c-toolkits"),
+  conversationId: asId<ConversationId>("c-toolkits"),
 };
 
 const backend = () => asExampleBackend(createMemoryBackend());

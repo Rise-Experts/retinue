@@ -56,7 +56,7 @@ describe("a tampered secret fails rather than decrypting to something else — A
   it("rejects a flipped ciphertext byte", async () => {
     const sealed = await cipher.seal("sk-live-SECRET");
     const raw = Buffer.from(sealed.ciphertext, "base64");
-    raw[0] ^= 0xff;
+    raw.writeUInt8(raw.readUInt8(0) ^ 0xff, 0);
     await expect(cipher.open({ ...sealed, ciphertext: raw.toString("base64") })).rejects.toThrow(
       /failed authentication/,
     );
@@ -65,7 +65,7 @@ describe("a tampered secret fails rather than decrypting to something else — A
   it("rejects a flipped authentication tag", async () => {
     const sealed = await cipher.seal("sk-live-SECRET");
     const raw = Buffer.from(sealed.ciphertext, "base64");
-    raw[raw.length - 1] ^= 0xff;
+    raw.writeUInt8(raw.readUInt8(raw.length - 1) ^ 0xff, raw.length - 1);
     await expect(cipher.open({ ...sealed, ciphertext: raw.toString("base64") })).rejects.toThrow(
       /failed authentication/,
     );

@@ -209,8 +209,7 @@ describe("find_tools", () => {
      */
     const axes = ["issue", "message", "search", "price", "csv"];
     const embeddings: EmbeddingProvider = {
-      id: "test-embeddings",
-      dimensions: axes.length,
+      model: { modelId: "test-embeddings", version: "1", dimensions: axes.length },
       async embed(texts) {
         return texts.map((text) => axes.map((axis) => (text.toLowerCase().includes(axis) ? 1 : 0)));
       },
@@ -228,8 +227,7 @@ describe("find_tools", () => {
   it("embeds each document once across searches, so a catalogue is not re-embedded per query", async () => {
     let batches = 0;
     const embeddings: EmbeddingProvider = {
-      id: "counting",
-      dimensions: 1,
+      model: { modelId: "counting", version: "1", dimensions: 1 },
       async embed(texts) {
         batches += 1;
         return texts.map(() => [1]);

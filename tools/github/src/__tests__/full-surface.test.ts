@@ -9,6 +9,7 @@
  * node id — get their own cases.
  */
 import { describe, expect, it, vi } from "vitest";
+import type { ConversationId } from "@retinue/agentkit";
 import { createStaticCredentialResolver } from "@retinue/agentkit/tools";
 import { asId, type ExecutionContext } from "@retinue/agentkit";
 
@@ -21,7 +22,7 @@ const context: ExecutionContext = {
   locale: "en",
   timezone: "UTC",
   requestId: asId("req1"),
-  conversationId: asId("c1"),
+  conversationId: asId<ConversationId>("c1"),
 };
 
 const jsonResponse = (body: unknown, status = 200): Response =>

@@ -18,6 +18,9 @@ const section = (over: Partial<ContextSection> & { title: string; estimatedToken
   body: over.title,
   priority: 1,
   provenance: "test",
+  // Required with no default: a section that does not say whether it may instruct is the case the field
+  // exists to prevent. These fixtures are the platform's own text.
+  origin: "platform",
   sensitivity: "internal",
   cacheable: false,
   ...over,

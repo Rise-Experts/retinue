@@ -6,6 +6,7 @@
  */
 
 import { asId } from "../core/ids.js";
+import { DEFAULT_EXECUTION_LIMITS } from "../agents/define.js";
 import { createMemoryRateLimitStore } from "../adapters/memory/rate-limit.js";
 import { rateLimitStoreConformance } from "../testing/conformance/rate-limit.js";
 import { connectionStoreConformance } from "../testing/conformance/connections.js";
@@ -134,13 +135,13 @@ const manifest = (id: string, version: number): AgentManifest => ({
   name: `agent ${id} v${version}`,
   description: "conformance fixture",
   instructions: "be useful",
-  modelPolicy: { preferred: "claude-opus-5" },
+  modelPolicy: { role: "smart" },
   responseFormat: { kind: "text" },
   toolPolicy: { preloaded: [], categories: [], excluded: [] },
   skillPolicy: { assigned: [], allowTenantSkills: false },
   authorizationPolicyId: "default",
   contextProviderIds: [],
-  limits: { maxSteps: 4, maxToolCalls: 8, maxWallClockMs: 60_000 },
+  limits: { ...DEFAULT_EXECUTION_LIMITS, maxSteps: 4, maxToolCalls: 8, wallClockTimeoutMs: 60_000 },
 });
 
 agentStoreConformance(

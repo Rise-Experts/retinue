@@ -12,7 +12,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { AgentPlatformError } from "../../core/errors.js";
 import { createMemoryRunStore } from "../../adapters/memory/runtime.js";
-import { CAPABILITIES, CAPABILITY_REQUIRES } from "../index.js";
+import { CAPABILITIES, CAPABILITY_REQUIRES, type Capability } from "../index.js";
 import { createRuntime } from "../runtime.js";
 
 const floor = () => ({ runs: createMemoryRunStore() });
@@ -196,8 +196,8 @@ describe("supported combinations", () => {
    */
   const DEPS = CAPABILITIES.flatMap((name) => CAPABILITY_REQUIRES[name] ?? []);
 
-  const combinations = (): { on: readonly string[]; off: readonly string[] }[] => {
-    const all: { on: readonly string[]; off: readonly string[] }[] = [];
+  const combinations = (): { on: readonly Capability[]; off: readonly Capability[] }[] => {
+    const all: { on: readonly Capability[]; off: readonly Capability[] }[] = [];
     for (let mask = 0; mask < 1 << CAPABILITIES.length; mask += 1) {
       const on = CAPABILITIES.filter((_, index) => (mask & (1 << index)) !== 0);
       all.push({ on, off: CAPABILITIES.filter((name) => !on.includes(name)) });

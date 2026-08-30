@@ -11,6 +11,7 @@
  */
 
 import { afterEach, describe, expect, it } from "vitest";
+import type { RunId } from "../../core/ids.js";
 import { createMemoryConversationRunCoordinator, createMemoryConversationStore, createMemoryRunEventLog, createMemoryRunStore, createMemoryUsageStore } from "../../adapters/memory/index.js";
 import { createResolvers, typeDefs } from "../../graphql/index.js";
 import { asId, type ConversationId, type ExecutionContext, type ResolverDeps, type RunEvent, type TenantId } from "../../index.js";
@@ -216,7 +217,7 @@ describe("subscriptions", () => {
   it("delivers the ordered event stream and terminates on the terminal event", async () => {
     const { deps, bus, eventLog } = buildDeps();
     const conversationId = asId<ConversationId>("host-c1");
-    const runId = asId("host-r1");
+    const runId = asId<RunId>("host-r1");
 
     const event = (sequence: number, type: RunEvent["type"]): RunEvent =>
       ({

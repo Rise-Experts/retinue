@@ -20,6 +20,71 @@
 - RAG retrieval/citation evaluations.
 - ShareFlow workflow end-to-end tests.
 - **Reachability**: every declared capability is wired, and every run event has a producer (#170).
+- **Test typechecking**: the test files themselves compile under the package's own settings (#276).
+
+## Test files are typechecked (#276)
+
+`npm run check:test-types`, and it is **its own step in `ci:local`** rather than part of `typecheck`.
+
+### The gap it closes
+
+Every package's `tsconfig.json` excludes `src/**/__tests__/**` and `*.test.ts`, deliberately — test output must
+never reach `dist`. `npm run typecheck` is `tsc -b`, and Vitest transpiles without typechecking. The result was
+that **nothing anywhere typechecked a test file**, and a type error in one was invisible until, and unless, an
+assertion happened to fail at runtime.
+
+It surfaced in #225. A test resolver was written as `{ scheme: "basic", username: "a@b.c", secret: "tok" }` —
+the field on a `basic` credential is `password`. A plain type error. It compiled, ran, and produced a wrong
+`Authorization` header, and was caught only because that test asserted the header's exact bytes. A test
+asserting anything less specific would have passed against a credential that was silently wrong.
+
+### Why it matters more than "some tests had type errors"
+
+This repository's discipline is sabotage: change the code, watch the test fail. That rests entirely on the
+fixture being right. **A test that constructs a subtly wrong fixture proves something other than what it
+claims** — and the cost is not a broken test, it is a passing one, which is indistinguishable from working
+software until somebody looks.
+
+The first run found **385 errors across 22 packages**. They were not noise. Among them:
+
+- `quota.test.ts` passed a `clock` to `createRollupJob`, which has no such option — six tests believed they had
+  pinned time and were running on the real clock.
+- `release-gate.test.ts` set `passed` on an `EvalVerdict` whose field is `pass`, and `graderId`/`graderVersion`
+  on the verdict rather than the result. The real fields were never populated.
+- `engine-approvals.test.ts` built history as `{ role, text }` where `TurnMessage` carries `content` — so every
+  history turn reached the model **empty**, while the test asserted on what the model was asked.
+- `agent-tool-policy.test.ts` returned `{ name, score }` where `ToolSearchHit` is `{ entry, score, signals }`,
+  so anything reading `hit.entry.name` saw `undefined`.
+- `worker.test.ts` yielded an `approval.requested` event carrying `toolCallId`/`toolName`/`requestId`; the event
+  carries `interactionId`.
+- `authorization.test.ts` gave every fixture tool `approvalPolicy: "required"`, which is not a value the union
+  has ever had.
+- The `allowAll` authorization stubs returned `{}` from `scope()`, where `PermissionScope` requires `tenantId`
+  and `roleIds` — a pre-search filter with no tenant.
+- Several `.catch((e) => e)` assertions read `.message` off `T | Error`. `expect(a.message).toBe(b.message)`
+  passes **vacuously** when neither call rejected, because `undefined === undefined`.
+
+All 385 were fixed rather than suppressed. Two were fixes to *source*, not tests: the Redis lock store's
+`acquire` was typed as returning the port's narrow `LockHandle` while the implementation returned `token`,
+`key` and `renew` — so `renew`, the whole lease-extension mechanism, was unreachable to any typed caller. The
+widened type then had to be applied with `Omit` rather than an intersection, because an intersection makes the
+method an overload set and a call resolves against the *port's* signature first.
+
+### How it works, and why not `vitest --typecheck`
+
+Each package has a `tsconfig.test.json` that `extends` its own `tsconfig.json` — identical `lib`, `jsx`,
+`strict` and `noUncheckedIndexedAccess` — and overrides only `noEmit`, `composite` and `rootDir`. So the tests
+are held to exactly the rules the sources are, and nothing is emitted. The build config is untouched, and a
+test asserts it still excludes tests, so `dist` cannot start carrying fixtures.
+
+`vitest --typecheck` was the alternative. It couples typechecking to the test runner: a full check means
+running every test, and it checks through Vitest's transform rather than the package's real config, so what it
+enforces can drift from what the build enforces. `tsc -p` is the same compiler the build uses, it is faster,
+and a failure names a file and a line rather than a failing test.
+
+The packages are discovered rather than listed — a hard-coded list is the version of this check that silently
+stops covering the twenty-third package — and a test plants a deliberate type error, asserts the check fails on
+it by name, and removes it.
 
 ## The reachability guard (#170)
 

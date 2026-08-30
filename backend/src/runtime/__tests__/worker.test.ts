@@ -3,14 +3,7 @@ import type { Message, MessagePart, TextPart } from "../../core/content-parts.js
 import type { ExecutionContext } from "../../core/context.js";
 import type { RealtimePublisher, RunEvent } from "../../core/events.js";
 import { asId } from "../../core/ids.js";
-import type {
-  ConversationId,
-  MessageId,
-  MessagePartId,
-  RunId,
-  TenantId,
-  ToolCallId,
-} from "../../core/ids.js";
+import type { AgentId, ConversationId, InteractionId, MessageId, MessagePartId, RunId, TenantId, ToolCallId } from "../../core/ids.js";
 import {
   createMemoryCheckpointStore,
   createMemoryRunEventLog,
@@ -99,7 +92,7 @@ describe("durable worker — happy path & durability", () => {
     const runs = createMemoryRunStore();
     const checkpoints = createMemoryCheckpointStore();
     const external = { count: 0 };
-    await runs.create({ tenantId: TENANT, id: RUN, conversationId: CONVO, agentId: asId("a1"), agentVersion: 1 });
+    await runs.create({ tenantId: TENANT, id: RUN, conversationId: CONVO, agentId: asId<AgentId>("a1"), agentVersion: 1 });
     const { events, deps } = baseDeps(runs, checkpoints, toolEngine(external), clock);
     const worker = createDurableWorker(deps);
 
@@ -125,7 +118,7 @@ describe("durable worker — happy path & durability", () => {
     const clock = fakeClock();
     const runs = createMemoryRunStore();
     const checkpoints = createMemoryCheckpointStore();
-    await runs.create({ tenantId: TENANT, id: RUN, conversationId: CONVO, agentId: asId("a1"), agentVersion: 1 });
+    await runs.create({ tenantId: TENANT, id: RUN, conversationId: CONVO, agentId: asId<AgentId>("a1"), agentVersion: 1 });
     const engine: AgentEngine = {
       async *run() {
         yield { type: "part.added", messageId: deriveRunMessageId(RUN) as MessageId, part: textPart("p1", "one") };
@@ -150,7 +143,7 @@ describe("durable worker — atomic claim", () => {
   it("a second worker skips a run already claimed under a live lease", async () => {
     const clock = fakeClock();
     const runs = createMemoryRunStore();
-    await runs.create({ tenantId: TENANT, id: RUN, conversationId: CONVO, agentId: asId("a1"), agentVersion: 1 });
+    await runs.create({ tenantId: TENANT, id: RUN, conversationId: CONVO, agentId: asId<AgentId>("a1"), agentVersion: 1 });
     // worker-1 holds a live claim.
     const first = await runs.claim({ tenantId: TENANT, id: RUN, workerId: "worker-1", leaseMs: 30_000, now: new Date(clock.now()).toISOString() });
     expect(first).not.toBeNull();
@@ -169,7 +162,7 @@ describe("durable worker — crash recovery", () => {
     const runs = createMemoryRunStore();
     const checkpoints = createMemoryCheckpointStore();
     const external = { count: 1 }; // worker-1 already fired the external action once before dying.
-    await runs.create({ tenantId: TENANT, id: RUN, conversationId: CONVO, agentId: asId("a1"), agentVersion: 1 });
+    await runs.create({ tenantId: TENANT, id: RUN, conversationId: CONVO, agentId: asId<AgentId>("a1"), agentVersion: 1 });
 
     // Simulate worker-1: claim, checkpoint a started-but-not-completed tool call, then crash (no terminal transition).
     await runs.claim({ tenantId: TENANT, id: RUN, workerId: "worker-1", leaseMs: 30_000, now: new Date(clock.now()).toISOString() });
@@ -210,7 +203,7 @@ describe("durable worker — crash recovery", () => {
     const checkpoints = createMemoryCheckpointStore();
     const eventLog = createMemoryRunEventLog();
     const external = { count: 1 }; // worker-1 already fired the tool once.
-    await runs.create({ tenantId: TENANT, id: RUN, conversationId: CONVO, agentId: asId("a1"), agentVersion: 1 });
+    await runs.create({ tenantId: TENANT, id: RUN, conversationId: CONVO, agentId: asId<AgentId>("a1"), agentVersion: 1 });
     await runs.claim({ tenantId: TENANT, id: RUN, workerId: "worker-1", leaseMs: 30_000, now: new Date(clock.now()).toISOString() });
 
     // worker-1: the event LOG got the part (seq 1) and a tool.started (seq 2), but the CHECKPOINT was
@@ -245,7 +238,7 @@ describe("durable worker — crash recovery", () => {
   it("reapExpired surfaces runs whose lease has passed", async () => {
     const clock = fakeClock();
     const runs = createMemoryRunStore();
-    await runs.create({ tenantId: TENANT, id: RUN, conversationId: CONVO, agentId: asId("a1"), agentVersion: 1 });
+    await runs.create({ tenantId: TENANT, id: RUN, conversationId: CONVO, agentId: asId<AgentId>("a1"), agentVersion: 1 });
     await runs.claim({ tenantId: TENANT, id: RUN, workerId: "worker-1", leaseMs: 5_000, now: new Date(clock.now()).toISOString() });
     clock.advance(10_000);
     const expired = await runs.reapExpired({ now: new Date(clock.peek()).toISOString(), limit: 10 });
@@ -261,7 +254,7 @@ describe("durable worker — usage recording", () => {
     const runs = createMemoryRunStore();
     const checkpoints = createMemoryCheckpointStore();
     const usageStore = createMemoryUsageStore();
-    await runs.create({ tenantId: TENANT, id: RUN, conversationId: CONVO, agentId: asId("a1"), agentVersion: 1 });
+    await runs.create({ tenantId: TENANT, id: RUN, conversationId: CONVO, agentId: asId<AgentId>("a1"), agentVersion: 1 });
     const engine: AgentEngine = {
       async *run() {
         yield { type: "usage.updated", inputTokens: 100, outputTokens: 50, modelId: "m1", costMinorUnits: 30, currency: "USD" };
@@ -282,7 +275,7 @@ describe("durable worker — usage recording", () => {
     const runs = createMemoryRunStore();
     const checkpoints = createMemoryCheckpointStore();
     const usageStore = createMemoryUsageStore();
-    await runs.create({ tenantId: TENANT, id: RUN, conversationId: CONVO, agentId: asId("a1"), agentVersion: 1 });
+    await runs.create({ tenantId: TENANT, id: RUN, conversationId: CONVO, agentId: asId<AgentId>("a1"), agentVersion: 1 });
     const engine: AgentEngine = {
       async *run() {
         yield { type: "usage.updated", inputTokens: 80, outputTokens: 20, modelId: "m1", costMinorUnits: 12, currency: "USD" };
@@ -305,7 +298,7 @@ describe("durable worker — cancellation", () => {
     const clock = fakeClock();
     const runs = createMemoryRunStore();
     const checkpoints = createMemoryCheckpointStore();
-    await runs.create({ tenantId: TENANT, id: RUN, conversationId: CONVO, agentId: asId("a1"), agentVersion: 1 });
+    await runs.create({ tenantId: TENANT, id: RUN, conversationId: CONVO, agentId: asId<AgentId>("a1"), agentVersion: 1 });
 
     let cleanedUp = false;
     let emitted = 0;
@@ -394,7 +387,7 @@ describe("durable worker — heartbeat during a long tool call (#107 AC-5)", () 
   it("keeps the lease alive while a single tool call outlives it", async () => {
     const runs = createMemoryRunStore();
     const checkpoints = createMemoryCheckpointStore();
-    await runs.create({ tenantId: TENANT, id: RUN, conversationId: CONVO, agentId: asId("a1"), agentVersion: 1 });
+    await runs.create({ tenantId: TENANT, id: RUN, conversationId: CONVO, agentId: asId<AgentId>("a1"), agentVersion: 1 });
 
     const keepalives: string[] = [];
     const spying: RunStore = {
@@ -432,7 +425,7 @@ describe("durable worker — heartbeat during a long tool call (#107 AC-5)", () 
   it("does not leave the run reapable while the slow tool is still running", async () => {
     const runs = createMemoryRunStore();
     const checkpoints = createMemoryCheckpointStore();
-    await runs.create({ tenantId: TENANT, id: RUN, conversationId: CONVO, agentId: asId("a1"), agentVersion: 1 });
+    await runs.create({ tenantId: TENANT, id: RUN, conversationId: CONVO, agentId: asId<AgentId>("a1"), agentVersion: 1 });
 
     const { publisher } = recordingPublisher();
     const worker = createDurableWorker({
@@ -488,7 +481,7 @@ describe("durable worker — assistant turn persistence (#157)", () => {
   it("records the assistant's parts under the streamed message id when a run completes", async () => {
     const clock = fakeClock();
     const runs = createMemoryRunStore();
-    await runs.create({ tenantId: TENANT, id: RUN, conversationId: CONVO, agentId: asId("a1"), agentVersion: 1 });
+    await runs.create({ tenantId: TENANT, id: RUN, conversationId: CONVO, agentId: asId<AgentId>("a1"), agentVersion: 1 });
     const { appended, store } = recordingMessages();
     const { deps } = baseDeps(runs, createMemoryCheckpointStore(), toolEngine({ count: 0 }), clock);
 
@@ -511,7 +504,7 @@ describe("durable worker — assistant turn persistence (#157)", () => {
   it("records what was streamed before a failure", async () => {
     const clock = fakeClock();
     const runs = createMemoryRunStore();
-    await runs.create({ tenantId: TENANT, id: RUN, conversationId: CONVO, agentId: asId("a1"), agentVersion: 1 });
+    await runs.create({ tenantId: TENANT, id: RUN, conversationId: CONVO, agentId: asId<AgentId>("a1"), agentVersion: 1 });
     const { appended, store } = recordingMessages();
     const engine: AgentEngine = {
       async *run() {
@@ -537,17 +530,17 @@ describe("durable worker — assistant turn persistence (#157)", () => {
   it("writes nothing while a run is paused for approval, so the completed turn is not lost to its own partial", async () => {
     const clock = fakeClock();
     const runs = createMemoryRunStore();
-    await runs.create({ tenantId: TENANT, id: RUN, conversationId: CONVO, agentId: asId("a1"), agentVersion: 1 });
+    await runs.create({ tenantId: TENANT, id: RUN, conversationId: CONVO, agentId: asId<AgentId>("a1"), agentVersion: 1 });
     const { appended, store } = recordingMessages();
     let resumed = false;
     const engine: AgentEngine = {
       // Emits only what is new on the second pass — the worker restores the earlier parts from the checkpoint,
       // so an engine that re-yielded them would be duplicating, not replaying.
-      async *run() {
+      async *run(): AsyncGenerator<EngineEvent> {
         if (!resumed) {
           resumed = true;
           yield { type: "part.added", messageId: deriveRunMessageId(RUN) as MessageId, part: textPart("p1", "before") };
-          yield { type: "approval.requested", toolCallId: asId<ToolCallId>("tc1"), toolName: "publish", requestId: "req-1" };
+          yield { type: "approval.requested", interactionId: asId<InteractionId>("int-1") };
           return;
         }
         yield { type: "part.added", messageId: deriveRunMessageId(RUN) as MessageId, part: textPart("p2", "after") };
@@ -572,7 +565,7 @@ describe("durable worker — assistant turn persistence (#157)", () => {
   it("stays absent when no message store is supplied", async () => {
     const clock = fakeClock();
     const runs = createMemoryRunStore();
-    await runs.create({ tenantId: TENANT, id: RUN, conversationId: CONVO, agentId: asId("a1"), agentVersion: 1 });
+    await runs.create({ tenantId: TENANT, id: RUN, conversationId: CONVO, agentId: asId<AgentId>("a1"), agentVersion: 1 });
     const { deps } = baseDeps(runs, createMemoryCheckpointStore(), toolEngine({ count: 0 }), clock);
 
     // No throw, no silent requirement — the store is optional for hosts that read history from the event log.
@@ -596,7 +589,7 @@ describe("durable worker — a context that cannot be built (#172)", () => {
   it("fails the run instead of leaving it to be reaped forever", async () => {
     const clock = fakeClock();
     const runs = createMemoryRunStore();
-    await runs.create({ tenantId: TENANT, id: RUN, conversationId: CONVO, agentId: asId("a1"), agentVersion: 1 });
+    await runs.create({ tenantId: TENANT, id: RUN, conversationId: CONVO, agentId: asId<AgentId>("a1"), agentVersion: 1 });
     const { deps } = baseDeps(runs, createMemoryCheckpointStore(), toolEngine({ count: 0 }), clock);
 
     const result = await createDurableWorker({ ...deps, buildContext: refuses }).process({
@@ -616,7 +609,7 @@ describe("durable worker — a context that cannot be built (#172)", () => {
     const clock = fakeClock();
     const runs = createMemoryRunStore();
     const eventLog = createMemoryRunEventLog();
-    await runs.create({ tenantId: TENANT, id: RUN, conversationId: CONVO, agentId: asId("a1"), agentVersion: 1 });
+    await runs.create({ tenantId: TENANT, id: RUN, conversationId: CONVO, agentId: asId<AgentId>("a1"), agentVersion: 1 });
     const { deps } = baseDeps(runs, createMemoryCheckpointStore(), toolEngine({ count: 0 }), clock);
 
     await createDurableWorker({ ...deps, eventLog, buildContext: refuses }).process({ tenantId: TENANT, runId: RUN });
@@ -631,7 +624,7 @@ describe("durable worker — a context that cannot be built (#172)", () => {
     const clock = fakeClock();
     const runs = createMemoryRunStore();
     const external = { count: 0 };
-    await runs.create({ tenantId: TENANT, id: RUN, conversationId: CONVO, agentId: asId("a1"), agentVersion: 1 });
+    await runs.create({ tenantId: TENANT, id: RUN, conversationId: CONVO, agentId: asId<AgentId>("a1"), agentVersion: 1 });
     const { deps } = baseDeps(runs, createMemoryCheckpointStore(), toolEngine(external), clock);
 
     await createDurableWorker({ ...deps, buildContext: refuses }).process({ tenantId: TENANT, runId: RUN });
