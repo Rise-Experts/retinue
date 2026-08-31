@@ -33,11 +33,11 @@
  * application process holds the key in memory. Vault means the database performs the decryption and therefore
  * sees plaintext. Neither is strictly better, and a deployment should pick knowing that.
  *
- * **The Vault implementation is not shipped**, and that is deliberate rather than forgotten: there is no
- * Supabase project with Vault available to test it against, and an untested crypto implementation behind a seam
- * that *looks* tested is worse than none — the suite would pass against this implementation, and the first
- * person to select the other would be the first to run it. Tracked by #268; the seam is ready and it is purely
- * additive.
+ * **The Vault implementation shipped in #268**, in `vault-cipher.ts`, and every clause of this file's test
+ * suite was run against a real Vault before it landed — which is why it was held back until one was available.
+ * Two properties differ from app-side sealing and are argued there rather than here: a Vault-sealed row holds
+ * a **pointer, not ciphertext**, which changes what a backup contains; and a pointer cannot be authenticated
+ * by what it points at, so integrity is provided by a binding token rather than by AEAD.
  */
 
 import { createCipheriv, createDecipheriv, randomBytes, timingSafeEqual } from "node:crypto";
@@ -65,6 +65,19 @@ export interface SecretCipher {
   open(sealed: SealedSecret): Promise<string>;
   /** The key new secrets are sealed with. Exposed so a rotation job can tell what still needs re-sealing. */
   currentKeyId(): string;
+  /**
+   * Destroy whatever the sealed value refers to — **optional, and found by #268.**
+   *
+   * App-side sealing has nothing to implement: the ciphertext *is* the stored value, so deleting the row
+   * deletes the secret. A cipher that stores a **pointer** — Supabase Vault returns an id and keeps the
+   * ciphertext itself — does not, and dropping a connection row there leaves the credential behind, which is
+   * the opposite of what `docs/18` promises.
+   *
+   * Optional rather than required because most implementations genuinely have nothing to do, and a required
+   * no-op is a method every future cipher has to write in order to say "not applicable". A caller deleting a
+   * connection should call it when present.
+   */
+  forget?(sealed: SealedSecret): Promise<void>;
 }
 
 export const AES_GCM = "aes-256-gcm" as const;

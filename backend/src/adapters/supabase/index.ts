@@ -131,3 +131,13 @@ export const SUPABASE_CAPABILITIES: readonly AdapterCapability[] = [
  */
 export { createPostgresFlowDefinitionStore as createSupabaseFlowDefinitionStore } from "../postgres/flows.js";
 export { createPostgresFlowExecutionStore as createSupabaseFlowExecutionStore } from "../postgres/flows.js";
+
+/**
+ * The Supabase Vault `SecretCipher` — task #268.
+ *
+ * Exported from the Supabase adapters rather than from `connections/`, because it is Supabase-specific and
+ * needs a `SqlExecutor`: putting it in the general entry would make every consumer of the connections module
+ * import a database type it has no use for.
+ */
+export { createSupabaseVaultCipher, SUPABASE_VAULT, vaultRotationIsExternal } from "../../connections/vault-cipher.js";
+export type { VaultCipherOptions } from "../../connections/vault-cipher.js";

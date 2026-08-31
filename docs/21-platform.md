@@ -157,6 +157,42 @@ work — not a softer version of it. Three of them shaped the design directly:
   `CredentialResolver` and therefore belongs with [#260](https://github.com/Rise-Experts/retinue/issues/260)'s
   breaking change rather than after it.
 
+### Choosing a cipher, measured rather than reasoned about — #268
+
+Both implementations now exist and both have been run, so the trade-off can be stated from having used them
+instead of from the documentation.
+
+| | App-side AES-256-GCM | Supabase Vault |
+|---|---|---|
+| Who holds the key | The application process, in memory | Supabase, outside the database |
+| Who sees plaintext | The application only | **The database performs the decryption, so it sees plaintext** |
+| What the connections row holds | Ciphertext and a nonce | A **pointer** — a Vault uuid — and a binding token |
+| What a backup of `public` contains | Ciphertext, openable with a leaked key | Nothing openable, and nothing recoverable either |
+| Integrity | AEAD: a flipped byte fails | A binding token; see below |
+| Rotation | `resealConnections` walks `keyId` and re-seals | External. The walk finds nothing, **by design** |
+| Availability | Anywhere | Supabase only |
+
+Neither is strictly better. Three things are worth knowing before choosing, and all three were discovered by
+building the second one rather than by comparing docs:
+
+**A Vault-sealed row contains no secret material at all.** That is better for a leaked application backup and
+worse for a restore: with app-side sealing the ciphertext travels with the row, and here it does not. A backup
+strategy that covers `public` and not `vault` loses every credential silently. It belongs in a runbook.
+
+**Deleting the row does not delete the secret.** Dropping a pointer leaves what it pointed at, so
+`docs/18`'s deletion promises are not satisfied by deleting a connection alone. `SecretCipher` gained an
+optional `forget` for exactly this: app-side sealing has nothing to implement, and the Vault implementation
+removes the secret. A deployment on Vault that never calls it accumulates credentials that outlive the
+connections they belonged to.
+
+**A pointer cannot be authenticated by what it points at.** An attacker able to write the connections table
+could otherwise repoint one connection at another secret in the same Vault and read a credential they were not
+entitled to — the shape of a tenant-isolation bypass. Closed with a random binding token stored in the Vault
+secret's description and compared in constant time on open, so repointing fails. It involves no
+application-side key, so the "key the application database cannot decrypt on its own" property is untouched —
+but it is **not** equivalent to AEAD: an attacker who can write both the connections table and `vault.secrets`
+defeats it, where GCM would still fail.
+
 ### Refresh is time-driven, never 401-driven — #233
 
 An OAuth access token expires, so `CredentialResolver` gained a credential that carries an expiry and a
