@@ -13,12 +13,34 @@ rules are in [`brand/tokens.json`](brand/tokens.json), measured by `npm run chec
 | [`services/api/`](services/api) | `@retinue/api-service` | A Nest.js service serving the platform's schema through Nest's container — the second consumer, and the one that tests whether the package can be wired more than one way |
 | [`examples/`](examples) | `@retinue/example-app` | The reference application: what a deployment's own app module looks like |
 | [`frontend/`](frontend) | `@retinue/react` | Client: headless React state, subscriptions and typed part reducers |
-| [`tools/github/`](tools/github) | `@retinue/tools-github` | Integration: six GitHub tools. A sibling package, not a folder in the runtime — a vendor's API change is a patch here, not a platform release |
-| [`tools/slack/`](tools/slack) | `@retinue/tools-slack` | Integration: four Slack tools. Reads the response envelope rather than the HTTP status, because Slack answers `200` with `ok: false` |
-| [`tools/search/`](tools/search) | `@retinue/tools-search` | Integration: **no tools** — four search providers behind the one `web_search` the runtime already ships. One contract, several providers |
+| [`tools/*`](tools) | `@retinue/tools-*` | **Sixteen integration packages, 161 tools.** Siblings, not folders in the runtime — a vendor's API change is a patch to one small package, not a platform release. Listed below |
 | [`shareflow/`](shareflow) | `@retinue/shareflow` | The ShareFlow integration: its tools, context providers, skills and agent manifests. Depends on `backend`; nothing generic depends on it |
 | [`brand/`](brand) | — | The marks, and the palette and type as tokens |
 | [`docs/`](docs) | — | The specifications these packages implement |
+
+## The integration packages
+
+Each ships on its own version and is invisible to `@retinue/agentkit`. Install only what you use.
+
+| Package | Tools | Worth knowing |
+|---|---|---|
+| `tools-github` | 44 | Code, issues, pull requests, reviews, actions, releases |
+| `tools-google` | 28 | Gmail, Calendar, Drive, Docs, Sheets. The access token **must be refreshable** — Google's expires in about an hour |
+| `tools-meta` | 10 | WhatsApp and Instagram, each surface toggled by its own id |
+| `tools-azure` | 9 | Read-first by design: one tag write, one restart, and no create, delete or scale at all |
+| `tools-jira` | 8 | The transition read ships with the transition write — a transition id is per workflow |
+| `tools-linear` | 7 | The key goes in `Authorization` with **no** `Bearer` prefix; Linear rejects the prefixed form |
+| `tools-notion` | 7 | Property names are validated before the call, not after the error |
+| `tools-discord` | 7 | `Bot <token>` — the word is part of the value |
+| `tools-confluence` | 6 | Shares Jira's credential; updates carry a version check |
+| `tools-telegram` | 6 | Updates, messages, media |
+| `tools-x` | 6 | The subscription tier is stated by the deployment, and reads report it |
+| `tools-reddit` | 6 | Wants a user agent identifying *your* deployment, so it is configuration |
+| `tools-browser` | 6 | You supply the browser: no driver ships, because isolation is the operator's decision (`docs/30`) |
+| `tools-email` | 4 | One gated send and a **byte-identical** preview. Needs SPF, DKIM and DMARC on the sending domain |
+| `tools-slack` | 4 | Reads the response envelope rather than the HTTP status — Slack answers `200` with `ok: false` |
+| `tools-scrape` | 3 | SSRF closed at connect time, not at parse time; robots.txt honoured by default |
+| `tools-search` | 0 | Supplies **providers** for the `web_search` the runtime already ships. One contract, several vendors |
 
 ## Status
 
