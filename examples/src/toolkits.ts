@@ -20,6 +20,10 @@
  */
 
 import { createStaticCredentialResolver } from "@retinue/agentkit/tools";
+import { createAzureToolkit } from "@retinue/tools-azure";
+import { createEmailToolkit, httpProvider, smtpProvider } from "@retinue/tools-email";
+import { createGoogleToolkit } from "@retinue/tools-google";
+import { createScrapeToolkit, firecrawl, jinaReader } from "@retinue/tools-scrape";
 import { createConfluenceToolkit } from "@retinue/tools-confluence";
 import { createDiscordToolkit } from "@retinue/tools-discord";
 import { createGitHubToolkit } from "@retinue/tools-github";
@@ -198,6 +202,113 @@ export const exampleToolkits = (env: ToolkitEnv, fetchImpl?: typeof fetch): read
       }),
     );
   }
+
+  /**
+   * Google Workspace — REQ-054 (#232), tasks #234 and #235.
+   *
+   * **A static token here is a demonstration, not a pattern**, and the toolkit's own docstring says so: a
+   * Google access token expires in about an hour, so a deployment needs `withRefreshingCredentials` (#233)
+   * against the tenant's OAuth grant. This app has one deployment and one token, which is what an example is —
+   * and the comment exists so nobody copies the shape into something that has to run past lunchtime.
+   */
+  if (env.GOOGLE_ACCESS_TOKEN !== undefined) {
+    providers.push(
+      createGoogleToolkit({
+        credentialRef: "google",
+        resolver: createStaticCredentialResolver({ google: env.GOOGLE_ACCESS_TOKEN }),
+        ...wiring,
+      }),
+    );
+  }
+
+  /** Azure — REQ-054, task #236. Read-first: the only write is a tag, and the only destructive tool a restart. */
+  if (env.AZURE_ACCESS_TOKEN !== undefined) {
+    providers.push(
+      createAzureToolkit({
+        credentialRef: "azure",
+        resolver: createStaticCredentialResolver({ azure: env.AZURE_ACCESS_TOKEN }),
+        ...wiring,
+      }),
+    );
+  }
+
+  /**
+   * Scraping — REQ-055 (#237), task #238. **Opt-in, even though it needs no credential.**
+   *
+   * This file's rule is "wiring is the toggle", and scraping is the one toolkit that could quietly break it:
+   * the direct provider needs no account and no third party, so there is no absent credential to switch it off.
+   * Wiring it unconditionally was the first thing I tried and the tests below refused it — correctly. Fetching
+   * arbitrary URLs on a reader's machine is a capability worth asking for rather than one to arrive with, and
+   * one uniform rule is worth more than a rule plus an exception.
+   *
+   * A hosted provider is an *upgrade* chosen the way a search provider is, and implies the opt-in: configuring
+   * one is asking for this.
+   */
+  if (env.FIRECRAWL_API_KEY !== undefined || env.JINA_API_KEY !== undefined || env.RETINUE_ENABLE_SCRAPE === "1") {
+    providers.push(
+      createScrapeToolkit({
+        ...(env.FIRECRAWL_API_KEY !== undefined
+          ? { provider: firecrawl({ apiKey: env.FIRECRAWL_API_KEY }) }
+          : env.JINA_API_KEY !== undefined
+            ? { provider: jinaReader({ apiKey: env.JINA_API_KEY }) }
+            : {}),
+        // Identifies *this* deployment to the sites it fetches, for the reason Reddit's user agent does.
+        ...(env.SCRAPE_USER_AGENT === undefined ? {} : { userAgent: env.SCRAPE_USER_AGENT }),
+      }),
+    );
+  }
+
+  /**
+   * Mail — REQ-056 (#240), task #241. SMTP if a host is configured, otherwise an HTTP provider if a key is.
+   *
+   * `EMAIL_FROM` is required for both, and deliberately not defaulted: the sender is the field SPF and DKIM
+   * align against, so guessing it produces mail that silently lands in spam. A toolkit with no `from` is a
+   * misconfiguration, not a partial one.
+   */
+  if (env.EMAIL_FROM !== undefined) {
+    if (env.SMTP_HOST !== undefined && env.SMTP_USERNAME !== undefined && env.SMTP_PASSWORD !== undefined) {
+      providers.push(
+        createEmailToolkit({
+          provider: smtpProvider({
+            host: env.SMTP_HOST,
+            port: Number(env.SMTP_PORT ?? 587),
+            credentialRef: "smtp",
+            resolver: createStaticCredentialResolver({
+              smtp: { scheme: "basic", username: env.SMTP_USERNAME, password: env.SMTP_PASSWORD },
+            }),
+          }),
+          from: env.EMAIL_FROM,
+          ...(env.EMAIL_REPLY_TO === undefined ? {} : { replyTo: env.EMAIL_REPLY_TO }),
+        }),
+      );
+    } else if (env.RESEND_API_KEY !== undefined) {
+      providers.push(
+        createEmailToolkit({
+          provider: httpProvider({
+            name: "resend",
+            credentialRef: "resend",
+            resolver: createStaticCredentialResolver({ resend: env.RESEND_API_KEY }),
+            ...wiring,
+          }),
+          from: env.EMAIL_FROM,
+          ...(env.EMAIL_REPLY_TO === undefined ? {} : { replyTo: env.EMAIL_REPLY_TO }),
+        }),
+      );
+    }
+  }
+
+  /**
+   * `@retinue/tools-browser` is **deliberately not wired here**, and this note is the record of that decision.
+   *
+   * It requires a `BrowserDriver`, and the package ships none on purpose — `docs/30-browser-isolation.md`
+   * argues that how a browser is launched and isolated is the operator's decision, and a toolkit that silently
+   * spawned one it found on the PATH would be the "works on the machine where it was configured" shape with an
+   * unusually large blast radius. Supplying a driver means choosing between a hosted service and a local
+   * Chromium, which is a deployment decision this app cannot make on a reader's behalf.
+   *
+   * Left as an absence with a reason rather than a stub: a driver that pretended to work would teach exactly
+   * the wrong thing about the one toolkit where isolation is the whole subject.
+   */
 
   return providers;
 };

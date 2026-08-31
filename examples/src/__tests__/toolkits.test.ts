@@ -176,3 +176,78 @@ describe("the toolkits are not part of the runtime", () => {
     expect(declared.filter((name) => name.startsWith("@retinue/tools-"))).toEqual([]);
   });
 });
+
+
+/**
+ * The wave-2 toolkits are reachable from the app — REQ-054/055/056 (#232, #237, #240).
+ *
+ * The same guard the file above exists for, applied to the five packages shipped after it was written. Four of
+ * them were finished, unit-tested and wired to nothing, which is the seventh instance of this repository's most
+ * repeated defect and exactly what `toolkits.ts` was created to prevent.
+ *
+ * The assertions go through the app's **own** registry, not a fixture, because a fixture proves the toolkit can
+ * be constructed and says nothing about whether the app ever constructs it.
+ */
+describe("the wave-2 toolkits reach the app's registry", () => {
+  const WAVE_TWO = {
+    GOOGLE_ACCESS_TOKEN: "ya29.test",
+    AZURE_ACCESS_TOKEN: "az.test",
+    RETINUE_ENABLE_SCRAPE: "1",
+    EMAIL_FROM: "alerts@example.test",
+    SMTP_HOST: "smtp.example.test",
+    SMTP_USERNAME: "postmaster",
+    SMTP_PASSWORD: "s3cret",
+  } as const;
+
+  it("contributes google, azure, scrape and email when configured", () => {
+    const ids = exampleToolkits(WAVE_TWO).map((provider) => provider.id).sort();
+    expect(ids).toEqual(["azure", "email", "google", "scrape"]);
+  });
+
+  it("puts their tools in the app's own catalogue", async () => {
+    setEnv(WAVE_TWO);
+    const names = await namesInCatalogue();
+    /**
+     * One tool from each package, and a write as well as a read.
+     *
+     * Wiring the toolkit is only half of reachable: the example grants tools to roles by an explicit
+     * allowlist, so a newly wired package contributes providers whose tools the catalogue then filters out
+     * entirely. That is what this assertion caught — four packages were wired and **none** of their tools
+     * appeared — and it is why the check is against the catalogue rather than against `exampleToolkits`.
+     */
+    for (const name of [
+      "gmail_search_messages",
+      "gmail_send_message",
+      "calendar_find_free_time",
+      "azure_list_subscriptions",
+      "azure_restart_resource",
+      "web_scrape",
+      "email_compose_preview",
+      "email_send",
+    ]) {
+      expect(names, `${name} is not reachable from the app`).toContain(name);
+    }
+  });
+
+  it("contributes nothing when none of them is configured", () => {
+    // The rule the rest of this file follows, holding for the new packages too.
+    expect(exampleToolkits({}).map((provider) => provider.id)).toEqual([]);
+  });
+
+  it("refuses to send mail with no From address, rather than guessing one", () => {
+    // `EMAIL_FROM` is the field SPF and DKIM align against, so a default would produce mail that silently
+    // lands in spam. Absent means the toolkit is not wired at all.
+    const withoutFrom = { ...WAVE_TWO, EMAIL_FROM: undefined } as Record<string, string | undefined>;
+    expect(exampleToolkits(withoutFrom).map((provider) => provider.id)).not.toContain("email");
+  });
+
+  it("does not wire the browser toolkit, and that is a decision rather than an omission", () => {
+    /**
+     * `@retinue/tools-browser` needs a `BrowserDriver` and the package ships none on purpose — `docs/30`
+     * argues that how a browser is launched and isolated is the operator's call. This asserts the absence so
+     * that wiring one later is a deliberate change with a test to update, rather than something that drifts in.
+     */
+    const everything = { ...WAVE_TWO, RETINUE_ENABLE_BROWSER: "1" } as Record<string, string | undefined>;
+    expect(exampleToolkits(everything).map((provider) => provider.id)).not.toContain("browser");
+  });
+});

@@ -29,7 +29,9 @@ COPY backend/package.json ./backend/
 COPY frontend/package.json ./frontend/
 COPY shareflow/package.json ./shareflow/
 COPY examples/package.json ./examples/
+COPY tools/azure/package.json ./tools/azure/
 COPY tools/confluence/package.json ./tools/confluence/
+COPY tools/email/package.json ./tools/email/
 COPY tools/discord/package.json ./tools/discord/
 COPY tools/github/package.json ./tools/github/
 COPY tools/jira/package.json ./tools/jira/
@@ -40,6 +42,8 @@ COPY tools/reddit/package.json ./tools/reddit/
 COPY tools/x/package.json ./tools/x/
 COPY tools/search/package.json ./tools/search/
 COPY tools/slack/package.json ./tools/slack/
+COPY tools/google/package.json ./tools/google/
+COPY tools/scrape/package.json ./tools/scrape/
 COPY tools/telegram/package.json ./tools/telegram/
 RUN npm ci
 COPY tsconfig.json ./
@@ -50,7 +54,7 @@ COPY examples ./examples
 # Named projects, not a bare `tsc -b`: the root config also references shareflow, whose sources this
 # image deliberately does not carry. `frontend` is here because the reference app imports its view
 # models; the host itself does not.
-RUN npx tsc -b backend tools/confluence tools/discord tools/github tools/jira tools/linear tools/meta tools/notion tools/reddit tools/x tools/search tools/slack tools/telegram examples
+RUN npx tsc -b backend tools/azure tools/email tools/google tools/scrape tools/confluence tools/discord tools/github tools/jira tools/linear tools/meta tools/notion tools/reddit tools/x tools/search tools/slack tools/telegram examples
 
 FROM node:20-slim AS runtime
 WORKDIR /app
@@ -63,7 +67,9 @@ COPY backend/package.json ./backend/
 COPY frontend/package.json ./frontend/
 COPY shareflow/package.json ./shareflow/
 COPY examples/package.json ./examples/
+COPY tools/azure/package.json ./tools/azure/
 COPY tools/confluence/package.json ./tools/confluence/
+COPY tools/email/package.json ./tools/email/
 COPY tools/discord/package.json ./tools/discord/
 COPY tools/github/package.json ./tools/github/
 COPY tools/jira/package.json ./tools/jira/
@@ -74,11 +80,15 @@ COPY tools/reddit/package.json ./tools/reddit/
 COPY tools/x/package.json ./tools/x/
 COPY tools/search/package.json ./tools/search/
 COPY tools/slack/package.json ./tools/slack/
+COPY tools/google/package.json ./tools/google/
+COPY tools/scrape/package.json ./tools/scrape/
 COPY tools/telegram/package.json ./tools/telegram/
 RUN npm ci --omit=dev
 COPY --from=build /app/backend/dist ./backend/dist
 COPY --from=build /app/frontend/dist ./frontend/dist
+COPY --from=build /app/tools/azure/dist ./tools/azure/dist
 COPY --from=build /app/tools/confluence/dist ./tools/confluence/dist
+COPY --from=build /app/tools/email/dist ./tools/email/dist
 COPY --from=build /app/tools/discord/dist ./tools/discord/dist
 COPY --from=build /app/tools/github/dist ./tools/github/dist
 COPY --from=build /app/tools/jira/dist ./tools/jira/dist
@@ -89,6 +99,8 @@ COPY --from=build /app/tools/reddit/dist ./tools/reddit/dist
 COPY --from=build /app/tools/x/dist ./tools/x/dist
 COPY --from=build /app/tools/search/dist ./tools/search/dist
 COPY --from=build /app/tools/slack/dist ./tools/slack/dist
+COPY --from=build /app/tools/google/dist ./tools/google/dist
+COPY --from=build /app/tools/scrape/dist ./tools/scrape/dist
 COPY --from=build /app/tools/telegram/dist ./tools/telegram/dist
 COPY --from=build /app/examples/dist ./examples/dist
 COPY examples/public ./examples/public

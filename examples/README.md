@@ -114,6 +114,29 @@ Everything is in `.env` at the repository root; `.env.example` documents each va
 | `RETINUE_SANDBOX_IMAGE` | Unset. A local container image with a shell — `redis:7-alpine` will do. Only takes effect with `RETINUE_SHELL=1` |
 | `RETINUE_SHELL` | Unset. `1` declares the `shell` capability. Set without an image, the app **refuses to boot** — which is the point of a declaration |
 
+### The integration toolkits
+
+All optional, and **wiring is the toggle**: a toolkit whose credential is absent contributes *no tools*, rather
+than tools that answer "not configured" — the second kind costs the model a turn to discover and reads like a
+broken integration. `.env.example` lists every variable with its caveats.
+
+| Toolkit | Turned on by |
+|---|---|
+| GitHub, Slack, Discord, Telegram | one token each |
+| Jira + Confluence | `ATLASSIAN_EMAIL` + `ATLASSIAN_API_TOKEN` + `ATLASSIAN_SITE_URL` — all three, because a token with no site is a mistake rather than a partial configuration |
+| Linear, Notion | one key each |
+| Meta (WhatsApp, Instagram) | `META_ACCESS_TOKEN` plus the id of each surface you have been cleared for |
+| X, Reddit | a token; Reddit also needs a contact for its user agent |
+| **Google Workspace** | `GOOGLE_ACCESS_TOKEN` — a **static token here is a demonstration, not a pattern**: it expires in about an hour, so a deployment needs `withRefreshingCredentials` |
+| **Azure** | `AZURE_ACCESS_TOKEN`, same expiry caveat. Read-first: one tag write, one restart |
+| **Scraping** | `RETINUE_ENABLE_SCRAPE=1`, or a hosted provider key. Opt-in rather than credential-gated, because the direct provider needs no account and fetching arbitrary URLs is worth asking for |
+| **Mail** | `EMAIL_FROM` plus either SMTP settings or `RESEND_API_KEY`. `EMAIL_FROM` has no default on purpose — it is what SPF and DKIM align against |
+
+`@retinue/tools-browser` is **not** wired here. It needs a `BrowserDriver` and the package ships none by design:
+how a browser is launched and isolated is the operator's decision, and a toolkit that spawned one it found on
+the PATH would be the "works on the machine where it was configured" shape with an unusually large blast
+radius. `docs/30` makes the argument; a test asserts the absence so wiring one later is a deliberate change.
+
 ### The model needs tool calling
 
 An agent without tool calls is not much of an agent. Verified before choosing a default: a local 8B GGUF returned

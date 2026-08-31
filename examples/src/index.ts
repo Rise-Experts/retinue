@@ -239,6 +239,43 @@ const TOOLKIT_READ_TOOLS = [
   "discord_list_channels",
   "discord_read_messages",
   "telegram_get_chat",
+  //
+  // Wave 2 — REQ-054/055/056. A working set again, not every read.
+  //
+  // Google: the searches and the one-item reads. `sheets_list_sheets` is granted with the values read for the
+  // same reason `jira_list_transitions` is granted with the transition — a tab name is part of an A1 range, and
+  // guessing it is the most common way a range fails.
+  "gmail_search_messages",
+  "gmail_get_message",
+  "gmail_list_labels",
+  "calendar_list_events",
+  "calendar_get_event",
+  // Granted deliberately: it costs nothing and notifies nobody, where creating an event emails everyone on it.
+  // A model that cannot check availability will guess a time instead.
+  "calendar_find_free_time",
+  "drive_search_files",
+  "drive_get_file",
+  "docs_get_document",
+  "sheets_list_sheets",
+  "sheets_get_values",
+  // Azure — every tool in the package except the two writes, because the package is read-first by design and a
+  // subscription list is the entry point everything else is scoped by.
+  "azure_list_subscriptions",
+  "azure_list_resource_groups",
+  "azure_list_resources",
+  "azure_get_resource",
+  "azure_query_logs",
+  "azure_get_metrics",
+  "azure_list_activity_log",
+  // Scraping — the same class as `fetch_url`, which both roles already have. The control is the SSRF guard and
+  // the robots policy, not the role.
+  "web_scrape",
+  "web_scrape_batch",
+  // Mail reads. `email_compose_preview` is a *read* — it sends nothing — and granting it to `viewer` is the
+  // point: a role that cannot send can still see exactly what would be sent.
+  "email_compose_preview",
+  "email_get_status",
+  "email_list_sent",
 ] as const;
 
 /**
@@ -275,6 +312,32 @@ const TOOLKIT_WRITE_TOOLS = [
   // Ungated by classification, and granted so the `internal-write` path is exercised by a real role.
   "discord_add_reaction",
   "telegram_send_message",
+  //
+  // Wave 2 — REQ-054/055/056. One characteristic act per package, each gated.
+  //
+  // Gmail's send, and its reply. The reply is granted with the send because threading is where it goes wrong:
+  // a reply missing `In-Reply-To` is delivered perfectly, as a new conversation nobody can follow.
+  "gmail_send_message",
+  "gmail_reply_message",
+  // Calendar's create, which is the clearest "this notifies people who did not ask" act in the catalogue —
+  // every attendee is emailed an invitation that cannot be recalled.
+  "calendar_create_event",
+  // Sheets: the append is the safe write and `sheets_update_values` is `destroys()`. Both are granted, for the
+  // reason `github_merge_pull_request` is: the overwrite destroys data with no recovery path this package can
+  // reach, and a gate nothing exercises is a gate nobody trusts.
+  "sheets_append_rows",
+  "sheets_update_values",
+  // Drive's share, granted because it has **no default audience** — the argument is required, so the act of
+  // widening access is always something a person approved rather than something a default did.
+  "drive_share_file",
+  // Azure's two writes, and only those two: the package has no create, no delete and no scale.
+  // `azure_restart_resource` is `destroys()` and causes an outage on a running service.
+  "azure_tag_resource",
+  "azure_restart_resource",
+  // The least recoverable act here. A sent message cannot be recalled and, unlike a post, cannot be deleted
+  // afterwards — it is in somebody else's mailbox. `email_compose_preview` is granted to both roles above so
+  // the rehearsal is available without the send.
+  "email_send",
 ] as const;
 
 // The imported MCP tools come from `./mcp.ts`, derived from the administrator classification there.
