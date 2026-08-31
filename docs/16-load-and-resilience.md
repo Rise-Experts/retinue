@@ -221,16 +221,68 @@ before a run exists, so there is nothing to retry and no run event to carry it. 
 `RateLimitObserver` for the same reason `QuotaObserver` exists — a `RunEvent` carries a `runId`, and inventing
 one for an event about *not* starting a run would be worse than a separate sink.
 
-### Two axes deliberately not implemented
+## Per-tenant concurrency, on the lease — #265
 
-**Concurrent runs per tenant** is a real gap and is not closed here.
-`startOrEnqueueRun` serialises runs *within* a conversation, and `serialization.ts` says a conversation-less
-run's concurrency is "bounded where it should be: the worker's own limits, and quotas" — a per-process setting
-and a spend limit, neither of which stops one tenant occupying every slot in a fleet. It is left out because a
-correct implementation must be crash-safe: a counter incremented at admission and decremented at completion
-leaks a permanent unit every time a worker dies mid-run. The right home is the existing run **lease**, which
-already has a TTL and a heartbeat, so this belongs *with* the lease rather than beside it. Tracked as
-[#265](https://github.com/Rise-Experts/retinue/issues/265) rather than shipped leaky.
+The fourth control, and the one that stops **one tenant occupying every slot in the fleet**. Rate limiting does
+not: a customer firing 500 automations is inside every rate window if they arrive slowly enough, inside budget
+if each is cheap, and still holds every worker.
+
+### Live leases, not a counter
+
+Concurrency is **the count of a tenant's runs holding an unexpired lease**. There is no separate counter, and
+that is the point rather than an economy.
+
+A counter incremented at admission and decremented at completion leaks a permanent unit every time a worker
+dies mid-run — and a leaked unit is invisible until the tenant's effective concurrency has silently reached
+zero, at which point nothing they submit ever starts and no error explains why. A lease expires on its own, so
+a crashed worker's slot returns without operator action, without a reaper run, and without anybody noticing it
+was gone. The conformance suite asserts exactly that: kill a worker mid-run, change nothing else, and the slot
+comes back.
+
+### Enforced inside the claim, because it has to be atomic
+
+`RunStore.claim` takes `maxConcurrent` and evaluates the count in the same operation as the update — a
+correlated subquery in one SQL statement, one turn of the event loop in the reference adapter.
+
+Counting first and claiming second is check-then-act across processes: two workers both read "3 of 4 used",
+both claim, and the tenant runs at 5. The conformance suite issues two claims for one free slot without
+awaiting between them and asserts exactly one succeeds; a check-then-act implementation passes every sequential
+test and fails that one. It runs against real Postgres, not only the reference adapter, because atomicity is a
+claim about SQL as much as about JavaScript.
+
+`RunStore.countLive` exists too, and is deliberately **not** the enforcement path — only `claim` can be atomic
+with the decision. It is for telling an operator why a tenant's work is waiting, and for labelling a refused
+claim. A stale answer there costs a wrong log line, never a wrong admission.
+
+### A capped tenant queues; it is not refused
+
+This is the decision, and both options were defensible.
+
+A run refused by the cap stays `queued` and the worker reports `deferred` — distinct from `skipped`, which
+means *somebody else has this or it is already finished, there is nothing to do*. A caller that acknowledged a
+deferred job the way it acknowledges a skipped one would drop a run that still has to happen, so the outcomes
+are separate types rather than one with a flag. `ProcessResult.retryAfterMs` says when to try again; without a
+backoff a deferred run spins against the cap and the limit costs more capacity than it saves.
+
+Queueing rather than refusing, because refusal belongs at **admission**: the rate limiter already refuses there
+with `admission_rate_limited`, before a run exists. By the time a worker is claiming, the deployment has
+accepted the work, and turning it away then would mean accepting a run and then discarding it.
+
+### What this does not solve
+
+**It bounds worker occupancy, not queue depth.** A capped tenant's runs sit in the queue, and if that were the
+whole story the problem would have moved rather than been solved. It is not the whole story because the two
+resources are different: queue depth is cheap and already bounded at admission by `maxQueueDepth`, while a
+worker slot is the scarce thing — it holds a model connection, a context window and a provider's rate budget.
+A deployment that wants a tenant's *submissions* bounded wants `maxQueueDepth` and the rate limiter; this
+bounds what they can occupy once admitted.
+
+### Absent or zero means unlimited
+
+The same rule as the rate limiter, for the same reason: a deployment upgrading into the feature with nothing
+configured must keep working.
+
+### One axis still deliberately not implemented
 
 **Tool executions per run per interval** is not implemented because `ExecutionLimits.maxToolCalls` already bounds
 the count and `wallClockTimeoutMs` bounds a tight loop, so a rate would need a clock threaded through the tool

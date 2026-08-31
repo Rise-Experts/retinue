@@ -632,3 +632,80 @@ describe("durable worker — a context that cannot be built (#172)", () => {
     expect(external.count).toBe(0);
   });
 });
+
+
+/**
+ * Per-tenant concurrency at the worker — REQ-058 (#246), task #265.
+ *
+ * The store-level guarantees live in `runStoreConformance`, where they run against real SQL too. What is
+ * asserted here is the *worker's* half: that a run refused by the cap is reported as something a caller will
+ * re-enqueue, rather than as something it will throw away.
+ */
+describe("durable worker — per-tenant concurrency", () => {
+  const seed = async (runs: ReturnType<typeof createMemoryRunStore>, id: string) =>
+    runs.create({ tenantId: TENANT, id: asId<RunId>(id), conversationId: CONVO, agentId: asId<AgentId>("a1"), agentVersion: 1 });
+
+  it("defers rather than skipping, so the run is not silently dropped — AC-4", async () => {
+    const clock = fakeClock();
+    const runs = createMemoryRunStore();
+    const checkpoints = createMemoryCheckpointStore();
+    await seed(runs, "held");
+    await seed(runs, "waiting");
+    // Another worker holds the tenant's only slot.
+    await runs.claim({ tenantId: TENANT, id: asId<RunId>("held"), workerId: "other", leaseMs: 60_000, now: new Date(clock.peek()).toISOString() });
+
+    const { deps } = baseDeps(runs, checkpoints, toolEngine({ count: 0 }), clock);
+    const worker = createDurableWorker({ ...deps, concurrencyFor: () => 1 });
+    const result = await worker.process({ tenantId: TENANT, runId: asId<RunId>("waiting") });
+
+    /**
+     * `deferred`, not `skipped`. The distinction is the whole of AC-4: a caller acknowledges a `skipped` job
+     * because there is nothing to do, and doing that here would discard a run that still has to happen.
+     */
+    expect(result.outcome).toBe("deferred");
+    expect(result.retryAfterMs).toBeGreaterThan(0);
+    // Queued, not refused — the tenant waits for a slot rather than losing the work.
+    expect(result.run?.status).toBe("queued");
+  });
+
+  it("runs normally once the slot frees", async () => {
+    const clock = fakeClock();
+    const runs = createMemoryRunStore();
+    const checkpoints = createMemoryCheckpointStore();
+    await seed(runs, "held");
+    await seed(runs, "waiting");
+    await runs.claim({ tenantId: TENANT, id: asId<RunId>("held"), workerId: "other", leaseMs: 60_000, now: new Date(clock.peek()).toISOString() });
+    const { deps } = baseDeps(runs, checkpoints, toolEngine({ count: 0 }), clock);
+    const worker = createDurableWorker({ ...deps, concurrencyFor: () => 1 });
+
+    expect((await worker.process({ tenantId: TENANT, runId: asId<RunId>("waiting") })).outcome).toBe("deferred");
+    await runs.transition({ tenantId: TENANT, id: asId<RunId>("held"), workerId: "other", to: "completed", now: new Date(clock.peek()).toISOString() });
+    expect((await worker.process({ tenantId: TENANT, runId: asId<RunId>("waiting") })).outcome).toBe("completed");
+  });
+
+  it("still reports skipped when another worker simply holds the run", async () => {
+    // The cap must not swallow the pre-existing meaning of a failed claim: this run is genuinely somebody
+    // else's, there is nothing to re-enqueue, and reporting it as deferred would spin a job for ever.
+    const clock = fakeClock();
+    const runs = createMemoryRunStore();
+    const checkpoints = createMemoryCheckpointStore();
+    await seed(runs, "taken");
+    await runs.claim({ tenantId: TENANT, id: asId<RunId>("taken"), workerId: "other", leaseMs: 60_000, now: new Date(clock.peek()).toISOString() });
+    const { deps } = baseDeps(runs, checkpoints, toolEngine({ count: 0 }), clock);
+    const worker = createDurableWorker({ ...deps, concurrencyFor: () => 10 });
+    expect((await worker.process({ tenantId: TENANT, runId: asId<RunId>("taken") })).outcome).toBe("skipped");
+  });
+
+  it("no policy means unlimited — AC-6", async () => {
+    const clock = fakeClock();
+    const runs = createMemoryRunStore();
+    const checkpoints = createMemoryCheckpointStore();
+    await seed(runs, "held");
+    await seed(runs, "waiting");
+    await runs.claim({ tenantId: TENANT, id: asId<RunId>("held"), workerId: "other", leaseMs: 60_000, now: new Date(clock.peek()).toISOString() });
+    const { deps } = baseDeps(runs, checkpoints, toolEngine({ count: 0 }), clock);
+    // No `concurrencyFor` at all: the shape a deployment has before it configures anything.
+    const worker = createDurableWorker(deps);
+    expect((await worker.process({ tenantId: TENANT, runId: asId<RunId>("waiting") })).outcome).toBe("completed");
+  });
+});

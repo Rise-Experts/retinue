@@ -224,5 +224,107 @@ export function runStoreConformance(makeStore: () => RunStore): void {
       }
       expect((await store.reapExpired({ now: T90, limit: 2 })).length).toBeLessThanOrEqual(2);
     });
+
+  /**
+   * The per-tenant concurrent-run limit — REQ-058 (#246), task #265.
+   *
+   * In the conformance harness rather than beside the memory adapter, deliberately: the guarantee is that the
+   * count and the claim are **one atomic operation**, and that is a claim about SQL as much as about
+   * JavaScript. The reference adapter gets atomicity free — no await between the count and the write — so
+   * testing only there would prove nothing about the adapter where it is hard.
+   */
+  describe("per-tenant concurrency, on the lease", () => {
+    it("refuses a claim once the tenant holds its limit of live leases", async () => {
+      const store = makeStore();
+      for (const n of [1, 2, 3]) await seed(store, `c${n}`);
+
+      expect(await store.claim({ tenantId: T1, id: run("c1"), workerId: "w1", leaseMs: 60_000, now: T0, maxConcurrent: 2 })).not.toBeNull();
+      expect(await store.claim({ tenantId: T1, id: run("c2"), workerId: "w2", leaseMs: 60_000, now: T0, maxConcurrent: 2 })).not.toBeNull();
+      // Two live leases, limit two: the third gets nothing.
+      expect(await store.claim({ tenantId: T1, id: run("c3"), workerId: "w3", leaseMs: 60_000, now: T0, maxConcurrent: 2 })).toBeNull();
+      expect(await store.countLive({ tenantId: T1, now: T0 })).toBe(2);
+      // And it is still queued, not lost — the run waits rather than being discarded.
+      expect((await store.findById({ tenantId: T1, id: run("c3") }))?.status).toBe("queued");
+    });
+
+    it("two concurrent claims for one free slot admit exactly one — AC-3", async () => {
+      const store = makeStore();
+      await seed(store, "race-holder");
+      await seed(store, "race-a");
+      await seed(store, "race-b");
+      await store.claim({ tenantId: T1, id: run("race-holder"), workerId: "w0", leaseMs: 60_000, now: T0, maxConcurrent: 2 });
+
+      /**
+       * Issued without awaiting between them, which is what makes this a race rather than a sequence.
+       *
+       * Against the reference adapter both run in one turn of the event loop; against SQL they are two
+       * statements in flight at once. A check-then-act implementation passes the sequential test above and
+       * fails this one — which is why both exist.
+       */
+      const [a, b] = await Promise.all([
+        store.claim({ tenantId: T1, id: run("race-a"), workerId: "wa", leaseMs: 60_000, now: T0, maxConcurrent: 2 }),
+        store.claim({ tenantId: T1, id: run("race-b"), workerId: "wb", leaseMs: 60_000, now: T0, maxConcurrent: 2 }),
+      ]);
+      expect([a, b].filter((claimed) => claimed !== null)).toHaveLength(1);
+      expect(await store.countLive({ tenantId: T1, now: T0 })).toBe(2);
+    });
+
+    it("reclaims a crashed worker's slot with no operator action — AC-2", async () => {
+      const store = makeStore();
+      await seed(store, "crashed");
+      await seed(store, "waiting");
+      // A worker takes the only slot, then dies: no transition, no release, just a lease that stops being
+      // renewed. This is the case a decrement-on-completion counter never recovers from.
+      await store.claim({ tenantId: T1, id: run("crashed"), workerId: "dead", leaseMs: 1_000, now: T0, maxConcurrent: 1 });
+      expect(await store.claim({ tenantId: T1, id: run("waiting"), workerId: "w2", leaseMs: 60_000, now: T0, maxConcurrent: 1 })).toBeNull();
+
+      // Time passes. Nothing else happens — no reaper, no restart, no intervention.
+      expect(await store.countLive({ tenantId: T1, now: T90 })).toBe(0);
+      expect(await store.claim({ tenantId: T1, id: run("waiting"), workerId: "w2", leaseMs: 60_000, now: T90, maxConcurrent: 1 })).not.toBeNull();
+    });
+
+    it("does not count a run against its own recovery", async () => {
+      const store = makeStore();
+      await seed(store, "recovering");
+      await store.claim({ tenantId: T1, id: run("recovering"), workerId: "dead", leaseMs: 1_000, now: T0, maxConcurrent: 1 });
+      // The lease has expired and this run is the tenant's only one. A limit of 1 must not block the recovery
+      // of the very run whose lease is being replaced.
+      expect(await store.claim({ tenantId: T1, id: run("recovering"), workerId: "w2", leaseMs: 60_000, now: T90, maxConcurrent: 1 })).not.toBeNull();
+    });
+
+    it("counts each tenant separately — AC-5", async () => {
+      const store = makeStore();
+      await seed(store, "t1-a", T1);
+      await seed(store, "t2-a", T2);
+      await store.claim({ tenantId: T1, id: run("t1-a"), workerId: "w1", leaseMs: 60_000, now: T0, maxConcurrent: 1 });
+      // T1 is full. T2 is untouched by that, and a shared counter would be the bug this catches.
+      expect(await store.claim({ tenantId: T2, id: run("t2-a"), workerId: "w2", leaseMs: 60_000, now: T0, maxConcurrent: 1 })).not.toBeNull();
+      expect(await store.countLive({ tenantId: T1, now: T0 })).toBe(1);
+      expect(await store.countLive({ tenantId: T2, now: T0 })).toBe(1);
+    });
+
+    it("absent or zero means unlimited — AC-6", async () => {
+      const store = makeStore();
+      for (const n of [1, 2, 3, 4]) await seed(store, `u${n}`);
+      // The branch that matters on the day this ships: a deployment that has configured nothing keeps working.
+      expect(await store.claim({ tenantId: T1, id: run("u1"), workerId: "w", leaseMs: 60_000, now: T0 })).not.toBeNull();
+      expect(await store.claim({ tenantId: T1, id: run("u2"), workerId: "w", leaseMs: 60_000, now: T0 })).not.toBeNull();
+      expect(await store.claim({ tenantId: T1, id: run("u3"), workerId: "w", leaseMs: 60_000, now: T0, maxConcurrent: 0 })).not.toBeNull();
+      expect(await store.claim({ tenantId: T1, id: run("u4"), workerId: "w", leaseMs: 60_000, now: T0, maxConcurrent: 0 })).not.toBeNull();
+      expect(await store.countLive({ tenantId: T1, now: T0 })).toBe(4);
+    });
+
+    it("a released slot is available immediately", async () => {
+      const store = makeStore();
+      await seed(store, "first");
+      await seed(store, "second");
+      await store.claim({ tenantId: T1, id: run("first"), workerId: "w1", leaseMs: 60_000, now: T0, maxConcurrent: 1 });
+      expect(await store.claim({ tenantId: T1, id: run("second"), workerId: "w2", leaseMs: 60_000, now: T0, maxConcurrent: 1 })).toBeNull();
+      // A terminal transition releases the lease, so the slot returns without waiting for an expiry.
+      await store.transition({ tenantId: T1, id: run("first"), workerId: "w1", to: "completed", now: T0 });
+      expect(await store.countLive({ tenantId: T1, now: T0 })).toBe(0);
+      expect(await store.claim({ tenantId: T1, id: run("second"), workerId: "w2", leaseMs: 60_000, now: T0, maxConcurrent: 1 })).not.toBeNull();
+    });
+  });
   });
 }

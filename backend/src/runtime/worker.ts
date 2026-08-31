@@ -119,6 +119,26 @@ export type DurableWorkerDeps = {
    * lost message costs latency rather than a stuck flow. A hook whose delivery was load-bearing would need a
    * queue, not a callback.
    */
+  /**
+   * The tenant's concurrent-run limit, or undefined for unlimited — REQ-058 (#246), task #265.
+   *
+   * A function rather than a value, for the reason `RateLimitGuardDeps.policyFor` gives: limits are per tenant
+   * and change without a redeploy, and a value captured at construction would be the limits of whoever booted
+   * the process.
+   *
+   * **Absent or non-positive means unlimited**, which is the branch that matters on the day this ships. A
+   * deployment upgrading into the feature with nothing configured must keep working; the alternative is an
+   * outage caused by adding a safety feature, which is how safety features get removed.
+   */
+  readonly concurrencyFor?: (tenantId: Run["tenantId"]) => Promise<number | undefined> | number | undefined;
+  /**
+   * How long a deferred run waits before its next attempt. Default one second.
+   *
+   * Not zero, and not the lease length. Zero spins a worker against the cap, burning capacity on the check
+   * itself; a full lease is longer than most runs, so a freed slot would sit idle. A second is short enough
+   * that a slot is picked up promptly and long enough that the retry is not the load.
+   */
+  readonly deferralBackoffMs?: number;
   readonly onRunSettled?: (input: {
     readonly context: ExecutionContext;
     readonly run: Run;
@@ -126,11 +146,26 @@ export type DurableWorkerDeps = {
   }) => Promise<void> | void;
 };
 
-export type ProcessOutcome = "completed" | "failed" | "cancelled" | "skipped" | "lost" | "paused";
+/**
+ * `deferred` is distinct from `skipped`, and conflating them would strand work — #265.
+ *
+ * `skipped` means *somebody else has this, or it is already finished* — there is nothing to do and the job is
+ * done with. `deferred` means *this tenant is at its concurrency limit right now*: the run is still queued, it
+ * still needs to run, and a caller that acknowledged it the way it acknowledges a `skipped` job would drop it
+ * for ever. A `deferred` result must be re-enqueued, and `ProcessResult.retryAfterMs` says when.
+ */
+export type ProcessOutcome = "completed" | "failed" | "cancelled" | "skipped" | "lost" | "paused" | "deferred";
 
 export type ProcessResult = {
   readonly run: Run | null;
   readonly outcome: ProcessOutcome;
+  /**
+   * How long to wait before trying this run again. Set only for `deferred`.
+   *
+   * Without it a deferred run is re-enqueued immediately and spins against the cap, burning a worker slot on
+   * the check itself — which would make a concurrency limit cost more capacity than it saves.
+   */
+  readonly retryAfterMs?: number;
 };
 
 /** Thrown internally when a keepalive reveals the lease was lost; never marks the run failed. */
@@ -146,6 +181,7 @@ export const createDurableWorker = (deps: DurableWorkerDeps) => {
   const clock = deps.clock ?? (() => new Date(now()).toISOString());
   const leaseMs = deps.leaseMs ?? 30_000;
   const keepaliveEveryMs = deps.keepaliveEveryMs ?? Math.max(1, Math.floor(leaseMs / 3));
+  const deferralBackoffMs = Math.max(1, deps.deferralBackoffMs ?? 1_000);
   const channelFor = deps.channelFor ?? ((r: Run) => `conversation:${r.conversationId}`);
   const { runs, checkpoints, publisher, engine, workerId } = deps;
 
@@ -500,8 +536,34 @@ export const createDurableWorker = (deps: DurableWorkerDeps) => {
       const lock = deps.locks ? await deps.locks.acquire(`run:${runId}`, leaseMs) : { released: async () => {} };
       if (!lock) return { run: await runs.findById({ tenantId, id: runId }), outcome: "skipped" };
       try {
-        const claimed = await runs.claim({ tenantId, id: runId, workerId, leaseMs, now: clock() });
-        if (!claimed) return { run: await runs.findById({ tenantId, id: runId }), outcome: "skipped" };
+        const maxConcurrent = await deps.concurrencyFor?.(tenantId);
+        const now = clock();
+        const claimed = await runs.claim({
+          tenantId,
+          id: runId,
+          workerId,
+          leaseMs,
+          now,
+          ...(maxConcurrent === undefined ? {} : { maxConcurrent }),
+        });
+        if (!claimed) {
+          const run = await runs.findById({ tenantId, id: runId });
+          /**
+           * Why the claim failed, diagnosed *after* the fact — #265.
+           *
+           * The decision was already made atomically inside `claim`; this only chooses which outcome to report,
+           * so a slightly stale count costs a wrong label rather than a wrong admission. The run being still
+           * `queued` is the discriminator: a run somebody else is driving is `running`, and a finished one is
+           * terminal, so `queued` after a refused claim means the cap is what stopped it.
+           */
+          if (maxConcurrent !== undefined && maxConcurrent > 0 && run?.status === "queued") {
+            const live = await runs.countLive({ tenantId, now });
+            if (live >= maxConcurrent) {
+              return { run, outcome: "deferred", retryAfterMs: deferralBackoffMs };
+            }
+          }
+          return { run, outcome: "skipped" };
+        }
         return await drive(claimed);
       } finally {
         await lock.released();

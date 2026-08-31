@@ -235,8 +235,40 @@ export interface RunStore {
    * terminal — so two workers never process one run.
    */
   claim(
-    input: TenantScope & { id: RunId; workerId: string; leaseMs: number; now: string },
+    input: TenantScope & {
+      id: RunId;
+      workerId: string;
+      leaseMs: number;
+      now: string;
+      /**
+       * Refuse the claim when the tenant already holds this many **live leases** — REQ-058 (#246), task #265.
+       *
+       * Enforced *here*, inside the claim, and that placement is the whole design. Counting live leases and
+       * then claiming in a second statement is check-then-act: two workers in two processes both read
+       * "3 of 4 used" and both claim, and the tenant runs at 5. An adapter must make this one atomic
+       * operation — one SQL statement, or one turn of the event loop for the reference adapter.
+       *
+       * **Live leases, not a counter.** A counter incremented at admission and decremented at completion leaks
+       * a unit every time a worker dies mid-run, and a leaked unit is invisible until the tenant's effective
+       * concurrency has silently reached zero. A lease expires on its own, so a crashed worker's slot returns
+       * without anybody noticing it was gone.
+       *
+       * The run being claimed is never counted against itself, so recovering an expired lease is not blocked
+       * by the limit it is trying to satisfy.
+       *
+       * Absent or non-positive means unlimited.
+       */
+      maxConcurrent?: number;
+    },
   ): Promise<Run | null>;
+  /**
+   * How many of a tenant's runs hold a live lease right now.
+   *
+   * **Not the enforcement path** — `claim` is, because only `claim` can be atomic with the decision. This
+   * exists for two honest uses: telling an operator why a tenant's work is waiting, and letting the worker
+   * label a refused claim. A slightly stale answer costs a wrong log line, never a wrong admission.
+   */
+  countLive(input: TenantScope & { now: string }): Promise<number>;
   /** Extend the lease. Returns false when the claim was lost (reaped/stolen) so the worker aborts. */
   keepalive(
     input: TenantScope & { id: RunId; workerId: string; leaseMs: number; now: string },

@@ -128,7 +128,19 @@ export const createPostgresRunStore = (sql: SqlExecutor): RunStore => {
      * A live lease held by *another* worker excludes the row; the current holder re-claiming is
      * allowed (idempotent re-entry after a transient failure).
      */
-    async claim({ tenantId, id, workerId, leaseMs, now }) {
+    async claim({ tenantId, id, workerId, leaseMs, now, maxConcurrent }) {
+      /**
+       * The per-tenant concurrency cap, **in the same statement as the claim** — #265.
+       *
+       * A correlated subquery rather than a count read beforehand, and that is the whole point. Reading the
+       * count and then updating is check-then-act across processes: two workers both read "3 of 4 used", both
+       * claim, and the tenant runs at 5. Inside the `WHERE`, the count is evaluated against the row versions
+       * this statement locks, so the two claims serialise and the second one's subquery sees the first.
+       *
+       * `id <> $2` keeps the run from counting against itself, so recovering an expired lease is never blocked
+       * by the limit it is trying to restore. A non-positive or absent limit is passed as NULL and the clause
+       * short-circuits to true.
+       */
       const rows = await sql.query<Row>(
         `UPDATE runs
             SET status           = 'running',
@@ -145,11 +157,27 @@ export const createPostgresRunStore = (sql: SqlExecutor): RunStore => {
                  OR claimed_by = $3
                  OR lease_expires_at IS NULL
                  OR lease_expires_at <= $4::timestamptz)
+            AND ($6::int IS NULL
+                 OR (SELECT count(*) FROM runs live
+                      WHERE live.tenant_id = $1
+                        AND live.id <> $2
+                        AND live.status = 'running'
+                        AND live.lease_expires_at > $4::timestamptz) < $6::int)
           RETURNING *`,
-        [tenantId, id, workerId, now, String(leaseMs)],
+        [tenantId, id, workerId, now, String(leaseMs), maxConcurrent !== undefined && maxConcurrent > 0 ? maxConcurrent : null],
       );
       const row = rows[0];
       return row ? toRun(row) : null;
+    },
+
+    async countLive({ tenantId, now }) {
+      const rows = await sql.query<{ live: string }>(
+        `SELECT count(*) AS live FROM runs
+          WHERE tenant_id = $1 AND status = 'running' AND lease_expires_at > $2::timestamptz`,
+        [tenantId, now],
+      );
+      // Postgres returns count() as bigint, which the driver hands back as a string.
+      return Number(rows[0]?.live ?? 0);
     },
 
     /** False when the claim was lost (reaped or stolen) so the worker aborts rather than continuing. */
