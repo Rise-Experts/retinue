@@ -16,6 +16,50 @@ Each model definition contains:
 
 Resolution considers administrator policy, tenant policy, required capabilities, data residency, availability, cost ceiling and deprecation state. Support `fast` and `smart` roles without hardcoding model IDs into agents.
 
+### Which providers actually resolve — #256
+
+The list above is what `ModelProvider` *declares*. Six of the seven resolve; **`bedrock` does not yet**, and it
+throws `capability_unavailable` when selected.
+
+That gap survived because a closed union with an exhaustive `switch` reads as complete coverage: `bedrock`
+compiled, typechecked, satisfied the `never` assertion at the end of the switch, and threw at runtime. The type
+system guarantees every member is *mentioned*; only a call finds out whether it is *served*.
+`provider-coverage.test.ts` is that call, and it enumerates `MODEL_PROVIDERS` rather than a hand-written list,
+so a provider added to the union is either wired or explicitly listed as unserved with a reason.
+
+**Bedrock is not wired here because it cannot be verified here.** #256 requires one real turn against it as
+evidence, there is no AWS account available to this work, and #268 settled the precedent: shipping a provider
+behind a seam that *looks* tested is worse than shipping none, because the first person to select it is the
+first to run it.
+
+### Google Vertex AI: not a provider — #256, AC-6
+
+**Decided: no, and `ModelProvider` does not gain the member.**
+
+Vertex serves the same Gemini models as the `google` provider already does. What differs is the *authentication
+and routing* — a GCP project, a region, and Application Default Credentials or a service account, rather than an
+API key. That is a credential shape, not a different model family, and the platform already has the seam for
+it: `ProviderCredentials` is per-provider, so a Vertex-routed deployment is `google` with different credentials
+if and when that is wired.
+
+Adding a member would mean two provider values resolving the same model ids through the same SDK, and every
+`allowedProviders` policy in every tenant would then have to name both to mean "Gemini". A policy that says
+`["google"]` and silently excludes the same model reached another way is a trap, and it is the kind that is
+discovered by a customer.
+
+The counter-argument, recorded because it is real: Vertex has genuine capabilities the API does not — provisioned
+throughput, and data residency guarantees tied to a GCP region. If a deployment needs those, the honest answer
+is a `google` credential shape carrying a project and a region, argued on its own. Not a seventh provider added
+speculatively.
+
+### `dataResidency` is read — #256, AC-7
+
+Audited rather than assumed, because the AC anticipated it might be a dead field. It is not: `eligible()` in
+`models/index.ts` excludes any model whose residency does not cover the policy's, and `models.test.ts` asserts
+both directions — a residency that selects a specific model, and one that excludes every candidate and throws.
+
+It does **not** belong in #242's unread-field inventory.
+
 ## Agent manifest
 
 ```ts

@@ -118,11 +118,17 @@ export const NO_RESULT_REASONS = [
   "below-threshold",
   "no-access",
   /**
-   * The mode asked for is not wired — task #219.
+   * The mode asked for is not wired.
    *
    * Its own reason rather than `no-match`, because the two want opposite responses: one says rephrase, this says
    * a deployment has not configured what you asked for. Falling back to another mode silently would be worse
    * than either, since the caller would attribute the results to the mode it named.
+   *
+   * **Live, not a placeholder** — audited for #256 AC-8. Three code paths return it (`navigate` with no
+   * navigator, `graph-local` and `graph-global` with no GraphRAG), and three test files assert it. The optional
+   * modes are exactly why it has to exist: GraphRAG ships **off by default** on the measured evidence in
+   * `docs/29`, so "you asked for a mode this deployment did not switch on" is an ordinary answer rather than an
+   * edge case. The comment previously cited task #219 as if it were pending; it closed.
    */
   "not-configured",
 ] as const;
