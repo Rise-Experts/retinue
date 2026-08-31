@@ -10,6 +10,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./view-models": {
+      "types": "./dist/view-models.d.ts",
+      "default": "./dist/view-models.js"
     }
   },
   "files": [

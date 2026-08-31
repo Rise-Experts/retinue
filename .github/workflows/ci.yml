@@ -97,6 +97,11 @@ jobs:
   # can be asserted without a model key: migrations applied, every dependency healthy, and the host's own
   # readiness route — which probes Postgres, Redis *and* the schema version, so a 200 means more than "a process
   # is listening".
+  #
+  # Since #267 it also serves the **reference application**, and asserts the page's script loads rather than
+  # only the page: the page renders without `composer.js`, so probing `/` alone is exactly the check that
+  # passed while the UI did nothing. The real-agent-turn step needs a model key and is gated on the secret
+  # being present rather than failing without it.
   compose:
     runs-on: ubuntu-latest
     steps:
@@ -114,12 +119,25 @@ jobs:
       - name: Every service healthy
         run: |
           docker compose ps
-          test "$(docker compose ps --status running --services | sort | tr '\n' ' ')" = "api postgres redis worker "
-      - name: The host is ready on the published port
+          test "$(docker compose ps --status running --services | sort | tr '\n' ' ')" = "api app postgres redis worker "
+      - name: The host is ready on its published port
         run: |
-          code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:4010/readyz)
+          code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:4011/readyz)
           echo "readyz → $code"
           test "$code" = "200"
+      - name: The reference app serves its page AND its script — #267, AC-2
+        run: |
+          page=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:4010/)
+          # `/composer.js` is the assertion that matters. The bundle is built rather than committed, so an
+          # image that copied `public/` from the build context serves a page that renders and does nothing —
+          # and a check on `/` alone passes for it.
+          script=$(curl -s -o /tmp/composer.js -w '%{http_code}' http://127.0.0.1:4010/composer.js)
+          echo "page → $page   composer.js → $script   $(wc -c < /tmp/composer.js) bytes"
+          test "$page" = "200"
+          test "$script" = "200"
+          # Not an error page served with a 200, and not an empty file.
+          test "$(wc -c < /tmp/composer.js)" -gt 10000
+          grep -q "AgentkitComposer" /tmp/composer.js
       - name: doctor, from inside the network
         env:
           RETINUE_MODEL_API_KEY: ci-no-model-call-is-made
@@ -133,6 +151,44 @@ jobs:
           grep -q '"id":"ci-1"' /tmp/gql.json
           docker compose exec -T postgres psql -U postgres -d retinue -tAc \
             "select count(*) from conversations where id = 'ci-1'" | grep -q 1
+      - name: A real agent turn reaches a terminal state — #267, AC-4
+        # Gated on the secret rather than failing without it: a fork has no access to it, and a job that goes
+        # red on every fork PR is a job people learn to ignore. Skipped is honest; failing is not.
+        if: ${{ env.MODEL_KEY != '' }}
+        env:
+          MODEL_KEY: ${{ secrets.RETINUE_MODEL_API_KEY }}
+        run: |
+          set -euo pipefail
+          # The reference app's own route, not the GraphQL host's `sendMessage`: the host coordinates a
+          # conversation's slot and does not create the run row, which is why the assertion above this one
+          # could only ever reach admission.
+          curl -sf -X POST http://127.0.0.1:4010/api/message \
+            -H 'content-type: application/json' \
+            -H 'x-agentkit-tenant: ci' -H 'x-agentkit-principal: ci' -H 'x-agentkit-roles: editor' \
+            -d '{"conversationId":"ci-turn","text":"What is 2 + 2? Answer with just the number."}' | tee /tmp/turn.json
+          run_id=$(node -e "process.stdout.write(String(JSON.parse(require('fs').readFileSync('/tmp/turn.json','utf8')).runId ?? ''))")
+          test -n "$run_id"
+          echo "run $run_id"
+          # Polled, with a ceiling. `completed` is the assertion — the run reached the end of its lifecycle.
+          #
+          # The prompt is deliberately banal. Verified locally with "Reply with the single word: ready", which
+          # the model *declined* — the run still completed, because a refusal is a normal answer, but a prompt
+          # that invites one is a prompt that makes this job's logs confusing to read.
+          for _ in $(seq 1 60); do
+            status=$(docker compose exec -T postgres psql -U postgres -d retinue -tAc \
+              "select status from runs where id = '$run_id'" | tr -d '[:space:]')
+            echo "  status=$status"
+            case "$status" in
+              completed|failed|cancelled) break ;;
+            esac
+            sleep 2
+          done
+          test -n "$status"
+          case "$status" in
+            completed) echo "✓ the run completed" ;;
+            failed|cancelled) echo "✗ the run reached $status"; docker compose logs --no-color worker | tail -50; exit 1 ;;
+            *) echo "✗ the run never reached a terminal state (last: $status)"; docker compose logs --no-color worker | tail -50; exit 1 ;;
+          esac
       - name: Logs on failure
         if: failure()
         run: docker compose logs --no-color

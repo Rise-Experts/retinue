@@ -157,3 +157,56 @@ const main = () => {
 };
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) process.exit(main());
+
+/**
+ * What the **reference app** needs, beyond its compiled output — #267, AC-3.
+ *
+ * The image carried `examples/dist` and `examples/public` and could still not start the application: the
+ * launcher lives in `examples/scripts/`, and `public/composer.js` is *built* rather than committed, so copying
+ * `public` from the build context shipped a page with no script. The page rendered and did nothing.
+ *
+ * This check exists for the same reason the workspace one does — `tools/` went missing exactly this way once —
+ * and it asserts the three facts that were each individually false:
+ *
+ * 1. the launcher is copied,
+ * 2. the bundler runs in the build stage,
+ * 3. `public` is copied **from the build stage**, where the bundle exists, and not from the context.
+ */
+export const carriesReferenceApp = (dockerfile) => {
+  const copiesFromBuild = (path) =>
+    new RegExp(`COPY\\s+--from=build\\s+/app/${path}\\b`).test(dockerfile);
+  return {
+    launcher: copiesFromBuild("examples/scripts"),
+    bundlerRuns: /RUN\s+node\s+examples\/scripts\/build-composer\.mjs/.test(dockerfile),
+    /**
+     * The distinction that matters. `COPY examples/public ...` (from the context) satisfies "public is
+     * copied" and ships no bundle, which is precisely the bug — so the assertion is about *where from*.
+     */
+    publicFromBuildStage: copiesFromBuild("examples/public"),
+    publicFromContext: /^COPY\s+examples\/public\b/m.test(dockerfile),
+  };
+};
+
+/**
+ * **Every** workspace's manifest reaches the runtime stage — #267.
+ *
+ * `carries` checks the workspaces the *app* depends on, which is the right question for "can the app run" and
+ * the wrong one for "does `npm ci` work". `npm ci` in a workspace root needs the manifest of every workspace
+ * the root declares, whether the app uses it or not.
+ *
+ * `tools/browser` shipped in #239 as a `tools/*` workspace and was never added to the runtime stage, so the
+ * image had been **unbuildable since then** — `npm ci --omit=dev` failing on a missing workspace — and nothing
+ * noticed, because the app does not depend on it and this file only asked about the app's dependencies.
+ *
+ * The two checks answer different questions and both are needed. This one is the cheaper and broader.
+ */
+export const runtimeStageOf = (dockerfile) => {
+  const stages = [...dockerfile.matchAll(/^FROM\s/gm)].map((match) => match.index ?? 0);
+  // The last `FROM` begins the stage that becomes the image. A single-stage Dockerfile returns all of it.
+  return stages.length <= 1 ? dockerfile : dockerfile.slice(stages[stages.length - 1]);
+};
+
+export const missingWorkspaceManifests = (dockerfile, workspaces) => {
+  const runtime = runtimeStageOf(dockerfile);
+  return workspaces.filter((dir) => !new RegExp(`COPY\\s+${dir}/package\\.json\\b`).test(runtime));
+};

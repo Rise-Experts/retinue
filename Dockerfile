@@ -30,6 +30,7 @@ COPY frontend/package.json ./frontend/
 COPY shareflow/package.json ./shareflow/
 COPY examples/package.json ./examples/
 COPY tools/azure/package.json ./tools/azure/
+COPY tools/browser/package.json ./tools/browser/
 COPY tools/confluence/package.json ./tools/confluence/
 COPY tools/email/package.json ./tools/email/
 COPY tools/discord/package.json ./tools/discord/
@@ -55,6 +56,14 @@ COPY examples ./examples
 # image deliberately does not carry. `frontend` is here because the reference app imports its view
 # models; the host itself does not.
 RUN npx tsc -b backend tools/azure tools/email tools/google tools/scrape tools/confluence tools/discord tools/github tools/jira tools/linear tools/meta tools/notion tools/reddit tools/x tools/search tools/slack tools/telegram examples
+# The composer bundle, built **here** rather than committed — #267.
+#
+# `examples/public/composer.js` is produced by `build-composer.mjs` and is deliberately not in git: a
+# checked-in bundle drifts from its source silently. The consequence for this image was that
+# `examples/public` shipped without the script the page loads, so the page rendered and did nothing.
+# `esbuild` is an examples devDependency and this stage still has devDependencies, which is why it can
+# run here and not in the runtime stage.
+RUN node examples/scripts/build-composer.mjs
 
 FROM node:20-slim AS runtime
 WORKDIR /app
@@ -68,6 +77,7 @@ COPY frontend/package.json ./frontend/
 COPY shareflow/package.json ./shareflow/
 COPY examples/package.json ./examples/
 COPY tools/azure/package.json ./tools/azure/
+COPY tools/browser/package.json ./tools/browser/
 COPY tools/confluence/package.json ./tools/confluence/
 COPY tools/email/package.json ./tools/email/
 COPY tools/discord/package.json ./tools/discord/
@@ -103,7 +113,12 @@ COPY --from=build /app/tools/google/dist ./tools/google/dist
 COPY --from=build /app/tools/scrape/dist ./tools/scrape/dist
 COPY --from=build /app/tools/telegram/dist ./tools/telegram/dist
 COPY --from=build /app/examples/dist ./examples/dist
-COPY examples/public ./examples/public
+# From the **build** stage, not the context: the context's `public/` has no `composer.js` in it, because
+# the bundle is built rather than committed. Copying from the context is what shipped a page with no script.
+COPY --from=build /app/examples/public ./examples/public
+# The reference app is started by `run-app.mjs`, which was in neither `dist` nor `public` — so the image
+# could serve the platform host and not the application. See the note at the top of compose.yaml.
+COPY --from=build /app/examples/scripts ./examples/scripts
 # Non-root: nothing here needs to write to the filesystem.
 USER node
 EXPOSE 4000

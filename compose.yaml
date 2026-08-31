@@ -14,13 +14,19 @@
 # same reason (:55432, :56379) — these are offset again so `docker compose up` and the test containers can run
 # at the same time.
 #
-# ## This serves the platform host, not the reference demo app
+# ## Which process this serves — #267, AC-5
 #
-# `retinue serve` mounts the GraphQL host. That is a complete API and it is *not* the example's web UI, which
-# `npm run app` serves locally — the image carries neither `examples/scripts/` nor a built composer bundle.
-# Tracked as #267. It matters for more than looks: the GraphQL host's `sendMessage` coordinates a conversation's
-# slot and does **not** create the run row, so a bare client can drive this stack as far as admission and no
-# further. The reference app's own routes create the run first, which is what a full turn needs.
+# **`app` serves the reference application** — the web UI plus `/api/message` — on :4010. That is what
+# `docker compose up` is for: the thing a consumer wants to see first, and the same process `npm run app`
+# starts locally.
+#
+# **`api` serves the platform's GraphQL host alone**, on :4011. Useful for checking the host works unaided,
+# and it is a different thing: the host's `sendMessage` coordinates a conversation's *slot* and does **not**
+# create the run row, so a bare client can drive it as far as admission and no further. The reference app's own
+# route creates the run first, which is what a full turn needs. A consumer copying this file for their own
+# application is replacing `app`, not `api`.
+#
+# Both are built from the same image. The difference is one command.
 #
 # ## Nothing here is a secret
 #
@@ -71,6 +77,34 @@ services:
       postgres: { condition: service_healthy }
     restart: "no"
 
+  app:
+    build: .
+    # The reference application: the page, `/composer.js`, and `/api/message`. This is the one to open.
+    command: ["node", "examples/scripts/run-app.mjs"]
+    environment:
+      RETINUE_DATABASE_URL: postgres://postgres:postgres@postgres:5432/retinue
+      RETINUE_REDIS_URL: redis://redis:6379
+      RETINUE_MODEL_API_KEY: ${RETINUE_MODEL_API_KEY:?set RETINUE_MODEL_API_KEY, e.g. in a .env file beside this one}
+      RETINUE_MODEL_ID: ${RETINUE_MODEL_ID:-gpt-4o}
+      RETINUE_MODEL_BASE_URL: ${RETINUE_MODEL_BASE_URL:-}
+      RETINUE_EXAMPLE_DEV_AUTH: "1"
+      # `run-app.mjs` defaults this to `agentkit_example` and sets it as the search_path. The migrate service
+      # above provisions `public`, so the app is pointed at `public` here rather than migrating a second schema.
+      RETINUE_EXAMPLE_SCHEMA: public
+      PORT: "4000"
+    ports: ["4010:4000"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+    healthcheck:
+      # `/composer.js`, not `/` — AC-2. The page renders without its script, so probing the page alone is
+      # exactly the check that would have passed while the UI did nothing.
+      test: ["CMD-SHELL", "node -e \"fetch('http://localhost:4000/composer.js').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
   api:
     build: .
     command: ["node", "backend/dist/server/bin.js", "serve"]
@@ -88,7 +122,7 @@ services:
       # "authentication" by setting something that looks truthy.
       RETINUE_EXAMPLE_DEV_AUTH: "1"
       PORT: "4000"
-    ports: ["4010:4000"]
+    ports: ["4011:4000"]
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }

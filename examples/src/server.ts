@@ -23,7 +23,14 @@ import { ROLLUP_PERIODS, parseWindowKey } from "@retinue/agentkit/persistence";
 import { startOrEnqueueRun, turnText } from "@retinue/agentkit/runtime";
 import { bucketStartFor, createRollupJob } from "@retinue/agentkit/usage";
 import { createPostgresApprovalGrantStore, createPostgresConversationStore, createPostgresMessageStore, createPostgresSessionStateStore, createPostgresUsageLimitStore, createPostgresUsageRollupStore } from "@retinue/agentkit/adapters/postgres";
-import { citationViewModel, formatCost, formatTokens, shapeUsagePanel } from "@retinue/react";
+/**
+ * From `/view-models`, not the root — #267.
+ *
+ * The root barrel re-exports the hooks, which import React. Importing these four pure functions through it
+ * pulled React into this server's module graph, and the Docker image — installed with `--omit=dev` — does not
+ * have it. The reference app failed to start with `Cannot find package 'react'`.
+ */
+import { citationViewModel, formatCost, formatTokens, shapeUsagePanel } from "@retinue/react/view-models";
 import { COMPACT_AT_FRACTION, compactConversation, createExampleSummarizer } from "./compaction.js";
 import { HISTORY_READ_LIMIT } from "./history.js";
 import { contextUsage } from "./context-usage.js";
