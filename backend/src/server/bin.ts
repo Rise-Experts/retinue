@@ -44,19 +44,18 @@ const postgres = async (url: string) => {
 };
 
 /**
- * The advisory-lock key migrations serialise on — task #252 AC-2.
+ * The advisory-lock key comes from `schema.ts` — #252's AC-2, and #266's AC-4.
  *
- * An arbitrary constant, and it has to be: Postgres advisory locks are a flat 64-bit namespace with no
- * registry, so the only protection against collision is picking something nobody else would. Derived from the
- * ASCII of "retinue" so it is at least reproducible rather than a magic number somebody will "tidy up".
+ * It used to be defined here. That made "the CLI and `auto` mode use the same key" a property of two constants
+ * happening to be equal, and a copy that drifted would produce two locks, no serialisation, and the original
+ * crash returning with the fix apparently in place. Two constants that must be equal are one constant.
  */
-const MIGRATION_LOCK = 0x72_65_74_69_6e_75; // "retinu"
 
 const migrate = async (flags: ReadonlySet<string>, env = process.env): Promise<number> => {
   const config = loadConfig(env);
   const { sql, open, end } = await postgres(config.databaseUrl);
   try {
-    const { createSchemaManager } = await import("../entries/adapters-postgres.js");
+    const { createSchemaManager, MIGRATION_LOCK } = await import("../entries/adapters-postgres.js");
 
     if (flags.has("--status") || flags.has("--dry-run")) {
       // Read-only paths take no lock. `plan()` and `currentVersion()` are documented as side-effect free — only
@@ -169,7 +168,7 @@ const doctor = async (env = process.env): Promise<number> => {
       };
     },
     schemaVersions: async (sql) => {
-      const { createSchemaManager } = await import("../entries/adapters-postgres.js");
+      const { createSchemaManager, MIGRATION_LOCK } = await import("../entries/adapters-postgres.js");
       const manager = createSchemaManager(sql as never);
       return { current: await manager.currentVersion(), target: manager.targetVersion() };
     },

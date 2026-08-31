@@ -73,6 +73,15 @@ export const boot = async (options: BootOptions): Promise<BootResult> => {
 
   const provisioned = await provisionSchema(sql, {
     mode: config.schemaMode,
+    /**
+     * Passed so `auto` mode serialises — #266.
+     *
+     * Several workers booting against a fresh database is the ordinary Kubernetes init pattern, and without
+     * this one of them crashes on Postgres's own type catalogue with an error naming nothing actionable.
+     * `undefined` for a process whose adapter cannot hold a connection, which is correct: those are
+     * single-process and have nothing to race with.
+     */
+    ...(open === undefined ? {} : { open }),
     // Routed through the structured log rather than printed, so `plan` mode's diff is machine-readable
     // in the same stream as everything else.
     log: (message) => log({ event: "schema", mode: config.schemaMode, message }),
