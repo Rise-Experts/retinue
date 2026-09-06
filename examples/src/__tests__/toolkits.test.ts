@@ -19,6 +19,9 @@ import { exampleRegistry } from "../index.js";
 import { asExampleBackend } from "../memory-composition.js";
 import { createMemoryBackend } from "../memory-app.js";
 import { exampleToolkits, searchProviderFrom } from "../toolkits.js";
+import { authorization } from "../index.js";
+import { createFileService } from "@retinue/agentkit/knowledge";
+import { createMemoryFileContentStore, createMemoryFileMetadataStore } from "@retinue/agentkit/persistence";
 
 const context: ExecutionContext = {
   tenantId: asId("t-toolkits"),
@@ -249,5 +252,77 @@ describe("the wave-2 toolkits reach the app's registry", () => {
      */
     const everything = { ...WAVE_TWO, RETINUE_ENABLE_BROWSER: "1" } as Record<string, string | undefined>;
     expect(exampleToolkits(everything).map((provider) => provider.id)).not.toContain("browser");
+  });
+});
+
+/**
+ * Audio reaches the app — REQ-062 (#257), task #258, AC-11.
+ *
+ * The AC is blunt about why: *"given the eight-instance history of built-and-unreachable features here, a
+ * backend-only landing does not count as done."* The ports, the adapters and the two tools all pass their own
+ * suites and would reach nothing without the wiring this asserts.
+ */
+describe("the audio tools reach the app's registry", () => {
+  /**
+   * A backend **with a file service**, which the memory composition deliberately lacks.
+   *
+   * The app's memory mode has no attachments on purpose — its two processes share no content store — so the
+   * audio tools correctly contribute nothing there. Adding a file service here is a test fixture rather than a
+   * change to that composition: the assertion is about the app's registry wiring, not about whether the memory
+   * mode grew attachments.
+   */
+  const withFiles = () => {
+    const base = backend();
+    return {
+      ...base,
+      files: createFileService({
+        metadata: createMemoryFileMetadataStore(),
+        content: createMemoryFileContentStore(),
+        authorization,
+        limits: { maxBytes: 25 * 1024 * 1024, allowedMediaTypes: ["audio/mpeg"], signedUrlSeconds: 300 },
+      }),
+    } as never;
+  };
+
+  const audioNames = async () => {
+    const catalogue = await exampleRegistry(withFiles()).catalog(context, {
+      preloaded: [],
+      categories: [],
+      excluded: [],
+    });
+    return [...catalogue.preloaded, ...catalogue.discoverable].map((entry) => entry.name);
+  };
+
+  it("contributes transcribe and speech_generate when a key is configured", async () => {
+    setEnv({ RETINUE_AUDIO_API_KEY: "sk-audio-test" });
+    const names = await audioNames();
+    expect(names).toContain("transcribe");
+    expect(names).toContain("speech_generate");
+  });
+
+  it("contributes nothing when the composition has no file service", async () => {
+    /**
+     * The other half, and it is a real configuration rather than a hypothetical: the memory composition has no
+     * attachments. A `transcribe` with nowhere to read from would be a tool that always fails, which is the
+     * shape this app refuses everywhere else.
+     */
+    setEnv({ RETINUE_AUDIO_API_KEY: "sk-audio-test" });
+    expect(await namesInCatalogue()).not.toContain("transcribe");
+  });
+
+  it("contributes neither when no key is configured", async () => {
+    /**
+     * Wiring is the toggle, here as everywhere. A `transcribe` that answered "not configured" would cost the
+     * model a turn to discover and read, in a transcript, exactly like a broken integration.
+     */
+    setEnv({ RETINUE_AUDIO_API_KEY: undefined, RETINUE_MODEL_API_KEY: undefined });
+    const names = await audioNames();
+    expect(names).not.toContain("transcribe");
+    expect(names).not.toContain("speech_generate");
+  });
+
+  it("falls back to the model key, so an OpenAI deployment needs no second variable", async () => {
+    setEnv({ RETINUE_AUDIO_API_KEY: undefined, RETINUE_MODEL_API_KEY: "sk-model-test" });
+    expect(await audioNames()).toContain("transcribe");
   });
 });

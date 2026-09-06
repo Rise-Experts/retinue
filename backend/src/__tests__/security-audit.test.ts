@@ -161,6 +161,13 @@ describe("egress — AC-2", () => {
       "mcp/egress.ts",
       "toolkit/http.ts",
       "adapters/embeddings/openai.ts",
+      /**
+       * Transcription and speech — REQ-062 (#257). The same justification as the embeddings adapter directly
+       * above: an operator-configured provider endpoint, chosen at wiring time and **never named by a model**.
+       * A tool passes a file id; the URL is the deployment's, not the model's, so there is no SSRF surface for
+       * the egress policy to protect.
+       */
+      "adapters/audio/openai.ts",
       "connections/oauth/index.ts",
       "connections/oauth/service.ts",
     ];

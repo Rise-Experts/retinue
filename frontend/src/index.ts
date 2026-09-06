@@ -27,5 +27,6 @@ export * from "./usage-panel.js";
 // The citation view model, but not the components — `./ui` stays opt-in. (So does React itself, for a
 // browser; see the note on the hooks above for why that is not the same as this entry being React-free.)
 export * from "./citations.js";
+export * from "./audio.js";
 
 export * from "./localization.js";

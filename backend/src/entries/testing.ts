@@ -25,3 +25,4 @@ export * from "../testing/conformance/index.js";
 export * from "../testing/stub-model.js";
 export * from "../testing/memory-backend.js";
 export * from "../testing/pglite.js";
+export * from "../testing/conformance/audio.js";

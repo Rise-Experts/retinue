@@ -5,6 +5,7 @@
  */
 
 import type { MessagePart } from "../types/index.js";
+import { isPlayableAudio } from "../audio.js";
 
 export type PartRenderKind =
   | "text"
@@ -12,6 +13,14 @@ export type PartRenderKind =
   | "tool"
   | "interaction"
   | "attachment"
+  /**
+   * Audio, split out of `attachment` — REQ-062 AC-10.
+   *
+   * A filename and a size is a download link, and audio is the one attachment kind where the useful
+   * interaction is *playing* rather than opening. A user who has to download an MP3 to hear a three-second
+   * answer will not.
+   */
+  | "audio"
   | "reference"
   | "artifact"
   | "status"
@@ -88,6 +97,10 @@ export const partSummary = (part: MessagePart): { kind: PartRenderKind; preview:
     case "approval":
       return { kind, preview: `Approve ${part.toolName}: ${part.summary}` };
     case "file":
+      // Audio is playable, so it gets its own kind and a UI can dispatch to a player rather than a link.
+      if (isPlayableAudio(part.mediaType)) {
+        return { kind: "audio", preview: `${part.filename} · ${formatByteSize(part.byteSize)}` };
+      }
       // Name and size, because the size is what a user needs before deciding to open it — and because the
       // reference is all there is: the content was never loaded, so a preview of it does not exist to show.
       return { kind, preview: `${part.filename} · ${formatByteSize(part.byteSize)}` };

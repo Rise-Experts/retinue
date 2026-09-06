@@ -257,3 +257,11 @@ export { createHttpRequestTool, createHttpWriteTool } from "./http.js";
 export { createSearchKnowledgeTool } from "./knowledge.js";
 export type { KnowledgeRetriever } from "./knowledge.js";
 export { createFetchJsonTool, createFetchUrlTool, createWebSearchTool } from "./web.js";
+/**
+ * Audio — REQ-062 (#257), task #258.
+ *
+ * Library tools rather than a `tools-media` package, and the reason is argued in `audio.ts`: they take ports,
+ * not a vendor, exactly as `createWebSearchTool` does.
+ */
+export { createSpeechGenerateTool, createTranscribeTool } from "./audio.js";
+export type { AudioToolDeps } from "./audio.js";

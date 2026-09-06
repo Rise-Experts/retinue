@@ -30,6 +30,7 @@
 // Every export here must be free of React, transitively. The test beside this file asserts that by importing
 // this module in isolation and failing if the graph reaches `react`.
 export * from "./citations.js";
+export * from "./audio.js";
 export * from "./usage-panel.js";
 export * from "./context-inspector.js";
 export * from "./localization.js";

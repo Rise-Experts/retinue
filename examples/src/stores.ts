@@ -175,8 +175,34 @@ export const postgresBackend = (
           content: createPostgresFileContentStore(sql),
           authorization,
           limits: {
-            maxBytes: 8 * 1024 * 1024,
-            allowedMediaTypes: ["image/png", "image/jpeg", "image/webp", "image/gif", "application/pdf", "text/plain"],
+            /**
+             * 25MB, raised from 8 for audio — REQ-062 (#257).
+             *
+             * The audio ceiling is 25MB because that is where every hosted transcription API draws its own
+             * line, and a file service that refused at 8 would make `transcribe` unusable for anything longer
+             * than a few minutes — the tool would exist and the recording could never reach it.
+             */
+            maxBytes: 25 * 1024 * 1024,
+            allowedMediaTypes: [
+              "image/png",
+              "image/jpeg",
+              "image/webp",
+              "image/gif",
+              "application/pdf",
+              "text/plain",
+              /**
+               * Audio — REQ-062, AC-3: *"attachment upload, storage and retention treat audio like any other
+               * file"*. Found by wiring the tools: they were reachable and every upload was refused here, so
+               * the whole path existed and could not be exercised. The list matches `AUDIO_MEDIA_TYPES`.
+               */
+              "audio/mpeg",
+              "audio/mp4",
+              "audio/wav",
+              "audio/webm",
+              "audio/ogg",
+              "audio/flac",
+              "audio/x-m4a",
+            ],
             signedUrlSeconds: 300,
           },
         }),

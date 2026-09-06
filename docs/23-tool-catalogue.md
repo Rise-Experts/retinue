@@ -270,8 +270,8 @@ tool.
 | `weather_forecast` | `tools-weather` | general | `read` | `never` | OpenWeather |
 | `place_search` | `tools-maps` | general | `read` | `never` | Google Maps |
 | `image_generate` | `tools-media` | media | `internal-write` | `policy` | DALL·E, Replicate, Fal, ModelsLab |
-| `speech_generate` | `tools-media` | media | `internal-write` | `policy` | ElevenLabs, Cartesia |
-| `transcribe` | `tools-media` | media | `read` | `never` | Whisper-compatible endpoints |
+| `speech_generate` | **`agentkit` (library)** | media | `internal-write` | `policy` | Any `SpeechProvider`; OpenAI shipped |
+| `transcribe` | **`agentkit` (library)** | media | `read` | `never` | Any `TranscriptionProvider`; OpenAI shipped |
 | `video_generate` | `tools-media` | media | `internal-write` | `always` | Luma, Replicate. `always` — minutes of GPU per call |
 
 ## Wave 3 — token or OAuth · sibling packages
@@ -341,7 +341,7 @@ implement differently.
 | `tools-finance` | finance | `stock_quote`, `stock_fundamentals` | 2 |
 | `tools-weather` | general | `weather_forecast` | 1 |
 | `tools-maps` | general | `place_search` | 1 |
-| `tools-media` | media | `image_generate`, `speech_generate`, `transcribe`, `video_generate`. The audio two need a runtime modality first — [REQ-062, #257](https://github.com/Rise-Experts/retinue/issues/257) | 4 |
+| `tools-media` | media | `image_generate`, `video_generate`. **The audio two moved** — see below | 2 |
 
 **~66 more across 12 packages.**
 
@@ -485,4 +485,24 @@ The remaining cost of a large catalogue is tokens, not accuracy — 12.5× at 20
 prompt caching, which does not exist yet
 ([REQ-058, #246](https://github.com/Rise-Experts/retinue/issues/246)). The catalogue and system prompt are
 byte-identical across every turn of a conversation, which is exactly the input caching exists for.
+
+
+## `transcribe` and `speech_generate` are library tools, not `tools-media` — REQ-062 (#257)
+
+This table used to assign both to a `tools-media` sibling package. They shipped in the **standard library**
+instead, and the reason is a distinction this catalogue is otherwise good at keeping:
+
+**A sibling package exists for a vendor.** `tools-github` wraps GitHub's API, and a change to that API is a
+patch to one small package rather than a platform release. Neither audio tool wraps a vendor. They take a
+`TranscriptionProvider` and a `SpeechProvider` — *ports* — exactly as `web_search` takes a `SearchProvider` and
+lives in the library for that reason. Whisper, Deepgram and a self-hosted `whisper.cpp` are values of a
+parameter, not three packages.
+
+A `tools-media` holding only these two would have contained no vendor code at all: two thin wrappers over
+runtime ports, in a package whose whole justification is isolating a vendor. `image_generate` and
+`video_generate` are a different matter — if they arrive as vendor integrations, that package is the right home
+for them, and the row above still names them.
+
+The assignment was made before the provider-port pattern had settled, which is why the table is corrected
+rather than obeyed.
 

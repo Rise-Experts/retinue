@@ -257,6 +257,18 @@ export const CREDENTIAL_FIELD_EXEMPTIONS: readonly { readonly file: string; read
       "row, and `CredentialAudit` receives the scheme and the ref, never the value.",
   },
   {
+    file: "adapters/audio/openai.ts",
+    reason:
+      "`OpenAiAudioConfig.apiKey` is the *deployment's own* provider key, supplied by the host at wiring time — " +
+      "the same shape, the same limits and the same reasoning as the embeddings adapter and the model provider " +
+      "factory. It reaches one `authorization` header on an operator-configured endpoint and nowhere else: it " +
+      "is never written to a table, never placed in a message part, a result envelope or an audit row, and the " +
+      "provider's error body is truncated rather than echoed whole. A `credentialRef` would be the wrong shape " +
+      "here for the reason it is wrong for the model provider — this is one deployment's key for its own " +
+      "provider account, not a per-tenant third-party grant, and routing it through the credential resolver " +
+      "would imply a per-tenant secret that does not exist.",
+  },
+  {
     file: "models/provider-factory.ts",
     reason:
       "`ProviderCredentials.apiKey` is the model provider's own key, supplied by the host at wiring time and " +

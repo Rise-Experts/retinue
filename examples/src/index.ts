@@ -35,10 +35,12 @@ import type { RetinueConfig } from "@retinue/agentkit/server";
 import { createDevAuthenticate } from "./auth.js";
 import type { Authenticate } from "@retinue/agentkit/server";
 import { STANDARD_TOOL_CATEGORIES, createStandardToolProvider } from "@retinue/agentkit/tools";
+import { createSpeechGenerateTool, createTranscribeTool } from "@retinue/agentkit/tools";
 import { createAttachmentResolver } from "@retinue/agentkit/knowledge";
 import { createFlowRunner } from "@retinue/agentkit/flows";
 import { EXAMPLE_FLOWS, createExampleFlowHandler } from "./flows.js";
 import { exampleToolkits, searchProviderFrom } from "./toolkits.js";
+import { audioProvidersFrom, audioToolDeps } from "./audio.js";
 
 /**
  * The catalogue controls this app wires — REQ-045 (#204), task #210.
@@ -276,6 +278,13 @@ const TOOLKIT_READ_TOOLS = [
   "email_compose_preview",
   "email_get_status",
   "email_list_sent",
+  /**
+   * Transcription — REQ-062. Both roles, like the other reads.
+   *
+   * Reading a recording somebody uploaded to this conversation is the same kind of act as reading a PDF they
+   * attached, and the control is the file service's authorization rather than the role.
+   */
+  "transcribe",
 ] as const;
 
 /**
@@ -338,6 +347,14 @@ const TOOLKIT_WRITE_TOOLS = [
   // afterwards — it is in somebody else's mailbox. `email_compose_preview` is granted to both roles above so
   // the rehearsal is available without the send.
   "email_send",
+  /**
+   * Speech generation — REQ-062. `editor` only, and gated by policy rather than always.
+   *
+   * It creates a file the tenant owns, so nothing leaves the deployment — but it costs money per character,
+   * which is why it is not a read. `policy` rather than `always` because a mandatory click on every spoken
+   * sentence would make the tool unusable, and the character ceiling already bounds the spend.
+   */
+  "speech_generate",
 ] as const;
 
 // The imported MCP tools come from `./mcp.ts`, derived from the administrator classification there.
@@ -613,6 +630,31 @@ const exampleToolProviders = (backend: ExampleBackend) => [
     // parameter, so switching from Brave to Tavily changes an environment variable and nothing else.
     ...(searchProviderFrom(process.env) === undefined ? {} : { search: searchProviderFrom(process.env) }),
   }),
+  /**
+   * `transcribe` and `speech_generate` — REQ-062 (#257), task #258, AC-11.
+   *
+   * Its own provider rather than an option on the standard one, because these tools are **per context**: the
+   * file reader has to be bound to the caller, so a principal cannot transcribe a recording they could not
+   * open. `listTools` receives the context, which is exactly where that binding belongs.
+   *
+   * Absent when no audio key is configured, and absent when the composition has no file service — a
+   * `transcribe` with nowhere to read from would be a tool that always fails.
+   */
+  {
+    id: "example.audio-tools",
+    async listTools(context: ExecutionContext) {
+      const providers = audioProvidersFrom(process.env);
+      if (backend.files === undefined || providers.transcription === undefined || providers.speech === undefined) {
+        return [];
+      }
+      const deps = { authorization, idempotency: backend.idempotency, approvals: approvalGateFor(backend) };
+      const audio = audioToolDeps(backend.files as never, context);
+      return [
+        createTranscribeTool(deps, providers.transcription, audio),
+        createSpeechGenerateTool(deps, providers.speech, audio),
+      ];
+    },
+  },
   /**
    * The integration toolkits — one call each, and nothing in `backend/` knows they exist (#214 AC-2).
    *
