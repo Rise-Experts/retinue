@@ -25,7 +25,10 @@ That gap survived because a closed union with an exhaustive `switch` reads as co
 compiled, typechecked, satisfied the `never` assertion at the end of the switch, and threw at runtime. The type
 system guarantees every member is *mentioned*; only a call finds out whether it is *served*.
 `provider-coverage.test.ts` is that call, and it enumerates `MODEL_PROVIDERS` rather than a hand-written list,
-so a provider added to the union is either wired or explicitly listed as unserved with a reason.
+so a provider added to the union is either wired or explicitly listed in `NOT_YET_SERVED` with a written reason
+**and** a test asserting it throws `capability_unavailable` rather than something incidental. Adding a member
+and doing neither fails. The list is named "not yet" because it is meant to shrink, and a second assertion
+fails when its length changes — which is the moment to delete an entry rather than leave a stale excuse.
 
 **Bedrock is not wired here because it cannot be verified here.** #256 requires one real turn against it as
 evidence, there is no AWS account available to this work, and #268 settled the precedent: shipping a provider
@@ -34,7 +37,9 @@ first to run it.
 
 ### Google Vertex AI: not a provider — #256, AC-6
 
-**Decided: no, and `ModelProvider` does not gain the member.**
+**Decided: no, and `ModelProvider` does not gain the member.** Asserted in `provider-coverage.test.ts` rather
+than only recorded here, because the mistake this REQ exists to fix is a member added speculatively — and a
+decision that lives only in prose is one the next person re-litigates by editing a union.
 
 Vertex serves the same Gemini models as the `google` provider already does. What differs is the *authentication
 and routing* — a GCP project, a region, and Application Default Credentials or a service account, rather than an
@@ -55,8 +60,23 @@ speculatively.
 ### `dataResidency` is read — #256, AC-7
 
 Audited rather than assumed, because the AC anticipated it might be a dead field. It is not: `eligible()` in
-`models/index.ts` excludes any model whose residency does not cover the policy's, and `models.test.ts` asserts
-both directions — a residency that selects a specific model, and one that excludes every candidate and throws.
+`models/index.ts` excludes any model whose residency does not cover the policy's, and both directions are
+asserted — a residency that selects a specific model, and one that excludes every candidate and throws. The
+candidate ordering in that test is deliberate: the *wrong* model is first, so a filter that did nothing would
+return it and the test would fail rather than pass by luck.
+
+### What #256 did not do
+
+**Bedrock is still unwired, and the exact-list check is what makes that visible rather than forgotten.** AC-5
+requires one real turn as evidence; there is no AWS account available to this work. Wiring it would satisfy the
+letter of "resolves" — the AI SDK constructs a model object without touching the network — while leaving the
+first person who selects it as the first person to run it. That is the trade #268 already settled, and AC-5
+states it outright: *"a claim of support with no live call is worse"*.
+
+AC-3 sharpens it further, and is worth recording because it rules out the obvious shortcut: AWS credentials
+must come through `ProviderCredentials`, **not** the ambient AWS chain. A provider that silently works because
+the developer has `~/.aws/credentials` is the same defect as an Azure toolkit riding an `az` login (#236 AC-7),
+and it is the shape a first attempt naturally takes.
 
 It does **not** belong in #242's unread-field inventory.
 
