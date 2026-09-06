@@ -2,7 +2,7 @@
 
 ## Model platform
 
-Initial providers: OpenAI, Anthropic, Google, Mistral, Azure OpenAI, Amazon Bedrock and OpenAI-compatible endpoints.
+Providers: OpenAI, Anthropic, Google, Mistral, Azure OpenAI and OpenAI-compatible endpoints. Amazon Bedrock was declared and unwired; it was **removed** rather than wired — see below.
 
 Each model definition contains:
 
@@ -18,8 +18,9 @@ Resolution considers administrator policy, tenant policy, required capabilities,
 
 ### Which providers actually resolve — #256
 
-The list above is what `ModelProvider` *declares*. Six of the seven resolve; **`bedrock` does not yet**, and it
-throws `capability_unavailable` when selected.
+The list above is what `ModelProvider` declares, and **all six resolve**. That is now asserted unconditionally:
+`provider-coverage.test.ts` enumerates `MODEL_PROVIDERS` and constructs each one, with no skip and no
+exceptions list to keep in step.
 
 That gap survived because a closed union with an exhaustive `switch` reads as complete coverage: `bedrock`
 compiled, typechecked, satisfied the `never` assertion at the end of the switch, and threw at runtime. The type
@@ -30,10 +31,23 @@ so a provider added to the union is either wired or explicitly listed in `NOT_YE
 and doing neither fails. The list is named "not yet" because it is meant to shrink, and a second assertion
 fails when its length changes — which is the moment to delete an entry rather than leave a stale excuse.
 
-**Bedrock is not wired here because it cannot be verified here.** #256 requires one real turn against it as
-evidence, there is no AWS account available to this work, and #268 settled the precedent: shipping a provider
-behind a seam that *looks* tested is worse than shipping none, because the first person to select it is the
-first to run it.
+**Bedrock was removed from the union rather than wired.** Two reasons, and the first is the general one:
+
+*A declared provider that throws is worse than an absent one.* It typechecks, satisfies the factory's
+exhaustive `never` assertion, and fails at runtime for whoever selects it first — which is exactly how it
+survived. Removing it makes the goal true by construction, and costs nothing today because nothing could select
+it and get a model.
+
+*And it could not be verified.* #256's AC-5 requires one real turn as evidence; there is no AWS account
+available to this work. Constructing a Bedrock model object needs no network, so an unverified wiring would
+have satisfied the letter of "resolves" while leaving its first user as its first tester — the trade #268
+settled for crypto.
+
+Adding it back is a one-line change plus a case in `provider-coverage.test.ts`, and that test is what will
+force the verification then rather than permit the same gap again. AC-3 is the other thing to carry forward:
+credentials must come through `ProviderCredentials`, **not** the ambient AWS chain, because a provider that
+silently works from `~/.aws/credentials` is the same defect as an Azure toolkit riding an `az` login
+(#236 AC-7) — and that is the shape a first attempt naturally takes.
 
 ### Google Vertex AI: not a provider — #256, AC-6
 

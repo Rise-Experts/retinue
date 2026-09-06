@@ -6,13 +6,34 @@
 
 import { AgentPlatformError } from "../core/errors.js";
 
+/**
+ * The providers that actually resolve — REQ-061 (#255), task #256.
+ *
+ * `"bedrock"` was here and threw `capability_unavailable` when selected. It is gone, and removing it rather
+ * than wiring it is the decision:
+ *
+ * - **A declared provider that throws is worse than an absent one.** It typechecks, satisfies the exhaustive
+ *   `switch`, and fails at runtime for whoever selects it first — and it survived precisely because a closed
+ *   union reads as complete coverage. The type system guarantees every member is *mentioned*; only a call
+ *   finds out whether it is *served*.
+ * - **Wiring it could not be verified.** #256's AC-5 requires one real turn as evidence, and constructing a
+ *   Bedrock model needs no network — so an unverified wiring would satisfy "resolves" while leaving its first
+ *   user as its first tester. #268 settled that precedent.
+ *
+ * Nothing is lost today: nothing could select it and get a model. Adding it back is a one-line change plus a
+ * `provider-coverage.test.ts` case, and that test is what will force the verification then rather than allow
+ * the same gap again.
+ *
+ * Vertex is absent for a different reason, argued in `docs/03`: it serves the same Gemini models the `google`
+ * provider does, differing in credentials rather than model family, so a second member would make every
+ * `allowedProviders` policy name both to mean "Gemini".
+ */
 export const MODEL_PROVIDERS = [
   "openai",
   "anthropic",
   "google",
   "mistral",
   "azure-openai",
-  "bedrock",
   "openai-compatible",
 ] as const;
 

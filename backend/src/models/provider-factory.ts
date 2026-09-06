@@ -72,14 +72,16 @@ export const createProviderFactory = (config: ProviderFactoryConfig = {}): Provi
           return createOpenAICompatible({ name: c.name ?? "openai-compatible", baseURL: c.baseURL, apiKey: c.apiKey })(
             model.modelId,
           );
-        case "bedrock":
-          // Bedrock wiring (@ai-sdk/amazon-bedrock + AWS credentials) is a follow-up.
-          throw new AgentPlatformError({
-            code: "capability_unavailable",
-            message: "Amazon Bedrock provider is not wired yet",
-            retryable: false,
-          });
         default: {
+          /**
+           * Unreachable while `MODEL_PROVIDERS` and this switch agree — which is the point, and is now the
+           * *only* thing standing between a declared provider and a runtime failure.
+           *
+           * `"bedrock"` used to have a case here that threw. It was removed from the union in #256 rather than
+           * wired, because a declared provider that throws is worse than an absent one: it typechecks,
+           * satisfies this `never` assertion, and fails for whoever selects it first. `provider-coverage.test.ts`
+           * is what turns "mentioned in a switch" into "actually constructs".
+           */
           const exhaustive: never = model.provider;
           throw new AgentPlatformError({
             code: "capability_unavailable",

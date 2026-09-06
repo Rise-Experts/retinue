@@ -1,42 +1,31 @@
 /**
- * Every declared provider and mode is either served or explicitly unserved — REQ-061 (#255), task #256.
+ * Every declared provider and mode actually resolves — REQ-061 (#255), task #256.
  *
  * The exact-list habit `EXEMPT`, `PACKAGES` and `RELEASABLE` already use, applied to the two unions that had
  * grown a member nothing implemented. #256's AC-1 asked for this to land **before any wiring**, and the
  * failure it produced is in the issue comment: *"AgentPlatformError: Amazon Bedrock provider is not wired yet"*.
  * A check that first appears alongside its own fix has never been seen to work.
  *
- * ## Why `NOT_YET_SERVED` exists rather than a passing test
+ * ## There is no exceptions list, and that is the outcome
  *
- * Bedrock is still not wired, and that is a decision rather than an omission — #256's AC-5 requires one real
- * turn against it as evidence, and *"a claim of support with no live call is worse"* than the
- * `capability_unavailable` it throws today. There is no AWS account available to this work, so wiring it would
- * mean shipping a provider whose first user is its first tester. #268 settled that precedent for crypto and the
- * reasoning carries.
+ * An earlier version of this file carried `NOT_YET_SERVED` — a partition, so a declared-but-unwired provider
+ * could be listed with a reason instead of failing. Bedrock was its only entry.
  *
- * So the union is partitioned explicitly. A provider is served — it constructs — or it is on `NOT_YET_SERVED` with a
- * written reason and a test asserting it throws the honest error. **Adding a member and doing neither fails.**
- * That is the property that stops the next Bedrock: the type system guarantees every member is *mentioned*,
- * and only a call finds out whether it is *served*.
+ * It was resolved by **removing `"bedrock"` from the union** rather than wiring it. A declared provider that
+ * throws is worse than an absent one: it typechecks, satisfies the factory's exhaustive `never` assertion, and
+ * fails at runtime for whoever selects it first — which is exactly how it survived. And wiring it could not be
+ * verified: #256's AC-5 requires one real turn as evidence, constructing a Bedrock model needs no network, and
+ * an unverified wiring would satisfy "resolves" while leaving its first user as its first tester.
+ *
+ * So the assertion is now unconditional: **every member of `MODEL_PROVIDERS` constructs.** No skip, no
+ * allowance, nothing to keep in step. Adding Bedrock back is a one-line change plus a case here, and this test
+ * is what will force the verification then rather than permit the same gap again.
  */
 import { describe, expect, it } from "vitest";
 
 import { createModelRegistry, MODEL_PROVIDERS, type ModelDefinition, type ModelProvider } from "../index.js";
 import { NO_RESULT_REASONS, type RetrievalMode } from "../../knowledge/retrieval.js";
 import { createProviderFactory } from "../provider-factory.js";
-
-/**
- * Declared and deliberately not served, each with the reason it is not.
- *
- * A list rather than a skip: a skipped case reports success while the gap remains, and the whole failure being
- * fixed is a member that looked covered because a `switch` mentioned it.
- */
-const NOT_YET_SERVED: Readonly<Record<string, string>> = {
-  bedrock:
-    "No AWS account is available to verify it, and #256 AC-5 requires one real turn as evidence. Wiring it " +
-    "would mean the first person to select it is the first to run it — worse than the honest " +
-    "`capability_unavailable` it throws today.",
-};
 
 const definition = (provider: ModelProvider): ModelDefinition =>
   ({
@@ -67,18 +56,8 @@ const credentials = {
 
 const factory = () => createProviderFactory({ credentials: { ...(credentials as Record<string, unknown>) } as never });
 
-describe("every declared model provider is served or explicitly unserved — AC-1", () => {
-  it.each(MODEL_PROVIDERS)("%s", (provider) => {
-    if (provider in NOT_YET_SERVED) {
-      /**
-       * Asserted to throw, and to throw the *right* error. An unserved provider that failed with a stack trace
-       * or a vendor's own message would be indistinguishable from a broken one — `capability_unavailable` is
-       * what tells a deployment this is a gap rather than a fault.
-       */
-      expect(() => factory().languageModel(definition(provider)), provider).toThrow(/not wired/i);
-      expect(NOT_YET_SERVED[provider], `${provider} needs a written reason`).toBeTruthy();
-      return;
-    }
+describe("every declared model provider resolves — AC-1", () => {
+  it.each(MODEL_PROVIDERS)("%s constructs a language model", (provider) => {
     /**
      * Constructs, rather than calls. Every AI SDK factory builds a model object without touching the network,
      * so this asserts the wiring — the import, the credential path, the model id — without an account with each
@@ -88,38 +67,29 @@ describe("every declared model provider is served or explicitly unserved — AC-
     expect(factory().languageModel(definition(provider)), provider).toBeDefined();
   });
 
-  it("the union is exactly seven, six served and one not", () => {
+  it("the union is exactly the six that are wired", () => {
     /**
      * The assertion that stops the next unwired provider. A member added to `MODEL_PROVIDERS` fails the loop
-     * above unless it is wired or listed here — and updating this line is a deliberate moment to ask whether it
-     * has actually been run.
+     * above unless it constructs, and fails this line as well — which is a deliberate moment to ask whether it
+     * has actually been *run* against the vendor, not merely imported.
      */
     expect([...MODEL_PROVIDERS].sort()).toEqual([
       "anthropic",
       "azure-openai",
-      "bedrock",
       "google",
       "mistral",
       "openai",
       "openai-compatible",
     ]);
-    expect(Object.keys(NOT_YET_SERVED)).toEqual(["bedrock"]);
   });
 
-  it("the unserved list is the thing that has to shrink", () => {
+  it("bedrock is absent rather than declared and throwing", () => {
     /**
-     * A deliberate tripwire. When Bedrock is wired, this fails — which is the moment to delete the entry rather
-     * than leave a stale excuse behind. `NOT_YET_SERVED` rather than `UNSERVED` for the same reason: the name
-     * carries the intent that the list is temporary.
+     * The resolution of #256, asserted so it cannot drift back. Adding `"bedrock"` to the union without wiring
+     * it fails the loop above; adding it *with* an unverified wiring is what AC-5 forbids, and this line is the
+     * reminder of why the member is gone rather than stubbed.
      */
-    expect(Object.keys(NOT_YET_SERVED)).toHaveLength(1);
-  });
-
-  it("every unserved provider is a real member of the union", () => {
-    // A stale entry would excuse a provider that no longer exists, and quietly stop covering one that does.
-    for (const provider of Object.keys(NOT_YET_SERVED)) {
-      expect(MODEL_PROVIDERS as readonly string[], provider).toContain(provider);
-    }
+    expect(MODEL_PROVIDERS as readonly string[]).not.toContain("bedrock");
   });
 });
 

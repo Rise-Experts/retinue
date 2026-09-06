@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { type ModelDefinition, type ModelProvider } from "../models/index.js";
 import { createProviderFactory } from "../models/provider-factory.js";
+import { MODEL_PROVIDERS } from "../models/index.js";
 
 const def = (provider: ModelProvider, modelId: string): ModelDefinition => ({
   provider, modelId, label: "m", lifecycle: "generally-available",
@@ -37,7 +38,17 @@ describe("provider factory", () => {
     expect(() => createProviderFactory().languageModel(def("openai-compatible", "x"))).toThrow(/baseURL/);
   });
 
-  it("throws capability_unavailable for the not-yet-wired Bedrock provider", () => {
-    expect(() => factory.languageModel(def("bedrock", "x"))).toThrow(/Bedrock/);
+  it("has no declared-but-unwired provider left to throw for", () => {
+    /**
+     * This case used to assert that `bedrock` threw `capability_unavailable`.
+     *
+     * It was removed from `MODEL_PROVIDERS` in #256 rather than wired, so there is nothing to assert about it:
+     * a declared provider that throws is worse than an absent one — it typechecks, satisfies the factory's
+     * exhaustive `never` assertion, and fails at runtime for whoever selects it first. The union is the
+     * statement now, and `provider-coverage.test.ts` asserts every member of it constructs.
+     *
+     * `bedrock` is no longer assignable here, which is the compiler making the same point.
+     */
+    expect(MODEL_PROVIDERS as readonly string[]).not.toContain("bedrock");
   });
 });
