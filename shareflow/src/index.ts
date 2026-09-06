@@ -24,3 +24,13 @@ export * from "./manifests/index.js";
 export * from "./shadow/index.js";
 export * from "./rollout/index.js";
 export * from "./parity/index.js";
+
+/**
+ * The application shell — Rise-Experts/retinue#128.
+ *
+ * What turns this app module into something a client can talk to. `ShareFlowServices` stays a parameter:
+ * implementing the ten of them over the ShareFlow database is REQ-041's parity work, and keeping them separate
+ * is what lets shadow capture start on the first workflow rather than waiting for all ten.
+ */
+export * from "./app/index.js";
+export * from "./app/server.js";
