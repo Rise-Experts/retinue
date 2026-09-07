@@ -35,7 +35,7 @@ import {
   type PostDraftSummary,
 } from "../services/index.js";
 import type { ShareFlowToolFactory } from "./factory.js";
-import { cursorString, idString, shareFlowTool } from "./factory.js";
+import { cursorOf, idString, pageInput, shareFlowTool } from "./factory.js";
 
 /**
  * Platform ids, normalised.
@@ -118,7 +118,7 @@ const listPostDraftsSchema = z
      * choosing one — the caller fetches the body of the one it picked.
      */
     limit: z.number().int().min(1).max(25).default(10),
-    cursor: cursorString.optional(),
+    page: pageInput,
   })
   .strict();
 
@@ -137,7 +137,7 @@ export const listPostDraftsTool = shareFlowTool(["content"], ({ services, deps }
         limit: input.limit,
         ...(input.status === undefined ? {} : { status: input.status }),
         ...(input.campaignId === undefined ? {} : { campaignId: asId<CampaignId>(input.campaignId) }),
-        ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
+        ...(cursorOf(input.page) === undefined ? {} : { cursor: cursorOf(input.page)! }),
       });
       return {
         posts: page.items.map(summaryView),

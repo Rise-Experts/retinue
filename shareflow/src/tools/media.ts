@@ -34,7 +34,7 @@ import {
   type ValidationIssue,
 } from "../services/index.js";
 import type { ShareFlowToolFactory } from "./factory.js";
-import { cursorString, idString, shareFlowTool } from "./factory.js";
+import { cursorOf, idString, pageInput, shareFlowTool } from "./factory.js";
 
 const assetIds = z.array(idString).min(1).max(20);
 
@@ -84,7 +84,7 @@ const storageView = (check: MediaStorageCheck) => ({
 const listMediaSchema = z
   .object({
     limit: z.number().int().min(1).max(25).default(10),
-    cursor: cursorString.optional(),
+    page: pageInput,
   })
   .strict();
 
@@ -101,7 +101,7 @@ export const listMediaTool = shareFlowTool(["media"], ({ services, deps }): Tool
     delegate: async (input: z.infer<typeof listMediaSchema>, context) => {
       const page = await services.media.listAssets(context, {
         limit: input.limit,
-        ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
+        ...(cursorOf(input.page) === undefined ? {} : { cursor: cursorOf(input.page)! }),
       });
       return {
         media: page.items.map(assetView),

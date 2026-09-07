@@ -154,7 +154,7 @@ beforeEach(() => {
 /** AC-1. */
 describe("reading the inbox", () => {
   it("returns comments with their reply state", async () => {
-    const result = await run(build(listCommentsTool), { replyState: "needs-review" });
+    const result = await run(build(listCommentsTool), { replyState: "needs-review", page: { kind: "first" } });
     expect(result).toMatchObject({
       ok: true,
       data: {
@@ -172,7 +172,7 @@ describe("reading the inbox", () => {
       build(listCommentsTool, {
         engagement: { listComments: () => ({ items: [comment({ draftedReply: "Yes — here are the docs." })] }) },
       }),
-      {},
+      { page: { kind: "first" } },
     );
     expect(result).toMatchObject({
       ok: true,
@@ -420,7 +420,7 @@ describe("attribution", () => {
   });
 
   it("returns the attribution on a read, so the linkage is visible", async () => {
-    const result = await run(build(listLeadsTool), {});
+    const result = await run(build(listLeadsTool), { page: { kind: "first" } });
     expect(result).toMatchObject({
       ok: true,
       data: { leads: [{ leadId: "l1", attribution: { postDraftId: "d1", platformId: "linkedin" } }] },

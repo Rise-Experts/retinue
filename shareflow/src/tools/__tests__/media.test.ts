@@ -115,7 +115,7 @@ beforeEach(() => {
 /** AC-1 and AC-2. */
 describe("finding and inspecting media", () => {
   it("lists media with enough to choose one", async () => {
-    const result = await run(build(listMediaTool));
+    const result = await run(build(listMediaTool), { page: { kind: "first" } });
     expect(result).toMatchObject({
       ok: true,
       data: { media: [{ mediaAssetId: "m1", kind: "video", mimeType: "video/quicktime" }], nextCursor: "cur1" },
@@ -445,6 +445,8 @@ describe("delegation and the catalog", () => {
 function inputFor(name: string): unknown {
   switch (name) {
     case "list_media":
+      // `page` is a required choice now, not an optional cursor — see `pageInput`.
+      return { page: { kind: "first" } };
     case "check_media_storage":
       return {};
     case "inspect_media":

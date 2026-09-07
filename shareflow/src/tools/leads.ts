@@ -41,7 +41,7 @@ import {
   type PostDraftId,
 } from "../services/index.js";
 import type { ShareFlowToolFactory } from "./factory.js";
-import { cursorString, idString, shareFlowTool } from "./factory.js";
+import { cursorOf, idString, pageInput, shareFlowTool } from "./factory.js";
 
 
 /**
@@ -106,7 +106,7 @@ const listLeadsSchema = z
   .object({
     status: z.enum(LEAD_STATUSES).optional(),
     limit: z.number().int().min(1).max(25).default(10),
-    cursor: cursorString.optional(),
+    page: pageInput,
   })
   .strict();
 
@@ -124,7 +124,7 @@ export const listLeadsTool = shareFlowTool(["leads"], ({ services, deps }): Tool
       const page = await services.leads.listLeads(context, {
         limit: input.limit,
         ...(input.status === undefined ? {} : { status: input.status }),
-        ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
+        ...(cursorOf(input.page) === undefined ? {} : { cursor: cursorOf(input.page)! }),
       });
       return {
         leads: page.items.map(leadView),

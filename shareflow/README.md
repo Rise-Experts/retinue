@@ -300,19 +300,23 @@ a service method, and R7 fails the build on an attempt.
 
 ## Wiring it up
 
-Three of the ten services now have adapters in this package. `content` and `brand` read ShareFlow's own
-tables through a `SqlExecutor`; `generator` fronts the host's model, because it is the one capability with
-no table behind it.
+Four of the ten services now have adapters in this package. `content`, `brand` and `publishing` read
+ShareFlow's own tables through a `SqlExecutor`; `generator` fronts the host's model, because it is the one
+capability with no table behind it.
 
 ```ts
 import { createShareFlowServices, backedContextProviders } from "@retinue/shareflow";
 
-const services = createShareFlowServices({ sql, generate });
+const services = createShareFlowServices({ sql, transaction, generate });
 const providers = backedContextProviders(services);
 ```
 
-The other seven — `connectors`, `media`, `publishing`, `engagement`, `leads`, `research`, `analytics` —
-are still ports, and `createShareFlowServices` returns a **narrower type** rather than a ten-member object
+`transaction` is required rather than optional, and only because of `publishing`: `scheduled_items` has **no
+unique constraint** on `(post_id, social_account_id)`, so publish-once rests on `SELECT … FOR UPDATE` on the
+draft held across two statements on one connection — which `pool.query` cannot provide, since it takes a
+different connection per call. A deployment that cannot supply one should not be publishing.
+
+The other six — `connectors`, `media`, `engagement`, `leads`, `research`, `analytics` — are still ports, and `createShareFlowServices` returns a **narrower type** rather than a ten-member object
 whose missing members throw. That is a measured decision, not caution: `backend/src/context/assembler.ts:35`
 runs context providers in a bare `for` loop with no `try`, and `createAccountsContextProvider` calls
 `services.connectors.listAccounts` on every turn — so a declare-and-throw object plus the standard base
@@ -337,9 +341,9 @@ these ShareFlow tools need services this deployment does not provide: publish_po
 schedule_post (publishing). Supply publishing, or leave those factories out of the list …
 ```
 
-That is what makes a partial rollout representable: twelve of the thirty-seven capabilities read only the
-three implemented services — the five post tools, the five campaign tools and the two generation tools — so a
-deployment can serve those and nothing else.
+That is what makes a partial rollout representable: seventeen of the thirty-seven capabilities read only the
+four implemented services — five post tools, five campaign tools, two generation tools and five publishing
+tools — so a deployment can serve those and nothing else.
 
 Two properties keep the declaration honest, because it can go stale in both directions. Declaring **too
 little** does not compile, since `services` is a `Pick` of exactly `requires`. Declaring **too much** compiles
@@ -371,6 +375,55 @@ comparison of "asked a question" against a completed old-runtime workflow measur
 
 **A shadow run does create real drafts.** Suppression covers `external-write` and `destructive`, not
 `internal-write`, so the script runs in a workspace of its own and prints what it made.
+
+## Publishing, and what the schema does not guarantee
+
+`PublishingService` is the first adapter whose methods are `external-write`, which is what gives a shadow run
+something to suppress. Three findings about this schema are load-bearing:
+
+- **Nothing stops a double publish.** `scheduled_items` has no unique constraint on
+  `(post_id, social_account_id)`; the only unique index is `(posting_schedule_id, social_account_id,
+  occurrence_at)`, partial on `posting_schedule_id IS NOT NULL`, so it governs recurring rules and not one-off
+  scheduling. `schedule` therefore takes a row lock on the draft and checks inside the transaction. The
+  residual gap is stated rather than hidden: this serialises *this adapter's* callers, and ShareFlow's own
+  route takes no lock, so an app publish concurrent with an agent publish can still produce two rows. Closing
+  that needs a partial unique index in ShareFlow's schema — a migration in that repository, and a decision
+  about whether the app ever legitimately schedules one draft to one account twice.
+- **This adapter does not enqueue.** ShareFlow's route inserts the row *and* adds a BullMQ job. Reaching Redis
+  from here would add a queue dependency the boundary rules forbid and make this a second producer for a queue
+  ShareFlow owns — where the sweep's whole safety argument rests on `jobId` being the item id. The row is
+  enough because ShareFlow's reconciliation sweep collects due `PENDING` items, at a cost of
+  `SWEEP_WORST_CASE_MS` (six minutes) versus seconds. That is a real behavioural difference between the two
+  runtimes and a parity report should carry it; a deployment that wants the seconds back supplies `enqueue`.
+- **Two states the port describes are unreachable.** `awaiting-platform` is not a value `scheduled_items.status`
+  holds, and the port's "ShareFlow gives up after 24 hours" is not this deployment's rule — there is no
+  24-hour threshold and no `finish-pending-targets` sweep. `stuck` is derived from the sweep's own alert
+  threshold instead, because reporting the port's number would assert a rule that is not running.
+
+### Shadow mode skips the preflight, and a parity report must know
+
+The registry suppresses a gated effect at `backend/src/tools/registry.ts:721` and **returns before
+`tool.execute`**, so the delegating envelope's read-only preflight never runs in shadow mode.
+`publish_post_now`'s preflight calls `PublishingService.validate`, which refuses a draft id that does not
+exist — so a shadow run can record *"the new runtime would have published draft X"* for an id the model
+invented. The first real publish turn did exactly that:
+
+```
+publish_post_now → PublishingService.schedule (external-write)
+  would require approval: true
+  input: {"postDraftId":"draft456","accountIds":["linkedin123"]}
+  targets: MISSING postDraftId=draft456 (not a UUID), accountId=linkedin123 (not a UUID)
+```
+
+Diffed against the old runtime's real publish that is a **manufactured divergence** — the report would blame
+the runtime for a model error. `scripts/shadow-turn.mjs` checks every suppressed write's targets against the
+database and says so, which makes the pollution visible rather than silent. Fixing the ordering is a platform
+decision with its own trade: the registry would have to trust every preflight to be read-only.
+
+**`publish` is not yet a usable workflow, for a precise reason.** Nothing among the seventeen servable
+capabilities lists connected accounts — `list_accounts` needs `ConnectorService`, which has no adapter — so
+the model cannot learn a real account id and can only guess one. Publishing works; discovering where to
+publish does not.
 
 ### What the first real turns found
 

@@ -70,11 +70,22 @@ Retrieve supported comments/mentions, propose grounded replies, request approval
 
 ## Service adapters
 
-Three of the ten services declared in `packages/shareflow/src/services/` now have adapters in that package:
-`content` and `brand` over ShareFlow's own tables, and `generator` over the host's model. They are the set
-`create-post` needs, which makes them the smallest set that lets shadow capture produce real parity data.
+Four of the ten services declared in `packages/shareflow/src/services/` now have adapters in that package:
+`content`, `brand` and `publishing` over ShareFlow's own tables, and `generator` over the host's model.
+`publishing` is the first whose methods are external writes, which is what gives a shadow run something to
+suppress — the three before it were all reads and internal writes, so a shadow record was correctly empty.
 
-The seven remaining — connectors, media, publishing, engagement, leads, research and analytics — are ports
+Publishing rests on facts the schema does not enforce, and they are worth stating at specification level.
+`scheduled_items` has **no unique constraint** on `(post_id, social_account_id)`, so publish-once is the
+service's responsibility, not the database's; the adapter takes a row lock on the draft inside a transaction,
+which serialises its own callers but not ShareFlow's app, whose route takes no lock. Closing that needs a
+partial unique index in ShareFlow's schema. The adapter also does not enqueue: it writes a `PENDING` row and
+relies on ShareFlow's reconciliation sweep, which trades seconds for minutes and is a real behavioural
+difference between the two runtimes. And two states this specification describes are not reachable in the
+deployment — there is no `awaiting-platform` status and no 24-hour give-up rule, so "stuck" is derived from
+the sweep's own alert threshold.
+
+The six remaining — connectors, media, engagement, leads, research and analytics — are ports
 without adapters, and the composer returns a narrower type rather than an object whose missing members throw.
 The reason is measurable rather than stylistic: the context assembler runs providers in a bare loop with no
 error handling, and the accounts provider reads `connectors` on every turn, so a declare-and-throw object plus
@@ -124,7 +135,20 @@ references the campaign table alone; an optional id field the model would not le
 entirely until "none" was made sayable; and the parity report crashed on a run with no old-runtime half.
 
 The lesson generalises past this adapter: **every one arrived as a model argument**, and none of them was
-reachable by reading the code.
+reachable by reading the code. Two of the seven were the same defect twice — an optional scalar the model
+fabricated rather than omitted, first an id and then a pagination cursor, each fixed by making the intent
+sayable as a union. Where omitting a field carries meaning, the meaning needs a name.
+
+One finding is about shadow mode itself and constrains how parity data may be read. The registry suppresses a
+gated effect and returns before the tool executes, so the delegating envelope's read-only preflight is skipped
+— and that preflight is what refuses a publish to a draft or account that does not exist. A shadow run can
+therefore record a write that a real run would have refused, which in a diff against the old runtime is a
+manufactured divergence rather than a difference. The harness labels such writes; fixing the ordering means
+the registry trusting every preflight to be read-only, which is a decision in its own right.
+
+A workflow can also be servable without being usable. `publish` has all five of its capabilities, and nothing
+among them lists connected accounts — that needs the connector service — so the assistant cannot learn where
+to publish and can only guess an account id.
 
 ## Migration behavior
 

@@ -27,7 +27,7 @@ import {
   type PlatformId,
 } from "../services/index.js";
 import type { ShareFlowToolFactory } from "./factory.js";
-import { cursorString, idString, shareFlowTool } from "./factory.js";
+import { cursorOf, idString, pageInput, shareFlowTool } from "./factory.js";
 
 /**
  * Why there is no `boost_campaign`, `set_campaign_budget` or anything like them.
@@ -113,7 +113,7 @@ const listCampaignsSchema = z
   .object({
     status: z.enum(CAMPAIGN_STATUSES).optional(),
     limit: z.number().int().min(1).max(25).default(10),
-    cursor: cursorString.optional(),
+    page: pageInput,
   })
   .strict();
 
@@ -131,7 +131,7 @@ export const listCampaignsTool = shareFlowTool(["content"], ({ services, deps })
       const page = await services.content.listCampaigns(context, {
         limit: input.limit,
         ...(input.status === undefined ? {} : { status: input.status }),
-        ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
+        ...(cursorOf(input.page) === undefined ? {} : { cursor: cursorOf(input.page)! }),
       });
       return {
         campaigns: page.items.map(campaignSummaryView),
@@ -160,7 +160,7 @@ const getCampaignCalendarSchema = z
   .object({
     campaignId: idString,
     limit: z.number().int().min(1).max(50).default(25),
-    cursor: cursorString.optional(),
+    page: pageInput,
   })
   .strict();
 
@@ -178,7 +178,7 @@ export const getCampaignCalendarTool = shareFlowTool(["content"], ({ services, d
       const page = await services.content.getCampaignCalendar(context, {
         id: asId<CampaignId>(input.campaignId),
         limit: input.limit,
-        ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
+        ...(cursorOf(input.page) === undefined ? {} : { cursor: cursorOf(input.page)! }),
       });
       return {
         // Structured entries, not prose (AC-3). Every field is a value the model can compare, sort or

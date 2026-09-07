@@ -116,19 +116,37 @@ export const idString = z
   .describe("An id this workspace's own tools returned. Never invent one — read it from a previous result.");
 
 /**
- * A pagination cursor, as a tool argument.
+ * Which page to read: **a choice, not an optional cursor**.
  *
- * Described, not format-checked, for the reason `idString` gives at length: `Page.nextCursor` is **opaque** in
- * the port, and that this adapter happens to make it an ISO instant is the adapter's business. A `.datetime()`
- * here would refuse a valid cursor from any other `ContentService`.
+ * The second measured instance of the same model behaviour, and the reason this is a union rather than a
+ * string. `campaignId: idString.optional()` was defeated by gpt-4o inventing ids; `cursor` was defeated the
+ * same way, in one real turn, five times:
  *
- * The motivating input is still worth recording. A real gpt-4o turn called `list_campaigns` four times with
- * `cursor: "/"`, and another with a hundred characters of parallel-tool-call junk. Untyped, each reached
- * `$3::timestamptz` and came back as `date/time field value out of range` under code `internal` — one
- * malformed argument taking out an otherwise complete turn. `asCursor` in the adapter refuses those now, by
- * name and as `invalid_input`, which is the layer that knows what a cursor is here.
+ *     cursor: "/begin"   "/current"   "/start-over"   "/start-at-beginning"
+ *
+ * The model was trying to say *"the first page"* — including in direct response to a refusal message that
+ * said "or omit it to start from the beginning". It cannot omit; it can only say things. So "first" is now a
+ * thing it can say.
+ *
+ * The generalisation is worth stating because it will come up again: **an optional scalar in a tool schema is
+ * an invitation to fabricate a sentinel.** Where omitting carries meaning, give the meaning a name.
+ *
+ * The cursor itself stays a plain string — `Page.nextCursor` is opaque in the port, and that this adapter
+ * makes it an ISO instant is the adapter's business. `asCursor` refuses a malformed one there, by name.
  */
-export const cursorString = z
-  .string()
-  .min(1)
-  .describe("The `nextCursor` from a previous page of this same tool. Omit it to start from the beginning.");
+export const pageInput = z
+  .discriminatedUnion("kind", [
+    z.object({ kind: z.literal("first") }).strict(),
+    z
+      .object({
+        kind: z.literal("after"),
+        cursor: z.string().min(1).describe("The `nextCursor` from a previous page of this same tool."),
+      })
+      .strict(),
+  ])
+  .describe('Use {"kind":"first"} to start. Only use "after" with a `nextCursor` a previous page returned.');
+
+/** The cursor a `pageInput` names, or `undefined` for the first page. */
+export const cursorOf = (page: { readonly kind: "first" } | { readonly kind: "after"; readonly cursor: string }):
+  | string
+  | undefined => (page.kind === "after" ? page.cursor : undefined);

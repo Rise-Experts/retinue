@@ -123,7 +123,7 @@ describe("reading a post", () => {
   });
 
   it("returns summaries from a list, never the bodies", async () => {
-    const result = await run(build(listPostDraftsTool), { limit: 5, status: "approved" });
+    const result = await run(build(listPostDraftsTool), { limit: 5, page: { kind: "first" }, status: "approved" });
     expect(result.ok).toBe(true);
     const data = (result as { data: { posts: unknown[]; nextCursor?: string } }).data;
     // The whole reason a list is a different shape: twenty captions in one tool result is a
@@ -138,7 +138,7 @@ describe("reading a post", () => {
   });
 
   it("defaults the page size low rather than unbounded", async () => {
-    await run(build(listPostDraftsTool), {});
+    await run(build(listPostDraftsTool), { page: { kind: "first" } });
     expect(recorder.calls[0]?.args).toEqual({ limit: 10 });
   });
 });

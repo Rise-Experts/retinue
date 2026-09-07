@@ -25,8 +25,10 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import type { AgentPlatformError } from "@retinue/agentkit";
+import { createPoolOpener, createTransactionScope, type TransactionRunner } from "@retinue/agentkit/adapters/postgres";
 
 import { createPostgresBrandService, BRAND_SUPPORTED } from "../brand.js";
+import { SWEEP_ALERT_MS, SWEEP_WORST_CASE_MS, UNCHECKED_CODES } from "../publishing.js";
 import {
   createPostgresContentService,
   cadenceFrom,
@@ -46,8 +48,8 @@ import { createShareFlowApp } from "../../../app/index.js";
 import {
   CAMPAIGN_TOOL_FACTORIES,
   GENERATE_TOOL_FACTORIES,
+  MEDIA_TOOL_FACTORIES,
   POSTS_TOOL_FACTORIES,
-  PUBLISHING_TOOL_FACTORIES,
 } from "../../../tools/index.js";
 import { POST_DRAFT_STATUSES, PUBLISH_TARGET_STATES } from "../../../services/index.js";
 import type { ShareFlowServices } from "../../../services/index.js";
@@ -88,6 +90,15 @@ const URL_ = process.env["RETINUE_TEST_SHAREFLOW_URL"];
 type Sql = { query<Row>(text: string, params?: readonly unknown[]): Promise<Row[]> };
 
 let sql: Sql;
+/**
+ * A **real** transaction runner over the same pool, not a stub.
+ *
+ * `PublishingService` requires one, and stubbing it would defeat the point: publish-once rests on
+ * `SELECT … FOR UPDATE` and a fresh snapshot on the next statement, which a fake that just calls the callback
+ * on the pool cannot provide — `pool.query` takes a different connection per call, so `BEGIN` and the work
+ * land on different connections and guarantee nothing. `transaction.ts` opens with exactly that warning.
+ */
+let transaction: TransactionRunner;
 let end: (() => Promise<void>) | undefined;
 let workspaceId = "";
 let userId = "";
@@ -100,6 +111,7 @@ beforeAll(async () => {
   const { Pool } = await import("pg");
   const pool = new Pool({ connectionString: URL_, connectionTimeoutMillis: 5_000 });
   end = () => pool.end();
+  transaction = createTransactionScope(createPoolOpener(pool)).runner;
   sql = {
     async query<Row>(text: string, params?: readonly unknown[]): Promise<Row[]> {
       const result = await pool.query(text, params ? [...params] : undefined);
@@ -859,6 +871,509 @@ describe.skipIf(URL_ === undefined)("the campaign calendar, one row per destinat
 });
 
 
+describe.skipIf(URL_ === undefined)("PublishingService — the first adapter that writes outside the tenant", () => {
+  /**
+   * The fourth adapter, and the first whose methods are `external-write`. Everything before it was `read` or
+   * `internal-write`, so a shadow run's suppressed-write list was correctly empty and the parity diff had no
+   * signal. This is where the signal comes from — and where a mistake reaches a customer's audience.
+   */
+  const publishing = () =>
+    createShareFlowServices({ sql: sql as never, transaction, generate: (async () => ({})) as never }).publishing;
+  const content = () => createPostgresContentService(sql as never);
+
+  let accountA = "";
+  let accountB = "";
+
+  beforeAll(async () => {
+    if (URL_ === undefined) return;
+    const created = await sql.query<{ id: string }>(
+      `insert into public.social_accounts
+         (workspace_id, platform, platform_user_id, account_name, auth_tokens, status)
+       values ($1::uuid, 'linkedin', 'li-1', 'Acme LinkedIn', '{}'::jsonb, 'ACTIVE'),
+              ($1::uuid, 'linkedin', 'li-2', 'Acme Second',   '{}'::jsonb, 'ACTIVE')
+       returning id`,
+      [workspaceId],
+    );
+    accountA = created[0]!.id;
+    accountB = created[1]!.id;
+  });
+
+  /** A draft this block owns. linkedin, for the override reason recorded above. */
+  const draft = async (caption = "publishable text #a #b #c") =>
+    (await content().createDraft(context(), {
+      idempotencyKey: `pub-${caption.length}-${Math.trunc(Number(accountA.slice(0, 4).replace(/\D/g, "0")))}` as never,
+      caption,
+      targetPlatforms: ["linkedin"] as never,
+    })).id;
+
+  const target = (accountId: string, at?: string) =>
+    ({ accountId, idempotencyKey: `${accountId}:key`, ...(at === undefined ? {} : { scheduledAt: at }) }) as never;
+
+  it("schedules a destination and reads its state back", async () => {
+    /**
+     * Also the first execution of `ITEM_COLUMNS`, which is where a syntax error would surface — that query
+     * carries a correlated subselect for the latest failure log and a three-table join, and none of it is
+     * checked by the compiler.
+     */
+    const id = await draft("a first scheduled post #a #b #c");
+    const statuses = await publishing().schedule(context(), {
+      idempotencyKey: "call-1" as never,
+      draftId: id,
+      targets: [target(accountA, "2026-12-01T09:00:00Z")],
+    });
+    expect(statuses).toHaveLength(1);
+    expect(statuses[0]).toMatchObject({ accountId: accountA, state: "scheduled" });
+    expect(statuses[0]!.scheduledAt).toBe("2026-12-01T09:00:00.000Z");
+
+    const read = await publishing().getStatus(context(), { draftId: id });
+    expect(read.map((status) => status.accountId)).toEqual([accountA]);
+  });
+
+  it("writes PENDING, which is what ShareFlow's sweep collects", async () => {
+    /**
+     * The row and not a queue job, deliberately. ShareFlow's route inserts *and* enqueues; reaching Redis
+     * from this package would add a queue dependency the boundary rules forbid and make this a second
+     * producer for a queue ShareFlow owns — where the sweep's whole safety argument rests on `jobId` being
+     * the item id.
+     *
+     * The cost is real and quantified: `SWEEP_WORST_CASE_MS`, the grace period plus a cron tick.
+     */
+    const id = await draft("a pending post #a #b #c");
+    await publishing().schedule(context(), {
+      idempotencyKey: "call-2" as never,
+      draftId: id,
+      targets: [target(accountA)],
+    });
+    const rows = await sql.query<{ status: string; job_id: string | null }>(
+      "select status, job_id from public.scheduled_items where post_id = $1::uuid",
+      [String(id)],
+    );
+    expect(rows[0]!.status).toBe("PENDING");
+    // No job id: this adapter does not enqueue, and a fabricated one would collide with the sweep's.
+    expect(rows[0]!.job_id).toBeNull();
+    expect(SWEEP_WORST_CASE_MS).toBe(6 * 60_000);
+  });
+
+  it("publishes a destination once, however many times it is asked", async () => {
+    /**
+     * **The guarantee this file exists for**, and the database does not provide it: `scheduled_items` has no
+     * unique constraint on `(post_id, social_account_id)`. The only unique index is
+     * `(posting_schedule_id, social_account_id, occurrence_at)` and it is partial on
+     * `posting_schedule_id IS NOT NULL`, so it covers recurring rules and not one-off scheduling.
+     *
+     * The port asks for the harder half: a **second, distinct** call for the same draft and account must also
+     * be deduplicated, not merely a retry of the same call.
+     */
+    const id = await draft("published exactly once #a #b #c");
+    await publishing().schedule(context(), {
+      idempotencyKey: "call-3a" as never,
+      draftId: id,
+      targets: [target(accountA)],
+    });
+    // A different call key entirely — the case that would republish if the key came from the call.
+    await publishing().schedule(context(), {
+      idempotencyKey: "call-3b" as never,
+      draftId: id,
+      targets: [target(accountA)],
+    });
+    const rows = await sql.query<{ n: string }>(
+      "select count(*) as n from public.scheduled_items where post_id = $1::uuid and social_account_id = $2::uuid",
+      [String(id), accountA],
+    );
+    expect(rows[0]!.n).toBe("1");
+  });
+
+  it("publishes each destination once when two calls genuinely interleave", async () => {
+    /**
+     * **The hardest assertion here, and a plain `Promise.all` cannot make it.**
+     *
+     * Two concurrent `schedule` calls under `Promise.all` passed with the `FOR UPDATE` removed — sabotage
+     * showed it. Node's event loop and pool acquisition happened to serialise them, so the dangerous window
+     * never opened and the test proved nothing about the lock.
+     *
+     * So the interleaving is forced. The first caller's transaction is held **after** it takes the lock and
+     * before it inserts, using a wrapped `TransactionRunner` — the runner being a dependency is what makes
+     * this observable at all. Then:
+     *
+     * - **With `FOR UPDATE`:** the second caller blocks *inside Postgres* on the draft row for as long as the
+     *   first is held. When the first commits, the second's next statement takes a fresh READ COMMITTED
+     *   snapshot, sees the row, and inserts nothing. One row.
+     * - **Without it:** the second caller sails past, its `WHERE NOT EXISTS` sees nothing because the first
+     *   has not committed, and both insert. Two rows — a post published twice to a customer's audience.
+     *
+     * The hold is 500 ms, which is enormous next to a local insert; the assertion is about which side of the
+     * lock the second caller waits on, not about timing precision.
+     */
+    /**
+     * A **barrier**, not a delay, and the difference is why the first two attempts at this test were useless.
+     *
+     * Attempt one used a plain `Promise.all` and passed with `FOR UPDATE` removed: the calls happened to
+     * serialise, so the window never opened. Attempt two held only the *first* transaction, which just
+     * reordered them — the second inserted while the first was held, the first then saw the committed row and
+     * skipped, and the count was 1 either way.
+     *
+     * What has to happen is both callers sitting **between their lock and their insert at the same time**:
+     *
+     * - **With `FOR UPDATE`,** the second never gets there. It blocks inside Postgres on the draft row, so
+     *   only one caller ever arrives, the barrier times out, that caller inserts and commits, and the second
+     *   then proceeds to find the row. One row.
+     * - **Without it,** both arrive, the barrier releases them together, and both `WHERE NOT EXISTS` checks
+     *   run against snapshots in which the other's uncommitted insert is invisible. Two rows — a post
+     *   published twice to a customer's audience.
+     *
+     * The timeout is what keeps the locked case from deadlocking the test, and it is the arrival count rather
+     * than any duration that the assertion turns on.
+     */
+    const BARRIER_TIMEOUT_MS = 1_500;
+    let arrived = 0;
+    let release: (() => void) | undefined;
+    const bothArrived = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const barrier = async (): Promise<void> => {
+      arrived += 1;
+      if (arrived >= 2) {
+        release?.();
+        return;
+      }
+      await Promise.race([bothArrived, new Promise((resolve) => setTimeout(resolve, BARRIER_TIMEOUT_MS))]);
+    };
+
+    /** Holds **every** transaction between its lock and its insert. The runner being injected is what allows it. */
+    const holding: TransactionRunner = {
+      transaction: (fn) =>
+        transaction.transaction(async (tx) =>
+          fn({
+            async query<Row>(text: string, params?: readonly unknown[]): Promise<Row[]> {
+              const rows = await tx.query<Row>(text, params);
+              if (text.includes("for update") || text.includes("from public.posts where workspace_id")) {
+                await barrier();
+              }
+              return rows;
+            },
+          }),
+        ),
+    };
+
+    const withHold = createShareFlowServices({
+      sql: sql as never,
+      transaction: holding,
+      generate: (async () => ({})) as never,
+    }).publishing;
+
+    const id = await draft("racing two calls #a #b #c");
+    await Promise.all([
+      withHold.schedule(context(), { idempotencyKey: "race-1" as never, draftId: id, targets: [target(accountA)] }),
+      new Promise((resolve) => setTimeout(resolve, 50)).then(() =>
+        withHold.schedule(context(), { idempotencyKey: "race-2" as never, draftId: id, targets: [target(accountA)] }),
+      ),
+    ]);
+
+    const rows = await sql.query<{ n: string }>(
+      "select count(*) as n from public.scheduled_items where post_id = $1::uuid and social_account_id = $2::uuid",
+      [String(id), accountA],
+    );
+    expect(rows[0]!.n).toBe("1");
+  });
+
+  it("schedules the destinations that are outstanding and leaves the rest alone", async () => {
+    // The port's reason for a per-destination key: a re-issued call must complete only what is not done.
+    const id = await draft("two destinations #a #b #c");
+    await publishing().schedule(context(), {
+      idempotencyKey: "call-4a" as never,
+      draftId: id,
+      targets: [target(accountA)],
+    });
+    const both = await publishing().schedule(context(), {
+      idempotencyKey: "call-4b" as never,
+      draftId: id,
+      targets: [target(accountA), target(accountB)],
+    });
+    expect(both.map((status) => status.accountId).sort()).toEqual([accountA, accountB].sort());
+    const rows = await sql.query<{ n: string }>(
+      "select count(*) as n from public.scheduled_items where post_id = $1::uuid",
+      [String(id)],
+    );
+    expect(rows[0]!.n).toBe("2");
+  });
+
+  it("refuses another workspace's connected account", async () => {
+    /**
+     * `scheduled_items.social_account_id` has a foreign key to `social_accounts` and **not** to the
+     * workspace — the same shape as the `posts.campaign_id` hole found earlier. `social_accounts` holds
+     * credentials, so publishing to another tenant's account is the worst outcome in this adapter.
+     */
+    const other = await sql.query<{ id: string }>("insert into public.workspaces (name) values ('other-pub') returning id");
+    const theirs = await sql.query<{ id: string }>(
+      `insert into public.social_accounts (workspace_id, platform, platform_user_id, account_name, auth_tokens, status)
+       values ($1::uuid, 'linkedin', 'li-x', 'Theirs', '{}'::jsonb, 'ACTIVE') returning id`,
+      [other[0]!.id],
+    );
+    const id = await draft("aimed at someone else #a #b #c");
+    const error = thrown(
+      await publishing()
+        .schedule(context(), {
+          idempotencyKey: "call-5" as never,
+          draftId: id,
+          targets: [target(theirs[0]!.id)],
+        })
+        .catch((rejection: unknown) => rejection),
+    );
+    expect(error.code).toBe("not_found");
+    const rows = await sql.query<{ n: string }>(
+      "select count(*) as n from public.scheduled_items where post_id = $1::uuid",
+      [String(id)],
+    );
+    expect(rows[0]!.n).toBe("0");
+    await sql.query("delete from public.workspaces where id = $1::uuid", [other[0]!.id]);
+  });
+
+  it("maps every status the column holds onto a state the port declares", async () => {
+    const id = await draft("every state #a #b #c");
+    await publishing().schedule(context(), {
+      idempotencyKey: "call-6" as never,
+      draftId: id,
+      targets: [target(accountA)],
+    });
+    const [item] = await sql.query<{ id: string }>(
+      "select id from public.scheduled_items where post_id = $1::uuid",
+      [String(id)],
+    );
+    for (const [stored, expected] of [
+      ["PENDING", "scheduled"],
+      ["QUEUED", "publishing"],
+      ["SUCCESS", "published"],
+      ["FAILED", "failed"],
+      // Real, and not in ShareFlow's declared union: its publisher sets it. `publishing` is the honest
+      // reading — the two alternatives each assert an outcome that may be false.
+      ["AUTH_FAILED", "publishing"],
+    ] as const) {
+      await sql.query("update public.scheduled_items set status = $2 where id = $1::uuid", [item!.id, stored]);
+      const [status] = await publishing().getStatus(context(), { draftId: id });
+      expect(status!.state, stored).toBe(expected);
+      expect(PUBLISH_TARGET_STATES).toContain(status!.state);
+    }
+  });
+
+  it("reports the failure message and never the provider's raw body", async () => {
+    /**
+     * `post_logs.error_payload` holds the provider's response and is deliberately not selected — the port
+     * says "never the provider's raw body", and a JSON blob in a tool result is both a context bomb and a
+     * place credentials end up.
+     */
+    const id = await draft("a failed destination #a #b #c");
+    await publishing().schedule(context(), {
+      idempotencyKey: "call-7" as never,
+      draftId: id,
+      targets: [target(accountA)],
+    });
+    const [item] = await sql.query<{ id: string }>(
+      "select id from public.scheduled_items where post_id = $1::uuid",
+      [String(id)],
+    );
+    await sql.query("update public.scheduled_items set status = 'FAILED' where id = $1::uuid", [item!.id]);
+    await sql.query(
+      `insert into public.post_logs (scheduled_item_id, status, message, error_payload)
+       values ($1::uuid, 'ERROR', 'LinkedIn rejected the post: the API version is retired.',
+               '{"secret":"do-not-surface"}'::jsonb)`,
+      [item!.id],
+    );
+    const [status] = await publishing().getStatus(context(), { draftId: id });
+    expect(status!.failure?.message).toContain("API version is retired");
+    expect(JSON.stringify(status)).not.toContain("do-not-surface");
+  });
+
+  it("marks a long-overdue destination stuck, from this deployment's threshold", async () => {
+    /**
+     * The port says ShareFlow gives up after 24 hours because an Instagram container expires. **This
+     * deployment has no such rule** — no 24-hour threshold, and no `finish-pending-targets` sweep. What it
+     * has is the reconciliation sweep, which alerts at an hour late, so that is the number reported.
+     * Asserting the port's would be claiming a rule that is not running.
+     */
+    const id = await draft("overdue by hours #a #b #c");
+    const longAgo = new Date(Date.now() - SWEEP_ALERT_MS - 60_000).toISOString();
+    await publishing().schedule(context(), {
+      idempotencyKey: "call-8" as never,
+      draftId: id,
+      targets: [target(accountA, longAgo)],
+    });
+    const [status] = await publishing().getStatus(context(), { draftId: id });
+    expect(status!.stuck).toBe(true);
+
+    // And a destination that is merely due is not stuck: the flag means "late enough to be a problem".
+    const fresh = await draft("due right now #a #b #c");
+    await publishing().schedule(context(), {
+      idempotencyKey: "call-9" as never,
+      draftId: fresh,
+      targets: [target(accountB)],
+    });
+    const [now] = await publishing().getStatus(context(), { draftId: fresh });
+    expect(now!.stuck).toBeUndefined();
+  });
+
+  it("retries only a failed destination, and says why when it will not", async () => {
+    /**
+     * ShareFlow's own route refuses anything but `FAILED` with a 409, and the port's reason for per-target
+     * retry is the same: a draft that published to three of four destinations must not be re-sent to the
+     * three that succeeded.
+     *
+     * The refusal names the current state, because "not found" and "already published" lead to different next
+     * steps and a caller told only "could not retry" will try again.
+     */
+    const id = await draft("retry me #a #b #c");
+    await publishing().schedule(context(), {
+      idempotencyKey: "call-10" as never,
+      draftId: id,
+      targets: [target(accountA)],
+    });
+    const [item] = await sql.query<{ id: string }>(
+      "select id from public.scheduled_items where post_id = $1::uuid",
+      [String(id)],
+    );
+
+    // PENDING: nothing to retry, and the refusal says so rather than silently re-queuing.
+    const early = thrown(
+      await publishing().retry(context(), { idempotencyKey: "r-1" as never, targetId: item!.id as never }).catch((r: unknown) => r),
+    );
+    expect(early.code).toBe("conflict");
+    expect(early.message).toContain("scheduled");
+
+    // SUCCESS: the dangerous one. Retrying a published destination posts twice.
+    await sql.query("update public.scheduled_items set status = 'SUCCESS' where id = $1::uuid", [item!.id]);
+    const done = thrown(
+      await publishing().retry(context(), { idempotencyKey: "r-2" as never, targetId: item!.id as never }).catch((r: unknown) => r),
+    );
+    expect(done.code).toBe("conflict");
+    expect(done.message).toContain("post twice");
+
+    // FAILED: back to PENDING, for the sweep to collect.
+    await sql.query("update public.scheduled_items set status = 'FAILED' where id = $1::uuid", [item!.id]);
+    const retried = await publishing().retry(context(), { idempotencyKey: "r-3" as never, targetId: item!.id as never });
+    expect(retried.state).toBe("scheduled");
+  });
+
+  it("does not touch retry_count, which ShareFlow's worker owns", async () => {
+    // A second writer would make the number mean nothing, and `attemptCount` is what distinguishes
+    // "not tried" from "tried and failed twice" for an assistant offering a retry.
+    const id = await draft("counting attempts #a #b #c");
+    await publishing().schedule(context(), {
+      idempotencyKey: "call-11" as never,
+      draftId: id,
+      targets: [target(accountA)],
+    });
+    const [item] = await sql.query<{ id: string }>(
+      "select id from public.scheduled_items where post_id = $1::uuid",
+      [String(id)],
+    );
+    await sql.query("update public.scheduled_items set status = 'FAILED', retry_count = 2 where id = $1::uuid", [item!.id]);
+    const retried = await publishing().retry(context(), { idempotencyKey: "r-4" as never, targetId: item!.id as never });
+    expect(retried.attemptCount).toBe(2);
+  });
+
+  it("refuses another workspace's publish target", async () => {
+    const other = await sql.query<{ id: string }>("insert into public.workspaces (name) values ('other-t') returning id");
+    const theirPost = await sql.query<{ id: string }>(
+      `insert into public.posts (workspace_id, author_id, raw_content, status, target_platforms)
+       values ($1::uuid, $2::uuid, 'theirs', 'APPROVED', '{linkedin}') returning id`,
+      [other[0]!.id, userId],
+    );
+    const theirAccount = await sql.query<{ id: string }>(
+      `insert into public.social_accounts (workspace_id, platform, platform_user_id, account_name, auth_tokens, status)
+       values ($1::uuid, 'linkedin', 'li-y', 'Theirs', '{}'::jsonb, 'ACTIVE') returning id`,
+      [other[0]!.id],
+    );
+    const theirItem = await sql.query<{ id: string }>(
+      `insert into public.scheduled_items (post_id, social_account_id, scheduled_at, status)
+       values ($1::uuid, $2::uuid, now(), 'FAILED') returning id`,
+      [theirPost[0]!.id, theirAccount[0]!.id],
+    );
+    const error = thrown(
+      await publishing()
+        .retry(context(), { idempotencyKey: "r-5" as never, targetId: theirItem[0]!.id as never })
+        .catch((rejection: unknown) => rejection),
+    );
+    // `not_found`, never `forbidden` — the two must be indistinguishable.
+    expect(error.code).toBe("not_found");
+    const untouched = await sql.query<{ status: string }>(
+      "select status from public.scheduled_items where id = $1::uuid",
+      [theirItem[0]!.id],
+    );
+    expect(untouched[0]!.status).toBe("FAILED");
+    await sql.query("delete from public.workspaces where id = $1::uuid", [other[0]!.id]);
+  });
+
+  it("reports what it could not check rather than passing silently", async () => {
+    /**
+     * `validate` covers "claims, duplication, platform limits and media". Two of the four have nothing behind
+     * them in this deployment: no table holds claims, and there is no media service. Silence would mean this
+     * deployment validated nothing for those, and the failure would surface as a rejected publish long after
+     * the assistant said the post was fine — which is exactly what running this before the approval gate is
+     * meant to avoid.
+     */
+    const id = await draft("nothing wrong with this #a #b #c");
+    const report = await publishing().validate(context(), { draftId: id, accountIds: [accountA] as never });
+    const codes = report.issues.map((issue) => issue.code);
+    for (const code of UNCHECKED_CODES) expect(codes).toContain(code);
+    // And an absent check does not block: a missing claims table cannot mean nothing may be published.
+    expect(report.ok).toBe(true);
+  });
+
+  it("refuses an expired credential before a human is asked to approve anything", async () => {
+    const expired = await sql.query<{ id: string }>(
+      `insert into public.social_accounts
+         (workspace_id, platform, platform_user_id, account_name, auth_tokens, status, token_expires_at)
+       values ($1::uuid, 'linkedin', 'li-exp', 'Expired', '{}'::jsonb, 'ACTIVE', now() - interval '1 day')
+       returning id`,
+      [workspaceId],
+    );
+    const id = await draft("aimed at an expired account #a #b #c");
+    const report = await publishing().validate(context(), {
+      draftId: id,
+      accountIds: [expired[0]!.id] as never,
+    });
+    expect(report.ok).toBe(false);
+    expect(report.issues.map((issue) => issue.code)).toContain("credential-expired");
+  });
+
+  it("carries the platform limits from ContentService rather than a second reading", async () => {
+    /**
+     * `platform_rules` is workspace-overridable, so two readings would be two answers to "is this caption
+     * publishable" — and the one that mattered would be whichever ran last.
+     */
+    /**
+     * Inserted directly, because `createDraft` refuses this caption itself — which is the point of a separate
+     * assertion rather than a flaw in the fixture. A draft can also reach `validate` having been written by
+     * ShareFlow's own UI, or before a rule changed, so `validate` must find the limit rather than assume
+     * anything that exists was once acceptable.
+     */
+    const rows = await sql.query<{ id: string }>(
+      `insert into public.posts (workspace_id, author_id, raw_content, status, target_platforms)
+       values ($1::uuid, $2::uuid, 'one hashtag only #a', 'DRAFT', '{linkedin}') returning id`,
+      [workspaceId, userId],
+    );
+    const report = await publishing().validate(context(), {
+      draftId: rows[0]!.id as never,
+      accountIds: [accountA] as never,
+    });
+    expect(report.ok).toBe(false);
+    expect(report.issues.map((issue) => issue.code)).toContain("hashtags-too-few");
+  });
+
+  it("flags a near-duplicate of an already published post", async () => {
+    // ShareFlow's own heuristic, via `findDuplicateContent`. A second similarity rule here would be a second
+    // notion of "this is the same post again", disagreeing on exactly the cases that matter.
+    const caption = "Our workshop guide to torque settings is live today #a #b #c";
+    await sql.query(
+      `insert into public.posts (workspace_id, author_id, raw_content, status, target_platforms)
+       values ($1::uuid, $2::uuid, $3, 'PUBLISHED', '{linkedin}')`,
+      [workspaceId, userId, caption],
+    );
+    const id = await draft(caption);
+    const report = await publishing().validate(context(), { draftId: id, accountIds: [accountA] as never });
+    expect(report.issues.map((issue) => issue.code)).toContain("duplicate-content");
+  });
+});
+
 describe.skipIf(URL_ === undefined)("wiring the three, which is what makes them reachable", () => {
   /**
    * Three adapters nobody can construct together are three adapters nobody uses. `createShareFlowServices` is
@@ -876,6 +1391,7 @@ describe.skipIf(URL_ === undefined)("wiring the three, which is what makes them 
     const systems: string[] = [];
     const services = createShareFlowServices({
       sql: sql as never,
+      transaction,
       generate: (async (input: { system: string }) => {
         systems.push(input.system);
         return { variants: [{ platformId: "instagram", caption: "generated" }] };
@@ -912,7 +1428,7 @@ describe.skipIf(URL_ === undefined)("wiring the three, which is what makes them 
      * This asserts the narrower list actually *runs* against the live database, which is the only way to know
      * none of the three reaches a service that is not there.
      */
-    const services = createShareFlowServices({ sql: sql as never, generate: (async () => ({})) as never });
+    const services = createShareFlowServices({ sql: sql as never, transaction, generate: (async () => ({})) as never });
     const providers = backedContextProviders(services);
     expect(providers.map((provider) => provider.id)).toEqual([
       "shareflow.brand",
@@ -936,7 +1452,7 @@ describe.skipIf(URL_ === undefined)("wiring the three, which is what makes them 
      * construction. This builds one and asserts the catalogue is exactly the twelve capabilities those
      * three services can serve.
      */
-    const services = createShareFlowServices({ sql: sql as never, generate: (async () => ({})) as never });
+    const services = createShareFlowServices({ sql: sql as never, transaction, generate: (async () => ({})) as never });
     const app = createShareFlowApp({
       services,
       factories: [...POSTS_TOOL_FACTORIES, ...CAMPAIGN_TOOL_FACTORIES, ...GENERATE_TOOL_FACTORIES],
@@ -973,15 +1489,19 @@ describe.skipIf(URL_ === undefined)("wiring the three, which is what makes them 
 
   it("refuses an app whose factory list needs a service it does not have", () => {
     /**
-     * The other half, and the one that makes the first half safe: adding the publishing factories to a
-     * deployment without a `PublishingService` fails **here**, naming the tools, rather than at the
-     * moment a user asks for something to be published.
+     * The other half, and the one that makes the first half safe: a factory whose service is absent fails
+     * **here**, naming the tools, rather than at the moment a user asks for something.
+     *
+     * This test named the *publishing* factories until `PublishingService` was built, at which point the
+     * configuration became legitimate and the test correctly stopped throwing. Media is the next one with no
+     * adapter — and the fact this had to be updated is the mechanism working: a service becoming available
+     * changes what a deployment may register.
      */
-    const services = createShareFlowServices({ sql: sql as never, generate: (async () => ({})) as never });
+    const services = createShareFlowServices({ sql: sql as never, transaction, generate: (async () => ({})) as never });
     expect(() =>
       createShareFlowApp({
         services,
-        factories: [...POSTS_TOOL_FACTORIES, ...PUBLISHING_TOOL_FACTORIES],
+        factories: [...POSTS_TOOL_FACTORIES, ...MEDIA_TOOL_FACTORIES],
         deps: { authorization: { async can() { return { allow: true }; } } } as never,
         authorization: {} as never,
         manifest: {
@@ -991,7 +1511,7 @@ describe.skipIf(URL_ === undefined)("wiring the three, which is what makes them 
           limits: {} as never,
         },
       }),
-    ).toThrowError(/publish_post_now \(publishing\)/);
+    ).toThrowError(/list_media \(media\)/);
   });
 
   it("keeps the backed and unbacked lists adding up to the whole interface", () => {
@@ -1010,7 +1530,7 @@ describe.skipIf(URL_ === undefined)("wiring the three, which is what makes them 
     expect(new Set(all).size).toBe(all.length);
     expect(all).toHaveLength(10);
     // Each name is a real member — the length check alone would accept ten wrong names.
-    const backed = createShareFlowServices({ sql: sql as never, generate: (async () => ({})) as never });
+    const backed = createShareFlowServices({ sql: sql as never, transaction, generate: (async () => ({})) as never });
     for (const name of BACKED_SERVICES) expect(backed[name]).toBeDefined();
   });
 });

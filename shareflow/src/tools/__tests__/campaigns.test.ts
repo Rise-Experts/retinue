@@ -141,7 +141,7 @@ describe("reading a campaign", () => {
   });
 
   it("lists campaigns as summaries without the brief", async () => {
-    const result = await run(build(listCampaignsTool), { status: "draft" });
+    const result = await run(build(listCampaignsTool), { status: "draft", page: { kind: "first" } });
     const data = (result as { data: { campaigns: unknown[]; nextCursor?: string } }).data;
     expect(data.campaigns[0]).not.toHaveProperty("brief");
     expect(data.campaigns[0]).toMatchObject({ campaignId: "c1", plannedPostCount: 13 });
@@ -153,7 +153,7 @@ describe("reading a campaign", () => {
 /** AC-3. */
 describe("the content calendar", () => {
   it("returns structured entries carrying ids and excerpts, never whole drafts", async () => {
-    const result = await run(build(getCampaignCalendarTool), { campaignId: "c1" });
+    const result = await run(build(getCampaignCalendarTool), { campaignId: "c1", page: { kind: "first" } });
     const data = (result as { data: { entries: Record<string, unknown>[] } }).data;
     expect(data.entries).toEqual([
       {
@@ -174,17 +174,17 @@ describe("the content calendar", () => {
     // ShareFlow's own `toCalendarPosts` derives YYYY-MM-DD from Date#getFullYear/getMonth/getDate,
     // which is the server's timezone — 00:30 UTC lands on the previous day west of Greenwich. The
     // frontend localizes instead.
-    const result = await run(build(getCampaignCalendarTool), { campaignId: "c1" });
+    const result = await run(build(getCampaignCalendarTool), { campaignId: "c1", page: { kind: "first" } });
     const entry = (result as { data: { entries: { scheduledAt: string }[] } }).data.entries[0];
     expect(entry?.scheduledAt).toMatch(/T\d{2}:\d{2}:\d{2}/);
   });
 
   it("caps the page rather than returning a whole year", async () => {
-    await run(build(getCampaignCalendarTool), {});
+    await run(build(getCampaignCalendarTool), { page: { kind: "first" } });
     expect(recorder.calls).toEqual([]); // campaignId is required
-    await run(build(getCampaignCalendarTool), { campaignId: "c1", limit: 51 });
+    await run(build(getCampaignCalendarTool), { campaignId: "c1", limit: 51, page: { kind: "first" } });
     expect(recorder.calls).toEqual([]); // above the ceiling
-    await run(build(getCampaignCalendarTool), { campaignId: "c1" });
+    await run(build(getCampaignCalendarTool), { campaignId: "c1", page: { kind: "first" } });
     expect(recorder.calls[0]?.args).toEqual({ id: "c1", limit: 25 });
   });
 });

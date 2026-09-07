@@ -36,10 +36,12 @@ import {
   CAMPAIGN_TOOL_FACTORIES,
   GENERATE_TOOL_FACTORIES,
   POSTS_TOOL_FACTORIES,
+  PUBLISHING_TOOL_FACTORIES,
 } from "../dist/index.js";
 import { createMemoryIdempotencyStore } from "@retinue/agentkit/persistence";
 import { createAuthorizationPolicy } from "@retinue/agentkit/hitl";
 import { createProviderFactory } from "@retinue/agentkit/providers";
+import { createPoolOpener, createTransactionScope } from "@retinue/agentkit/adapters/postgres";
 
 const args = process.argv.slice(2);
 const flag = (name, fallback) => {
@@ -66,8 +68,10 @@ const workflow = flag("workflow", "create-post");
 const messages = flags("message");
 if (messages.length === 0) {
   messages.push(
-    "Draft a short Instagram post announcing our new cordless impact driver. Propose angles first.",
-    "Use the durability angle. Save it as a draft for instagram.",
+    "Draft a short LinkedIn post announcing our new cordless impact driver. Propose angles first.",
+    "Use the durability angle. Generate the caption and save it as a LinkedIn draft.",
+    // The turn that produces a suppressed write. In a real run this publishes; in shadow it is recorded.
+    "Now publish that draft to our LinkedIn account.",
   );
 }
 const out = flag("out");
@@ -98,6 +102,22 @@ if (owner === undefined) die("no rows in public.profiles", { why: "posts need an
 const workspace = (
   await sql.query("insert into public.workspaces (name) values ($1) returning id", [`retinue-shadow-${workflow}`])
 )[0].id;
+
+/**
+ * A connected destination, so the publishing capabilities have somewhere to aim.
+ *
+ * `auth_tokens` is an empty object: **nothing in a shadow run reaches a provider**, so there is no credential
+ * to hold. That is the point — a suppressed write records what would have been sent and sends nothing.
+ */
+const account = (
+  await sql.query(
+    `insert into public.social_accounts
+       (workspace_id, platform, platform_user_id, account_name, auth_tokens, status)
+     values ($1::uuid, 'linkedin', 'shadow-li', 'Northwind LinkedIn', '{}'::jsonb, 'ACTIVE')
+     returning id, platform, account_name`,
+    [workspace],
+  )
+)[0];
 
 /**
  * A brand profile, so the generated text is grounded the way a real workspace's would be.
@@ -142,7 +162,16 @@ const generate = async ({ system, prompt, schema }) => {
   return result.object;
 };
 
-const services = createShareFlowServices({ sql, generate });
+/**
+ * A real transaction runner, because `PublishingService` requires one and will not take a stub.
+ *
+ * `scheduled_items` has no unique constraint on `(post_id, social_account_id)`, so publish-once rests on a row
+ * lock held across two statements on one connection — which `pool.query` cannot provide, since it takes a
+ * different connection each call.
+ */
+const transaction = createTransactionScope(createPoolOpener(pool)).runner;
+
+const services = createShareFlowServices({ sql, transaction, generate });
 
 /**
  * An approval gate that **throws if consulted**.
@@ -176,25 +205,32 @@ const authorization = createAuthorizationPolicy({
     {
       roleId: "editor",
       permissions: [{ action: "*", resourceType: "*" }],
-      tools: ["posts", "campaigns"],
+      tools: ["posts", "campaigns", "publishing"],
     },
   ],
 });
 
 const app = createShareFlowApp({
   services,
-  factories: [...POSTS_TOOL_FACTORIES, ...CAMPAIGN_TOOL_FACTORIES, ...GENERATE_TOOL_FACTORIES],
+  factories: [
+    ...POSTS_TOOL_FACTORIES,
+    ...CAMPAIGN_TOOL_FACTORIES,
+    ...GENERATE_TOOL_FACTORIES,
+    // The publishing capabilities, which is what gives a shadow run something to suppress: every capability
+    // before these is `read` or `internal-write`.
+    ...PUBLISHING_TOOL_FACTORIES,
+  ],
   deps: { authorization, approvals, idempotency: createMemoryIdempotencyStore() },
   authorization,
   manifest: {
     instructions:
-      "You draft social content for one workspace. Use the tools to read context and to save drafts; " +
-      "never claim a post is published unless a tool result says so. Keep captions within the platform's " +
-      "limits, and respect the workspace's brand voice.",
+      "You draft, schedule and publish social content for one workspace. Use the tools to read context, save " +
+      "drafts and publish; never claim a post is published unless a tool result says so. Keep captions " +
+      "within the platform's limits, and respect the workspace's brand voice.",
     modelPolicy: { role: "primary", requires: { tools: true } },
     authorizationPolicyId: "shareflow-shadow",
     limits: { maxSteps: 8, maxToolCalls: 8 },
-    categories: ["posts", "campaigns"],
+    categories: ["posts", "campaigns", "publishing"],
   },
 });
 
@@ -220,7 +256,8 @@ const runner = createShadowTurnRunner({
 // ---------------------------------------------------------------------------------------------------
 
 console.log(`▶ shadow turn · workflow=${workflow} · model=${modelId} · ${messages.length} turn(s)`);
-console.log(`  workspace ${workspace}\n`);
+console.log(`  workspace ${workspace}`);
+console.log(`  destination ${account.account_name} (${account.platform}) ${account.id}\n`);
 
 /** Every turn's suppressed writes, in order — the workflow's writes, not one message's. */
 const allWrites = [];
@@ -279,11 +316,55 @@ for (const [index, text] of messages.entries()) {
   allWrites.push(...result.writes);
 }
 
+/**
+ * Whether a suppressed write names things that actually exist.
+ *
+ * **This check exists because of a real finding, and a parity report needs it.** The registry suppresses at
+ * `backend/src/tools/registry.ts:721` and returns immediately, so `tool.execute` is never called — which means
+ * the delegating envelope's **read-only preflight is skipped in shadow mode**. `publish_post_now`'s preflight
+ * calls `PublishingService.validate`, which would refuse a draft id that does not exist.
+ *
+ * So a shadow run can record "the new runtime would have published draft X to account Y" for ids the model
+ * invented. The first real publish turn did exactly that: `postDraftId: "lasKlj983"`,
+ * `accountIds: ["LinkedInAccount123"]`. Fed into a diff against the old runtime's real publish, that is a
+ * **manufactured divergence** — the report would blame the runtime for a model error.
+ *
+ * Labelling it here does not fix the ordering; it makes the pollution visible in the data instead of silent.
+ */
+const targetsExist = async (write) => {
+  const input = write.input ?? {};
+  const missing = [];
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const check = async (label, id, table) => {
+    if (typeof id !== "string") return;
+    if (!uuid.test(id)) {
+      missing.push(`${label}=${id} (not a UUID)`);
+      return;
+    }
+    const rows = await sql.query(`select 1 from public.${table} where id = $1::uuid`, [id]);
+    if (rows.length === 0) missing.push(`${label}=${id} (no such row)`);
+  };
+  await check("postDraftId", input.postDraftId, "posts");
+  for (const id of Array.isArray(input.accountIds) ? input.accountIds : []) {
+    await check("accountId", id, "social_accounts");
+  }
+  return missing;
+};
+
 console.log(`— suppressed external writes across the workflow: ${allWrites.length} —`);
 for (const write of allWrites) {
   console.log(`  ${write.toolName} → ${write.delegatesTo} (${write.effect})`);
   console.log(`    would require approval: ${write.wouldRequireApproval}`);
   console.log(`    input: ${JSON.stringify(write.input).slice(0, 200)}`);
+  const missing = await targetsExist(write);
+  if (missing.length === 0) {
+    console.log(`    targets: all present — this write would have been attempted for real`);
+  } else {
+    console.log(`    targets: MISSING ${missing.join(", ")}`);
+    console.log(`      A real run would have refused this in the envelope's preflight, which shadow mode`);
+    console.log(`      skips (registry.ts:721 returns before tool.execute). Do NOT diff this against the`);
+    console.log(`      old runtime: it records a model error, not a runtime difference.`);
+  }
 }
 if (allWrites.length === 0) {
   /**

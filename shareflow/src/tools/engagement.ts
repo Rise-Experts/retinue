@@ -30,7 +30,7 @@ import {
   type InboxCommentId,
 } from "../services/index.js";
 import type { ShareFlowToolFactory } from "./factory.js";
-import { cursorString, idString, shareFlowTool } from "./factory.js";
+import { cursorOf, idString, pageInput, shareFlowTool } from "./factory.js";
 
 
 /**
@@ -66,7 +66,7 @@ const listCommentsSchema = z
     replyState: z.enum(COMMENT_REPLY_STATES).optional(),
     platformId: z.string().trim().min(1).max(64).toLowerCase().optional(),
     limit: z.number().int().min(1).max(50).default(20),
-    cursor: cursorString.optional(),
+    page: pageInput,
   })
   .strict();
 
@@ -85,7 +85,7 @@ export const listCommentsTool = shareFlowTool(["engagement"], ({ services, deps 
         limit: input.limit,
         ...(input.replyState === undefined ? {} : { replyState: input.replyState }),
         ...(input.platformId === undefined ? {} : { platformId: input.platformId }),
-        ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
+        ...(cursorOf(input.page) === undefined ? {} : { cursor: cursorOf(input.page)! }),
       });
       return {
         comments: page.items.map(commentView),
