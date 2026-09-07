@@ -271,10 +271,22 @@ export const validateInventory = (
       at('does not say what it changes outside this process — AC-1. Write "none — a read" if that is the answer');
     }
 
-    if (entry.invocation !== "interactive" && (entry.coverageEvidence ?? "").trim() === "") {
-      // Nobody shadows 03:00. A scheduled capability with no evidence is not covered, and its shadow count will
-      // be zero forever — so treating the zero as the answer would report it as uncovered rather than as
-      // un-evidenced, and those need different actions.
+    /**
+     * Nobody shadows 03:00. A scheduled capability with no evidence is not covered, and its shadow count will
+     * be zero forever — so treating the zero as the answer would report it as uncovered rather than as
+     * un-evidenced, and those need different actions.
+     *
+     * **Not asked of a `dropped` entry**, and the exemption is the point rather than a convenience: a dropped
+     * capability has nothing to evidence, and demanding coverage for one would force a sentence that is not
+     * true. Two of the eight signed drops are `triggered` routes, and the text they carried
+     * ("the cutover runbook has to carry it") became false the moment somebody signed them off — a stale
+     * reassurance is worse than a blank. The decision is recorded in `droppedBy`, which is required instead.
+     */
+    if (
+      entry.status !== "dropped" &&
+      entry.invocation !== "interactive" &&
+      (entry.coverageEvidence ?? "").trim() === ""
+    ) {
       at(`is ${entry.invocation} and shadow traffic cannot reach it — AC-7 requires its own coverage evidence`);
     }
 

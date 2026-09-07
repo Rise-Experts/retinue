@@ -622,8 +622,8 @@ endpoints, 7 skills, 5 inbound webhooks and 1 cron job — 51 capabilities:
 |---|---|
 | 13 `implemented` | a replacement exists with a behavioural test against the old contract |
 | 3 `partial` | `convert_media` (the old tool queues video and this one cannot represent a running job) and the two generation endpoints, where the tool exists and the non-conversational HTTP entry point does not |
-| 29 `missing` | artifacts, diagrams, PDFs, `read_pdf`, `repost_post`, `delete_post`, branding reads and writes, the four agent-skill tools, and twelve endpoints |
-| 0 `dropped` | a drop needs a named person, and nobody has agreed to remove artifacts or the studio agent's branding tools from a live product |
+| 21 `missing` | artifacts, diagrams, PDFs, `read_pdf`, `repost_post`, `delete_post`, and ten endpoints. Three are a tool away — the platform already carries an artifact service and a document-extraction pipeline |
+| 8 `dropped` | signed 2026-09-07: the six workspace-configuration tools and `POST /llm/validate`, `POST /assistant/session-name`. Two of the signatures record a **cost**, not a redirection — see below |
 | 6 `retained` | five webhooks and the publish sweep, which live in `web/` and call the AI backend not at all — verified by grep. Removing Agno leaves every one of them running |
 
 `retained` is the fifth status and was added deliberately rather than found convenient. `missing` would claim we
@@ -632,6 +632,37 @@ The hazard in adding a status is that a new value falls through every `if` and c
 both `validateInventory` and `gateStatus` switch exhaustively with a `never` default, and `validateInventory`
 refuses `retained` for any capability whose source is under `ai_backend/`. Without that guard, `retained` is the
 escape hatch that empties the file.
+
+### The eight drops, and what two of them cost
+
+A drop needs a name, a date and a reason as data, because a capability removed silently is a customer's
+workflow removed silently. Signed on 2026-09-07:
+
+- **`get_branding`, `update_branding`, `list_agent_skills`, `save_agent_skill`, `delete_agent_skill`,
+  `set_agent_skill_enabled`** — the new runtime ships skills as versioned code, reviewed and deployed rather
+  than written in a chat turn, and reaches the brand as context.
+- **`POST /llm/validate`, `POST /assistant/session-name`** — not ShareFlow agent capabilities.
+
+Two of those signatures say what is given up rather than where it went, and the difference matters because
+"it moved to the UI" would be false in both cases:
+
+- **`update_branding` is the only writer of `workspace_ai_profile` in the product.** The white-label settings
+  screen writes `workspace_branding` — a brand name, a logo, an accent colour — which is a different table,
+  and `web/src/lib/mcp/server.ts` only reads the AI profile. Six generation routes read `brand_voice`,
+  `audience` and `custom_instructions` from it. After the cutover those fields can be changed only in the
+  database until the web app grows an editor.
+- **`workspace_agent_skills` has no UI at all.** The four Agno tools are its only surface, so per-workspace
+  custom skills stop being editable rather than moving elsewhere.
+
+`dropped` does **not** block a workflow verdict — the control on a drop is the signature, not the gate — which
+makes signing one a way to turn a blocking capability into a passing one. All eight name no workflow, so no
+verdict moved, and a test asserts that: if a later drop covers something a gate measures, it fails and somebody
+has to decide whether the gate still means anything.
+
+A dropped entry is asked for no `coverageEvidence`, and that exemption is deliberate rather than convenient.
+Two of the eight are `triggered` routes, and the text they used to carry — *"the cutover runbook has to carry
+it"* — became false the moment somebody signed them off. A stale reassurance is worse than a blank. Removing
+the signature still fails.
 
 ### The verdict was unreachable from the report
 

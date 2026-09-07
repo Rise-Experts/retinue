@@ -331,6 +331,27 @@ describe("parity-report.mjs", () => {
       expect(stdout).toContain(workflow);
   });
 
+  it("names who signed each drop, and does not report a drop as an untested replacement", async () => {
+    /**
+     * Two assertions, both about the same defect in the first version of this output: it filtered
+     * `status !== "missing"`, so the eight signed drops were swept in beside the real replacements and printed
+     * as "implemented and never exercised" — 18 where there are 12. A dropped capability has no replacement to
+     * exercise, and reporting it as an untested one describes work that does not exist.
+     *
+     * The names are printed because a drop is the one status whose control is a *person* rather than a
+     * measurement. "8 dropped" without them says eight customer-visible capabilities went away on somebody's
+     * authority, without saying whose.
+     */
+    const path = await withShadow("drops.json", [pair("create-post")]);
+    const { stdout } = await exec("parity-report.mjs", ["--shadow", path]);
+    expect(stdout).toContain("dropped by agreement: 8");
+    expect(stdout).toContain("change the brand profile — Azeem Sarwar, 2026-09-07");
+    expect(stdout).toContain("replaced and never exercised");
+    for (const entry of CAPABILITY_INVENTORY.filter((e) => e.status === "dropped")) {
+      expect(stdout).not.toContain(`○ ${entry.capability}`);
+    }
+  });
+
   it("prints a symbol for every verdict it can produce", async () => {
     // The script throws at startup if `VERDICTS` gains a value with no symbol. The first version spelled one key
     // `gate-unagreed`, which does not exist, so every unagreed gate rendered as `?` — the same glyph as

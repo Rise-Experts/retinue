@@ -235,13 +235,38 @@ console.log(
  * Printed as a list rather than a count: "3 uncovered" is a number to argue about and "reply to a comment was
  * never exercised" is a thing to go and do.
  */
-const unexercised = coverage.filter((c) => c.invocation === "interactive" && c.shadowRuns === 0 && c.status !== "missing");
+const REPLACED = new Set(["implemented", "partial"]);
+/**
+ * Only a **replaced** capability can be "never exercised".
+ *
+ * The first version filtered `status !== "missing"`, which swept the eight signed drops in beside the real
+ * replacements and reported 18 where there are 10. A dropped capability has no replacement to exercise, and
+ * printing it as an untested one is the report describing work that does not exist.
+ */
+const unexercised = coverage.filter(
+  (c) => c.invocation === "interactive" && c.shadowRuns === 0 && REPLACED.has(c.status),
+);
 const exercised = coverage.filter((c) => c.shadowRuns > 0);
 console.log(`  exercised by shadow traffic: ${exercised.length}`);
 for (const c of exercised) console.log(`    ✓ ${c.capability} — ${c.shadowRuns} run(s)`);
 if (unexercised.length > 0) {
-  console.log(`  implemented and never exercised: ${unexercised.length}`);
+  console.log(`  replaced and never exercised: ${unexercised.length}`);
   for (const c of unexercised) console.log(`    ○ ${c.capability} (${c.status})`);
+}
+
+/**
+ * The drops, with who signed them and when.
+ *
+ * Printed rather than counted, because a drop is the one status whose control is a *person* rather than a
+ * measurement — and a report that showed "8 dropped" without the names would be reporting that eight
+ * customer-visible capabilities went away on somebody's authority, without saying whose.
+ */
+const drops = CAPABILITY_INVENTORY.filter((entry) => entry.status === "dropped");
+if (drops.length > 0) {
+  console.log(`  dropped by agreement: ${drops.length}`);
+  for (const entry of drops) {
+    console.log(`    ✗ ${entry.capability} — ${entry.droppedBy?.by ?? "?"}, ${entry.droppedBy?.at ?? "?"}`);
+  }
 }
 
 /**

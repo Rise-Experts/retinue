@@ -338,20 +338,78 @@ describe("the shipped inventory", () => {
     expect(gate.status).toBe("incomplete");
 
     /**
-     * The tally, pinned. Named numbers rather than a list of 32 strings, because the list would be edited to
-     * match on every change and stop being a claim — but the *shape* of the migration is a claim: this package
-     * replaces 13 of the old runtime's capabilities outright, part of 3 more, and has not replaced 29.
-     *
-     * Nothing is dropped, and that is deliberate: a drop needs a named person, and nobody has agreed to remove
-     * artifacts, diagrams, PDFs or the studio agent's branding tools from a live product.
+     * The tally, pinned. Named numbers rather than a list of strings, because the list would be edited to match
+     * on every change and stop being a claim — but the *shape* of the migration is a claim: this package
+     * replaces 13 of the old runtime's capabilities outright, part of 3 more, has 8 signed off as dropped, and
+     * has not replaced 21.
      */
     expect(inventoryTally(CAPABILITY_INVENTORY)).toEqual({
       implemented: 13,
       partial: 3,
-      missing: 29,
-      dropped: 0,
+      missing: 21,
+      dropped: 8,
       retained: 6,
     });
+  });
+
+  it("carries a real name, date and reason on every drop — and the drops do not unblock a gate", () => {
+    /**
+     * Eight drops signed on 2026-09-07: the six workspace-configuration tools and the two platform endpoints.
+     *
+     * The second assertion is the one worth having. `dropped` does not block a workflow verdict — by design,
+     * since the control on a drop is the signature rather than the gate — which means signing one is a way to
+     * turn a blocking capability into a passing one. Every capability signed off here names **no** workflow, so
+     * no verdict moved. If a later drop covers something a gate measures, this fails and somebody has to look
+     * at whether the gate still means anything.
+     */
+    const dropped = CAPABILITY_INVENTORY.filter((entry) => entry.status === "dropped");
+    expect(dropped).toHaveLength(8);
+    for (const entry of dropped) {
+      expect(entry.droppedBy?.by, entry.capability).toBe("Azeem Sarwar");
+      expect(entry.droppedBy?.at, entry.capability).toBe("2026-09-07");
+      // A reason long enough to say what was given up. A one-word reason is a reason nobody can review.
+      expect((entry.droppedBy?.reason ?? "").length, entry.capability).toBeGreaterThan(80);
+      expect(entry.replacement, entry.capability).toBeNull();
+      expect(entry.workflows, entry.capability).toEqual([]);
+    }
+  });
+
+  it("records what each drop costs, rather than implying somewhere else covers it", () => {
+    /**
+     * Two of the eight remove the only surface a thing has, and the signature says so instead of a comment
+     * beside it — because the record is what a reviewer reads in a year, and "it moved to the UI" would be
+     * false in both cases.
+     *
+     * `update_branding` is the only writer of `workspace_ai_profile` in the product: the white-label settings
+     * screen writes `workspace_branding`, a different table, and the MCP server only reads the AI profile.
+     * `workspace_agent_skills` has no UI at all — the four Agno tools are its only surface.
+     */
+    const reasonFor = (ref: string) =>
+      CAPABILITY_INVENTORY.find((entry) => entry.oldRuntimeRef === ref)?.droppedBy?.reason ?? "";
+    expect(reasonFor("tool:update_branding")).toContain("only writer of workspace_ai_profile");
+    expect(reasonFor("tool:save_agent_skill")).toContain("no UI for workspace_agent_skills");
+    // And the two that genuinely move work rather than deleting it say *that*, not that it is covered.
+    expect(reasonFor("route:POST /llm/validate")).toContain("instead of");
+  });
+
+  it("asks a dropped entry for no coverage evidence, and still asks for its signature", () => {
+    /**
+     * Both halves, because the exemption could be the hole. Two signed drops are `triggered` routes, and the
+     * coverage text they used to carry — "the cutover runbook has to carry it" — became false the moment
+     * somebody signed them off; a stale reassurance is worse than a blank.
+     *
+     * The control is that removing the signature still fails. Were the exemption written as "dropped entries
+     * are fine", a drop with nobody's name on it would pass.
+     */
+    const route = CAPABILITY_INVENTORY.find((e) => e.oldRuntimeRef === "route:POST /llm/validate");
+    if (route === undefined) throw new Error("expected the llm/validate entry");
+    expect(route.coverageEvidence).toBeUndefined();
+    expect(validateInventory([route])).toEqual([]);
+
+    const unsigned: CapabilityEntry = { ...route, droppedBy: undefined };
+    expect(validateInventory([unsigned]).map((p) => p.problem)).toEqual([
+      "is dropped with no signature — AC-1 requires a named decision",
+    ]);
   });
 
   it("marks nothing inside ai_backend as retained", () => {

@@ -23,10 +23,20 @@
  * ## What the honest picture is
  *
  * The old runtime is 31 Agno tools across 9 components, 14 purpose-built HTTP endpoints, 7 skills, 5 inbound
- * webhooks and 1 cron job. This package replaces 13 of the tools outright and part of 4 more. **The rest is
- * unreplaced**, and the inventory gate is therefore `incomplete` — which is the correct verdict and not a
- * defect in the gate. Nothing here is `dropped`: a drop needs a person, and nobody has agreed to remove
- * artifacts, diagrams, PDFs or the studio agent's branding tools from a live product.
+ * webhooks and 1 cron job. This package replaces 13 outright, part of 3 more, has **8 signed off as dropped**
+ * on 2026-09-07, retains 6 that live in `web/` — and has not replaced 21. The inventory gate is therefore
+ * `incomplete`, which is the correct verdict and not a defect in the gate.
+ *
+ * The eight drops are the six workspace-configuration tools and two platform endpoints, and two of their
+ * signatures record a cost rather than a redirection: `update_branding` is the **only writer** of
+ * `workspace_ai_profile` in the product, and `workspace_agent_skills` has **no UI** — the Agno tools are its
+ * only surface. Neither moves anywhere; both stop being editable. That is written into `droppedBy.reason`
+ * rather than a comment beside it, because the record is what somebody reads in a year.
+ *
+ * The remaining 21 are not dropped for the reason the drops exist: a drop needs a person, and nobody has
+ * agreed to remove artifacts, diagrams, PDFs, `repost_post` or `delete_post` from a live product. Three of
+ * them are a tool away from working — the platform already carries an artifact service and a
+ * document-extraction pipeline.
  *
  * The old-runtime paths are not written here at all — they come from `OLD_RUNTIME_MANIFEST`, which the scan
  * generates. A reviewer who wants the file and line reads it from there rather than trusting a string typed by
@@ -43,6 +53,21 @@ import type { CapabilityEntry } from "./index.js";
  * entries** — a capability gets dropped when a person decides to drop it, and that decision has not been made
  * for any of these.
  */
+
+/**
+ * One decision covering four tools, so one reason rather than four paraphrases of it.
+ *
+ * Signed on 2026-09-07 with the cost stated: there is **no UI** for `workspace_agent_skills`. The four Agno
+ * tools are the only surface it has, so this is not a capability moving somewhere else — it is per-workspace
+ * custom skills ceasing to be editable.
+ */
+const AGENT_SKILLS_DROP =
+  "The new runtime ships skills as versioned code — SHAREFLOW_BUILT_IN_SKILLS, reviewed and deployed rather " +
+  "than written in a chat turn. Dropped knowing there is no UI for workspace_agent_skills: these four tools " +
+  "are its only surface, so per-workspace custom skills stop being editable at all rather than moving " +
+  "elsewhere. Accepted deliberately, because a tool that writes instructions the model later loads is the " +
+  "highest-consequence write in the old surface — the old runtime's own docstring for save_agent_skill says " +
+  'it "writes instructions the model will later load".';
 
 /** Every non-interactive entry needs its own evidence, and "none yet" is the truthful value for most. */
 const NO_TRIGGER_YET =
@@ -495,16 +520,17 @@ export const CAPABILITY_INVENTORY: readonly CapabilityEntry[] = [
     oldRuntimeRef: "tool:get_branding",
     workflows: [],
     replacement: null,
-    status: "missing",
+    status: "dropped",
     invocation: "interactive",
-    /**
-     * `missing` although `BrandService` exists, and the reason is worth stating rather than rounding off.
-     *
-     * The brand reaches the new runtime as **context**, injected by `createBrandContextProvider` — so a model
-     * that needs the brand has it. What no longer exists is the *capability*: the studio agent asking for the
-     * brand profile on purpose, which its instructions require before a change ("READ it with get_branding and
-     * show the user"). Context is not a tool call, and a `partial` here would claim a tool that is not there.
-     */
+    droppedBy: {
+      by: "Azeem Sarwar",
+      at: "2026-09-07",
+      reason:
+        "The brand profile reaches the new runtime as context, injected by createBrandContextProvider, so a " +
+        "model that needs it has it. What is dropped is the model asking for it on purpose — the studio " +
+        "agent's instructions require reading it before a change — and nothing a user does today stops " +
+        "working as a result.",
+    },
     sideEffects: "none — a read",
   },
   {
@@ -512,8 +538,27 @@ export const CAPABILITY_INVENTORY: readonly CapabilityEntry[] = [
     oldRuntimeRef: "tool:update_branding",
     workflows: [],
     replacement: null,
-    status: "missing",
+    status: "dropped",
     invocation: "interactive",
+    /**
+     * The one drop whose cost is larger than it looks, so the reason carries it rather than a comment.
+     *
+     * This tool is the **only writer** of `workspace_ai_profile` anywhere in the product. The white-label
+     * settings screen writes `workspace_branding` — a different table, holding a brand name, a logo and an
+     * accent colour — and `web/src/lib/mcp/server.ts` only reads the AI profile. Six generation routes read
+     * `brand_voice`, `audience` and `custom_instructions` from it.
+     */
+    droppedBy: {
+      by: "Azeem Sarwar",
+      at: "2026-09-07",
+      reason:
+        "Dropped knowing the cost: this tool is the only writer of workspace_ai_profile in the product. The " +
+        "white-label settings screen writes workspace_branding, a different table, and the MCP server only " +
+        "reads the AI profile — so after the cutover brand_voice, audience and custom_instructions can be " +
+        "changed only in the database until the web app grows an editor, while six generation routes go on " +
+        "reading them. Accepted because a chat turn rewriting the instructions every later generation obeys " +
+        "is not a capability this design has.",
+    },
     sideEffects:
       "overwrites the workspace's brand profile, which every later generation reads. Confirmation-gated in the old runtime",
   },
@@ -522,8 +567,13 @@ export const CAPABILITY_INVENTORY: readonly CapabilityEntry[] = [
     oldRuntimeRef: "tool:list_agent_skills",
     workflows: [],
     replacement: null,
-    status: "missing",
+    status: "dropped",
     invocation: "interactive",
+    droppedBy: {
+      by: "Azeem Sarwar",
+      at: "2026-09-07",
+      reason: AGENT_SKILLS_DROP,
+    },
     sideEffects: "none — a read",
   },
   {
@@ -531,14 +581,18 @@ export const CAPABILITY_INVENTORY: readonly CapabilityEntry[] = [
     oldRuntimeRef: "tool:save_agent_skill",
     workflows: [],
     replacement: null,
-    status: "missing",
+    status: "dropped",
     invocation: "interactive",
     /**
-     * The old runtime's own docstring is the reason this one is confirmation-gated: `save_agent_skill` "writes
-     * instructions the model will later load". A tool that edits its own future instructions is the highest-
-     * consequence write in the old surface, and the new runtime ships skills as code instead — which is a
-     * deliberate difference, but nobody has signed it as a drop.
+     * The old runtime's own docstring is why this is the highest-consequence write in its surface:
+     * `save_agent_skill` "writes instructions the model will later load". A tool that edits its own future
+     * instructions is deliberately absent from the new design, and that is the decision being signed.
      */
+    droppedBy: {
+      by: "Azeem Sarwar",
+      at: "2026-09-07",
+      reason: AGENT_SKILLS_DROP,
+    },
     sideEffects: "writes an instruction the model loads on later turns. Changes future behaviour, not a row",
   },
   {
@@ -546,8 +600,13 @@ export const CAPABILITY_INVENTORY: readonly CapabilityEntry[] = [
     oldRuntimeRef: "tool:delete_agent_skill",
     workflows: [],
     replacement: null,
-    status: "missing",
+    status: "dropped",
     invocation: "interactive",
+    droppedBy: {
+      by: "Azeem Sarwar",
+      at: "2026-09-07",
+      reason: AGENT_SKILLS_DROP,
+    },
     sideEffects: "removes an instruction the model loads. Confirmation-gated in the old runtime",
   },
   {
@@ -555,8 +614,13 @@ export const CAPABILITY_INVENTORY: readonly CapabilityEntry[] = [
     oldRuntimeRef: "tool:set_agent_skill_enabled",
     workflows: [],
     replacement: null,
-    status: "missing",
+    status: "dropped",
     invocation: "interactive",
+    droppedBy: {
+      by: "Azeem Sarwar",
+      at: "2026-09-07",
+      reason: AGENT_SKILLS_DROP,
+    },
     sideEffects: "changes which instructions load on later turns. Confirmation-gated in the old runtime",
   },
 
@@ -566,25 +630,34 @@ export const CAPABILITY_INVENTORY: readonly CapabilityEntry[] = [
     oldRuntimeRef: "route:POST /llm/validate",
     workflows: [],
     replacement: null,
-    status: "missing",
+    status: "dropped",
     invocation: "triggered",
-    /**
-     * A platform concern rather than a ShareFlow one — the new runtime has its own provider registry — but it
-     * is listed because the endpoint is what the settings screen calls today, and "the platform has something
-     * like it" is not the same as "this call has a replacement".
-     */
+    droppedBy: {
+      by: "Azeem Sarwar",
+      at: "2026-09-07",
+      reason:
+        "Not a ShareFlow agent capability — it is the settings screen testing a workspace's provider " +
+        "credentials. Dropped from this inventory rather than claimed as covered: retinue ships no " +
+        "credential validation today, so this moves the work to the platform or the web app instead of " +
+        "replacing it, and the settings screen loses its check until one of them carries it.",
+    },
     sideEffects: "outbound call to the configured provider with the workspace's credentials, to see if they work",
-    coverageEvidence: NO_TRIGGER_YET,
   },
   {
     capability: "name a session from its messages",
     oldRuntimeRef: "route:POST /assistant/session-name",
     workflows: [],
     replacement: null,
-    status: "missing",
+    status: "dropped",
     invocation: "triggered",
+    droppedBy: {
+      by: "Azeem Sarwar",
+      at: "2026-09-07",
+      reason:
+        "Not a ShareFlow agent capability. Retinue has no session naming today either, so the web app keeps " +
+        "or reimplements it; sessions will show whatever the client titles them until it does.",
+    },
     sideEffects: "none — returns a short name for the caller to store",
-    coverageEvidence: NO_TRIGGER_YET,
   },
 
   // ---- Retained: the web app keeps these, and the cutover does not touch them ------------------------------
