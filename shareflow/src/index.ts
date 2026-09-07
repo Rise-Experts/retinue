@@ -34,3 +34,11 @@ export * from "./parity/index.js";
  */
 export * from "./app/index.js";
 export * from "./app/server.js";
+
+/**
+ * Three of the ten services, over ShareFlow's own tables — REQ-041 (#190).
+ *
+ * `content`, `brand` and `generator` are what `create-post` needs, which makes them the smallest set that
+ * lets shadow capture produce real parity data. The other seven are still ports without adapters.
+ */
+export * from "./adapters/index.js";

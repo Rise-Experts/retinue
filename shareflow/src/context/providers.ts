@@ -59,7 +59,17 @@ const provenance = (source: string) => `shareflow:${source}`;
  * line "Voice:" would spend budget saying nothing and read to the model as an instruction to have no
  * voice.
  */
-export const createBrandContextProvider = (services: ShareFlowServices): ContextProvider => ({
+/**
+ * The three brand providers need **one** member of `ShareFlowServices`, and say so.
+ *
+ * Widening what they accept rather than requiring the whole ten-member object, because a partial rollout has
+ * only some of them: `createShareFlowServices` builds three, and a provider that demanded all ten would force
+ * a cast at the wiring site — which is how a service that is not there gets handed to something that will call
+ * it. A full `ShareFlowServices` still satisfies this, so every existing caller is unaffected.
+ */
+type BrandOnly = Pick<ShareFlowServices, "brand">;
+
+export const createBrandContextProvider = (services: BrandOnly): ContextProvider => ({
   id: "shareflow.brand",
   async provide(context: ExecutionContext) {
     const profile = await services.brand.getBrandProfile(context);
@@ -100,7 +110,7 @@ export const createBrandContextProvider = (services: ShareFlowServices): Context
  *
  * The prompt is still advisory even when present, which is why `findForbiddenClaims` exists.
  */
-export const createClaimsContextProvider = (services: ShareFlowServices): ContextProvider => ({
+export const createClaimsContextProvider = (services: BrandOnly): ContextProvider => ({
   id: "shareflow.claims",
   async provide(context: ExecutionContext) {
     const policy = await services.brand.getClaimPolicy(context);
@@ -139,7 +149,7 @@ export const createClaimsContextProvider = (services: ShareFlowServices): Contex
  * One free-text field, rendered as one. docs/07 asks for "audience segments"; `workspace_ai_profile`
  * holds a paragraph, and splitting it into pretend segments here would be inventing structure.
  */
-export const createAudienceContextProvider = (services: ShareFlowServices): ContextProvider => ({
+export const createAudienceContextProvider = (services: BrandOnly): ContextProvider => ({
   id: "shareflow.audience",
   async provide(context: ExecutionContext) {
     const profile = await services.brand.getBrandProfile(context);

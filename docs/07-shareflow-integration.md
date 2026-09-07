@@ -68,6 +68,36 @@ Retrieve and calculate metrics deterministically. The model explains observed pa
 
 Retrieve supported comments/mentions, propose grounded replies, request approval where policy requires it, send idempotently and optionally create an attributed lead.
 
+## Service adapters
+
+Three of the ten services declared in `packages/shareflow/src/services/` now have adapters in that package:
+`content` and `brand` over ShareFlow's own tables, and `generator` over the host's model. They are the set
+`create-post` needs, which makes them the smallest set that lets shadow capture produce real parity data.
+
+The seven remaining — connectors, media, publishing, engagement, leads, research and analytics — are ports
+without adapters, and the composer returns a narrower type rather than an object whose missing members throw.
+The reason is measurable rather than stylistic: the context assembler runs providers in a bare loop with no
+error handling, and the accounts provider reads `connectors` on every turn, so a declare-and-throw object plus
+the standard provider list is a deployment where no turn completes at all.
+
+Two methods have **no store in this schema**. Nothing holds approved or forbidden claims, and the performance
+brief needs a metrics join the port itself describes as too expensive for a routine request. Both answer empty
+and both are marked in `BRAND_SUPPORTED`, so a caller can distinguish "this workspace forbids nothing" from
+"nobody records that" — a distinction that matters because the first is a policy statement and the second is
+an absence.
+
+### The mapping is the work
+
+The ports were specified here; the tables were built by ShareFlow. Every gap is a translation, and the
+translations were wrong in ways only a live database revealed — statuses that do not exist in the column, a
+cadence the CHECK constraint spells differently, a post-count formula that reported a third of a three-a-week
+campaign, a publish state with no arm for the value that means "it went out", and two not-null columns whose
+omitted optionals became explicit nulls and failed every campaign insert. None was visible to the compiler.
+
+The suite for these adapters therefore runs against a real ShareFlow database and **skips rather than falling
+back to a fake** when one is not configured. A fake executor can only confirm that the adapter sends the SQL
+its author expected, which is the one thing already known.
+
 ## Migration behavior
 
 - Current Agno workflows remain active until their replacement passes parity gates.

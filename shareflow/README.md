@@ -292,29 +292,67 @@ From Accounts:
 | `shadow/` | shadow-run recording and the per-workflow parity diff |
 | `rollout/` | per-workspace runtime flags, rollback, and the written procedure |
 | `parity/` | the parity gates, their evaluator, the cutover runbook and the removal gate |
+| `adapters/` | three of the ten services, over ShareFlow's own tables and the host's model (#190) |
 
 Nothing under `tools/` performs I/O; a ShareFlow tool is the envelope from `defineDelegatingTool` over
 a service method, and R7 fails the build on an attempt.
 
 ## Wiring it up
 
-ShareFlow supplies the implementations and registers the provider:
+Three of the ten services now have adapters in this package. `content` and `brand` read ShareFlow's own
+tables through a `SqlExecutor`; `generator` fronts the host's model, because it is the one capability with
+no table behind it.
 
 ```ts
-import { createShareFlowToolProvider, type ShareFlowServices } from "@retinue/shareflow";
+import { createShareFlowServices, backedContextProviders } from "@retinue/shareflow";
 
-const services: ShareFlowServices = {
-  connectors: myConnectorAdapter,   // implemented in the ShareFlow app
-  content: myContentAdapter,
-  media: myMediaAdapter,
-  publishing: myPublishingAdapter,
-};
-
-const provider = createShareFlowToolProvider({ services, factories: [/* #115 onward */] });
+const services = createShareFlowServices({ sql, generate });
+const providers = backedContextProviders(services);
 ```
+
+The other seven — `connectors`, `media`, `publishing`, `engagement`, `leads`, `research`, `analytics` —
+are still ports, and `createShareFlowServices` returns a **narrower type** rather than a ten-member object
+whose missing members throw. That is a measured decision, not caution: `backend/src/context/assembler.ts:35`
+runs context providers in a bare `for` loop with no `try`, and `createAccountsContextProvider` calls
+`services.connectors.listAccounts` on every turn — so a declare-and-throw object plus the standard base
+providers is a deployment where every turn dies before the model is called. `backedContextProviders` is the
+base list minus that one provider, and the omission is deliberate: such an assistant does not know which
+destinations are connected and may propose posting somewhere the workspace cannot, which is the honest
+state of a partial rollout.
+
+`createShareFlowApp` still requires all ten, so it cannot yet be built from these three. Closing that needs
+`ShareFlowToolFactory` to declare which services it uses, so `createShareFlowToolProvider` can refuse at
+construction — the property its own docstring already claims.
 
 Registration validates at construction: a duplicate tool name or a category outside the vocabulary
 stops the process starting, rather than producing a confusing catalog on someone's first conversation.
+
+### What the adapters found
+
+The ports were written from docs/07 and the tables were written by ShareFlow, so every gap between them
+was a mapping decision — and the mappings were wrong in ways only a real database showed:
+
+| The port | ShareFlow | Consequence of the first version |
+|---|---|---|
+| `post_drafts` | `posts`, drafts and published rows in one table | — |
+| `draft`, `in-review`, … | `DRAFT`, `IN_REVIEW`, … (five, per `web/src/lib/data/posts.ts:5`) | mapped three statuses that do not exist, one of them to `approved` |
+| `3x-week` | `3x_week`, held by `campaigns_cadence_check` | every `3x-week` campaign failed to insert |
+| `plannedPostCount` | `postCountFor` in `web/src/lib/campaigns.ts:34` | three-a-week reported **a third** of the posts ShareFlow creates |
+| `PublishTargetState` | `PENDING \| QUEUED \| SUCCESS \| FAILED` | no arm for `SUCCESS`, so every published destination read as pending |
+| `mediaAssetIds` | `media_urls`, URLs not ids | returned as stored; no id table exists |
+| optional `mode`, `mediaType` | `NOT NULL` with defaults | an omitted field became an explicit null and **every** campaign insert failed |
+| `startsOn: string` | `date`, which node-postgres parses to a `Date` | `value.slice is not a function` |
+
+The claim policy and the performance brief have **no table at all**; they answer empty and `BRAND_SUPPORTED`
+says which, so a caller can tell "nothing is forbidden here" from "nobody stores that".
+
+None of the eight was visible to the compiler, and the four campaign failures were in one code path that
+nothing had ever called. That is why `adapters/postgres/__tests__/services.test.ts` runs against a real
+database and skips — rather than falling back to a fake — when `RETINUE_TEST_SHAREFLOW_URL` is unset:
+
+```bash
+RETINUE_TEST_SHAREFLOW_URL=postgresql://... npm test --workspace @retinue/shareflow
+```
 
 ## Status
 
