@@ -34,7 +34,8 @@ import {
   type PostDraftId,
   type PostDraftSummary,
 } from "../services/index.js";
-import type { ShareFlowToolContext, ShareFlowToolFactory } from "./index.js";
+import type { ShareFlowToolFactory } from "./factory.js";
+import { shareFlowTool } from "./factory.js";
 
 /**
  * Platform ids, normalised.
@@ -93,7 +94,7 @@ const summaryView = (summary: PostDraftSummary) => ({
 
 const getPostDraftSchema = z.object({ postDraftId: idString }).strict();
 
-export const getPostDraftTool: ShareFlowToolFactory = ({ services, deps }: ShareFlowToolContext): Tool =>
+export const getPostDraftTool = shareFlowTool(["content"], ({ services, deps }): Tool =>
   defineDelegatingTool(deps, {
     name: "get_post_draft",
     label: "Read a post",
@@ -105,7 +106,7 @@ export const getPostDraftTool: ShareFlowToolFactory = ({ services, deps }: Share
     delegatesTo: "ContentService.getDraft",
     delegate: async (input: z.infer<typeof getPostDraftSchema>, context) =>
       draftView(await services.content.getDraft(context, { id: asId<PostDraftId>(input.postDraftId) })),
-  });
+  }));
 
 const listPostDraftsSchema = z
   .object({
@@ -122,7 +123,7 @@ const listPostDraftsSchema = z
   })
   .strict();
 
-export const listPostDraftsTool: ShareFlowToolFactory = ({ services, deps }: ShareFlowToolContext): Tool =>
+export const listPostDraftsTool = shareFlowTool(["content"], ({ services, deps }): Tool =>
   defineDelegatingTool(deps, {
     name: "list_post_drafts",
     label: "List posts",
@@ -144,7 +145,7 @@ export const listPostDraftsTool: ShareFlowToolFactory = ({ services, deps }: Sha
         ...(page.nextCursor === undefined ? {} : { nextCursor: page.nextCursor }),
       };
     },
-  });
+  }));
 
 // ---------------------------------------------------------------------------------------------------
 // Draft writes — `internal-write`, so no approval gate fires and nothing here can publish.
@@ -165,7 +166,7 @@ const createPostDraftSchema = z
   })
   .strict();
 
-export const createPostDraftTool: ShareFlowToolFactory = ({ services, deps }: ShareFlowToolContext): Tool =>
+export const createPostDraftTool = shareFlowTool(["content"], ({ services, deps }): Tool =>
   defineDelegatingTool(deps, {
     name: "create_post_draft",
     label: "Save a post",
@@ -202,7 +203,7 @@ export const createPostDraftTool: ShareFlowToolFactory = ({ services, deps }: Sh
         droppedMedia: created.droppedMedia,
       };
     },
-  });
+  }));
 
 const updatePostDraftSchema = z
   .object({
@@ -219,7 +220,7 @@ const updatePostDraftSchema = z
     { message: "supply at least one of caption, targetPlatforms or mediaAssetIds" },
   );
 
-export const updatePostDraftTool: ShareFlowToolFactory = ({ services, deps }: ShareFlowToolContext): Tool =>
+export const updatePostDraftTool = shareFlowTool(["content"], ({ services, deps }): Tool =>
   defineDelegatingTool(deps, {
     name: "update_post_draft",
     label: "Edit a post",
@@ -245,13 +246,13 @@ export const updatePostDraftTool: ShareFlowToolFactory = ({ services, deps }: Sh
           },
         }),
       ),
-  });
+  }));
 
 const duplicatePostDraftSchema = z
   .object({ postDraftId: idString, targetPlatforms: platformList.optional() })
   .strict();
 
-export const duplicatePostDraftTool: ShareFlowToolFactory = ({ services, deps }: ShareFlowToolContext): Tool =>
+export const duplicatePostDraftTool = shareFlowTool(["content"], ({ services, deps }): Tool =>
   defineDelegatingTool(deps, {
     name: "duplicate_post_draft",
     label: "Duplicate a post",
@@ -269,7 +270,7 @@ export const duplicatePostDraftTool: ShareFlowToolFactory = ({ services, deps }:
           ...(input.targetPlatforms === undefined ? {} : { targetPlatforms: input.targetPlatforms }),
         }),
       ),
-  });
+  }));
 
 /**
  * The Posts category, in the order a conversation uses them: find one, read it, write one, change it,

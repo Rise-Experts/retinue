@@ -95,7 +95,7 @@ beforeEach(() => {
 /** AC-1. */
 describe("a shadow run performs no external write", () => {
   it("does not reach the service, and records what it would have done", async () => {
-    const tool = publishPostNowTool({
+    const tool = publishPostNowTool.build({
       services: publishingServices(),
       deps: { authorization: allowAll, idempotency, approvals: await grantedGate(), shadow: recorder },
     });
@@ -118,7 +118,7 @@ describe("a shadow run performs no external write", () => {
   });
 
   it("does not report a success the assistant could relay as a publish", async () => {
-    const tool = publishPostNowTool({
+    const tool = publishPostNowTool.build({
       services: publishingServices(),
       deps: { authorization: allowAll, idempotency, approvals: await grantedGate(), shadow: recorder },
     });
@@ -134,7 +134,7 @@ describe("a shadow run performs no external write", () => {
   it("refuses when the run says shadow and nothing can record it", async () => {
     // Fail closed, in the direction that matters. Announcing a shadow run and having nowhere to record it
     // is not a licence to publish.
-    const tool = publishPostNowTool({
+    const tool = publishPostNowTool.build({
       services: publishingServices(),
       deps: { authorization: allowAll, idempotency, approvals: await grantedGate() },
     });
@@ -151,7 +151,7 @@ describe("a shadow run performs no external write", () => {
     // the whole answer — before the gate this is suppressed, after it the run stops at `approval_required`
     // and a human is asked to authorise something that was never going to happen.
     const ungranted = createApprovalGate({ grants: createMemoryApprovalGrantStore() });
-    const tool = publishPostNowTool({
+    const tool = publishPostNowTool.build({
       services: publishingServices(),
       deps: { authorization: allowAll, idempotency, approvals: ungranted, shadow: recorder },
     });
@@ -164,7 +164,7 @@ describe("a shadow run performs no external write", () => {
   });
 
   it("does not suppress a real run", async () => {
-    const tool = publishPostNowTool({
+    const tool = publishPostNowTool.build({
       services: publishingServices(),
       deps: { authorization: allowAll, idempotency, approvals: await grantedGate(), shadow: recorder },
     });
@@ -181,7 +181,7 @@ describe("a shadow run performs no external write", () => {
     // A suppressed call must not become the stored result under that key, or the first real run after a
     // shadow batch would replay "suppressed" and publish nothing while reporting fine.
     const deps = { authorization: allowAll, idempotency, approvals: await grantedGate(), shadow: recorder };
-    const tool = publishPostNowTool({ services: publishingServices(), deps });
+    const tool = publishPostNowTool.build({ services: publishingServices(), deps });
     await run(tool, context({ shadow: true }), { postDraftId: "d1", accountIds: ["a1"] }, "same");
     const real = await run(tool, context(), { postDraftId: "d1", accountIds: ["a1"] }, "same");
     expect(real).toMatchObject({ ok: true, data: { outcome: "published" } });

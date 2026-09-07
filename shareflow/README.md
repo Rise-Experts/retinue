@@ -285,6 +285,7 @@ From Accounts:
 | Directory | Contains |
 |---|---|
 | `services/` | the seam: `ConnectorService`, `ContentService`, `MediaService`, `PublishingService` |
+| `tools/factory.ts` | what a capability declares and receives — its own module, because the barrel re-exports every factory and the helper is a runtime value |
 | `tools/` | the `ToolProvider` and the closed category vocabulary from docs/07 |
 | `context/` | the eight providers from docs/07, the shared section builder, and the forbidden-claim checker |
 | `skills/` | the seven migrated skill bodies, validated at import time by the platform's own validator |
@@ -320,12 +321,34 @@ base list minus that one provider, and the omission is deliberate: such an assis
 destinations are connected and may propose posting somewhere the workspace cannot, which is the honest
 state of a partial rollout.
 
-`createShareFlowApp` still requires all ten, so it cannot yet be built from these three. Closing that needs
-`ShareFlowToolFactory` to declare which services it uses, so `createShareFlowToolProvider` can refuse at
-construction — the property its own docstring already claims.
+### A capability declares the services it reads
 
-Registration validates at construction: a duplicate tool name or a category outside the vocabulary
-stops the process starting, rather than producing a confusing catalog on someone's first conversation.
+```ts
+export const getPostDraftTool = shareFlowTool(["content"], ({ services, deps }) => …);
+```
+
+`services` inside that factory is `Pick<ShareFlowServices, "content">` — reading anything else does not
+compile. `createShareFlowToolProvider` takes a **`Partial<ShareFlowServices>`** and refuses at construction
+when a registered capability needs a service the deployment does not have, naming the tools and the services
+to supply rather than failing mid-conversation:
+
+```
+these ShareFlow tools need services this deployment does not provide: publish_post_now (publishing);
+schedule_post (publishing). Supply publishing, or leave those factories out of the list …
+```
+
+That is what makes a partial rollout representable: twelve of the thirty-seven capabilities read only the
+three implemented services — the five post tools, the five campaign tools and the two generation tools — so a
+deployment can serve those and nothing else.
+
+Two properties keep the declaration honest, because it can go stale in both directions. Declaring **too
+little** does not compile, since `services` is a `Pick` of exactly `requires`. Declaring **too much** compiles
+but would make the provider refuse a deployment it could have served, so a test scans the source of all 37
+factories and compares each declaration with the `services.` accesses in its body.
+
+Registration validates at construction: a duplicate tool name, a category outside the vocabulary, or a
+capability whose service is absent stops the process starting, rather than producing a confusing catalog on
+someone's first conversation.
 
 ### What the adapters found
 

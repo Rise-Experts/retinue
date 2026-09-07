@@ -3,7 +3,7 @@
  * a mistake would otherwise be silent (AC-1, AC-4, AC-5).
  */
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { asId, type ExecutionContext, type PrincipalId, type TenantId, type Tool } from "@retinue/agentkit";
@@ -14,7 +14,18 @@ import {
   SHAREFLOW_TOOL_CATEGORIES,
   SHAREFLOW_BUILT_IN_SKILLS,
   SOCIAL_ASSISTANT_ID,
+  ACCOUNT_TOOL_FACTORIES,
+  ANALYTICS_TOOL_FACTORIES,
+  CAMPAIGN_TOOL_FACTORIES,
+  ENGAGEMENT_TOOL_FACTORIES,
+  GENERATE_TOOL_FACTORIES,
+  LEAD_TOOL_FACTORIES,
+  MEDIA_TOOL_FACTORIES,
+  POSTS_TOOL_FACTORIES,
+  PUBLISHING_TOOL_FACTORIES,
+  RESEARCH_TOOL_FACTORIES,
   createShareFlowToolProvider,
+  shareFlowTool,
   defineShareFlowSkill,
   estimateTokens,
   serviceFailure,
@@ -23,7 +34,17 @@ import {
   socialAssistantManifest,
   unwrapServiceResult,
   type ShareFlowServices,
+  type ShareFlowToolFactory,
 } from "../index.js";
+
+/**
+ * Type-level equality, for the `requires` narrowing below.
+ *
+ * The two-thunk form rather than `A extends B`, because `extends` is satisfied by a *wider* type — and
+ * widening is precisely the regression being guarded against.
+ */
+type Equal<A, B> = (<G>() => G extends A ? 1 : 2) extends <G>() => G extends B ? 1 : 2 ? true : false;
+type Expect<T extends true> = T;
 
 const CONTEXT = {
   tenantId: asId<TenantId>("t1"),
@@ -44,7 +65,7 @@ describe("the tool provider", () => {
     const provider = createShareFlowToolProvider({
       services,
       deps,
-      factories: [() => tool("list_accounts", "accounts"), () => tool("create_post_draft", "posts")],
+      factories: [shareFlowTool([], () => tool("list_accounts", "accounts")), shareFlowTool([], () => tool("create_post_draft", "posts"))],
     });
     expect(provider.id).toBe("shareflow");
     expect((await provider.listTools(CONTEXT)).map((t) => t.descriptor.name)).toEqual([
@@ -58,7 +79,7 @@ describe("the tool provider", () => {
     // selects tools *by* category, so "post" instead of "posts" yields an assistant that silently has
     // fewer tools than configured — which reads as the model being unhelpful.
     expect(() =>
-      createShareFlowToolProvider({ services, deps, factories: [() => tool("create_post", "post")] }),
+      createShareFlowToolProvider({ services, deps, factories: [shareFlowTool([], () => tool("create_post", "post"))] }),
     ).toThrowError(/not one of/);
   });
 
@@ -69,9 +90,184 @@ describe("the tool provider", () => {
       createShareFlowToolProvider({
         services,
         deps,
-        factories: [() => tool("publish_post", "publishing"), () => tool("publish_post", "posts")],
+        factories: [shareFlowTool([], () => tool("publish_post", "publishing")), shareFlowTool([], () => tool("publish_post", "posts"))],
       }),
     ).toThrowError(/duplicate/);
+  });
+
+  it("refuses a factory whose service this deployment does not provide", () => {
+    /**
+     * The reason `requires` exists. Before it, a partial deployment could only be served by handing
+     * factories an object with holes in it, and the hole surfaced as `Cannot read properties of
+     * undefined` in the middle of somebody's conversation.
+     *
+     * The refusal names the **tool**, not the factory's position, because "get_post_metrics needs
+     * analytics" is actionable where "factory 14" is not.
+     */
+    expect(() =>
+      createShareFlowToolProvider({
+        services: { content: {} as never },
+        deps,
+        factories: [shareFlowTool(["analytics"], () => tool("get_post_metrics", "analytics"))],
+      }),
+    ).toThrowError(/get_post_metrics \(analytics\)/);
+  });
+
+  it("reports every unmet requirement at once, not the first", () => {
+    /**
+     * Aggregated deliberately: a deployment adding services one at a time needs the whole list to
+     * decide what to wire next. Failing on the first turns one fix into several restarts.
+     */
+    const error = (() => {
+      try {
+        createShareFlowToolProvider({
+          services: {},
+          deps,
+          factories: [
+            shareFlowTool(["analytics"], () => tool("get_post_metrics", "analytics")),
+            shareFlowTool(["publishing"], () => tool("publish_post_now", "publishing")),
+            shareFlowTool(["content"], () => tool("get_post_draft", "posts")),
+          ],
+        });
+        return undefined;
+      } catch (thrown) {
+        return thrown as Error;
+      }
+    })();
+    expect(error).toBeDefined();
+    for (const fragment of ["get_post_metrics", "publish_post_now", "get_post_draft"]) {
+      expect(error!.message).toContain(fragment);
+    }
+    // And the summary line names the services to supply, deduplicated and sorted.
+    expect(error!.message).toContain("Supply analytics, content, publishing");
+  });
+
+  it("serves a partial deployment whose factories match what it has", () => {
+    // The configuration the previous signature made unrepresentable: three services, and only the
+    // capabilities that read them.
+    const provider = createShareFlowToolProvider({
+      services: { content: {} as never },
+      deps,
+      factories: [shareFlowTool(["content"], () => tool("get_post_draft", "posts"))],
+    });
+    expect(provider).toBeDefined();
+  });
+
+  it("does not read a service while building, which is what lets the refusal name the tool", () => {
+    /**
+     * `createShareFlowToolProvider` builds every factory *before* checking requirements, because the
+     * tool's name only exists after the build. That is only safe if no factory touches a service
+     * while constructing — they read them inside the delegate closure, at execute time.
+     *
+     * Asserted rather than assumed, against **every real factory**, with a services object whose
+     * every property throws on access. A factory that read one eagerly would fail here instead of
+     * turning a legible refusal into a `TypeError` from inside a build.
+     */
+    const explode = new Proxy(
+      {},
+      {
+        get(_target, property) {
+          throw new Error(`a factory read services.${String(property)} while building`);
+        },
+      },
+    ) as ShareFlowServices;
+
+    const factories = [
+      ...ACCOUNT_TOOL_FACTORIES,
+      ...ANALYTICS_TOOL_FACTORIES,
+      ...CAMPAIGN_TOOL_FACTORIES,
+      ...ENGAGEMENT_TOOL_FACTORIES,
+      ...GENERATE_TOOL_FACTORIES,
+      ...LEAD_TOOL_FACTORIES,
+      ...MEDIA_TOOL_FACTORIES,
+      ...POSTS_TOOL_FACTORIES,
+      ...PUBLISHING_TOOL_FACTORIES,
+      ...RESEARCH_TOOL_FACTORIES,
+    ];
+    expect(factories).toHaveLength(37);
+    for (const factory of factories) {
+      expect(() => factory.build({ services: explode, deps })).not.toThrow();
+    }
+  });
+
+  it("declares exactly the services each factory reads — scanned from the source", () => {
+    /**
+     * The declaration can go stale in two directions and the type system only closes one.
+     *
+     * Reading an **undeclared** service does not compile, because `services` is a `Pick` of exactly
+     * `requires`. Declaring one that is **never read** compiles fine, and it is not harmless: it makes
+     * the provider refuse a deployment that could have been served, which reads as the capability
+     * being unavailable rather than as a wrong list.
+     *
+     * So this scans the source. Text rather than reflection because the accesses happen inside a
+     * closure at execute time — there is nothing to observe at build time, which is exactly what the
+     * test above asserts.
+     */
+    const here = dirname(fileURLToPath(import.meta.url));
+    const dir = resolve(here, "../tools");
+    const factories = readdirSync(dir).filter((name) => name.endsWith(".ts") && !["index.ts", "factory.ts"].includes(name));
+    const problems: string[] = [];
+    let seen = 0;
+
+    for (const file of factories) {
+      const text = readFileSync(resolve(dir, file), "utf8");
+      // Each factory runs from its `export const NAME = shareFlowTool([...]` to the next top-level
+      // declaration, which is how the rewrite that introduced `requires` sliced them too.
+      const heads = [...text.matchAll(/^export const (\w+) = shareFlowTool\(\[([^\]]*)\],/gm)];
+      for (const [index, head] of heads.entries()) {
+        seen += 1;
+        const start = head.index!;
+        const next = heads[index + 1]?.index ?? text.length;
+        const body = text.slice(start, next);
+        const declared = [...head[2]!.matchAll(/"(\w+)"/g)].map((match) => match[1]!).sort();
+        const read = [...new Set([...body.matchAll(/services\.(\w+)/g)].map((match) => match[1]!))].sort();
+        if (declared.join() !== read.join()) {
+          problems.push(`${file}:${head[1]} declares [${declared}] and reads [${read}]`);
+        }
+      }
+    }
+
+    expect(problems).toEqual([]);
+    // The scan found the factories rather than nothing — a regex that matched none would pass above.
+    expect(seen).toBe(37);
+  });
+
+  it("narrows `requires` to the literals given, which is what makes the Pick a Pick", () => {
+    /**
+     * If `R` ever widens to the whole `ShareFlowServiceName` union, `Pick<ShareFlowServices, R>`
+     * degrades to the full interface and every factory silently receives all ten again — undoing this
+     * change with nothing else failing. That is what this pins.
+     *
+     * Checked by the compiler, and `Equal` is the two-thunk trick rather than `extends`, because
+     * `extends` is satisfied by exactly the wider type being guarded against.
+     *
+     * Worth recording what this test does *not* prove: sabotage showed that removing the `const`
+     * modifier from `shareFlowTool` changes nothing, because the union constraint is what produces the
+     * literal type. The comment on the helper used to claim otherwise.
+     */
+    const narrow = shareFlowTool(["content"], () => tool("get_post_draft", "posts"));
+    /**
+     * Compared against `Pick<ShareFlowServices, "content">`, **not** against
+     * `ShareFlowToolFactory<"content">`.
+     *
+     * The first version compared it to the factory type, which is self-referential — a change to that
+     * type moved both sides of the equality and the assertion held regardless. `Pick` is defined
+     * independently of the thing being guarded, so it cannot move with it.
+     *
+     * The regression this now catches, confirmed by reverting it: widening **`shareFlowTool`'s
+     * `requires` parameter** to `readonly ShareFlowServiceName[]` removes the only inference site for
+     * `R`, so it falls back to its constraint and every factory receives all ten services again.
+     *
+     * Widening the `requires` *field* on `ShareFlowToolFactory` does **not** do that, which sabotage
+     * also showed — inference happens at the helper's signature, not at the type alias. Worth saying
+     * so, because the field looks like the load-bearing part and is not.
+     */
+    type Narrowed = Expect<
+      Equal<Parameters<typeof narrow.build>[0]["services"], Pick<ShareFlowServices, "content">>
+    >;
+    const proof: Narrowed = true;
+    expect(proof).toBe(true);
+    expect(narrow.requires).toEqual(["content"]);
   });
 
   it("fails at construction, not at the first conversation", async () => {
@@ -80,7 +276,7 @@ describe("the tool provider", () => {
     let built = false;
     expect(() => {
       built = true;
-      return createShareFlowToolProvider({ services, deps, factories: [() => tool("x", "nope")] });
+      return createShareFlowToolProvider({ services, deps, factories: [shareFlowTool([], () => tool("x", "nope"))] });
     }).toThrow();
     expect(built).toBe(true);
   });

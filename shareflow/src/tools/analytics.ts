@@ -38,7 +38,8 @@ import type {
   MetricWindow,
   PostDraftId,
 } from "../services/index.js";
-import type { ShareFlowToolContext, ShareFlowToolFactory } from "./index.js";
+import type { ShareFlowToolFactory } from "./factory.js";
+import { shareFlowTool } from "./factory.js";
 
 const idString = z.string().min(1);
 
@@ -93,7 +94,7 @@ const reportView = (report: MetricsReport) => ({
 
 const postMetricsSchema = z.object({ postDraftId: idString, window: windowSchema.optional() }).strict();
 
-export const postMetricsTool: ShareFlowToolFactory = ({ services, deps }: ShareFlowToolContext): Tool =>
+export const postMetricsTool = shareFlowTool(["analytics"], ({ services, deps }): Tool =>
   defineDelegatingTool(deps, {
     name: "get_post_metrics",
     label: "Post performance",
@@ -110,11 +111,11 @@ export const postMetricsTool: ShareFlowToolFactory = ({ services, deps }: ShareF
           ...(input.window === undefined ? {} : { window: input.window as MetricWindow }),
         }),
       ),
-  });
+  }));
 
 const campaignMetricsSchema = z.object({ campaignId: idString, window: windowSchema.optional() }).strict();
 
-export const campaignMetricsTool: ShareFlowToolFactory = ({ services, deps }: ShareFlowToolContext): Tool =>
+export const campaignMetricsTool = shareFlowTool(["analytics"], ({ services, deps }): Tool =>
   defineDelegatingTool(deps, {
     name: "get_campaign_metrics",
     label: "Campaign performance",
@@ -131,7 +132,7 @@ export const campaignMetricsTool: ShareFlowToolFactory = ({ services, deps }: Sh
           ...(input.window === undefined ? {} : { window: input.window as MetricWindow }),
         }),
       ),
-  });
+  }));
 
 const attributionSchema = z
   .object({
@@ -146,7 +147,7 @@ const attributionSchema = z
     message: "supply either postDraftId or campaignId, not both",
   });
 
-export const attributionTool: ShareFlowToolFactory = ({ services, deps }: ShareFlowToolContext): Tool =>
+export const attributionTool = shareFlowTool(["analytics"], ({ services, deps }): Tool =>
   defineDelegatingTool(deps, {
     name: "get_attribution",
     label: "Attributed leads",
@@ -164,7 +165,7 @@ export const attributionTool: ShareFlowToolFactory = ({ services, deps }: ShareF
           ...(input.window === undefined ? {} : { window: input.window as MetricWindow }),
         }),
       ),
-  });
+  }));
 
 /** The complete Analytics catalog. All reads; none of them computes anything. */
 export const ANALYTICS_TOOL_NAMES = [

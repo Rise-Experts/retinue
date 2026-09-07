@@ -80,6 +80,12 @@ The reason is measurable rather than stylistic: the context assembler runs provi
 error handling, and the accounts provider reads `connectors` on every turn, so a declare-and-throw object plus
 the standard provider list is a deployment where no turn completes at all.
 
+A partial deployment is therefore a first-class configuration rather than a workaround. Each of the 37 tool
+factories declares which services it reads; a factory receives only those, so reading another does not
+compile; and the provider takes a partial service set and **refuses at construction** when a registered
+capability needs one that is absent, naming the tools and the services to supply. Twelve capabilities read
+only the three implemented services, which is the surface a rollout can serve today.
+
 Two methods have **no store in this schema**. Nothing holds approved or forbidden claims, and the performance
 brief needs a metrics join the port itself describes as too expensive for a routine request. Both answer empty
 and both are marked in `BRAND_SUPPORTED`, so a caller can distinguish "this workspace forbids nothing" from

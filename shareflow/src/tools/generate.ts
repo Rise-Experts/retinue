@@ -38,7 +38,8 @@ import {
   type ValidationIssue,
 } from "../services/index.js";
 import { DEFAULT_SIMILARITY_THRESHOLD, findDuplicateContent } from "./duplication.js";
-import type { ShareFlowToolContext, ShareFlowToolFactory } from "./index.js";
+import type { ShareFlowToolFactory } from "./factory.js";
+import { shareFlowTool } from "./factory.js";
 
 /**
  * How many times a failed variant is regenerated before giving up.
@@ -86,7 +87,7 @@ const proposeAnglesSchema = z
  * which needs something to select between. `max(5)` because past that the assistant is presenting a list
  * rather than a decision.
  */
-export const proposePostAnglesTool: ShareFlowToolFactory = ({ services, deps }: ShareFlowToolContext): Tool =>
+export const proposePostAnglesTool = shareFlowTool(["generator"], ({ services, deps }): Tool =>
   defineDelegatingTool(deps, {
     name: "propose_post_angles",
     label: "Propose angles",
@@ -102,7 +103,7 @@ export const proposePostAnglesTool: ShareFlowToolFactory = ({ services, deps }: 
         rationale: a.rationale,
       })),
     }),
-  });
+  }));
 
 const generateSchema = z
   .object({
@@ -135,7 +136,7 @@ type VariantOutcome =
       readonly issues: readonly ValidationIssue[];
     };
 
-export const generateContentTool: ShareFlowToolFactory = ({ services, deps }: ShareFlowToolContext): Tool =>
+export const generateContentTool = shareFlowTool(["brand", "content", "generator"], ({ services, deps }): Tool =>
   defineDelegatingTool(deps, {
     name: "generate_content",
     label: "Write content",
@@ -256,7 +257,7 @@ export const generateContentTool: ShareFlowToolFactory = ({ services, deps }: Sh
           .map((o) => ({ platformId: o.platformId, attempts: o.attempts, issues: o.issues.map(issueView) })),
       };
     },
-  });
+  }));
 
 /** The generation capabilities. Both `read`: neither saves anything. */
 export const GENERATE_TOOL_NAMES = ["propose_post_angles", "generate_content"] as const;

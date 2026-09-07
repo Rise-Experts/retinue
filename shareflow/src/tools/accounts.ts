@@ -41,7 +41,8 @@ import {
   type ConnectionSetup,
   type SocialAccountId,
 } from "../services/index.js";
-import type { ShareFlowToolContext, ShareFlowToolFactory } from "./index.js";
+import type { ShareFlowToolFactory } from "./factory.js";
+import { shareFlowTool } from "./factory.js";
 
 /**
  * What to do about a destination that is not working.
@@ -186,7 +187,7 @@ const setupView = (setup: ConnectionSetup) => ({
 
 const listAccountsSchema = z.object({}).strict();
 
-export const listAccountsTool: ShareFlowToolFactory = ({ services, deps }: ShareFlowToolContext): Tool =>
+export const listAccountsTool = shareFlowTool(["connectors"], ({ services, deps }): Tool =>
   defineDelegatingTool(deps, {
     name: "list_accounts",
     label: "List destinations",
@@ -199,7 +200,7 @@ export const listAccountsTool: ShareFlowToolFactory = ({ services, deps }: Share
     delegate: async (_input: z.infer<typeof listAccountsSchema>, context) => ({
       accounts: (await services.connectors.listAccounts(context)).map(accountView),
     }),
-  });
+  }));
 
 const checkAccountHealthSchema = z
   .object({
@@ -208,10 +209,7 @@ const checkAccountHealthSchema = z
   })
   .strict();
 
-export const checkAccountHealthTool: ShareFlowToolFactory = ({
-  services,
-  deps,
-}: ShareFlowToolContext): Tool =>
+export const checkAccountHealthTool = shareFlowTool(["connectors"], ({ services, deps, }): Tool =>
   defineDelegatingTool(deps, {
     name: "check_account_health",
     label: "Re-check destinations",
@@ -228,14 +226,11 @@ export const checkAccountHealthTool: ShareFlowToolFactory = ({
         })
       ).map(accountView),
     }),
-  });
+  }));
 
 const getConnectionSetupSchema = z.object({}).strict();
 
-export const getConnectionSetupTool: ShareFlowToolFactory = ({
-  services,
-  deps,
-}: ShareFlowToolContext): Tool =>
+export const getConnectionSetupTool = shareFlowTool(["connectors"], ({ services, deps, }): Tool =>
   defineDelegatingTool(deps, {
     name: "get_connection_setup",
     label: "How to connect a platform",
@@ -247,7 +242,7 @@ export const getConnectionSetupTool: ShareFlowToolFactory = ({
     delegatesTo: "ConnectorService.getConnectionSetup",
     delegate: async (_input: z.infer<typeof getConnectionSetupSchema>, context) =>
       setupView(await services.connectors.getConnectionSetup(context)),
-  });
+  }));
 
 /**
  * The complete Accounts catalog. Pinned by a test, like Campaigns — so adding a capability that changes

@@ -99,7 +99,7 @@ let recorder: Recorder;
 let idempotency: IdempotencyStore;
 
 const build = (factory: ShareFlowToolFactory, content?: Partial<ContentService>): Tool =>
-  factory({
+  factory.build({
     services: { content: stubContent(recorder, content) } as unknown as ShareFlowServices,
     deps: { authorization: allowAll, idempotency },
   });
@@ -360,7 +360,7 @@ describe("entitlement", () => {
   });
 
   it("refuses before the service is called when the policy says no", async () => {
-    const tool = updateCampaignTool({
+    const tool = updateCampaignTool.build({
       services: { content: stubContent(recorder) } as unknown as ShareFlowServices,
       deps: {
         authorization: {

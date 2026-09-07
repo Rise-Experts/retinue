@@ -99,7 +99,7 @@ let recorder: Recorder;
 let idempotency: IdempotencyStore;
 
 const build = (factory: ShareFlowToolFactory, media?: Partial<MediaService>): Tool =>
-  factory({
+  factory.build({
     services: { media: stubMedia(recorder, media) } as unknown as ShareFlowServices,
     deps: { authorization: allowAll, idempotency, approvals: grantingGate() },
   });
@@ -387,7 +387,7 @@ describe("the storage diagnostic", () => {
   });
 
   it("is refused outright when no approval gate is wired", async () => {
-    const tool = checkMediaStorageTool({
+    const tool = checkMediaStorageTool.build({
       services: { media: stubMedia(recorder) } as unknown as ShareFlowServices,
       deps: { authorization: allowAll, idempotency },
     });
@@ -425,7 +425,7 @@ describe("delegation and the catalog", () => {
   });
 
   it("refuses before the service is called when the policy says no", async () => {
-    const tool = inspectMediaTool({
+    const tool = inspectMediaTool.build({
       services: { media: stubMedia(recorder) } as unknown as ShareFlowServices,
       deps: {
         authorization: {

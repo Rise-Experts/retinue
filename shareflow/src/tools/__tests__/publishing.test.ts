@@ -137,7 +137,7 @@ const build = (
   factory: ShareFlowToolFactory,
   options: { publishing?: Partial<Record<keyof PublishingService, Producer>>; approvals?: ApprovalGate } = {},
 ): Tool =>
-  factory({
+  factory.build({
     services: { publishing: stubPublishing(recorder, options.publishing) } as unknown as ShareFlowServices,
     deps: {
       authorization: allowAll,
@@ -510,7 +510,7 @@ describe("arguments and delegation", () => {
   });
 
   it("refuses before the service is called when the policy says no", async () => {
-    const tool = publishPostNowTool({
+    const tool = publishPostNowTool.build({
       services: { publishing: stubPublishing(recorder) } as unknown as ShareFlowServices,
       deps: {
         authorization: {

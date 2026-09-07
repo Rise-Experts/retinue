@@ -81,7 +81,7 @@ let idempotency: IdempotencyStore;
 let callCounter = 0;
 
 const build = (factory: ShareFlowToolFactory, o: Options = {}): Tool =>
-  factory({ services: services(o), deps: { authorization: allowAll, idempotency } });
+  factory.build({ services: services(o), deps: { authorization: allowAll, idempotency } });
 
 /** A unique key per call by default — the #124 lesson. */
 const run = (tool: Tool, input: unknown, key?: string): Promise<ToolResult> =>
@@ -354,7 +354,7 @@ describe("arguments, delegation and the catalog", () => {
   });
 
   it("refuses before the service is called when the policy says no", async () => {
-    const tool = postMetricsTool({
+    const tool = postMetricsTool.build({
       services: services(),
       deps: {
         authorization: {
@@ -370,7 +370,7 @@ describe("arguments, delegation and the catalog", () => {
   });
 
   it("surfaces a service failure rather than an empty report", async () => {
-    const tool = postMetricsTool({
+    const tool = postMetricsTool.build({
       services: {
         analytics: {
           async postMetrics() {

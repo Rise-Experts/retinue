@@ -33,7 +33,8 @@ import {
   type PostDraftId,
   type ValidationIssue,
 } from "../services/index.js";
-import type { ShareFlowToolContext, ShareFlowToolFactory } from "./index.js";
+import type { ShareFlowToolFactory } from "./factory.js";
+import { shareFlowTool } from "./factory.js";
 
 const idString = z.string().min(1);
 const assetIds = z.array(idString).min(1).max(20);
@@ -88,7 +89,7 @@ const listMediaSchema = z
   })
   .strict();
 
-export const listMediaTool: ShareFlowToolFactory = ({ services, deps }: ShareFlowToolContext): Tool =>
+export const listMediaTool = shareFlowTool(["media"], ({ services, deps }): Tool =>
   defineDelegatingTool(deps, {
     name: "list_media",
     label: "List media",
@@ -108,11 +109,11 @@ export const listMediaTool: ShareFlowToolFactory = ({ services, deps }: ShareFlo
         ...(page.nextCursor === undefined ? {} : { nextCursor: page.nextCursor }),
       };
     },
-  });
+  }));
 
 const inspectMediaSchema = z.object({ mediaAssetId: idString }).strict();
 
-export const inspectMediaTool: ShareFlowToolFactory = ({ services, deps }: ShareFlowToolContext): Tool =>
+export const inspectMediaTool = shareFlowTool(["media"], ({ services, deps }): Tool =>
   defineDelegatingTool(deps, {
     name: "inspect_media",
     label: "Inspect a file",
@@ -124,14 +125,11 @@ export const inspectMediaTool: ShareFlowToolFactory = ({ services, deps }: Share
     delegatesTo: "MediaService.inspect",
     delegate: async (input: z.infer<typeof inspectMediaSchema>, context) =>
       assetView(await services.media.inspect(context, { id: asId<MediaAssetId>(input.mediaAssetId) })),
-  });
+  }));
 
 const checkMediaSchema = z.object({ mediaAssetIds: assetIds, platformIds: platformList }).strict();
 
-export const checkMediaForPlatformsTool: ShareFlowToolFactory = ({
-  services,
-  deps,
-}: ShareFlowToolContext): Tool =>
+export const checkMediaForPlatformsTool = shareFlowTool(["media"], ({ services, deps, }): Tool =>
   defineDelegatingTool(deps, {
     name: "check_media_for_platforms",
     label: "Check media against destinations",
@@ -154,7 +152,7 @@ export const checkMediaForPlatformsTool: ShareFlowToolFactory = ({
         issues: issues.map(issueView),
       };
     },
-  });
+  }));
 
 // ---------------------------------------------------------------------------------------------------
 // Writes
@@ -164,7 +162,7 @@ const attachMediaSchema = z
   .object({ postDraftId: idString, mediaAssetIds: assetIds })
   .strict();
 
-export const attachMediaTool: ShareFlowToolFactory = ({ services, deps }: ShareFlowToolContext): Tool =>
+export const attachMediaTool = shareFlowTool(["media"], ({ services, deps }): Tool =>
   defineDelegatingTool(deps, {
     name: "attach_media_to_post",
     label: "Attach media",
@@ -184,7 +182,7 @@ export const attachMediaTool: ShareFlowToolFactory = ({ services, deps }: ShareF
       // without a second read — and still no bytes and no URL.
       return { postDraftId: result.draftId, mediaAssetIds: result.mediaAssetIds };
     },
-  });
+  }));
 
 /**
  * A format token, deliberately unvalidated against a list.
@@ -203,7 +201,7 @@ const targetFormat = z
 
 const convertMediaSchema = z.object({ mediaAssetId: idString, targetFormat }).strict();
 
-export const convertMediaTool: ShareFlowToolFactory = ({ services, deps }: ShareFlowToolContext): Tool =>
+export const convertMediaTool = shareFlowTool(["media"], ({ services, deps }): Tool =>
   defineDelegatingTool(deps, {
     name: "convert_media",
     label: "Convert a file",
@@ -221,7 +219,7 @@ export const convertMediaTool: ShareFlowToolFactory = ({ services, deps }: Share
           targetFormat: input.targetFormat,
         }),
       ),
-  });
+  }));
 
 const checkStorageSchema = z.object({}).strict();
 
@@ -241,10 +239,7 @@ const checkStorageSchema = z.object({}).strict();
  * What it buys is the failure that is otherwise invisible until it matters: a private bucket publishes
  * nothing, and *"a bucket that is private fails only at publish time."*
  */
-export const checkMediaStorageTool: ShareFlowToolFactory = ({
-  services,
-  deps,
-}: ShareFlowToolContext): Tool =>
+export const checkMediaStorageTool = shareFlowTool(["media"], ({ services, deps, }): Tool =>
   defineDelegatingTool(deps, {
     name: "check_media_storage",
     label: "Test media storage",
@@ -256,7 +251,7 @@ export const checkMediaStorageTool: ShareFlowToolFactory = ({
     delegatesTo: "MediaService.checkStorage",
     delegate: async (_input: z.infer<typeof checkStorageSchema>, context, { idempotencyKey }) =>
       storageView(await services.media.checkStorage(context, { idempotencyKey })),
-  });
+  }));
 
 /** The complete Media catalog, pinned by a test. */
 export const MEDIA_TOOL_NAMES = [

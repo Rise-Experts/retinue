@@ -80,7 +80,7 @@ const allowAll = {
 let idempotency: IdempotencyStore;
 
 const build = (factory: ShareFlowToolFactory, o: Options = {}): Tool =>
-  factory({ services: services(o), deps: { authorization: allowAll, idempotency } });
+  factory.build({ services: services(o), deps: { authorization: allowAll, idempotency } });
 
 /**
  * A **unique key per call** by default.
@@ -389,7 +389,7 @@ describe("catalog and delegation", () => {
   });
 
   it("refuses before the service is called when the policy says no", async () => {
-    const tool = searchWebTool({
+    const tool = searchWebTool.build({
       services: services(),
       deps: {
         authorization: {

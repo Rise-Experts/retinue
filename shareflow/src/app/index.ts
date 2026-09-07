@@ -23,6 +23,11 @@
  * Separating them is what lets the two proceed independently: shadow capture can start on the first workflow
  * whose services exist, rather than waiting for all ten. A shell that also implemented the services would have
  * made this issue depend on that one.
+ *
+ * And it really is "the first workflow whose services exist": `services` is a **`Partial`**, and each
+ * registered factory declares which members it reads, so a deployment with three adapters and a matching
+ * factory list is a legitimate configuration. One with a factory whose service is absent is refused here,
+ * at construction — see `createShareFlowToolProvider`.
  */
 
 import type {
@@ -49,7 +54,15 @@ export const APPLICATION_HEADER = "x-retinue-application";
 export const APPLICATION_NAME = "shareflow";
 
 export type ShareFlowAppConfig = {
-  readonly services: ShareFlowServices;
+  /**
+   * What this deployment has. **Partial**, because a rollout does not necessarily have all ten.
+   *
+   * A missing service is checked against what the registered factories declare they need, in
+   * `createShareFlowToolProvider`, so an incomplete set is refused at construction rather than in the
+   * middle of a conversation. Requiring all ten here made a partial rollout unrepresentable — which
+   * mattered the moment three of them had adapters and seven did not.
+   */
+  readonly services: Partial<ShareFlowServices>;
   /**
    * The tool factories this deployment ships.
    *

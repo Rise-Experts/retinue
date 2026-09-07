@@ -30,7 +30,8 @@ import { z } from "zod";
 import { AgentPlatformError, type Tool } from "@retinue/agentkit";
 import { defineDelegatingTool } from "@retinue/agentkit/tools";
 import type { ReadSourceResult, SearchOutcome, SourcePassage } from "../services/index.js";
-import type { ShareFlowToolContext, ShareFlowToolFactory } from "./index.js";
+import type { ShareFlowToolFactory } from "./factory.js";
+import { shareFlowTool } from "./factory.js";
 
 /**
  * The fence around fetched content.
@@ -74,7 +75,7 @@ const searchSchema = z
   })
   .strict();
 
-export const searchWebTool: ShareFlowToolFactory = ({ services, deps }: ShareFlowToolContext): Tool =>
+export const searchWebTool = shareFlowTool(["research"], ({ services, deps }): Tool =>
   defineDelegatingTool(deps, {
     name: "search_web",
     label: "Search the web",
@@ -104,7 +105,7 @@ export const searchWebTool: ShareFlowToolFactory = ({ services, deps }: ShareFlo
         })),
       };
     },
-  });
+  }));
 
 const readSourceSchema = z
   .object({
@@ -119,7 +120,7 @@ const readSourceSchema = z
     message: "supply either url or resultId, not both",
   });
 
-export const readSourceTool: ShareFlowToolFactory = ({ services, deps }: ShareFlowToolContext): Tool =>
+export const readSourceTool = shareFlowTool(["research"], ({ services, deps }): Tool =>
   defineDelegatingTool(deps, {
     name: "read_source",
     label: "Read a source",
@@ -153,7 +154,7 @@ export const readSourceTool: ShareFlowToolFactory = ({ services, deps }: ShareFl
         passages: result.passages.map(passageView),
       };
     },
-  });
+  }));
 
 /** The research capabilities. Both `read`: a GET changes nothing, which is the line #117 drew. */
 export const RESEARCH_TOOL_NAMES = ["search_web", "read_source"] as const;

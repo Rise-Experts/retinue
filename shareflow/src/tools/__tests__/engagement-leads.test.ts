@@ -131,7 +131,7 @@ const build = (
     approvals?: ApprovalGate;
   } = {},
 ): Tool =>
-  factory({
+  factory.build({
     services: {
       engagement: stub<EngagementService>(recorder, engagementDefaults(), options.engagement),
       leads: stub<LeadService>(recorder, leadDefaults(), options.leads),
@@ -181,7 +181,7 @@ describe("reading the inbox", () => {
   });
 
   it("refuses before the service is called when the policy says no", async () => {
-    const tool = listCommentsTool({
+    const tool = listCommentsTool.build({
       services: {
         engagement: stub<EngagementService>(recorder, engagementDefaults()),
       } as unknown as ShareFlowServices,

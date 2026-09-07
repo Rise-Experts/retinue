@@ -43,7 +43,9 @@ import {
   type ValidationIssue,
   type ValidationReport,
 } from "../services/index.js";
-import type { ShareFlowToolContext, ShareFlowToolFactory } from "./index.js";
+import type { ShareFlowToolFactory } from "./factory.js";
+import type { ShareFlowServices } from "../services/index.js";
+import { shareFlowTool } from "./factory.js";
 
 const idString = z.string().min(1);
 const accountIds = z.array(idString).min(1).max(20);
@@ -175,7 +177,7 @@ const reportOf = (report: ValidationReport) => ({
   issues: report.issues.map(issueView),
 });
 
-export const validatePublishTool: ShareFlowToolFactory = ({ services, deps }: ShareFlowToolContext): Tool =>
+export const validatePublishTool = shareFlowTool(["publishing"], ({ services, deps }): Tool =>
   defineDelegatingTool(deps, {
     name: "validate_publish",
     label: "Check a post before publishing",
@@ -192,7 +194,7 @@ export const validatePublishTool: ShareFlowToolFactory = ({ services, deps }: Sh
           accountIds: input.accountIds.map((id) => asId<SocialAccountId>(id)),
         }),
       ),
-  });
+  }));
 
 // ---------------------------------------------------------------------------------------------------
 // Publish and schedule — external-write, approval always
@@ -206,7 +208,14 @@ export const validatePublishTool: ShareFlowToolFactory = ({ services, deps }: Sh
  * it would be a side effect happening without approval.
  */
 const publishPreflight =
-  (services: ShareFlowToolContext["services"]) =>
+  /**
+   * Takes only the service it reads, which is the same rule the factories now follow.
+   *
+   * It was `ShareFlowToolContext["services"]` — the whole ten-member object — and narrowing the
+   * factories to a `Pick` is what surfaced it: a helper demanding all ten cannot be called from a
+   * capability that declared one. The type error was the point.
+   */
+  (services: Pick<ShareFlowServices, "publishing">) =>
   async (input: { postDraftId: string; accountIds: readonly string[] }, context: ExecutionContext) => {
     const report = await services.publishing.validate(context, {
       draftId: asId<PostDraftId>(input.postDraftId),
@@ -225,7 +234,7 @@ const publishPreflight =
 
 const publishNowSchema = z.object({ postDraftId: idString, accountIds }).strict();
 
-export const publishPostNowTool: ShareFlowToolFactory = ({ services, deps }: ShareFlowToolContext): Tool =>
+export const publishPostNowTool = shareFlowTool(["publishing"], ({ services, deps }): Tool =>
   defineDelegatingTool(deps, {
     name: "publish_post_now",
     label: "Publish now",
@@ -246,11 +255,11 @@ export const publishPostNowTool: ShareFlowToolFactory = ({ services, deps }: Sha
         }),
       );
     },
-  });
+  }));
 
 const scheduleSchema = z.object({ postDraftId: idString, accountIds, scheduledAt: instant }).strict();
 
-export const schedulePostTool: ShareFlowToolFactory = ({ services, deps }: ShareFlowToolContext): Tool =>
+export const schedulePostTool = shareFlowTool(["publishing"], ({ services, deps }): Tool =>
   defineDelegatingTool(deps, {
     name: "schedule_post",
     label: "Schedule a post",
@@ -271,7 +280,7 @@ export const schedulePostTool: ShareFlowToolFactory = ({ services, deps }: Share
         }),
       );
     },
-  });
+  }));
 
 // ---------------------------------------------------------------------------------------------------
 // Status and retry
@@ -279,7 +288,7 @@ export const schedulePostTool: ShareFlowToolFactory = ({ services, deps }: Share
 
 const statusSchema = z.object({ postDraftId: idString }).strict();
 
-export const getPublishStatusTool: ShareFlowToolFactory = ({ services, deps }: ShareFlowToolContext): Tool =>
+export const getPublishStatusTool = shareFlowTool(["publishing"], ({ services, deps }): Tool =>
   defineDelegatingTool(deps, {
     name: "get_publish_status",
     label: "Check what was published",
@@ -293,11 +302,11 @@ export const getPublishStatusTool: ShareFlowToolFactory = ({ services, deps }: S
       reportView(
         await services.publishing.getStatus(context, { draftId: asId<PostDraftId>(input.postDraftId) }),
       ),
-  });
+  }));
 
 const retrySchema = z.object({ publishTargetId: idString }).strict();
 
-export const retryPublishTargetTool: ShareFlowToolFactory = ({ services, deps }: ShareFlowToolContext): Tool =>
+export const retryPublishTargetTool = shareFlowTool(["publishing"], ({ services, deps }): Tool =>
   defineDelegatingTool(deps, {
     name: "retry_publish_target",
     label: "Retry one destination",
@@ -314,7 +323,7 @@ export const retryPublishTargetTool: ShareFlowToolFactory = ({ services, deps }:
           targetId: asId<PublishTargetId>(input.publishTargetId),
         }),
       ),
-  });
+  }));
 
 /** The complete Publishing catalog, pinned by a test. */
 export const PUBLISHING_TOOL_NAMES = [

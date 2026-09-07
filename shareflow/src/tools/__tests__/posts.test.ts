@@ -90,7 +90,7 @@ let recorder: Recorder;
 let idempotency: IdempotencyStore;
 
 const build = (factory: ShareFlowToolFactory, content?: Partial<ContentService>): Tool =>
-  factory({
+  factory.build({
     services: { content: stubContent(recorder, content) } as unknown as ShareFlowServices,
     deps: { authorization: allowAll, idempotency },
   });
@@ -304,7 +304,7 @@ describe("effects", () => {
     // The strongest form of AC-3: `defineDelegatingTool` refuses a gated effect when no approval gate
     // is wired. These must not be gated, so they must work with `approvals` absent — which is exactly
     // what a drafting-only deployment would have.
-    const tool = createPostDraftTool({
+    const tool = createPostDraftTool.build({
       services: { content: stubContent(recorder) } as unknown as ShareFlowServices,
       deps: { authorization: allowAll, idempotency },
     });
@@ -329,7 +329,7 @@ describe("entitlement", () => {
   });
 
   it("refuses before the service is called when the policy says no", async () => {
-    const tool = getPostDraftTool({
+    const tool = getPostDraftTool.build({
       services: { content: stubContent(recorder) } as unknown as ShareFlowServices,
       deps: {
         authorization: {

@@ -26,7 +26,8 @@ import {
   type CampaignSummary,
   type PlatformId,
 } from "../services/index.js";
-import type { ShareFlowToolContext, ShareFlowToolFactory } from "./index.js";
+import type { ShareFlowToolFactory } from "./factory.js";
+import { shareFlowTool } from "./factory.js";
 
 /**
  * Why there is no `boost_campaign`, `set_campaign_budget` or anything like them.
@@ -117,7 +118,7 @@ const listCampaignsSchema = z
   })
   .strict();
 
-export const listCampaignsTool: ShareFlowToolFactory = ({ services, deps }: ShareFlowToolContext): Tool =>
+export const listCampaignsTool = shareFlowTool(["content"], ({ services, deps }): Tool =>
   defineDelegatingTool(deps, {
     name: "list_campaigns",
     label: "List campaigns",
@@ -138,11 +139,11 @@ export const listCampaignsTool: ShareFlowToolFactory = ({ services, deps }: Shar
         ...(page.nextCursor === undefined ? {} : { nextCursor: page.nextCursor }),
       };
     },
-  });
+  }));
 
 const getCampaignSchema = z.object({ campaignId: idString }).strict();
 
-export const getCampaignTool: ShareFlowToolFactory = ({ services, deps }: ShareFlowToolContext): Tool =>
+export const getCampaignTool = shareFlowTool(["content"], ({ services, deps }): Tool =>
   defineDelegatingTool(deps, {
     name: "get_campaign",
     label: "Read a campaign",
@@ -154,7 +155,7 @@ export const getCampaignTool: ShareFlowToolFactory = ({ services, deps }: ShareF
     delegatesTo: "ContentService.getCampaign",
     delegate: async (input: z.infer<typeof getCampaignSchema>, context) =>
       campaignView(await services.content.getCampaign(context, { id: asId<CampaignId>(input.campaignId) })),
-  });
+  }));
 
 const getCampaignCalendarSchema = z
   .object({
@@ -164,10 +165,7 @@ const getCampaignCalendarSchema = z
   })
   .strict();
 
-export const getCampaignCalendarTool: ShareFlowToolFactory = ({
-  services,
-  deps,
-}: ShareFlowToolContext): Tool =>
+export const getCampaignCalendarTool = shareFlowTool(["content"], ({ services, deps, }): Tool =>
   defineDelegatingTool(deps, {
     name: "get_campaign_calendar",
     label: "Read a campaign's calendar",
@@ -190,7 +188,7 @@ export const getCampaignCalendarTool: ShareFlowToolFactory = ({
         ...(page.nextCursor === undefined ? {} : { nextCursor: page.nextCursor }),
       };
     },
-  });
+  }));
 
 // ---------------------------------------------------------------------------------------------------
 // Writes — `internal-write`. Creating a campaign schedules nothing; publishing stays in #119.
@@ -213,7 +211,7 @@ const createCampaignSchema = z
   .strict()
   .refine(orderedDates, ORDERED_DATES_MESSAGE);
 
-export const createCampaignTool: ShareFlowToolFactory = ({ services, deps }: ShareFlowToolContext): Tool =>
+export const createCampaignTool = shareFlowTool(["content"], ({ services, deps }): Tool =>
   defineDelegatingTool(deps, {
     name: "create_campaign",
     label: "Create a campaign",
@@ -240,7 +238,7 @@ export const createCampaignTool: ShareFlowToolFactory = ({ services, deps }: Sha
           ...(input.mediaType === undefined ? {} : { mediaType: input.mediaType }),
         }),
       ),
-  });
+  }));
 
 const CAMPAIGN_PATCH_FIELDS = [
   "name",
@@ -280,7 +278,7 @@ const updateCampaignSchema = z
   })
   .refine(orderedDates, ORDERED_DATES_MESSAGE);
 
-export const updateCampaignTool: ShareFlowToolFactory = ({ services, deps }: ShareFlowToolContext): Tool =>
+export const updateCampaignTool = shareFlowTool(["content"], ({ services, deps }): Tool =>
   defineDelegatingTool(deps, {
     name: "update_campaign",
     label: "Edit a campaign",
@@ -306,7 +304,7 @@ export const updateCampaignTool: ShareFlowToolFactory = ({ services, deps }: Sha
         }),
       );
     },
-  });
+  }));
 
 /**
  * The complete Campaigns catalog.

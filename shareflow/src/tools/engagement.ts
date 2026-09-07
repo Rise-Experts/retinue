@@ -29,7 +29,8 @@ import {
   type InboxComment,
   type InboxCommentId,
 } from "../services/index.js";
-import type { ShareFlowToolContext, ShareFlowToolFactory } from "./index.js";
+import type { ShareFlowToolFactory } from "./factory.js";
+import { shareFlowTool } from "./factory.js";
 
 const idString = z.string().min(1);
 
@@ -70,7 +71,7 @@ const listCommentsSchema = z
   })
   .strict();
 
-export const listCommentsTool: ShareFlowToolFactory = ({ services, deps }: ShareFlowToolContext): Tool =>
+export const listCommentsTool = shareFlowTool(["engagement"], ({ services, deps }): Tool =>
   defineDelegatingTool(deps, {
     name: "list_comments",
     label: "Read the inbox",
@@ -92,7 +93,7 @@ export const listCommentsTool: ShareFlowToolFactory = ({ services, deps }: Share
         ...(page.nextCursor === undefined ? {} : { nextCursor: page.nextCursor }),
       };
     },
-  });
+  }));
 
 /**
  * `commentId` is required, and that is AC-3 rather than bookkeeping.
@@ -106,7 +107,7 @@ const replySchema = z
   .object({ commentId: idString, text: z.string().trim().min(1).max(4_000) })
   .strict();
 
-export const replyToCommentTool: ShareFlowToolFactory = ({ services, deps }: ShareFlowToolContext): Tool =>
+export const replyToCommentTool = shareFlowTool(["engagement"], ({ services, deps }): Tool =>
   defineDelegatingTool(deps, {
     name: "reply_to_comment",
     label: "Reply to a comment",
@@ -128,11 +129,11 @@ export const replyToCommentTool: ShareFlowToolFactory = ({ services, deps }: Sha
       // answered something.
       return { commentId: receipt.commentId, platformId: receipt.platformId, sentAt: receipt.sentAt };
     },
-  });
+  }));
 
 const dismissSchema = z.object({ commentId: idString }).strict();
 
-export const dismissCommentTool: ShareFlowToolFactory = ({ services, deps }: ShareFlowToolContext): Tool =>
+export const dismissCommentTool = shareFlowTool(["engagement"], ({ services, deps }): Tool =>
   defineDelegatingTool(deps, {
     name: "dismiss_comment",
     label: "Dismiss a comment",
@@ -151,7 +152,7 @@ export const dismissCommentTool: ShareFlowToolFactory = ({ services, deps }: Sha
           commentId: asId<InboxCommentId>(input.commentId),
         }),
       ),
-  });
+  }));
 
 /** The complete Engagement catalog, pinned by a test. */
 export const ENGAGEMENT_TOOL_NAMES = ["list_comments", "reply_to_comment", "dismiss_comment"] as const;

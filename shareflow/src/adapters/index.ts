@@ -27,15 +27,15 @@
  *
  * ## What a caller does with this
  *
- * `createShareFlowApp` requires all ten, so it cannot yet be constructed from these three. Closing that gap is
- * a change to `ShareFlowToolFactory`: a factory should declare which services it needs, so
- * `createShareFlowToolProvider` can refuse at construction — which is the property its own docstring already
- * claims, that *"a wiring mistake should stop the process starting rather than surface as a confusing catalogue
- * on someone's first conversation"*. Until a factory says what it uses, nothing can check it, and this file
- * will not pretend otherwise by handing over an object with seven live grenades in it.
+ * Hands it to `createShareFlowApp` with a factory list those three services can serve. That works because
+ * every `ShareFlowToolFactory` now declares its `requires`, so `createShareFlowToolProvider` refuses at
+ * construction when a registered capability needs a service this deployment does not have — the property that
+ * file's docstring already claimed, that *"a wiring mistake should stop the process starting rather than
+ * surface as a confusing catalogue on someone's first conversation"*.
  *
- * What it *can* do today is what shadow capture needs: the three services, and the context providers that read
- * only from them.
+ * Twelve of the thirty-seven capabilities read only these three: the five post tools, the five campaign tools
+ * and the two generation tools. Adding, say, `PUBLISHING_TOOL_FACTORIES` to that list is refused by name
+ * rather than failing when somebody asks for a post to go out.
  */
 
 import type { ContextProvider } from "@retinue/agentkit";
@@ -112,6 +112,10 @@ export const createShareFlowServices = (config: ShareFlowAdapterConfig): BackedS
 
 /**
  * The context providers that read only from the three backed services.
+ *
+ * The tool side of this is checked by the compiler and by the provider; the context side is not, because
+ * `ContextProvider` has no `requires` and adding one would be a platform change rather than a ShareFlow one.
+ * So this list is maintained by hand and asserted in the tests by actually running each provider.
  *
  * `shareFlowBaseContextProviders` is the full list and includes `accounts`, which calls
  * `services.connectors.listAccounts`. With no connector adapter that provider throws, and per

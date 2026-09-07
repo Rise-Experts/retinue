@@ -87,7 +87,7 @@ let recorder: Recorder;
 let idempotency: IdempotencyStore;
 
 const build = (factory: ShareFlowToolFactory, connectors?: Partial<ConnectorService>): Tool =>
-  factory({
+  factory.build({
     services: { connectors: stubConnectors(recorder, connectors) } as unknown as ShareFlowServices,
     deps: { authorization: allowAll, idempotency },
   });
@@ -348,7 +348,7 @@ describe("connecting stays a user action", () => {
 /** AC-5. */
 describe("entitlement", () => {
   it("refuses before the service is called when the policy says no", async () => {
-    const tool = listAccountsTool({
+    const tool = listAccountsTool.build({
       services: { connectors: stubConnectors(recorder) } as unknown as ShareFlowServices,
       deps: {
         authorization: {

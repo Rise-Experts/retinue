@@ -9,9 +9,10 @@
  * Nothing in this directory performs I/O — R7 in `scripts/check-boundaries.mjs` fails the build if it
  * tries. A ShareFlow tool is the envelope from #113 over a service method; the service does the work.
  */
-import type { DelegatingToolDeps, ExecutionContext, Tool, ToolProvider } from "@retinue/agentkit";
+import type { DelegatingToolDeps, ExecutionContext, ToolProvider } from "@retinue/agentkit";
 import { AgentPlatformError } from "@retinue/agentkit";
 import type { ShareFlowServices } from "../services/index.js";
+import type { ShareFlowServiceName, ShareFlowToolFactory } from "./factory.js";
 
 /**
  * The closed category vocabulary, from docs/07's tool-provider table.
@@ -40,29 +41,6 @@ const CATEGORIES: ReadonlySet<string> = new Set(SHAREFLOW_TOOL_CATEGORIES);
 export const isShareFlowToolCategory = (value: string): value is ShareFlowToolCategory =>
   CATEGORIES.has(value);
 
-/**
- * Everything a capability is built from.
- *
- * `deps` was missing from the first version of this type (#114), and writing the first capability
- * (#115) is what surfaced it: every ShareFlow tool is a `defineDelegatingTool`, and that needs the
- * authorization policy, the approval gate and the idempotency store. A factory that received only the
- * services could not build one — so each capability would have closed over its own copy of the deps,
- * which is precisely the "applied in one place, in one order" property the envelope exists to have.
- */
-export type ShareFlowToolContext = {
-  readonly services: ShareFlowServices;
-  readonly deps: DelegatingToolDeps;
-};
-
-/**
- * How a capability is registered: a function from the services and deps to a tool.
- *
- * A factory rather than a constructed tool, so a capability is written against the seam and the
- * concrete services are supplied once at wiring time. It is also what keeps a capability testable —
- * pass a stub service, get a tool.
- */
-export type ShareFlowToolFactory = (context: ShareFlowToolContext) => Tool;
-
 const invalid = (message: string) =>
   new AgentPlatformError({ code: "invalid_input", message, retryable: false });
 
@@ -75,12 +53,59 @@ const invalid = (message: string) =>
  */
 export const createShareFlowToolProvider = (input: {
   readonly id?: string;
-  readonly services: ShareFlowServices;
+  /**
+   * What this deployment has. **Partial**, because a rollout does not necessarily have all ten.
+   *
+   * A missing service is not an error here — it is an error only if a registered factory needs it,
+   * which is the check below. A deployment serving analytics and nothing else is a legitimate
+   * configuration, and the previous signature made it unrepresentable.
+   */
+  readonly services: Partial<ShareFlowServices>;
   readonly deps: DelegatingToolDeps;
   readonly factories: readonly ShareFlowToolFactory[];
 }): ToolProvider => {
-  const context: ShareFlowToolContext = { services: input.services, deps: input.deps };
-  const tools = input.factories.map((factory) => factory(context));
+  /**
+   * Build first, then check — and the order is deliberate rather than convenient.
+   *
+   * A factory reads its services inside the delegate closure, at execute time, so building one whose
+   * service is absent is safe and yields the tool's *name*. That name is what makes the refusal
+   * legible: "get_post_metrics needs analytics" is actionable where "factory 14 needs analytics" is
+   * not.
+   *
+   * The assumption — that no factory touches a service while building — is not left to trust: a test
+   * builds all 37 against a services object whose every property throws on access.
+   */
+  const built = input.factories.map((factory) => ({
+    factory,
+    tool: factory.build({ services: input.services as ShareFlowServices, deps: input.deps }),
+  }));
+
+  /**
+   * Every unmet requirement, reported together.
+   *
+   * Aggregated rather than thrown on the first one, because a deployment adding a service at a time
+   * needs the whole list to decide what to wire next — failing one at a time turns one fix into
+   * several restarts.
+   */
+  const unmet = built
+    .map(({ factory, tool }) => ({
+      name: tool.descriptor.name,
+      missing: factory.requires.filter((service: ShareFlowServiceName) => input.services[service] === undefined),
+    }))
+    .filter((entry) => entry.missing.length > 0);
+
+  if (unmet.length > 0) {
+    const services = [...new Set(unmet.flatMap((entry) => entry.missing))].sort();
+    throw invalid(
+      `these ShareFlow tools need services this deployment does not provide: ` +
+        `${unmet.map((entry) => `${entry.name} (${entry.missing.join(", ")})`).join("; ")}. ` +
+        `Supply ${services.join(", ")}, or leave those factories out of the list — a rollout serves ` +
+        `the workflows whose services exist, and a tool that is registered without one would fail in ` +
+        `the middle of a conversation instead of here.`,
+    );
+  }
+
+  const tools = built.map((entry) => entry.tool);
 
   const seen = new Set<string>();
   for (const tool of tools) {
@@ -105,6 +130,7 @@ export const createShareFlowToolProvider = (input: {
   };
 };
 
+export * from "./factory.js";
 export * from "./posts.js";
 export * from "./campaigns.js";
 export * from "./accounts.js";

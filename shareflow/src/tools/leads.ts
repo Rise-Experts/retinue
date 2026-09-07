@@ -40,7 +40,8 @@ import {
   type LeadId,
   type PostDraftId,
 } from "../services/index.js";
-import type { ShareFlowToolContext, ShareFlowToolFactory } from "./index.js";
+import type { ShareFlowToolFactory } from "./factory.js";
+import { shareFlowTool } from "./factory.js";
 
 const idString = z.string().min(1);
 
@@ -110,7 +111,7 @@ const listLeadsSchema = z
   })
   .strict();
 
-export const listLeadsTool: ShareFlowToolFactory = ({ services, deps }: ShareFlowToolContext): Tool =>
+export const listLeadsTool = shareFlowTool(["leads"], ({ services, deps }): Tool =>
   defineDelegatingTool(deps, {
     name: "list_leads",
     label: "List leads",
@@ -131,7 +132,7 @@ export const listLeadsTool: ShareFlowToolFactory = ({ services, deps }: ShareFlo
         ...(page.nextCursor === undefined ? {} : { nextCursor: page.nextCursor }),
       };
     },
-  });
+  }));
 
 const createLeadSchema = z
   .object({
@@ -142,7 +143,7 @@ const createLeadSchema = z
   })
   .strict();
 
-export const createLeadTool: ShareFlowToolFactory = ({ services, deps }: ShareFlowToolContext): Tool =>
+export const createLeadTool = shareFlowTool(["leads"], ({ services, deps }): Tool =>
   defineDelegatingTool(deps, {
     name: "create_lead",
     label: "Capture a lead",
@@ -162,7 +163,7 @@ export const createLeadTool: ShareFlowToolFactory = ({ services, deps }: ShareFl
           ...(input.valueMinorUnits === undefined ? {} : { valueMinorUnits: input.valueMinorUnits }),
         }),
       ),
-  });
+  }));
 
 const LEAD_PATCH_FIELDS = ["name", "email", "status", "valueMinorUnits"] as const;
 
@@ -179,7 +180,7 @@ const updateLeadSchema = z
     message: `supply at least one of: ${LEAD_PATCH_FIELDS.join(", ")}`,
   });
 
-export const updateLeadTool: ShareFlowToolFactory = ({ services, deps }: ShareFlowToolContext): Tool =>
+export const updateLeadTool = shareFlowTool(["leads"], ({ services, deps }): Tool =>
   defineDelegatingTool(deps, {
     name: "update_lead",
     label: "Update a lead",
@@ -205,7 +206,7 @@ export const updateLeadTool: ShareFlowToolFactory = ({ services, deps }: ShareFl
         }),
       );
     },
-  });
+  }));
 
 /** The complete Leads catalog, pinned by a test — `suppress_lead` is absent on purpose. */
 export const LEAD_TOOL_NAMES = ["list_leads", "create_lead", "update_lead"] as const;

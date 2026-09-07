@@ -118,7 +118,7 @@ const allowAll = {
 let idempotency: IdempotencyStore;
 
 const build = (factory: ShareFlowToolFactory, o: Options = {}): Tool =>
-  factory({ services: services(o), deps: { authorization: allowAll, idempotency } });
+  factory.build({ services: services(o), deps: { authorization: allowAll, idempotency } });
 
 const run = (tool: Tool, input: unknown, key = "k1"): Promise<ToolResult> =>
   tool.execute({ context: CONTEXT, input, idempotencyKey: key });
@@ -438,7 +438,7 @@ describe("duplication against recent posts", () => {
         },
       },
     } as unknown as ShareFlowServices;
-    const tool = generateContentTool({ services: patched, deps: { authorization: allowAll, idempotency } });
+    const tool = generateContentTool.build({ services: patched, deps: { authorization: allowAll, idempotency } });
     await run(tool, { brief: "b", platformIds: ["linkedin"] });
     expect(calls).toHaveLength(DEFAULT_REPAIR_BOUND + 1);
     expect(listCalls).toBe(1);
@@ -489,7 +489,7 @@ describe("catalog and delegation", () => {
   });
 
   it("refuses before the generator is called when the policy says no", async () => {
-    const tool = generateContentTool({
+    const tool = generateContentTool.build({
       services: services(),
       deps: {
         authorization: {

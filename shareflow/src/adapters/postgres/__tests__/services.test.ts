@@ -42,6 +42,13 @@ import {
 } from "../content.js";
 import { createModelContentGenerator } from "../../model/generator.js";
 import { BACKED_SERVICES, UNBACKED_SERVICES, backedContextProviders, createShareFlowServices } from "../../index.js";
+import { createShareFlowApp } from "../../../app/index.js";
+import {
+  CAMPAIGN_TOOL_FACTORIES,
+  GENERATE_TOOL_FACTORIES,
+  POSTS_TOOL_FACTORIES,
+  PUBLISHING_TOOL_FACTORIES,
+} from "../../../tools/index.js";
 import { POST_DRAFT_STATUSES, PUBLISH_TARGET_STATES } from "../../../services/index.js";
 import type { ShareFlowServices } from "../../../services/index.js";
 
@@ -748,6 +755,75 @@ describe.skipIf(URL_ === undefined)("wiring the three, which is what makes them 
       const sections = await provider.provide(context());
       expect(Array.isArray(sections)).toBe(true);
     }
+  });
+
+  it("builds a real ShareFlow app from three services and the factories that read them", async () => {
+    /**
+     * **The payoff.** Before `ShareFlowToolFactory.requires`, `createShareFlowApp` demanded all ten
+     * services, so these three adapters were constructible, tested and unreachable — the same defect
+     * family as the campaign path that had never been called.
+     *
+     * Now `services` is a `Partial` and each factory declares what it reads, so a deployment with
+     * three adapters and a matching factory list is a legitimate configuration, checked at
+     * construction. This builds one and asserts the catalogue is exactly the twelve capabilities those
+     * three services can serve.
+     */
+    const services = createShareFlowServices({ sql: sql as never, generate: (async () => ({})) as never });
+    const app = createShareFlowApp({
+      services,
+      factories: [...POSTS_TOOL_FACTORIES, ...CAMPAIGN_TOOL_FACTORIES, ...GENERATE_TOOL_FACTORIES],
+      deps: { authorization: { async can() { return { allow: true }; } } } as never,
+      authorization: {} as never,
+      manifest: {
+        instructions: "Draft and plan social content.",
+        modelPolicy: {} as never,
+        authorizationPolicyId: "shareflow-default",
+        limits: {} as never,
+        // Narrowed to what these services can serve. The manifest's own mechanism for a partial
+        // rollout, and the reason `categories` exists.
+        categories: ["posts", "campaigns"],
+      },
+    });
+
+    const tools = await app.providers[0]!.listTools(context());
+    expect(tools).toHaveLength(12);
+    expect(tools.map((registered) => registered.descriptor.name)).toContain("create_post_draft");
+    expect(tools.map((registered) => registered.descriptor.name)).toContain("generate_content");
+    /**
+     * Two categories, and only two. No accounts, publishing, media, analytics, engagement, leads or
+     * research — those services do not exist here, and a factory for one would have been refused at
+     * construction rather than appearing in this catalogue.
+     *
+     * The generation tools sit under `posts` rather than a category of their own, which is why this
+     * asserts the distinct set instead of a count per category.
+     */
+    expect([...new Set(tools.map((registered) => registered.descriptor.category))].sort()).toEqual([
+      "campaigns",
+      "posts",
+    ]);
+  });
+
+  it("refuses an app whose factory list needs a service it does not have", () => {
+    /**
+     * The other half, and the one that makes the first half safe: adding the publishing factories to a
+     * deployment without a `PublishingService` fails **here**, naming the tools, rather than at the
+     * moment a user asks for something to be published.
+     */
+    const services = createShareFlowServices({ sql: sql as never, generate: (async () => ({})) as never });
+    expect(() =>
+      createShareFlowApp({
+        services,
+        factories: [...POSTS_TOOL_FACTORIES, ...PUBLISHING_TOOL_FACTORIES],
+        deps: { authorization: { async can() { return { allow: true }; } } } as never,
+        authorization: {} as never,
+        manifest: {
+          instructions: "Draft and publish.",
+          modelPolicy: {} as never,
+          authorizationPolicyId: "shareflow-default",
+          limits: {} as never,
+        },
+      }),
+    ).toThrowError(/publish_post_now \(publishing\)/);
   });
 
   it("keeps the backed and unbacked lists adding up to the whole interface", () => {
