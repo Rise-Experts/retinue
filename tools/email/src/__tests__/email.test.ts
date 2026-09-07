@@ -60,7 +60,19 @@ const localSmtp = (sink: Sink, extra: Record<string, unknown> = {}) =>
     requireTls: false,
     credentialRef: "smtp",
     resolver: basicResolver,
-    timeoutMs: 5_000,
+    /**
+     * 250ms, and the number that was here is why the release failed.
+     *
+     * It was `5_000` — **exactly vitest's default test timeout**. The STARTTLS test drives a sink that
+     * advertises the capability and cannot complete the handshake, so the client waits for a reply that never
+     * comes; whether the provider's timeout or the test's fired first was a race decided by how fast the
+     * machine was. It won on this workstation and lost on a hosted runner, which is not a slow-CI problem —
+     * the test was passing by luck.
+     *
+     * A loopback sink answers in microseconds, so 250ms is generous for every assertion here and two orders
+     * of magnitude under the harness. The one test that is *about* a timeout should set its own and say so.
+     */
+    timeoutMs: 250,
     ...extra,
   });
 
