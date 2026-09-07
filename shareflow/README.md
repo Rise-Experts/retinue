@@ -620,9 +620,9 @@ endpoints, 7 skills, 5 inbound webhooks and 1 cron job — 51 capabilities:
 
 | | |
 |---|---|
-| 13 `implemented` | a replacement exists with a behavioural test against the old contract |
+| 16 `implemented` | a replacement exists with a behavioural test against the old contract |
 | 3 `partial` | `convert_media` (the old tool queues video and this one cannot represent a running job) and the two generation endpoints, where the tool exists and the non-conversational HTTP entry point does not |
-| 21 `missing` | artifacts, diagrams, PDFs, `read_pdf`, `repost_post`, `delete_post`, and ten endpoints. Three are a tool away — the platform already carries an artifact service and a document-extraction pipeline |
+| 18 `missing` | diagrams, PDFs, `read_pdf`, `repost_post`, `delete_post`, and ten endpoints |
 | 8 `dropped` | signed 2026-09-07: the six workspace-configuration tools and `POST /llm/validate`, `POST /assistant/session-name`. Two of the signatures record a **cost**, not a redirection — see below |
 | 6 `retained` | five webhooks and the publish sweep, which live in `web/` and call the AI backend not at all — verified by grep. Removing Agno leaves every one of them running |
 
@@ -632,6 +632,46 @@ The hazard in adding a status is that a new value falls through every `if` and c
 both `validateInventory` and `gateStatus` switch exhaustively with a `never` default, and `validateInventory`
 refuses `retained` for any capability whose source is under `ai_backend/`. Without that guard, `retained` is the
 escape hatch that empties the file.
+
+### The three that were a tool away
+
+`create_artifact`, `update_artifact` and `get_artifact`, built once the inventory said what they needed.
+`assistant_artifacts`, `assistant_artifact_versions` and the `chorus-artifact:` scheme were already in
+ShareFlow; what was missing was an `ArtifactService`, a Postgres adapter and three tools. Eleven services now,
+forty tools.
+
+**It reads ShareFlow's table, not the platform's.** `@retinue/agentkit` ships its own `createArtifactService`
+and using it would have been less code and the wrong rows: every `chorus-artifact:` link in a customer's chat
+history resolves against an `assistant_artifacts` id, so a replacement writing elsewhere would leave all of
+them dead while reporting a migrated capability.
+
+**Archive before update, now under a lock.** The old lib's invariant is kept exactly — *"the OLD content is
+archived before the update, not after — if the archive write fails, the revision is refused and the previous
+version is still intact"*. What is added is `select … for update`. The old path reads, archives and updates on
+separate connections, so two concurrent revisions both read version 1 and both try to archive version 1;
+`assistant_artifact_versions_artifact_id_version_key` refuses the second, which means **the old safety was the
+unique index rather than the sequencing**, and that caller got a 500 for a queueing problem. Under the lock the
+second writer waits, sees version 2 and produces version 3. That difference is recorded on the inventory entry
+rather than smoothed over.
+
+**One side effect no port mentions.** The old runtime writes an `audit_log` row from every internal write, and
+ShareFlow's `/audit` screen reads that table. No adapter in this package did. The artifact adapter does, best
+effort, following the app's own rule that *"an audit write must never break the action it records"* — and the
+gap for the other ten adapters is a finding rather than something this change fixed.
+
+**The skill was `draft` because these three did not exist.** `skills/document-generation` was migrated and
+held out of discovery with a comment naming `create_artifact`, `update_artifact` and `get_artifact` as the
+reason. It is `active` now. Leaving it would have been the AC-5 defect in its purest form: three replaced tools
+running without the instructions the old runtime ran them under, producing identical write sets on every run
+where the guidance did not happen to change a decision. Its body names no tool, so `generate_pdf` still being
+absent makes nothing in it false. `mermaid-diagrams` stays `draft` — `render_diagram` does not exist.
+
+**A new parity gate, unsigned.** The three name a `documents` workflow, which is a gate that now exists with
+`status: "proposed"`. The alternative was giving them no workflow, which would have put three *replaced* tools
+in the same position as the 19 nothing measures — and a capability no threshold covers cannot fail, which is
+worse than failing. It stays proposed because it is the first gate written *after* shadow data existed:
+agreeing a threshold now is what #128 AC-1 forbids, so `gate-not-agreed` blocks until somebody signs it having
+looked at the runs. It is the only unsigned gate, and a test pins that.
 
 ### The eight drops, and what two of them cost
 
@@ -675,7 +715,7 @@ tools are not built reported on the rate.
 `evaluateParity`'s second argument is required now, not defaulted: a default of `[]` is the same silence with a
 nicer signature. Each gate sees the entries naming its workflow, which is what `CapabilityEntry.workflows` is
 for, and both directions are asserted — every name must be a real gate, and every measurable gate must be named
-by at least one entry. 22 of the 51 name **no** workflow at all: artifacts, PDFs, branding, the agent-skill
+by at least one entry. 19 of the 51 name **no** workflow at all: PDFs, diagrams, branding, the agent-skill
 tools. No threshold measures them, so nothing about them can fail, which is worse than failing — the report
 prints them rather than letting an empty list read as nothing to do.
 

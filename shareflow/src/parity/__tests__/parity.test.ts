@@ -63,6 +63,9 @@ describe("the gates", () => {
       "analytics",
       "campaign-planning",
       "create-post",
+      // Not a docs/07 workflow — added with REQ-041 (#190) when the artifact tools shipped, so three replaced
+      // capabilities are measured by something rather than sitting in the set no threshold covers.
+      "documents",
       "engagement-read",
       "engagement-reply",
       "publish",
@@ -98,9 +101,26 @@ describe("the gates", () => {
      * these were signed before shadow mode had run against production traffic at all.
      */
     for (const gate of PARITY_GATES) {
+      if (gate.status === "proposed") continue;
       expect(gate.status, gate.workflow).toBe("agreed");
       expect(gate.agreedBy, gate.workflow).toBeTruthy();
       expect(gate.agreedAt, gate.workflow).toMatch(/^\d{4}-\d{2}-\d{2}/);
+    }
+
+    /**
+     * `documents` is the one exception, and the exception is the mechanism rather than a hole.
+     *
+     * The 2026-08-24 gates carry a claim no later gate can: they were agreed before shadow mode had ever run
+     * against production traffic, so no threshold could have been fitted to a result. `documents` was written
+     * after REQ-041 shipped the artifact tools — with shadow data already in existence — so signing it here
+     * would be precisely what AC-1 forbids. It stays `proposed`, which blocks, and it names no signature
+     * because there is none to name.
+     */
+    const proposed = PARITY_GATES.filter((gate) => gate.status === "proposed");
+    expect(proposed.map((gate) => gate.workflow)).toEqual(["documents"]);
+    for (const gate of proposed) {
+      expect(gate.agreedBy, gate.workflow).toBeUndefined();
+      expect(gate.agreedAt, gate.workflow).toBeUndefined();
     }
   });
 
@@ -131,7 +151,9 @@ describe("the gates", () => {
       expect(gateFor(workflow)?.metric, workflow).toBe("unmeasurable-by-shadow");
     }
     expect(measurableWorkflows()).not.toContain("analytics");
-    expect(measurableWorkflows()).toHaveLength(5);
+    // Six since `documents` — a written artifact is a write, so it is measurable in principle even though its
+    // threshold is not agreed yet.
+    expect(measurableWorkflows()).toHaveLength(6);
   });
 });
 
@@ -226,6 +248,8 @@ describe("evaluating a workflow", () => {
     expect([...evaluation.blocking].sort()).toEqual([
       "campaign-planning",
       "create-post",
+      // Blocking as `gate-not-agreed` rather than on its data: nobody has agreed how to measure documents.
+      "documents",
       "engagement-reply",
       "publish",
       "repurpose",

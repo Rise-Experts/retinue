@@ -29,6 +29,7 @@
  */
 import type { ExecutionContext } from "@retinue/agentkit";
 import type {
+  ArtifactId,
   CampaignId,
   InboxCommentId,
   LeadId,
@@ -1396,7 +1397,104 @@ export interface AnalyticsService {
   ): Promise<MetricsReport>;
 }
 
+// ---------------------------------------------------------------------------------------------------
+// Artifacts
+// ---------------------------------------------------------------------------------------------------
+
+/**
+ * From `assistant_artifacts_kind_check`, which is the authority — not the calling code.
+ *
+ * The lesson `ConnectorService` learned the hard way: `social_accounts.status` was mapped from the app's
+ * switch statement and the database refused the fixture, because the constraint admitted a value the code
+ * never wrote. Read the constraint.
+ */
+export const ARTIFACT_KINDS = ["markdown", "html", "mermaid"] as const;
+export type ArtifactKind = (typeof ARTIFACT_KINDS)[number];
+
+/**
+ * The size limits, transcribed from `web/src/lib/internal/artifacts.ts` — and in the **port**, not the adapter.
+ *
+ * Both the adapter and the tool schema need them, and the first version had the tool importing them from
+ * `adapters/postgres/artifacts.ts`. That compiles and passes the boundary check, because a constant is not
+ * I/O — but it makes the model-facing contract depend on one storage backend, so a second adapter would
+ * either import Postgres' numbers or quietly disagree with the schema that validates its input.
+ *
+ * Transcribed rather than chosen: a runtime that accepted a 400,000-character artifact would write a row the
+ * app's own editor refuses to save back, and that surfaces as a broken document rather than a rejected call.
+ */
+export const ARTIFACT_MAX_CHARS = 200_000;
+export const ARTIFACT_MAX_TITLE = 200;
+
+export type Artifact = {
+  readonly id: ArtifactId;
+  readonly title: string;
+  /** Fixed at creation. `revise` cannot change it — see `ArtifactService.revise`. */
+  readonly kind: ArtifactKind;
+  readonly content: string;
+  /** 1 on creation, and one higher on every revision. Every prior version is kept. */
+  readonly version: number;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  /**
+   * A `chorus-artifact:<uuid>` href for the assistant to put in its reply as a markdown link.
+   *
+   * Optional because the app's own formatter returns null for anything that is not a uuid, and it does that
+   * for a reason worth preserving: a reply streams token by token, so a half-written reference exists for a
+   * frame, and a client that rendered a card for it would fetch an artifact that cannot be found. Absent
+   * means "do not link to this", which is a different instruction from an empty string.
+   */
+  readonly reference?: string;
+};
+
+/**
+ * Documents the user opens beside the chat — REQ-041 (#190).
+ *
+ * The capability the old runtime's Documents agent owned, and the one place in this package where the point is
+ * that a thing is **edited**: "make the intro shorter" has to produce version 2 of the same document, not a
+ * second file with a similar name. That is why artifacts are rows and not media — a generated PDF is binary
+ * and immutable, an artifact is neither.
+ *
+ * There is no `list` and no `delete`, because the old runtime has neither. A tool the old product did not have
+ * is not parity, it is scope: `create_artifact`, `update_artifact` and `get_artifact` are the three that
+ * exist, and a fourth would be a capability with nothing to compare against.
+ */
+export type ArtifactService = {
+  create(
+    context: ExecutionContext,
+    input: {
+      readonly idempotencyKey: ServiceIdempotencyKey;
+      readonly title: string;
+      readonly kind: ArtifactKind;
+      readonly content: string;
+    },
+  ): Promise<Artifact>;
+
+  /**
+   * Replace an artifact's body, keeping the previous version.
+   *
+   * `content` is the **whole** new document, not a patch — the old tool says so explicitly, and the reason is
+   * that a model asked for a diff produces one that does not apply. `title` is optional and omitting it keeps
+   * the current one.
+   *
+   * `kind` is deliberately absent. The old runtime validates a revision against the *stored* kind, so markdown
+   * cannot become html by revision, and a caller who wants a different kind creates a different artifact. The
+   * id is stable across revisions so a reference shown ten edits ago still resolves.
+   */
+  revise(
+    context: ExecutionContext,
+    input: {
+      readonly idempotencyKey: ServiceIdempotencyKey;
+      readonly id: ArtifactId;
+      readonly content: string;
+      readonly title?: string;
+    },
+  ): Promise<Artifact>;
+
+  get(context: ExecutionContext, input: { readonly id: ArtifactId }): Promise<Artifact>;
+};
+
 export type ShareFlowServices = {
+  readonly artifacts: ArtifactService;
   readonly connectors: ConnectorService;
   readonly content: ContentService;
   readonly media: MediaService;

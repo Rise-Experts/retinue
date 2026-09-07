@@ -14,16 +14,7 @@ import {
   SHAREFLOW_TOOL_CATEGORIES,
   SHAREFLOW_BUILT_IN_SKILLS,
   SOCIAL_ASSISTANT_ID,
-  ACCOUNT_TOOL_FACTORIES,
-  ANALYTICS_TOOL_FACTORIES,
-  CAMPAIGN_TOOL_FACTORIES,
-  ENGAGEMENT_TOOL_FACTORIES,
-  GENERATE_TOOL_FACTORIES,
-  LEAD_TOOL_FACTORIES,
-  MEDIA_TOOL_FACTORIES,
-  POSTS_TOOL_FACTORIES,
-  PUBLISHING_TOOL_FACTORIES,
-  RESEARCH_TOOL_FACTORIES,
+  SHAREFLOW_TOOL_FACTORIES,
   createShareFlowToolProvider,
   shareFlowTool,
   defineShareFlowSkill,
@@ -172,19 +163,15 @@ describe("the tool provider", () => {
       },
     ) as ShareFlowServices;
 
-    const factories = [
-      ...ACCOUNT_TOOL_FACTORIES,
-      ...ANALYTICS_TOOL_FACTORIES,
-      ...CAMPAIGN_TOOL_FACTORIES,
-      ...ENGAGEMENT_TOOL_FACTORIES,
-      ...GENERATE_TOOL_FACTORIES,
-      ...LEAD_TOOL_FACTORIES,
-      ...MEDIA_TOOL_FACTORIES,
-      ...POSTS_TOOL_FACTORIES,
-      ...PUBLISHING_TOOL_FACTORIES,
-      ...RESEARCH_TOOL_FACTORIES,
-    ];
-    expect(factories).toHaveLength(37);
+    /**
+     * From `SHAREFLOW_TOOL_FACTORIES`, not a spread written here.
+     *
+     * This test used to maintain its own copy of the ten category constants, and the copy is the defect: an
+     * eleventh category lands, nobody remembers the list in this file, and **a test that builds fewer tools
+     * passes**. The artifacts category was the eleventh, and it is why the aggregate exists.
+     */
+    const factories = SHAREFLOW_TOOL_FACTORIES;
+    expect(factories).toHaveLength(40);
     for (const factory of factories) {
       expect(() => factory.build({ services: explode, deps })).not.toThrow();
     }
@@ -229,7 +216,9 @@ describe("the tool provider", () => {
 
     expect(problems).toEqual([]);
     // The scan found the factories rather than nothing — a regex that matched none would pass above.
-    expect(seen).toBe(37);
+    expect(seen).toBe(40);
+    // And it scanned every category file, so a new one cannot arrive unscanned while the count still adds up.
+    expect(seen).toBe(SHAREFLOW_TOOL_FACTORIES.length);
   });
 
   it("narrows `requires` to the literals given, which is what makes the Pick a Pick", () => {

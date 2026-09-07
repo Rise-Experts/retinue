@@ -23,8 +23,8 @@
  * ## What the honest picture is
  *
  * The old runtime is 31 Agno tools across 9 components, 14 purpose-built HTTP endpoints, 7 skills, 5 inbound
- * webhooks and 1 cron job. This package replaces 13 outright, part of 3 more, has **8 signed off as dropped**
- * on 2026-09-07, retains 6 that live in `web/` — and has not replaced 21. The inventory gate is therefore
+ * webhooks and 1 cron job. This package replaces 16 outright, part of 3 more, has **8 signed off as dropped**
+ * on 2026-09-07, retains 6 that live in `web/` — and has not replaced 18. The inventory gate is therefore
  * `incomplete`, which is the correct verdict and not a defect in the gate.
  *
  * The eight drops are the six workspace-configuration tools and two platform endpoints, and two of their
@@ -33,10 +33,8 @@
  * only surface. Neither moves anywhere; both stop being editable. That is written into `droppedBy.reason`
  * rather than a comment beside it, because the record is what somebody reads in a year.
  *
- * The remaining 21 are not dropped for the reason the drops exist: a drop needs a person, and nobody has
- * agreed to remove artifacts, diagrams, PDFs, `repost_post` or `delete_post` from a live product. Three of
- * them are a tool away from working — the platform already carries an artifact service and a
- * document-extraction pipeline.
+ * The remaining 18 are not dropped for the reason the drops exist: a drop needs a person, and nobody has
+ * agreed to remove diagrams, PDFs, `repost_post` or `delete_post` from a live product.
  *
  * The old-runtime paths are not written here at all — they come from `OLD_RUNTIME_MANIFEST`, which the scan
  * generates. A reviewer who wants the file and line reads it from there rather than trusting a string typed by
@@ -394,6 +392,10 @@ export const CAPABILITY_INVENTORY: readonly CapabilityEntry[] = [
   },
 
   // ---- Documents, diagrams and artifacts ------------------------------------------------------------------
+  //
+  // The three artifact tools are built (REQ-041, #190): the rows, the versioning and the `chorus-artifact:`
+  // scheme were already in ShareFlow, so what was missing was a service and three tools. `render_diagram` and
+  // `generate_pdf` are not, and they are the reason `skills/mermaid-diagrams` is still `draft`.
   {
     capability: "render a diagram as an image",
     oldRuntimeRef: "tool:render_diagram",
@@ -415,29 +417,51 @@ export const CAPABILITY_INVENTORY: readonly CapabilityEntry[] = [
   {
     capability: "create an artifact",
     oldRuntimeRef: "tool:create_artifact",
-    workflows: [],
-    replacement: null,
-    status: "missing",
+    workflows: ["documents"],
+    replacement: "create_artifact",
+    status: "implemented",
     invocation: "interactive",
-    sideEffects: "inserts an artifact row — a long document the user then edits",
+    instructions:
+      "skills/document-generation — choosing a document over a reply, and reporting what was made rather than handing over a bare link. Held at `draft` until these three tools existed; active now, because three replaced tools running without the instructions the old runtime ran them under is the AC-5 defect exactly",
+    sideEffects:
+      "inserts an assistant_artifacts row and an audit_log row. Nothing leaves the system, and the returned chorus-artifact: reference resolves in the app's own panel",
+    contractTest: "shareflow/src/tools/__tests__/artifacts.test.ts",
   },
   {
     capability: "revise an artifact",
     oldRuntimeRef: "tool:update_artifact",
-    workflows: [],
-    replacement: null,
-    status: "missing",
+    workflows: ["documents"],
+    replacement: "update_artifact",
+    status: "implemented",
     invocation: "interactive",
-    sideEffects: "overwrites an artifact's content",
+    instructions: "skills/document-generation — same rules; a revision is a document",
+    /**
+     * One deliberate difference from the old contract, recorded here rather than smoothed over.
+     *
+     * The old path reads, archives and updates on separate connections, so two concurrent revisions both read
+     * version 1 and both try to insert version 1 into `assistant_artifact_versions`. The unique index refuses
+     * the second — which is why the old code cannot lose a version, and it means the safety is the index
+     * rather than the sequencing — and that caller gets a 500 for what is a queueing problem.
+     *
+     * The adapter takes `for update` on the artifact row instead, so the second writer waits, sees version 2
+     * and produces version 3. The guarantee the old code actually made — no version is ever lost or
+     * overwritten — is preserved; the spurious error is not. A behavioural test pins both halves.
+     */
+    sideEffects:
+      "archives the current version into assistant_artifact_versions, then replaces the body and bumps the version. Never destructive: the archive is written first, so a failure leaves the previous version intact. Plus an audit_log row",
+    contractTest: "shareflow/src/tools/__tests__/artifacts.test.ts",
   },
   {
     capability: "read an artifact",
     oldRuntimeRef: "tool:get_artifact",
-    workflows: [],
-    replacement: null,
-    status: "missing",
+    workflows: ["documents"],
+    replacement: "get_artifact",
+    status: "implemented",
     invocation: "interactive",
+    instructions:
+      "none — a deterministic read. The instruction that matters is in skills/document-generation and belongs to the revision, not to this",
     sideEffects: "none — a read",
+    contractTest: "shareflow/src/tools/__tests__/artifacts.test.ts",
   },
 
   // ---- Campaigns ------------------------------------------------------------------------------------------

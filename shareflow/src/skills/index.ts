@@ -95,10 +95,20 @@ const MIGRATED_AT = "2026-08-23T00:00:00.000Z";
  * that is only meaningful if the numbers move when the text does. Starting at 1 for a body that was
  * edited during migration is honest: this text has never been executed before.
  *
- * `mermaid-diagrams` and `document-generation` are `draft`. Every tool they describe — `render_diagram`,
- * `generate_pdf`, `create_artifact`, `update_artifact`, `get_artifact` — is REQ-028 and does not exist, so
- * offering them would instruct the model into nothing, which is worse than not offering them. The content
- * is migrated and versioned; the resolver's status filter keeps it out of discovery until #129–#133.
+ * `mermaid-diagrams` is `draft`. `render_diagram` does not exist, so offering it would instruct the model into
+ * nothing, which is worse than not offering it. The content is migrated and versioned; the resolver's status
+ * filter keeps it out of discovery.
+ *
+ * `document-generation` **was** draft for the same reason and is now `active` — REQ-041 (#190) built
+ * `create_artifact`, `update_artifact` and `get_artifact`, so the precondition is gone. Worth being precise
+ * about why it is safe: its body names no tool at all. It is about choosing a document over a reply, writing
+ * markdown, keeping a diagram in the document's source, and reporting what was made — none of which depends
+ * on `generate_pdf`, which still does not exist. Leaving it draft would have been the AC-5 defect in its
+ * purest form: three replaced tools shipping without the instructions the old runtime ran them under, which
+ * produces identical write sets on every run where the guidance did not happen to change a decision.
+ *
+ * Its version stays 1. Only the status changed; the text is the same text, and #30's guarantee is that the
+ * number moves when the *text* does.
  */
 export const SHAREFLOW_BUILT_IN_SKILLS: readonly SkillVersion[] = shareFlowBuiltInSkills([
   defineShareFlowSkill({
@@ -157,7 +167,9 @@ export const SHAREFLOW_BUILT_IN_SKILLS: readonly SkillVersion[] = shareFlowBuilt
     instructions: SHAREFLOW_SKILL_BODIES["document-generation"],
     version: 1,
     authoredAt: MIGRATED_AT,
-    status: "draft",
+    // Active since the artifact tools exist — see the note above. Its body names no tool, so nothing in it
+    // points at `generate_pdf`, which does not.
+    status: "active",
   }),
 ]);
 

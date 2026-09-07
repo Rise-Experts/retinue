@@ -15,6 +15,7 @@ export type MediaAssetId = Branded<string, "MediaAssetId">;
 export type PublishTargetId = Branded<string, "PublishTargetId">;
 export type InboxCommentId = Branded<string, "InboxCommentId">;
 export type LeadId = Branded<string, "LeadId">;
+export type ArtifactId = Branded<string, "ArtifactId">;
 
 /**
  * Platform id as a plain string, deliberately.

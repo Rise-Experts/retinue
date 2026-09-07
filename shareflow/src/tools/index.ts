@@ -14,6 +14,7 @@ import { AgentPlatformError } from "@retinue/agentkit";
 import type { ShareFlowServices } from "../services/index.js";
 import type { ShareFlowServiceName, ShareFlowToolFactory } from "./factory.js";
 import { ACCOUNT_TOOL_FACTORIES, ACCOUNT_TOOL_NAMES } from "./accounts.js";
+import { ARTIFACT_TOOL_FACTORIES, ARTIFACT_TOOL_NAMES } from "./artifacts.js";
 import { ANALYTICS_TOOL_FACTORIES, ANALYTICS_TOOL_NAMES } from "./analytics.js";
 import { CAMPAIGN_TOOL_FACTORIES, CAMPAIGN_TOOL_NAMES } from "./campaigns.js";
 import { ENGAGEMENT_TOOL_FACTORIES, ENGAGEMENT_TOOL_NAMES } from "./engagement.js";
@@ -34,6 +35,7 @@ import { RESEARCH_TOOL_FACTORIES, RESEARCH_TOOL_NAMES } from "./research.js";
  */
 export const SHAREFLOW_TOOL_CATEGORIES = [
   "posts",
+  "artifacts",
   "accounts",
   "publishing",
   "campaigns",
@@ -83,7 +85,7 @@ export const createShareFlowToolProvider = (input: {
    * not.
    *
    * The assumption — that no factory touches a service while building — is not left to trust: a test
-   * builds all 37 against a services object whose every property throws on access.
+   * builds all 40 against a services object whose every property throws on access.
    */
   const built = input.factories.map((factory) => ({
     factory,
@@ -169,6 +171,7 @@ export * from "./analytics.js";
 export const SHAREFLOW_TOOL_FACTORIES: readonly ShareFlowToolFactory[] = [
   ...ACCOUNT_TOOL_FACTORIES,
   ...ANALYTICS_TOOL_FACTORIES,
+  ...ARTIFACT_TOOL_FACTORIES,
   ...CAMPAIGN_TOOL_FACTORIES,
   ...ENGAGEMENT_TOOL_FACTORIES,
   ...GENERATE_TOOL_FACTORIES,
@@ -188,6 +191,7 @@ export const SHAREFLOW_TOOL_FACTORIES: readonly ShareFlowToolFactory[] = [
 export const SHAREFLOW_TOOL_NAMES: readonly string[] = [
   ...ACCOUNT_TOOL_NAMES,
   ...ANALYTICS_TOOL_NAMES,
+  ...ARTIFACT_TOOL_NAMES,
   ...CAMPAIGN_TOOL_NAMES,
   ...ENGAGEMENT_TOOL_NAMES,
   ...GENERATE_TOOL_NAMES,
@@ -197,3 +201,4 @@ export const SHAREFLOW_TOOL_NAMES: readonly string[] = [
   ...PUBLISHING_TOOL_NAMES,
   ...RESEARCH_TOOL_NAMES,
 ];
+export * from "./artifacts.js";

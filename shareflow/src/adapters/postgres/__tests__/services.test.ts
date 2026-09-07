@@ -36,6 +36,7 @@ import { ACCOUNT_STATUS_FROM_DB, accountHealthFrom } from "../connectors.js";
 import { LEAD_SUPPRESSION, STORED_LEAD_STATUSES, encodeAttribution, normaliseEmail } from "../leads.js";
 import { ANALYTICS_REFRESH_WINDOW_MS } from "../analytics.js";
 import { MEDIA_UNCHECKED_CODE } from "../media.js";
+import { ARTIFACT_SCHEME, artifactReference, createPostgresArtifactService } from "../artifacts.js";
 import {
   createPostgresContentService,
   cadenceFrom,
@@ -58,7 +59,12 @@ import {
   MEDIA_TOOL_FACTORIES,
   POSTS_TOOL_FACTORIES,
 } from "../../../tools/index.js";
-import { POST_DRAFT_STATUSES, PUBLISH_TARGET_STATES } from "../../../services/index.js";
+import {
+  ARTIFACT_MAX_CHARS,
+  ARTIFACT_MAX_TITLE,
+  POST_DRAFT_STATUSES,
+  PUBLISH_TARGET_STATES,
+} from "../../../services/index.js";
 import type { ShareFlowServices } from "../../../services/index.js";
 
 /**
@@ -2757,7 +2763,10 @@ describe.skipIf(URL_ === undefined)("wiring the services, which is what makes th
      */
     const all = [...BACKED_SERVICES, ...UNBACKED_SERVICES];
     expect(new Set(all).size).toBe(all.length);
-    expect(all).toHaveLength(10);
+    // Eleven since REQ-041 (#190) added `artifacts`. The compiler already proves the two lists partition
+    // `ShareFlowServices` exactly; this is the count, so a service added to the interface and to neither list
+    // fails here as well as there.
+    expect(all).toHaveLength(11);
     // Each name is a real member — the length check alone would accept ten wrong names.
     const backed = createShareFlowServices({ sql: sql as never, transaction, setup: () => SETUP,
       ...RESEARCH, generate: (async () => ({})) as never });
@@ -2952,5 +2961,221 @@ describe("ContentGenerator over a model", () => {
     await withCapture.generate({} as never, { brief: "b", platformIds: ["x"] as never, avoid: [] });
     expect(systems[0]).not.toContain("Brand:");
     expect(systems[0]).not.toContain("unknown");
+  });
+});
+
+describe.skipIf(URL_ === undefined)("ArtifactService over assistant_artifacts — REQ-041 (#190)", () => {
+  /**
+   * The first of the three capabilities the inventory called "a tool away".
+   *
+   * Everything this needs was already in ShareFlow: `assistant_artifacts`, `assistant_artifact_versions` and
+   * the `chorus-artifact:` scheme. So the interesting assertions are not "does it insert" — they are the two
+   * places a plausible implementation would be wrong about something:
+   *
+   * - **the table.** `@retinue/agentkit` ships its own `createArtifactService`, and using it would have been
+   *   less code and the wrong rows: every `chorus-artifact:` link in a customer's chat history resolves
+   *   against an `assistant_artifacts` id.
+   * - **the ordering.** The old lib archives the OLD content *before* the update, so a failed archive refuses
+   *   the revision and leaves the previous version intact. Reversed, a partial failure loses a version.
+   */
+  const artifacts = () => createPostgresArtifactService({ sql, transaction });
+
+  const create = async (over: Partial<{ title: string; kind: string; content: string }> = {}) =>
+    artifacts().create(context(), {
+      idempotencyKey: `k-${Math.random()}` as never,
+      title: over.title ?? "Q3 content plan",
+      kind: (over.kind ?? "markdown") as never,
+      content: over.content ?? "# Plan\n\nFirst paragraph.",
+    });
+
+  it("writes to ShareFlow's own table, with the app's provenance columns", async () => {
+    const artifact = await create();
+    expect(artifact.version).toBe(1);
+    expect(artifact.kind).toBe("markdown");
+    // The reference the assistant is told to put in its reply, in the app's scheme so it opens the app's panel.
+    expect(artifact.reference).toBe(`${ARTIFACT_SCHEME}${String(artifact.id).toLowerCase()}`);
+
+    const rows = await sql.query<{ workspace_id: string; created_by: string | null; session_id: string | null }>(
+      "select workspace_id, created_by, session_id from public.assistant_artifacts where id = $1::uuid",
+      [String(artifact.id)],
+    );
+    expect(rows[0]?.workspace_id).toBe(workspaceId);
+    expect(rows[0]?.created_by).toBe(userId);
+    /**
+     * `session_id` is null here, and that is the honest value rather than a gap.
+     *
+     * It is `text` with no foreign key — the app's comment says the artifact outlives the session and it is
+     * *"never used for access control"* — so the adapter fills it from `context.conversationId`, which this
+     * suite's context does not carry. A placeholder would be provenance nobody can trace.
+     */
+    expect(rows[0]?.session_id).toBeNull();
+  });
+
+  it("records an audit_log row, because the customer's own audit screen reads it", async () => {
+    /**
+     * The side effect no port mentions and every old internal write performs. `/audit` in the app reads this
+     * table, and the old runtime writes to it from artifacts, drafts, schedules, reposts, branding and media —
+     * so an adapter that skipped it would make the trail go quiet for exactly the actions an assistant took on
+     * a customer's behalf.
+     */
+    const artifact = await create({ title: "Audited plan" });
+    const rows = await sql.query<{ action: string; target_id: string; detail: Record<string, unknown> }>(
+      `select action, target_id, detail from public.audit_log
+        where workspace_id = $1::uuid and target_id = $2 order by created_at desc`,
+      [workspaceId, String(artifact.id)],
+    );
+    expect(rows[0]?.action).toBe("artifact.created");
+    expect(rows[0]?.detail).toMatchObject({ source: "assistant", title: "Audited plan" });
+  });
+
+  it("archives the previous version before writing the new one, and keeps the old text", async () => {
+    const artifact = await create({ title: "First title", content: "Original body." });
+    const revised = await artifacts().revise(context(), {
+      idempotencyKey: "k2" as never,
+      id: artifact.id,
+      content: "Replacement body.",
+      title: "Second title",
+    });
+
+    expect(revised.version).toBe(2);
+    expect(revised.content).toBe("Replacement body.");
+
+    // The archive holds what was there *before* — not a copy of the new content, which is the mistake an
+    // "archive after update" ordering makes and which no assertion on the artifact row would catch.
+    const versions = await sql.query<{ version: number; title: string; content: string }>(
+      "select version, title, content from public.assistant_artifact_versions where artifact_id = $1::uuid order by version",
+      [String(artifact.id)],
+    );
+    expect(versions).toHaveLength(1);
+    expect(versions[0]).toMatchObject({ version: 1, title: "First title", content: "Original body." });
+  });
+
+  it("never writes the kind on a revision — scanned, because no result can show it", async () => {
+    /**
+     * A source scan, and the reason is a sabotage that got through.
+     *
+     * The first version of this test asserted the *outcome*: revise an html artifact, expect it still html.
+     * That passes whatever the adapter does, because the `UPDATE` does not touch the column — so replacing
+     * `validate(title, current.kind, …)` with a literal `"markdown"` broke nothing, and the comment claiming
+     * the stored kind was load-bearing was wrong. `validate` only asks whether a kind is one of the three.
+     *
+     * What actually keeps a kind fixed is that the statement does not set it. That is an absence, and an
+     * absence cannot be demonstrated by a fixture — same class as the `auth_tokens` column list and the
+     * analytics workspace predicate, and pinned the same way. The other two halves of the rule (no `kind` on
+     * the port, a `.strict()` tool schema) are behavioural and tested in `tools/__tests__/artifacts.test.ts`.
+     */
+    const source = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), "../artifacts.ts"), "utf8");
+    const update = source.slice(source.indexOf("update public.assistant_artifacts"));
+    const statement = update.slice(0, update.indexOf("returning"));
+    expect(statement).toContain("set title =");
+    expect(statement).not.toMatch(/\bkind\s*=/);
+
+    const artifact = await create({ kind: "html", content: "<p>One</p>" });
+    const revised = await artifacts().revise(context(), {
+      idempotencyKey: "k3" as never,
+      id: artifact.id,
+      content: "<p>Two</p>",
+    });
+    expect(revised.kind).toBe("html");
+    // Title omitted keeps the current one, rather than clearing it.
+    expect(revised.title).toBe("Q3 content plan");
+  });
+
+  it("serialises concurrent revisions instead of refusing one, and loses no version", async () => {
+    /**
+     * The behaviour that differs from the old runtime, deliberately, and the reason the adapter takes
+     * `select … for update`.
+     *
+     * The old path reads, archives and updates on separate connections, so two concurrent revisions both read
+     * version 1 and both try to insert version 1 into `assistant_artifact_versions`.
+     * `assistant_artifact_versions_artifact_id_version_key` refuses the second — which is why the old code
+     * cannot lose a version, and it means the safety was the index rather than the sequencing — and that caller
+     * gets "Could not archive the current version" for what is a queueing problem.
+     *
+     * Under the lock the second writer waits, sees version 2 and produces version 3. Both revisions land, both
+     * prior versions are archived, and the guarantee the old code actually made is preserved.
+     *
+     * Sabotage check: removing `for update` from the adapter makes this fail with a unique-violation from the
+     * archive insert, which is what confirms the lock is what produces the result rather than luck in the
+     * scheduler.
+     */
+    const artifact = await create({ title: "Contended", content: "v1 body" });
+    const service = artifacts();
+    const results = await Promise.all([
+      service.revise(context(), { idempotencyKey: "c1" as never, id: artifact.id, content: "from A" }),
+      service.revise(context(), { idempotencyKey: "c2" as never, id: artifact.id, content: "from B" }),
+    ]);
+
+    expect([...results.map((r) => r.version)].sort()).toEqual([2, 3]);
+    const versions = await sql.query<{ version: number; content: string }>(
+      "select version, content from public.assistant_artifact_versions where artifact_id = $1::uuid order by version",
+      [String(artifact.id)],
+    );
+    // v1 and v2 both archived: no revision overwrote another's text without keeping it.
+    expect(versions.map((v) => v.version)).toEqual([1, 2]);
+    expect(versions[0]?.content).toBe("v1 body");
+  });
+
+  it("reads another workspace's artifact as not-found, never as forbidden", async () => {
+    // The app's own rule, and the reason for it: `forbidden` confirms the id exists, which is a fact about
+    // another tenant's data.
+    const artifact = await create();
+    const other = { ...(context() as object), tenantId: workspaceId } as never;
+    const foreign = await sql.query<{ id: string }>(
+      "insert into public.workspaces (name) values ($1) returning id",
+      ["retinue-artifact-foreign"],
+    );
+    const foreignId = foreign[0]?.id ?? "";
+    try {
+      const asForeign = { ...(other as object), tenantId: foreignId } as never;
+      const error = thrown(await artifacts().get(asForeign, { id: artifact.id }).catch((r: unknown) => r));
+      expect(error.code).toBe("not_found");
+      // And a revision from the wrong workspace does not reach the lock either.
+      const failed = thrown(
+        await artifacts()
+          .revise(asForeign, { idempotencyKey: "x" as never, id: artifact.id, content: "hijack" })
+          .catch((r: unknown) => r),
+      );
+      expect(failed.code).toBe("not_found");
+    } finally {
+      await sql.query("delete from public.workspaces where id = $1::uuid", [foreignId]);
+    }
+  });
+
+  it("refuses what the app refuses, in the app's own order", async () => {
+    /**
+     * Clause for clause from `web/src/lib/internal/artifacts.ts`, and the *order* is part of it: a model told
+     * "an artifact needs a title" adds one, where a length complaint first would have it truncate content it
+     * did not need to.
+     */
+    const cases: [string, Partial<{ title: string; kind: string; content: string }>][] = [
+      ["An artifact needs a title", { title: "   " }],
+      [`A title can be at most ${ARTIFACT_MAX_TITLE}`, { title: "t".repeat(ARTIFACT_MAX_TITLE + 1) }],
+      ["kind must be one of", { kind: "md" }],
+      ["An artifact needs content", { content: "  \n  " }],
+      [`Content can be at most ${ARTIFACT_MAX_CHARS}`, { content: "c".repeat(ARTIFACT_MAX_CHARS + 1) }],
+    ];
+    for (const [message, over] of cases) {
+      const error = thrown(await create(over).catch((r: unknown) => r));
+      expect(error.code, message).toBe("invalid_input");
+      expect(error.message, message).toContain(message);
+    }
+  });
+
+  it("refuses an id that is not a uuid rather than asking the database", async () => {
+    const error = thrown(await artifacts().get(context(), { id: "not-a-uuid" as never }).catch((r: unknown) => r));
+    expect(error.code).toBe("invalid_input");
+  });
+
+  it("issues no reference for an id that is not a uuid, rather than a broken link", async () => {
+    /**
+     * The app's formatter returns null there and the reason is worth keeping: a reply streams token by token,
+     * so a half-written `chorus-artifact:8f14e45` exists for a frame, and a client rendering a card for it
+     * fetches an artifact that cannot be found. Absent means "do not link to this".
+     */
+    expect(artifactReference("8f14e45")).toBeUndefined();
+    expect(artifactReference("  550E8400-E29B-41D4-A716-446655440000  ")).toBe(
+      `${ARTIFACT_SCHEME}550e8400-e29b-41d4-a716-446655440000`,
+    );
   });
 });

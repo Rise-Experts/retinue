@@ -340,13 +340,17 @@ describe("the shipped inventory", () => {
     /**
      * The tally, pinned. Named numbers rather than a list of strings, because the list would be edited to match
      * on every change and stop being a claim — but the *shape* of the migration is a claim: this package
-     * replaces 13 of the old runtime's capabilities outright, part of 3 more, has 8 signed off as dropped, and
-     * has not replaced 21.
+     * replaces 16 of the old runtime's capabilities outright, part of 3 more, has 8 signed off as dropped, and
+     * has not replaced 18.
+     *
+     * 16 rather than 13 since the three artifact tools shipped. The three were listed as "a tool away" and
+     * that turned out to be exactly true: `assistant_artifacts`, its version table and the
+     * `chorus-artifact:` scheme were already in ShareFlow.
      */
     expect(inventoryTally(CAPABILITY_INVENTORY)).toEqual({
-      implemented: 13,
+      implemented: 16,
       partial: 3,
-      missing: 21,
+      missing: 18,
       dropped: 8,
       retained: 6,
     });

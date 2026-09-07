@@ -323,8 +323,19 @@ describe("parity-report.mjs", () => {
     expect(stdout).toContain("repost a published post (missing)");
     expect(stdout).toContain("cannot be distinguished from one that agrees");
     expect(stdout).not.toContain("failed");
-    // And no longer this, which is how the signing is visible end to end rather than only in the gate file.
-    expect(stdout).not.toContain("gate-not-agreed");
+    /**
+     * `gate-not-agreed` appears exactly once, on `documents`, and nowhere else — which is how both signings
+     * are visible end to end rather than only in the gate file.
+     *
+     * It used to appear nowhere: every gate was signed on 2026-08-24. `documents` arrived with REQ-041's
+     * artifact tools, *after* shadow data existed, so agreeing its threshold now would be the thing #128 AC-1
+     * forbids. A blocking unsigned gate is the correct state and this pins that it is the only one.
+     */
+    const notAgreed = stdout
+      .split("\n")
+      .filter((line) => line.includes("gate-not-agreed"))
+      .map((line) => line.trim().split(/\s+/)[1]);
+    expect(notAgreed).toEqual(["documents"]);
     // Every gated workflow appears, including those with no data — a workflow missing from the report reads as
     // one with nothing to answer for.
     for (const workflow of ["create-post", "publish", "campaign-planning", "repurpose", "engagement-reply"])

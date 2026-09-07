@@ -56,6 +56,7 @@ import { createPostgresContentService } from "./postgres/content.js";
 import { createPostgresAnalyticsService } from "./postgres/analytics.js";
 import { createPostgresConnectorService, type ConnectorDeps } from "./postgres/connectors.js";
 import { createPostgresEngagementService, type EngagementDeps } from "./postgres/engagement.js";
+import { createPostgresArtifactService } from "./postgres/artifacts.js";
 import { createPostgresLeadService, type LeadDeps } from "./postgres/leads.js";
 import { createPostgresMediaService, type MediaDeps } from "./postgres/media.js";
 import { createWebResearchService, type ResearchDeps } from "./web/research.js";
@@ -84,9 +85,10 @@ import type { ShareFlowServices } from "../services/index.js";
  */
 export type BackedShareFlowServices = ShareFlowServices;
 
-/** What this file can build: all ten. */
+/** What this file can build: all eleven. */
 export const BACKED_SERVICES = [
   "analytics",
+  "artifacts",
   "brand",
   "connectors",
   "content",
@@ -178,6 +180,16 @@ export const createShareFlowServices = (config: ShareFlowAdapterConfig): BackedS
   return {
     brand,
     content,
+    /**
+     * Artifacts need the transaction runner, not just the executor — `revise` locks the row it archives.
+     *
+     * Wired unconditionally because both halves are already required by `PublishingService`: a deployment
+     * that can publish can revise a document.
+     */
+    artifacts: createPostgresArtifactService({
+      sql: config.sql,
+      transaction: config.transaction,
+    }),
     generator: createModelContentGenerator({
       generate: config.generate,
       brand: (context) => brand.getBrandProfile(context),

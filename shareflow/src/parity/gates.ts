@@ -133,6 +133,28 @@ export const PARITY_GATES: readonly ParityGate[] = [
     agreedAt: AGREED_AT,
   },
   {
+    /**
+     * `documents` — new with REQ-041 (#190), and `proposed` on purpose.
+     *
+     * The three artifact tools are the first replacement to ship *after* the gates were signed on 2026-08-24,
+     * which makes this the first gate written with shadow data already in existence. Signing it now would be
+     * exactly what #128 AC-1 forbids — a threshold agreed after results are visible — so it stays proposed and
+     * the workflow cannot pass until somebody agrees the number knowing what they are looking at. That is the
+     * mechanism working, not a gap: `gate-not-agreed` blocks.
+     *
+     * The alternative was giving the artifact capabilities no workflow at all, which would have put three
+     * *replaced* tools in the same position as the 19 nothing measures. A capability no threshold covers cannot
+     * fail, which is worse than failing.
+     */
+    workflow: "documents",
+    metric: "identical-write-rate",
+    threshold: 0.9,
+    minimumSample: 100,
+    rationale:
+      "The same reasoning as create-post and the same number: a document is reviewed by a person before it is used, so the new runtime writing a different — possibly better — plan is not a regression, and what 0.9 asserts is that it is not writing something structurally different most of the time. The sample is 100 rather than 200 because an artifact is rarer than a post and a threshold whose sample cannot be reached blocks forever. Both numbers are a proposal, and unlike the 2026-08-24 gates this one is written with shadow data already in existence — so it must be agreed by someone who has looked at what the runs show, not transcribed from a sibling gate by whoever built the tools.",
+    status: "proposed",
+  },
+  {
     workflow: "engagement-reply",
     metric: "no-additional-approved-writes",
     threshold: 1.0,

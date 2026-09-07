@@ -358,8 +358,9 @@ Do not retry the identical source — it will fail identically. Read the error, 
 /**
  * `document-generation`.
  *
- * **Not assigned**, for the same reason as `mermaid-diagrams`: `create_artifact`, `update_artifact`,
- * `get_artifact` and `generate_pdf` are all REQ-028. Migrated at `status: "draft"`.
+ * **Assigned since REQ-041 (#190)** built `create_artifact`, `update_artifact` and `get_artifact`. It was held
+ * at `draft` while those did not exist; the text below names no tool, so `generate_pdf` still being absent
+ * does not make any of it false.
  */
 const DOCUMENT_GENERATION = `## Choose the container first
 

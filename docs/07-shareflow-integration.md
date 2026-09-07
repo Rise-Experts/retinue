@@ -30,6 +30,7 @@ Initial user-facing experience exposes one primary Social Assistant. Internal/ve
 | Engagement | Comments, assignment and replies |
 | Leads | Create/update attributed leads |
 | Research | Search and read sources |
+| Artifacts | Create, read and revise documents the user opens beside the chat |
 
 ## Workflow 1: create post
 

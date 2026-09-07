@@ -311,16 +311,20 @@ describe("every capability is attached to a gate, or visibly to none — AC-2", 
 
   it("counts the capabilities no gate covers, rather than letting an empty list read as nothing to do", () => {
     /**
-     * 22 of 51: artifacts, PDFs, diagrams, vision, capture, the six signed-off configuration capabilities,
-     * five webhooks. Not measured by any threshold, so nothing about them can fail — which is worse than
-     * failing one.
+     * 19 of 51: PDFs, diagrams, vision, capture, the six signed-off configuration capabilities, five
+     * webhooks. Not measured by any threshold, so nothing about them can fail — which is worse than failing
+     * one.
+     *
+     * 19 rather than 22 because the three artifact capabilities left this set when they were built: they name
+     * the `documents` workflow, which is a gate that exists and is not yet agreed. Moving from "no gate" to
+     * "an unsigned gate" is the improvement — an unsigned gate blocks, where no gate is silent.
      *
      * The status assertion is the load-bearing half. None of these is `implemented` or `partial`: were one to
      * become so, it would be a *replaced* capability that no gate measures, which is the position this whole
      * REQ exists to make visible. It fails here rather than reading as covered.
      */
     const ungated = CAPABILITY_INVENTORY.filter((entry) => entry.workflows.length === 0);
-    expect(ungated).toHaveLength(22);
+    expect(ungated).toHaveLength(19);
     expect(
       ungated.filter((entry) => entry.status === "implemented" || entry.status === "partial"),
     ).toEqual([]);

@@ -231,14 +231,24 @@ describe("the migrated content matches implemented behaviour", () => {
     }
   });
 
-  it("keeps the artifact skills out of discovery until their tools exist", async () => {
-    // Every tool `mermaid-diagrams` and `document-generation` describe is REQ-028. Migrated and
-    // versioned, not offered — which is what `status: "draft"` is for, now that the resolver honours it
-    // for built-ins as the store already did for tenant skills.
+  it("keeps a skill out of discovery until its tools exist, and lets it in when they do", async () => {
+    /**
+     * `draft` is the mechanism for "migrated and versioned, not offered", and the condition it encodes is
+     * whether the tools the body describes exist. Both halves are asserted here because only asserting the
+     * first turns this into a test that a skill is permanently hidden.
+     *
+     * `mermaid-diagrams` stays draft: `render_diagram` does not exist, and offering guidance for a tool the
+     * model cannot call instructs it into nothing.
+     *
+     * `document-generation` is active since REQ-041 (#190) built `create_artifact`, `update_artifact` and
+     * `get_artifact`. Leaving it draft once they shipped would have been the AC-5 defect exactly: three
+     * replaced tools running without the instructions the old runtime ran them under.
+     */
     const drafts = SHAREFLOW_BUILT_IN_SKILLS.filter((s) => s.status === "draft").map((s) => s.name);
-    expect([...drafts].sort()).toEqual(["document-generation", "mermaid-diagrams"]);
+    expect([...drafts].sort()).toEqual(["mermaid-diagrams"]);
     expect(SHAREFLOW_ASSIGNED_SKILLS).not.toContain("mermaid-diagrams");
-    expect(SHAREFLOW_ASSIGNED_SKILLS).toHaveLength(5);
+    expect(SHAREFLOW_ASSIGNED_SKILLS).toContain("document-generation");
+    expect(SHAREFLOW_ASSIGNED_SKILLS).toHaveLength(6);
 
     // And discovery agrees, even when a manifest names them.
     const catalog = await resolver().listCatalog({
@@ -247,7 +257,8 @@ describe("the migrated content matches implemented behaviour", () => {
       allowTenantSkills: false,
     });
     expect(catalog.map((e) => e.name)).not.toContain("mermaid-diagrams");
-    expect(catalog).toHaveLength(5);
+    expect(catalog.map((e) => e.name)).toContain("document-generation");
+    expect(catalog).toHaveLength(6);
   });
 
   it("still resolves a draft skill by exact version, so a pinned run keeps working", async () => {
