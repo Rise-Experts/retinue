@@ -33,6 +33,9 @@ import { createPoolOpener, createTransactionScope, type TransactionRunner } from
 import { createPostgresBrandService, BRAND_SUPPORTED } from "../brand.js";
 import { SWEEP_ALERT_MS, SWEEP_WORST_CASE_MS, UNCHECKED_CODES } from "../publishing.js";
 import { ACCOUNT_STATUS_FROM_DB, accountHealthFrom } from "../connectors.js";
+import { LEAD_SUPPRESSION, STORED_LEAD_STATUSES, encodeAttribution, normaliseEmail } from "../leads.js";
+import { ANALYTICS_REFRESH_WINDOW_MS } from "../analytics.js";
+import { MEDIA_UNCHECKED_CODE } from "../media.js";
 import {
   createPostgresContentService,
   cadenceFrom,
@@ -128,6 +131,18 @@ const SETUP = {
     },
   ],
 } as never;
+
+/**
+ * The research dependencies, as stubs.
+ *
+ * The real ones are the platform's `createWebSearch` and `createFetchPage` — where the egress policy, the
+ * redirect refusal and the byte ceiling live. These are stubs because this suite is about the ShareFlow
+ * adapters; the research adapter's own behaviour is tested against them directly in its own block.
+ */
+const RESEARCH = {
+  search: (async (query: string) => ({ searched: true as const, query, hits: [] })) as never,
+  fetchPage: (async (url: string) => ({ ok: true as const, url, status: 200, truncated: false, content: "" })) as never,
+};
 
 const context = () =>
   ({ tenantId: workspaceId, principalId: userId, roleIds: ["editor"], locale: "en", timezone: "UTC", requestId: "r" }) as never;
@@ -909,6 +924,7 @@ describe.skipIf(URL_ === undefined)("ConnectorService — where the assistant le
       sql: sql as never,
       transaction,
       setup: () => SETUP,
+      ...RESEARCH,
       generate: (async () => ({})) as never,
       ...over,
     }).connectors;
@@ -994,6 +1010,7 @@ describe.skipIf(URL_ === undefined)("ConnectorService — where the assistant le
       sql: sql as never,
       transaction,
       setup: () => SETUP,
+      ...RESEARCH,
       generate: (async () => ({})) as never,
     }).publishing;
     const rows = await sql.query<{ id: string }>(
@@ -1196,7 +1213,8 @@ describe.skipIf(URL_ === undefined)("PublishingService — the first adapter tha
    * signal. This is where the signal comes from — and where a mistake reaches a customer's audience.
    */
   const publishing = () =>
-    createShareFlowServices({ sql: sql as never, transaction, setup: () => SETUP, generate: (async () => ({})) as never }).publishing;
+    createShareFlowServices({ sql: sql as never, transaction, setup: () => SETUP,
+      ...RESEARCH, generate: (async () => ({})) as never }).publishing;
   const content = () => createPostgresContentService(sql as never);
 
   let accountA = "";
@@ -1377,6 +1395,7 @@ describe.skipIf(URL_ === undefined)("PublishingService — the first adapter tha
       sql: sql as never,
       transaction: holding,
       setup: () => SETUP,
+      ...RESEARCH,
       generate: (async () => ({})) as never,
     }).publishing;
 
@@ -1693,7 +1712,885 @@ describe.skipIf(URL_ === undefined)("PublishingService — the first adapter tha
   });
 });
 
-describe.skipIf(URL_ === undefined)("wiring the three, which is what makes them reachable", () => {
+describe.skipIf(URL_ === undefined)("EngagementService over inbox_comments", () => {
+  /**
+   * The cleanest of the six mappings: `inbox_comments_reply_status_check` is
+   * `needs_review | auto_sent | sent | dismissed` and the port's union is the same four in kebab-case.
+   * Underscore to hyphen, and the constraint says so rather than the calling code.
+   */
+  const engagement = (over: Record<string, unknown> = {}) =>
+    createShareFlowServices({
+      sql: sql as never,
+      transaction,
+      setup: () => SETUP,
+      ...RESEARCH,
+      generate: (async () => ({})) as never,
+      ...over,
+    }).engagement;
+
+  const comment = async (status = "needs_review", content = "Is this in stock?") =>
+    (
+      await sql.query<{ id: string }>(
+        `insert into public.inbox_comments
+           (workspace_id, platform, author_name, author_handle, content, reply_status, post_ref)
+         values ($1::uuid, 'linkedin', 'A Customer', '@cust', $2, $3, 'urn:li:share:1') returning id`,
+        [workspaceId, content, status],
+      )
+    )[0]!.id;
+
+  it("lists comments with their reply state and the drafted reply", async () => {
+    const id = await comment("needs_review", "Do you ship to Ireland?");
+    await sql.query("update public.inbox_comments set reply = 'We do.' where id = $1::uuid", [id]);
+    const page = await engagement().listComments(context(), { limit: 20 });
+    const found = page.items.find((item) => item.id === (id as never));
+    expect(found?.replyState).toBe("needs-review");
+    /**
+     * The draft is surfaced read-only, and there is deliberately no capability to approve it: an assistant
+     * that could send its own draft would route around the review step rather than pass through it. Knowing
+     * one exists is what stops it writing a second.
+     */
+    expect(found?.draftedReply).toBe("We do.");
+    expect(found?.authorHandle).toBe("@cust");
+  });
+
+  it("maps all four states the constraint admits", async () => {
+    for (const [stored, expected] of [
+      ["needs_review", "needs-review"],
+      ["auto_sent", "auto-sent"],
+      ["sent", "sent"],
+      ["dismissed", "dismissed"],
+    ] as const) {
+      const id = await comment(stored, `state ${stored}`);
+      const page = await engagement().listComments(context(), { limit: 50 });
+      expect(page.items.find((item) => item.id === (id as never))?.replyState, stored).toBe(expected);
+    }
+  });
+
+  it("refuses to reply when no connector is wired, which the port asks for by name", async () => {
+    /**
+     * *"Throws `capability_unavailable` when the platform's connector has no `sendReply`, because 'replying
+     * is not supported on {platform} yet — reply in the {platform} app instead' is guidance, not an error."*
+     *
+     * The honest refusal for the same reason `checkHealth`'s is: this method's whole purpose is the external
+     * effect, so there is no useful part of it to perform without a way to send.
+     */
+    const id = await comment();
+    const error = thrown(
+      await engagement()
+        .reply(context(), { idempotencyKey: "r1" as never, commentId: id as never, text: "Yes." })
+        .catch((rejection: unknown) => rejection),
+    );
+    expect(error.code).toBe("capability_unavailable");
+    expect(error.message).toContain("Reply in the platform");
+  });
+
+  it("claims the comment before sending, so a concurrent second reply cannot go out", async () => {
+    /**
+     * **The ordering that matters most here.** Read-then-send-then-write would send the second public reply
+     * and only then discover the conflict — and a duplicate reply on a customer's post cannot be taken back.
+     *
+     * So the row is claimed as `sent` in one guarded `UPDATE` first, and the send happens after. The failure
+     * that leaves is a row marked sent whose send failed, which a person reading the thread can recover; the
+     * other order leaves two replies, which nobody can.
+     */
+    const sent: string[] = [];
+    const service = engagement({
+      sendReply: async ({ text }: { text: string }) => {
+        sent.push(text);
+      },
+    });
+    const id = await comment();
+    const receipt = await service.reply(context(), {
+      idempotencyKey: "r2" as never,
+      commentId: id as never,
+      text: "Yes, we ship to Ireland.",
+    });
+    expect(receipt.commentId).toBe(id as never);
+    expect(sent).toEqual(["Yes, we ship to Ireland."]);
+
+    const stored = await sql.query<{ reply_status: string; reply: string }>(
+      "select reply_status, reply from public.inbox_comments where id = $1::uuid",
+      [id],
+    );
+    expect(stored[0]!.reply_status).toBe("sent");
+    expect(stored[0]!.reply).toBe("Yes, we ship to Ireland.");
+
+    // A second reply is refused, and nothing more is sent.
+    const again = thrown(
+      await service
+        .reply(context(), { idempotencyKey: "r3" as never, commentId: id as never, text: "Yes again." })
+        .catch((rejection: unknown) => rejection),
+    );
+    expect(again.code).toBe("conflict");
+    expect(again.message).toContain("publicly");
+    expect(sent).toHaveLength(1);
+  });
+
+  it("reports a send that failed after the claim, rather than reverting it", async () => {
+    /**
+     * The row stays `sent`. Reverting would invite a retry that might duplicate a reply the platform did
+     * accept before the error — "it may have gone out, check the thread" is the truthful report.
+     */
+    const service = engagement({
+      sendReply: async () => {
+        throw new Error("linkedin returned 502");
+      },
+    });
+    const id = await comment();
+    const error = thrown(
+      await service
+        .reply(context(), { idempotencyKey: "r4" as never, commentId: id as never, text: "Hello." })
+        .catch((rejection: unknown) => rejection),
+    );
+    expect(error.code).toBe("provider_error");
+    expect(error.message).toContain("did not confirm");
+    const stored = await sql.query<{ reply_status: string }>(
+      "select reply_status from public.inbox_comments where id = $1::uuid",
+      [id],
+    );
+    expect(stored[0]!.reply_status).toBe("sent");
+  });
+
+  it("dismisses a comment awaiting review, and refuses to hide an answered one", async () => {
+    const open = await comment("needs_review", "no answer needed");
+    expect(
+      (await engagement().dismiss(context(), { idempotencyKey: "d1" as never, commentId: open as never })).replyState,
+    ).toBe("dismissed");
+    // Idempotent: dismissing an already dismissed comment satisfies the caller's intent.
+    expect(
+      (await engagement().dismiss(context(), { idempotencyKey: "d2" as never, commentId: open as never })).replyState,
+    ).toBe("dismissed");
+
+    // Answered is different: dismissing it would take a sent reply out of the queue and read as unanswered.
+    const answered = await comment("sent", "already handled");
+    const error = thrown(
+      await engagement()
+        .dismiss(context(), { idempotencyKey: "d3" as never, commentId: answered as never })
+        .catch((rejection: unknown) => rejection),
+    );
+    expect(error.code).toBe("conflict");
+    expect(error.message).toContain("hide a reply");
+  });
+
+  it("never returns another workspace's comments", async () => {
+    const other = await sql.query<{ id: string }>("insert into public.workspaces (name) values ('other-e') returning id");
+    await sql.query(
+      `insert into public.inbox_comments (workspace_id, platform, author_name, content, reply_status)
+       values ($1::uuid, 'linkedin', 'Them', 'THEIR SECRET COMMENT', 'needs_review')`,
+      [other[0]!.id],
+    );
+    const page = await engagement().listComments(context(), { limit: 50 });
+    expect(page.items.some((item) => item.content.includes("THEIR SECRET"))).toBe(false);
+    await sql.query("delete from public.workspaces where id = $1::uuid", [other[0]!.id]);
+  });
+});
+
+describe.skipIf(URL_ === undefined)("LeadService over leads", () => {
+  const leads = (over: Record<string, unknown> = {}) =>
+    createShareFlowServices({
+      sql: sql as never,
+      transaction,
+      setup: () => SETUP,
+      ...RESEARCH,
+      generate: (async () => ({})) as never,
+      ...over,
+    }).leads;
+
+  it("refuses the status the port declares and the column cannot hold", async () => {
+    /**
+     * `LEAD_STATUSES` includes `rejected`; `leads_status_check` is `ARRAY['new', 'contacted', 'qualified']`.
+     * Left to the constraint this would come back as a violation naming the constraint — which a model cannot
+     * act on — and mapping it onto `contacted` would tell a salesperson to follow up on someone turned down.
+     */
+    const created = await leads().createLead(context(), {
+      idempotencyKey: "l1" as never,
+      name: "Rejected Person",
+      email: "reject@acme.test",
+      attribution: {},
+    });
+    expect(created.outcome).toBe("created");
+    const id = created.outcome === "created" ? created.lead.id : undefined;
+    const error = thrown(
+      await leads()
+        .updateLead(context(), { idempotencyKey: "l2" as never, id: id!, patch: { status: "rejected" } })
+        .catch((rejection: unknown) => rejection),
+    );
+    expect(error.code).toBe("invalid_input");
+    expect(error.message).toContain("new, contacted, qualified");
+    expect(STORED_LEAD_STATUSES).not.toContain("rejected");
+  });
+
+  it("reports a duplicate as `existing`, never as `created`", async () => {
+    /**
+     * **The database provides this guarantee**, which is the opposite of `scheduled_items`: two partial
+     * unique indexes hold the dedupe, so `ON CONFLICT DO NOTHING` is atomic in one statement with no lock.
+     * The difference between the two adapters is the index, not the care taken.
+     *
+     * The port: *"a dedupe match reported as `created` is the same class of untruth"* as misreporting a
+     * suppression.
+     */
+    const first = await leads().createLead(context(), {
+      idempotencyKey: "l3" as never,
+      name: "Dup Person",
+      email: "Dup@Acme.test",
+      valueMinorUnits: 5_000,
+      attribution: { platformId: "linkedin" as never },
+    });
+    expect(first.outcome).toBe("created");
+
+    // A different name and a different case in the email — the index is on `lower(email)`.
+    const second = await leads().createLead(context(), {
+      idempotencyKey: "l4" as never,
+      name: "Duplicate Person",
+      email: "dup@acme.TEST",
+      attribution: {},
+    });
+    expect(second.outcome).toBe("existing");
+    // And the stored row is returned unchanged: a second sighting must not overwrite a salesperson's edits.
+    if (second.outcome === "existing") {
+      expect(second.lead.name).toBe("Dup Person");
+      expect(second.lead.valueMinorUnits).toBe(5_000);
+    }
+    const rows = await sql.query<{ n: string }>(
+      "select count(*) as n from public.leads where workspace_id = $1::uuid and lower(email) = 'dup@acme.test'",
+      [workspaceId],
+    );
+    expect(rows[0]!.n).toBe("1");
+  });
+
+  it("round-trips a structured attribution through one text column", async () => {
+    /**
+     * The port says to serialise: *"The adapter serialises into `capturedFrom` until ShareFlow has columns
+     * for it."* The encoding is sorted `key=value` pairs rather than JSON **because the column is part of a
+     * unique index** — `(workspace_id, name, captured_from)` — so its text decides whether two leads are the
+     * same lead, and JSON key order would make one attribution encode two ways.
+     */
+    const post = await sql.query<{ id: string }>(
+      `insert into public.posts (workspace_id, author_id, raw_content, status, target_platforms)
+       values ($1::uuid, $2::uuid, 'attributed post', 'PUBLISHED', '{linkedin}') returning id`,
+      [workspaceId, userId],
+    );
+    const created = await leads().createLead(context(), {
+      idempotencyKey: "l5" as never,
+      name: "Attributed Person",
+      email: "attributed@acme.test",
+      attribution: { postDraftId: post[0]!.id as never, platformId: "linkedin" as never },
+    });
+    expect(created.outcome).toBe("created");
+    if (created.outcome === "created") {
+      expect(created.lead.attribution.postDraftId).toBe(post[0]!.id as never);
+      expect(created.lead.attribution.platformId).toBe("linkedin" as never);
+    }
+    /**
+     * Deterministic, and pinned to the exact string.
+     *
+     * The first version of this compared two object literals with the keys in different orders — which could
+     * not fail, because the encoder builds its parts in a fixed sequence regardless of how the object was
+     * written. Sabotage removing the encoder's `.sort()` passed. Pinning the output is what actually holds
+     * the dedupe: this text is part of `leads_dedupe_name_source_idx`.
+     */
+    expect(encodeAttribution({ platformId: "x" as never, campaignId: "c" as never })).toBe("campaign=c;platform=x");
+    expect(encodeAttribution({})).toBeNull();
+    // Not JSON: `JSON.stringify` does not guarantee key order across shapes, so one attribution could encode
+    // two ways and two identical leads would both insert.
+    expect(encodeAttribution({ campaignId: "c" as never })).not.toContain("{");
+  });
+
+  it("never reports a lead as suppressed unless the deployment can suppress", async () => {
+    /**
+     * There is **no suppression table and no suppression path** in this schema — the port describes it as
+     * "enforced inside the insert path", and that path does not exist here.
+     *
+     * The arm is not dropped, because the risk the port names is real: *"the risk is not that a tool bypasses
+     * it, but that a tool misreports it: telling the user a lead was captured for someone who opted out."*
+     * `LEAD_SUPPRESSION.enforced` is how a caller checks instead of inferring from never seeing the outcome.
+     */
+    expect(LEAD_SUPPRESSION.enforced).toBe(false);
+
+    const withList = leads({
+      isSuppressed: async ({ email }: { email?: string }) =>
+        email === "optout@acme.test" ? ("opt-out" as const) : undefined,
+    });
+    const refused = await withList.createLead(context(), {
+      idempotencyKey: "l6" as never,
+      name: "Opted Out",
+      email: "optout@acme.test",
+      attribution: {},
+    });
+    expect(refused).toEqual({ outcome: "suppressed", reason: "opt-out" });
+    // And nothing was written, which is the point of checking before the insert.
+    const rows = await sql.query<{ n: string }>(
+      "select count(*) as n from public.leads where workspace_id = $1::uuid and email = 'optout@acme.test'",
+      [workspaceId],
+    );
+    expect(rows[0]!.n).toBe("0");
+  });
+
+  it("suppresses in preference to reporting a duplicate", async () => {
+    // An opt-out is a stronger answer than "already here": a lead that exists *and* opted out must be
+    // reported as suppressed, or the caller is told to contact them.
+    await leads().createLead(context(), {
+      idempotencyKey: "l7" as never,
+      name: "Both",
+      email: "both@acme.test",
+      attribution: {},
+    });
+    const service = leads({ isSuppressed: async () => "complaint" as const });
+    const result = await service.createLead(context(), {
+      idempotencyKey: "l8" as never,
+      name: "Both",
+      email: "both@acme.test",
+      attribution: {},
+    });
+    expect(result.outcome).toBe("suppressed");
+  });
+
+  it("normalises the email exactly as the dedupe index does, and no further", () => {
+    /**
+     * `leads_dedupe_email_idx` is `lower((email)::text)`. Anything more aggressive here — stripping dots or
+     * `+` tags — would make this adapter treat two addresses as the same lead when the index does not, so
+     * both would insert and the "existing" answer would be wrong.
+     */
+    expect(normaliseEmail("  Mixed.Case+tag@Acme.TEST ")).toBe("mixed.case+tag@acme.test");
+  });
+
+  it("never returns another workspace's leads", async () => {
+    const other = await sql.query<{ id: string }>("insert into public.workspaces (name) values ('other-lead') returning id");
+    await sql.query(
+      `insert into public.leads (workspace_id, name, email, platform, value_cents, status)
+       values ($1::uuid, 'THEIR SECRET LEAD', 'secret@them.test', 'bio', 0, 'new')`,
+      [other[0]!.id],
+    );
+    const page = await leads().listLeads(context(), { limit: 50 });
+    expect(page.items.some((lead) => lead.name.includes("THEIR SECRET"))).toBe(false);
+    await sql.query("delete from public.workspaces where id = $1::uuid", [other[0]!.id]);
+  });
+});
+
+describe.skipIf(URL_ === undefined)("AnalyticsService — facts, and explicit absences", () => {
+  const analytics = () =>
+    createShareFlowServices({
+      sql: sql as never,
+      transaction,
+      setup: () => SETUP,
+      ...RESEARCH,
+      generate: (async () => ({})) as never,
+    }).analytics;
+
+  let account = "";
+  beforeAll(async () => {
+    if (URL_ === undefined) return;
+    account = (
+      await sql.query<{ id: string }>(
+        `insert into public.social_accounts
+           (workspace_id, platform, platform_user_id, account_name, auth_tokens, status)
+         values ($1::uuid, 'linkedin', 'an-1', 'Analytics LI', '{}'::jsonb, 'ACTIVE') returning id`,
+        [workspaceId],
+      )
+    )[0]!.id;
+  });
+
+  /** A published post with one destination and, optionally, a metrics row. */
+  const measured = async (metrics?: { likes: number; comments: number; shares: number; impressions: number }) => {
+    const post = await sql.query<{ id: string }>(
+      `insert into public.posts (workspace_id, author_id, raw_content, status, target_platforms)
+       values ($1::uuid, $2::uuid, 'measured post', 'PUBLISHED', '{linkedin}') returning id`,
+      [workspaceId, userId],
+    );
+    const item = await sql.query<{ id: string }>(
+      `insert into public.scheduled_items (post_id, social_account_id, scheduled_at, status)
+       values ($1::uuid, $2::uuid, now() - interval '1 day', 'SUCCESS') returning id`,
+      [post[0]!.id, account],
+    );
+    if (metrics !== undefined) {
+      await sql.query(
+        `insert into public.post_metrics
+           (scheduled_item_id, likes, comments, shares, impressions, engagement_rate, updated_at)
+         values ($1::uuid, $2, $3, $4, $5, 0, now())`,
+        [item[0]!.id, metrics.likes, metrics.comments, metrics.shares, metrics.impressions],
+      );
+    }
+    return { postId: post[0]!.id, itemId: item[0]!.id };
+  };
+
+  const factOf = (report: { facts: readonly { metric: string }[] }, metric: string) =>
+    report.facts.find((fact) => fact.metric === metric) as
+      | { metric: string; value?: number; unavailable?: string; unit: string }
+      | undefined;
+
+  it("reports counts with their window and provenance", async () => {
+    const { postId, itemId } = await measured({ likes: 10, comments: 4, shares: 1, impressions: 500 });
+    const report = await analytics().postMetrics(context(), { draftId: postId as never });
+    expect(factOf(report, "likes")?.value).toBe(10);
+    expect(factOf(report, "impressions")?.value).toBe(500);
+    // 15/500 — recomputed from the totals, not averaged from the stored per-row rate.
+    expect(factOf(report, "engagement_rate")?.value).toBeCloseTo(0.03);
+    expect(factOf(report, "engagement_rate")?.unit).toBe("fraction");
+
+    const traced = report.facts.find((fact) => "derivedFrom" in fact) as
+      | { derivedFrom: { recordType: string; recordCount: number; recordIds?: readonly string[] } }
+      | undefined;
+    expect(traced?.derivedFrom.recordType).toBe("post_metrics");
+    expect(traced?.derivedFrom.recordCount).toBe(1);
+    // A small set carries its ids; a large one carries only the type and count.
+    expect(traced?.derivedFrom.recordIds).toEqual([itemId]);
+  });
+
+  it("reports engagement rate as unavailable when impressions are zero, not as 0%", async () => {
+    /**
+     * **The defect the port names, with the line it lives on.**
+     * `web/src/lib/campaign-stats.ts:92` is `engagementRate: impressions === 0 ? 0 : engagements / impressions`
+     * — correct for a dashboard tile and wrong as a fact. No impressions makes the rate *undefined*, and an
+     * assistant handed `0` will report "engagement was 0%" when the truth is "nothing was measured".
+     */
+    const { postId } = await measured({ likes: 0, comments: 0, shares: 0, impressions: 0 });
+    const report = await analytics().postMetrics(context(), { draftId: postId as never });
+    expect(factOf(report, "engagement_rate")?.unavailable).toBe("no-data");
+    expect(factOf(report, "engagement_rate")).not.toHaveProperty("value");
+    // The counts are still measured zeroes: somebody looked and saw none.
+    expect(factOf(report, "likes")?.value).toBe(0);
+  });
+
+  it("distinguishes 'not collected' from 'measured zero'", async () => {
+    /**
+     * The `analytics-reporting` skill already says it: *"if a platform is not covered, say we cannot see its
+     * comments — not that the post has none."* A post with no metrics row at all is `not-collected`; a row of
+     * zeroes is a measurement. Those are different sentences to a user.
+     */
+    const { postId } = await measured();
+    const report = await analytics().postMetrics(context(), { draftId: postId as never });
+    for (const metric of ["likes", "comments", "shares", "impressions", "engagement_rate"]) {
+      expect(factOf(report, metric)?.unavailable, metric).toBe("not-collected");
+    }
+  });
+
+  it("answers not_found for another workspace's post rather than a report full of absences", async () => {
+    /**
+     * Without the existence check, a foreign id would come back as `not-collected` everywhere — which reads
+     * as "we have no numbers for your post" rather than "that is not your post".
+     */
+    const other = await sql.query<{ id: string }>("insert into public.workspaces (name) values ('other-a') returning id");
+    const theirs = await sql.query<{ id: string }>(
+      `insert into public.posts (workspace_id, author_id, raw_content, status, target_platforms)
+       values ($1::uuid, $2::uuid, 'theirs', 'PUBLISHED', '{linkedin}') returning id`,
+      [other[0]!.id, userId],
+    );
+    const error = thrown(
+      await analytics().postMetrics(context(), { draftId: theirs[0]!.id as never }).catch((r: unknown) => r),
+    );
+    expect(error.code).toBe("not_found");
+    await sql.query("delete from public.workspaces where id = $1::uuid", [other[0]!.id]);
+  });
+
+  it("scopes every metrics read by workspace in the query text, not only by the id filter", () => {
+    /**
+     * **Scanned from the source, because behaviour cannot show it.** Sabotage replaced `p.workspace_id = $1`
+     * with a tautology and every test still passed — the `post_id` / `campaign_id` filter already isolates
+     * the rows, and the existence check rejects a foreign id before the aggregate runs.
+     *
+     * So the workspace predicate is a second layer behind those two, and for this table it is the layer that
+     * matters most: `post_metrics` is keyed by `scheduled_item_id` and has **no workspace column at all**, so
+     * its only tenant scope is this join. If the existence check were ever removed or an id filter widened,
+     * this is what would still stand between one tenant's aggregate and another's numbers.
+     */
+    const source = readFileSync(
+      resolve(dirname(fileURLToPath(import.meta.url)), "../analytics.ts"),
+      "utf8",
+    );
+    const reads = [...source.matchAll(/from public\.(post_metrics|leads)[\s\S]*?(?=\n *\)|\n *`)/g)].map((m) => m[0]);
+    // Found the queries rather than nothing: a regex matching none would pass the loop below.
+    expect(reads.length).toBeGreaterThanOrEqual(2);
+    for (const read of reads) expect(read).toContain("workspace_id = $1::uuid");
+  });
+
+  it("never counts another workspace's metrics into an aggregate", async () => {
+    /**
+     * `post_metrics` is keyed by `scheduled_item_id` and has **no workspace column**, so its only tenant
+     * scope is the join through `scheduled_items` to `posts`. A query that read it directly would sum every
+     * tenant's numbers into one answer — the worst kind of wrong number, because it looks plausible.
+     */
+    const other = await sql.query<{ id: string }>("insert into public.workspaces (name) values ('other-agg') returning id");
+    const theirAccount = await sql.query<{ id: string }>(
+      `insert into public.social_accounts (workspace_id, platform, platform_user_id, account_name, auth_tokens, status)
+       values ($1::uuid, 'linkedin', 'an-x', 'Theirs', '{}'::jsonb, 'ACTIVE') returning id`,
+      [other[0]!.id],
+    );
+    const theirPost = await sql.query<{ id: string }>(
+      `insert into public.posts (workspace_id, author_id, raw_content, status, campaign_id, target_platforms)
+       values ($1::uuid, $2::uuid, 'theirs', 'PUBLISHED', null, '{linkedin}') returning id`,
+      [other[0]!.id, userId],
+    );
+    const theirItem = await sql.query<{ id: string }>(
+      `insert into public.scheduled_items (post_id, social_account_id, scheduled_at, status)
+       values ($1::uuid, $2::uuid, now() - interval '1 day', 'SUCCESS') returning id`,
+      [theirPost[0]!.id, theirAccount[0]!.id],
+    );
+    await sql.query(
+      `insert into public.post_metrics (scheduled_item_id, likes, comments, shares, impressions, engagement_rate)
+       values ($1::uuid, 999999, 0, 0, 999999, 0)`,
+      [theirItem[0]!.id],
+    );
+
+    const { postId } = await measured({ likes: 3, comments: 0, shares: 0, impressions: 100 });
+    const report = await analytics().postMetrics(context(), { draftId: postId as never });
+    expect(factOf(report, "likes")?.value).toBe(3);
+    await sql.query("delete from public.workspaces where id = $1::uuid", [other[0]!.id]);
+  });
+
+  it("takes freshness from the oldest row, not the newest", async () => {
+    /**
+     * An aggregate is as fresh as its least fresh input. Reporting the newest would let one recently
+     * refreshed destination present a month-old campaign total as current.
+     */
+    const campaign = await sql.query<{ id: string }>(
+      `insert into public.campaigns (workspace_id, name, theme, starts_on, ends_on, cadence, channels)
+       values ($1::uuid, 'fresh', 't', current_date - 3, current_date, 'daily', '{linkedin}') returning id`,
+      [workspaceId],
+    );
+    for (const [ago, likes] of [[1, 5], [40, 7]] as const) {
+      const post = await sql.query<{ id: string }>(
+        `insert into public.posts (workspace_id, author_id, raw_content, status, campaign_id, target_platforms)
+         values ($1::uuid, $2::uuid, 'campaign post', 'PUBLISHED', $3::uuid, '{linkedin}') returning id`,
+        [workspaceId, userId, campaign[0]!.id],
+      );
+      const item = await sql.query<{ id: string }>(
+        `insert into public.scheduled_items (post_id, social_account_id, scheduled_at, status)
+         values ($1::uuid, $2::uuid, now() - interval '1 day', 'SUCCESS') returning id`,
+        [post[0]!.id, account],
+      );
+      await sql.query(
+        `insert into public.post_metrics
+           (scheduled_item_id, likes, comments, shares, impressions, engagement_rate, updated_at)
+         values ($1::uuid, $2, 0, 0, 100, 0, now() - ($3 || ' days')::interval)`,
+        [item[0]!.id, likes, ago],
+      );
+    }
+    const report = await analytics().campaignMetrics(context(), { campaignId: campaign[0]!.id as never });
+    // Both posts counted, aggregated by the service and not by the caller.
+    expect(factOf(report, "likes")?.value).toBe(12);
+    // Forty days beats the seven-day refresh window, so the whole report is stale.
+    expect(report.freshness.stale).toBe(true);
+    expect(ANALYTICS_REFRESH_WINDOW_MS).toBe(7 * 24 * 60 * 60 * 1_000);
+  });
+
+  it("counts attributed leads as a measured zero, unlike missing metrics", async () => {
+    /**
+     * The difference is whether an absence of rows means "not measured" or "measured none". Every lead this
+     * workspace captured is in `leads`, so no matching row genuinely means none were attributed — where a
+     * missing `post_metrics` row means nobody collected the numbers.
+     */
+    const { postId } = await measured();
+    const empty = await analytics().attribution(context(), { draftId: postId as never });
+    expect(factOf(empty, "attributed_leads")?.value).toBe(0);
+    expect(factOf(empty, "attributed_leads")).not.toHaveProperty("unavailable");
+
+    // And a lead attributed to that post is found through the encoding `LeadService` writes.
+    const service = createShareFlowServices({
+      sql: sql as never,
+      transaction,
+      setup: () => SETUP,
+      ...RESEARCH,
+      generate: (async () => ({})) as never,
+    }).leads;
+    await service.createLead(context(), {
+      idempotencyKey: "attr-1" as never,
+      name: "From The Post",
+      email: "fromthepost@acme.test",
+      valueMinorUnits: 12_500,
+      attribution: { postDraftId: postId as never },
+    });
+    const found = await analytics().attribution(context(), { draftId: postId as never });
+    expect(factOf(found, "attributed_leads")?.value).toBe(1);
+    expect(factOf(found, "attributed_pipeline_value")?.value).toBe(12_500);
+  });
+
+  it("refuses to be asked about a draft and a campaign at once", async () => {
+    const error = thrown(
+      await analytics()
+        .attribution(context(), { draftId: "a" as never, campaignId: "b" as never })
+        .catch((rejection: unknown) => rejection),
+    );
+    expect(error.code).toBe("invalid_input");
+  });
+});
+
+describe.skipIf(URL_ === undefined)("MediaService over generated_assets and storage", () => {
+  const media = (over: Record<string, unknown> = {}) =>
+    createShareFlowServices({
+      sql: sql as never,
+      transaction,
+      setup: () => SETUP,
+      ...RESEARCH,
+      generate: (async () => ({})) as never,
+      ...over,
+    }).media;
+
+  let job = "";
+  let withObject = "";
+  let orphan = "";
+
+  beforeAll(async () => {
+    if (URL_ === undefined) return;
+    job = (
+      await sql.query<{ id: string }>(
+        `insert into public.generation_jobs (workspace_id, kind, prompt, status)
+         values ($1::uuid, 'image', 'a hero image', 'succeeded') returning id`,
+        [workspaceId],
+      )
+    )[0]!.id;
+
+    const path = `${workspaceId}/media/hero.png`;
+    /**
+     * A real `storage.objects` row, because that is where the byte count lives.
+     *
+     * `generated_assets` has **no size column** and `MediaAsset.bytes` is not optional — so the alternatives
+     * were `bytes: 0` (a lie an assistant repeats) or reading `metadata->>'size'`, which is what Supabase
+     * records. This inserts the object the way an upload would.
+     */
+    await sql.query(
+      `insert into storage.objects (bucket_id, name, metadata)
+       values ('media', $1, jsonb_build_object('size', 204800, 'mimetype', 'image/png'))`,
+      [path],
+    );
+    withObject = (
+      await sql.query<{ id: string }>(
+        `insert into public.generated_assets (job_id, workspace_id, storage_path, mime, width, height)
+         values ($1::uuid, $2::uuid, $3, 'image/png', 1200, 630) returning id`,
+        [job, workspaceId, path],
+      )
+    )[0]!.id;
+
+    orphan = (
+      await sql.query<{ id: string }>(
+        `insert into public.generated_assets (job_id, workspace_id, storage_path, mime, duration_ms)
+         values ($1::uuid, $2::uuid, $3, 'video/mp4', 15000) returning id`,
+        [job, workspaceId, `${workspaceId}/media/gone.mp4`],
+      )
+    )[0]!.id;
+  });
+
+  it("reports the real byte size, from where Supabase records it", async () => {
+    const asset = await media().inspect(context(), { id: withObject as never });
+    expect(asset.bytes).toBe(204_800);
+    expect(asset.kind).toBe("image");
+    expect(asset.mimeType).toBe("image/png");
+    expect(asset.width).toBe(1200);
+    // The label is the object key's last segment — the table has no filename column, and it is not a URL.
+    expect(asset.label).toBe("hero.png");
+  });
+
+  it("never returns a URL of any kind", async () => {
+    /**
+     * The port's reason: ShareFlow signs media URLs with an expiry, and *"a signed URL in a tool result would
+     * be persisted in the run event log and readable by anyone who can read that conversation, long
+     * outliving the check that produced it."*
+     */
+    const serialised = JSON.stringify(await media().listAssets(context(), { limit: 10 }));
+    for (const forbidden of ["http://", "https://", "signedUrl", "storagePath", "token="]) {
+      expect(serialised, forbidden).not.toContain(forbidden);
+    }
+  });
+
+  it("excludes an asset whose file is gone, and says which absence it is", async () => {
+    /**
+     * Not tidiness: an asset with no object **cannot be published**, because the platforms fetch the file
+     * themselves. Offering it to a model is offering something that cannot work.
+     *
+     * `inspect` tells the two absences apart — a wrong id and a broken upload need different actions, and one
+     * `not_found` for both would send a user looking for a typo.
+     */
+    const page = await media().listAssets(context(), { limit: 50 });
+    expect(page.items.map((asset) => asset.id)).toContain(withObject as never);
+    expect(page.items.map((asset) => asset.id)).not.toContain(orphan as never);
+
+    const error = thrown(await media().inspect(context(), { id: orphan as never }).catch((r: unknown) => r));
+    expect(error.code).toBe("not_found");
+    expect(error.message).toContain("missing from storage");
+
+    const unknown = thrown(
+      await media()
+        .inspect(context(), { id: "00000000-0000-0000-0000-000000000000" as never })
+        .catch((rejection: unknown) => rejection),
+    );
+    expect(unknown.message).not.toContain("missing from storage");
+  });
+
+  it("converts milliseconds to seconds", async () => {
+    // A duration reported a thousand times too large would make every video look longer than every platform
+    // allows — and the check would refuse a video that is fine.
+    await sql.query(
+      `insert into storage.objects (bucket_id, name, metadata)
+       values ('media', $1, jsonb_build_object('size', 5000000))`,
+      [`${workspaceId}/media/clip.mp4`],
+    );
+    const asset = await sql.query<{ id: string }>(
+      `insert into public.generated_assets (job_id, workspace_id, storage_path, mime, duration_ms)
+       values ($1::uuid, $2::uuid, $3, 'video/mp4', 15000) returning id`,
+      [job, workspaceId, `${workspaceId}/media/clip.mp4`],
+    );
+    expect((await media().inspect(context(), { id: asset[0]!.id as never })).durationSeconds).toBe(15);
+  });
+
+  it("appends attachments rather than replacing them, and drops a duplicate", async () => {
+    /**
+     * The port is explicit that this is not `updateDraft({ mediaAssetIds })`: *"To append one file through a
+     * replace the caller has to read the current list, append and write it back."* Attaching the same file
+     * twice would publish it twice, so the union is taken.
+     */
+    const draft = await sql.query<{ id: string }>(
+      `insert into public.posts (workspace_id, author_id, raw_content, status, target_platforms, media_urls)
+       values ($1::uuid, $2::uuid, 'with media', 'DRAFT', '{linkedin}', '{already-there}') returning id`,
+      [workspaceId, userId],
+    );
+    const first = await media().attachToDraft(context(), {
+      idempotencyKey: "m1" as never,
+      draftId: draft[0]!.id as never,
+      assetIds: [withObject as never],
+    });
+    expect(first.mediaAssetIds).toContain("already-there");
+    expect(first.mediaAssetIds).toHaveLength(2);
+
+    const again = await media().attachToDraft(context(), {
+      idempotencyKey: "m2" as never,
+      draftId: draft[0]!.id as never,
+      assetIds: [withObject as never],
+    });
+    expect(again.mediaAssetIds).toHaveLength(2);
+  });
+
+  it("refuses to attach a file that is missing from storage", async () => {
+    // A draft carrying a path the platforms cannot fetch fails at publish time — exactly the lateness this
+    // check exists to avoid.
+    const draft = await sql.query<{ id: string }>(
+      `insert into public.posts (workspace_id, author_id, raw_content, status, target_platforms)
+       values ($1::uuid, $2::uuid, 'no media', 'DRAFT', '{linkedin}') returning id`,
+      [workspaceId, userId],
+    );
+    const error = thrown(
+      await media()
+        .attachToDraft(context(), {
+          idempotencyKey: "m3" as never,
+          draftId: draft[0]!.id as never,
+          assetIds: [orphan as never],
+        })
+        .catch((rejection: unknown) => rejection),
+    );
+    expect(error.code).toBe("not_found");
+    const stored = await sql.query<{ media_urls: string[] }>(
+      "select media_urls from public.posts where id = $1::uuid",
+      [draft[0]!.id],
+    );
+    expect(stored[0]!.media_urls).toEqual([]);
+  });
+
+  it("refuses to attach to a published post, and names duplicating as the remedy", async () => {
+    const published = await sql.query<{ id: string }>(
+      `insert into public.posts (workspace_id, author_id, raw_content, status, target_platforms)
+       values ($1::uuid, $2::uuid, 'live', 'PUBLISHED', '{linkedin}') returning id`,
+      [workspaceId, userId],
+    );
+    const error = thrown(
+      await media()
+        .attachToDraft(context(), {
+          idempotencyKey: "m4" as never,
+          draftId: published[0]!.id as never,
+          assetIds: [withObject as never],
+        })
+        .catch((rejection: unknown) => rejection),
+    );
+    expect(error.code).toBe("conflict");
+    expect(error.details).toMatchObject({ remedy: "duplicate" });
+  });
+
+  it("reports that media rules could not be checked, rather than answering 'no issues'", async () => {
+    /**
+     * `platform_rules` holds `char_limit`, `hashtag_min` and `hashtag_max` and **nothing about media**. An
+     * empty list would say the attachments are publishable everywhere, and the failure would arrive as a
+     * rejected publish long after the assistant said the post was fine.
+     */
+    const issues = await media().checkPlatformCompatibility(context(), {
+      assetIds: [withObject as never],
+      platformIds: ["linkedin", "tiktok"] as never,
+    });
+    expect(issues.map((issue) => issue.code)).toEqual([MEDIA_UNCHECKED_CODE, MEDIA_UNCHECKED_CODE]);
+    for (const issue of issues) expect(issue.repairable).toBe(false);
+  });
+
+  it("refuses to convert or to vouch for storage when neither is wired", async () => {
+    /**
+     * `convert` refuses because unlike a scheduled publish there is **no sweep** that would pick up an
+     * unprocessed `media_conversion_jobs` row — writing one would queue a job nothing runs.
+     *
+     * `checkStorage` refuses because it is the check that catches a private bucket, which *"fails only at
+     * publish time"*. A deployment with nothing to run it reporting `ok` would assert the very thing the
+     * check exists to doubt.
+     */
+    const convert = thrown(
+      await media()
+        .convert(context(), { idempotencyKey: "c1" as never, id: withObject as never, targetFormat: "webp" })
+        .catch((rejection: unknown) => rejection),
+    );
+    expect(convert.code).toBe("capability_unavailable");
+
+    const storage = thrown(
+      await media().checkStorage(context(), { idempotencyKey: "c2" as never }).catch((r: unknown) => r),
+    );
+    expect(storage.code).toBe("capability_unavailable");
+    expect(storage.message).toContain("private bucket");
+  });
+
+  it("converts through the wired service and returns an asset with a real object", async () => {
+    const service = media({
+      convertMedia: async () => ({ assetId: withObject }),
+    });
+    const converted = await service.convert(context(), {
+      idempotencyKey: "c3" as never,
+      id: withObject as never,
+      targetFormat: "webp",
+    });
+    // Read back rather than trusted: the returned asset carries a real size and a real object, the same
+    // guarantee every other asset this service hands out has.
+    expect(converted.bytes).toBe(204_800);
+  });
+
+  it("never returns another workspace's assets", async () => {
+    const other = await sql.query<{ id: string }>("insert into public.workspaces (name) values ('other-m') returning id");
+    const theirJob = await sql.query<{ id: string }>(
+      "insert into public.generation_jobs (workspace_id, kind, prompt, status) values ($1::uuid, 'image', 'p', 'succeeded') returning id",
+      [other[0]!.id],
+    );
+    /**
+     * `on conflict do nothing`, because this object cannot be cleaned up.
+     *
+     * Supabase refuses a direct delete from `storage.objects`, and this path — unlike the others here — has
+     * no workspace id in it, so a second run of the suite collided on `bucketid_objname`. The row's
+     * existence is what the test needs; whether this run created it does not matter.
+     */
+    await sql.query(
+      `insert into storage.objects (bucket_id, name, metadata)
+       values ('media', 'their-secret.png', jsonb_build_object('size', 1))
+       on conflict do nothing`,
+    );
+    await sql.query(
+      `insert into public.generated_assets (job_id, workspace_id, storage_path, mime)
+       values ($1::uuid, $2::uuid, 'their-secret.png', 'image/png')`,
+      [theirJob[0]!.id, other[0]!.id],
+    );
+    const page = await media().listAssets(context(), { limit: 50 });
+    expect(page.items.some((asset) => asset.label.includes("their-secret"))).toBe(false);
+    await sql.query("delete from public.workspaces where id = $1::uuid", [other[0]!.id]);
+    /**
+     * The `storage.objects` row is deliberately left behind.
+     *
+     * Supabase refuses a direct delete — `Direct deletion from storage tables is not allowed. Use the
+     * Storage API instead.` — so cleaning it up from SQL is not possible. It is a metadata row in a private
+     * bucket with no file behind it, and the `generated_assets` row that referenced it went with the
+     * workspace cascade.
+     */
+  });
+});
+
+describe.skipIf(URL_ === undefined)("wiring the services, which is what makes them reachable", () => {
   /**
    * Three adapters nobody can construct together are three adapters nobody uses. `createShareFlowServices` is
    * the composition, and the assertions here are about the two ways it could be dishonest.
@@ -1712,6 +2609,7 @@ describe.skipIf(URL_ === undefined)("wiring the three, which is what makes them 
       sql: sql as never,
       transaction,
       setup: () => SETUP,
+      ...RESEARCH,
       generate: (async (input: { system: string }) => {
         systems.push(input.system);
         return { variants: [{ platformId: "instagram", caption: "generated" }] };
@@ -1751,7 +2649,8 @@ describe.skipIf(URL_ === undefined)("wiring the three, which is what makes them 
      * The assertion runs each provider against the live database, which is the only way to know none of them
      * reaches a service that is not there.
      */
-    const services = createShareFlowServices({ sql: sql as never, transaction, setup: () => SETUP, generate: (async () => ({})) as never });
+    const services = createShareFlowServices({ sql: sql as never, transaction, setup: () => SETUP,
+      ...RESEARCH, generate: (async () => ({})) as never });
     const providers = backedContextProviders(services);
     expect(providers.map((provider) => provider.id)).toEqual([
       "shareflow.brand",
@@ -1765,7 +2664,7 @@ describe.skipIf(URL_ === undefined)("wiring the three, which is what makes them 
     }
   });
 
-  it("builds a real ShareFlow app from three services and the factories that read them", async () => {
+  it("builds a real ShareFlow app from a partial service set and the factories that read it", async () => {
     /**
      * **The payoff.** Before `ShareFlowToolFactory.requires`, `createShareFlowApp` demanded all ten
      * services, so these three adapters were constructible, tested and unreachable — the same defect
@@ -1776,7 +2675,8 @@ describe.skipIf(URL_ === undefined)("wiring the three, which is what makes them 
      * construction. This builds one and asserts the catalogue is exactly the twelve capabilities those
      * three services can serve.
      */
-    const services = createShareFlowServices({ sql: sql as never, transaction, setup: () => SETUP, generate: (async () => ({})) as never });
+    const services = createShareFlowServices({ sql: sql as never, transaction, setup: () => SETUP,
+      ...RESEARCH, generate: (async () => ({})) as never });
     const app = createShareFlowApp({
       services,
       factories: [...POSTS_TOOL_FACTORIES, ...CAMPAIGN_TOOL_FACTORIES, ...GENERATE_TOOL_FACTORIES],
@@ -1811,20 +2711,25 @@ describe.skipIf(URL_ === undefined)("wiring the three, which is what makes them 
     ]);
   });
 
-  it("refuses an app whose factory list needs a service it does not have", () => {
+  it("refuses an app whose factory list needs a service the deployment withheld", () => {
     /**
      * The other half, and the one that makes the first half safe: a factory whose service is absent fails
-     * **here**, naming the tools, rather than at the moment a user asks for something.
+     * **here**, naming the tools, rather than when a user asks for something.
      *
-     * This test named the *publishing* factories until `PublishingService` was built, at which point the
-     * configuration became legitimate and the test correctly stopped throwing. Media is the next one with no
-     * adapter — and the fact this had to be updated is the mechanism working: a service becoming available
-     * changes what a deployment may register.
+     * **This test has been rewritten twice, and both rewrites were the mechanism working.** It named the
+     * publishing factories until `PublishingService` was built, then the media factories until `MediaService`
+     * was — each time the configuration became legitimate and the test correctly stopped throwing.
+     *
+     * Now that all ten services exist there is no unimplemented one to demonstrate with, so it withholds one
+     * deliberately instead. That is the better test anyway: what is under test is the check, not which
+     * services happen to be written this week.
      */
-    const services = createShareFlowServices({ sql: sql as never, transaction, setup: () => SETUP, generate: (async () => ({})) as never });
+    const complete = createShareFlowServices({ sql: sql as never, transaction, setup: () => SETUP,
+      ...RESEARCH, generate: (async () => ({})) as never });
+    const { media: _withheld, ...withoutMedia } = complete;
     expect(() =>
       createShareFlowApp({
-        services,
+        services: withoutMedia,
         factories: [...POSTS_TOOL_FACTORIES, ...MEDIA_TOOL_FACTORIES],
         deps: { authorization: { async can() { return { allow: true }; } } } as never,
         authorization: {} as never,
@@ -1854,7 +2759,8 @@ describe.skipIf(URL_ === undefined)("wiring the three, which is what makes them 
     expect(new Set(all).size).toBe(all.length);
     expect(all).toHaveLength(10);
     // Each name is a real member — the length check alone would accept ten wrong names.
-    const backed = createShareFlowServices({ sql: sql as never, transaction, setup: () => SETUP, generate: (async () => ({})) as never });
+    const backed = createShareFlowServices({ sql: sql as never, transaction, setup: () => SETUP,
+      ...RESEARCH, generate: (async () => ({})) as never });
     for (const name of BACKED_SERVICES) expect(backed[name]).toBeDefined();
   });
 });

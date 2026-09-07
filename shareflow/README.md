@@ -300,9 +300,10 @@ a service method, and R7 fails the build on an attempt.
 
 ## Wiring it up
 
-Five of the ten services now have adapters in this package. `content`, `brand`, `publishing` and `connectors`
-read ShareFlow's own tables through a `SqlExecutor`; `generator` fronts the host's model, because it is the
-one capability with no table behind it.
+**All ten services now have adapters in this package.** `content`, `brand`, `publishing`, `connectors`,
+`engagement`, `leads`, `media` and `analytics` read ShareFlow's own tables through a `SqlExecutor`;
+`generator` fronts the host's model and `research` the platform's guarded web toolkit, because neither has a
+table behind it.
 
 ```ts
 import { createShareFlowServices, backedContextProviders } from "@retinue/shareflow";
@@ -320,14 +321,18 @@ unique constraint** on `(post_id, social_account_id)`, so publish-once rests on 
 draft held across two statements on one connection — which `pool.query` cannot provide, since it takes a
 different connection per call. A deployment that cannot supply one should not be publishing.
 
-The other five — `media`, `engagement`, `leads`, `research`, `analytics` — are still ports, and `createShareFlowServices` returns a **narrower type** rather than a ten-member object
-whose missing members throw. That is a measured decision, not caution: `backend/src/context/assembler.ts:35`
+`createShareFlowServices` returned a **narrower type** while some were ports, and that argument is now
+discharged rather than forgotten. It was a measured decision, not caution: `backend/src/context/assembler.ts:35`
 runs context providers in a bare `for` loop with no `try`, and `createAccountsContextProvider` calls
 `services.connectors.listAccounts` on every turn — so a declare-and-throw object plus the standard base
-providers is a deployment where every turn dies before the model is called. `backedContextProviders` is the
-base list minus that one provider, and the omission is deliberate: such an assistant does not know which
-destinations are connected and may propose posting somewhere the workspace cannot, which is the honest
-state of a partial rollout.
+providers would have been a deployment where every turn died before the model was called.
+
+What has not changed is the rule that got it here. **Where a method needs something outside a ShareFlow
+table, it is a dependency, and where a deployment cannot supply one the method refuses rather than
+approximating.** Six do: `checkHealth`, `reply`, `convert`, `checkStorage`, and `search`/`readSource` through
+their required providers. That is not defeatism — each refusal is a case where returning *something* would be
+a false claim an assistant then relays to a user.
+
 
 ### A capability declares the services it reads
 
@@ -345,9 +350,9 @@ these ShareFlow tools need services this deployment does not provide: publish_po
 schedule_post (publishing). Supply publishing, or leave those factories out of the list …
 ```
 
-That is what makes a partial rollout representable: twenty of the thirty-seven capabilities read only the
-five implemented services — five post tools, five campaign tools, two generation tools, five publishing tools
-and three account tools — so a deployment can serve those and nothing else.
+All thirty-seven capabilities are now servable, so the complete factory list is accepted. The refusal is not
+obsolete: a deployment may still register a narrower set — the cutover moves workflows one at a time — and
+`requires` is what keeps that a checked decision rather than a hopeful one.
 
 Two properties keep the declaration honest, because it can go stale in both directions. Declaring **too
 little** does not compile, since `services` is a `Pick` of exactly `requires`. Declaring **too much** compiles
@@ -423,6 +428,39 @@ Diffed against the old runtime's real publish that is a **manufactured divergenc
 the runtime for a model error. `scripts/shadow-turn.mjs` checks every suppressed write's targets against the
 database and says so, which makes the pollution visible rather than silent. Fixing the ordering is a platform
 decision with its own trade: the registry would have to trust every preflight to be read-only.
+
+## The last five, and what each schema would not give
+
+Six adapters in, the pattern is consistent enough to state once: **read the CHECK constraint, not the calling
+code, and never live rows.** It has now been wrong three times in the other direction — a column permitting a
+value nothing writes, and live rows suggesting a vocabulary narrower than the real one.
+
+| Service | What the schema would not give | What it does instead |
+|---|---|---|
+| `engagement` | nothing — `inbox_comments_reply_status_check` is the port's four states in `snake_case` | maps, and claims the row as `sent` **before** sending, because read-then-send-then-write posts the second public reply and only then finds the conflict |
+| `leads` | `rejected` is in the port's union and **not** in `leads_status_check` | refuses it by name with the three that work, rather than mapping it onto `contacted` and telling a salesperson to chase someone who was turned down |
+| `leads` | no suppression table, and no suppression path in ShareFlow | `LEAD_SUPPRESSION.enforced` says so, so a caller checks rather than inferring from never seeing the outcome |
+| `analytics` | `post_metrics` has **no workspace column** | scoped only by the join through `scheduled_items` to `posts` — a query reading it directly would sum every tenant's numbers into one plausible-looking answer |
+| `media` | `generated_assets` has **no size column**, and `MediaAsset.bytes` is not optional | reads the real byte count from `storage.objects.metadata->>'size'`, rather than `bytes: 0` — a lie an assistant repeats |
+| `research` | nothing at all; there is no table | wraps the platform's `createWebSearch` and `createFetchPage`, where the egress policy lives |
+
+### Two places the database already provides what the port wants
+
+`leads` has two partial unique indexes — `(workspace_id, lower(email))` and
+`(workspace_id, name, captured_from)` — so the dedupe the port asks for is `ON CONFLICT DO NOTHING` in one
+atomic statement with no lock. Worth reading beside `PublishingService`, which needs a row lock for the same
+guarantee: **the difference between the two adapters is the index, not the care taken.**
+
+And `inbox_comments_reply_status_check` matches the port's `CommentReplyState` exactly, four for four. Where a
+schema and a specification agree, saying so is as useful as documenting a gap.
+
+### The one the port names, with the line it lives on
+
+`web/src/lib/campaign-stats.ts:92` guards divide-by-zero as `impressions === 0 ? 0 : engagements / impressions`
+— correct for a dashboard tile and **wrong as a fact**. No impressions makes engagement rate *undefined*, and
+an assistant handed `0` reports "engagement was 0%" when the truth is "nothing was measured". So zero
+impressions yields `unavailable: "no-data"`, and a post with no metrics row at all yields `not-collected`:
+"we cannot see this" and "we looked and there were none" are different sentences to a user.
 
 ## Connectors, and two questions a database cannot answer
 

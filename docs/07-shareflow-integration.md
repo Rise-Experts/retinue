@@ -93,7 +93,7 @@ console field labels, scopes, variable names) — so both are supplied by the de
 Re-checking an account against its platform refuses outright when no probe is wired, because answering from
 the stored status would be a false claim presented as a live check.
 
-The five remaining — media, engagement, leads, research and analytics — are ports
+**All ten now have adapters.** The remaining five — media, engagement, leads, research and analytics — were ports
 without adapters, and the composer returns a narrower type rather than an object whose missing members throw.
 The reason is measurable rather than stylistic: the context assembler runs providers in a bare loop with no
 error handling, and the accounts provider reads `connectors` on every turn, so a declare-and-throw object plus

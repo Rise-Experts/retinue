@@ -1,9 +1,15 @@
 /**
  * Wiring the three implemented services — REQ-041 (#190).
  *
- * `content`, `brand`, `generator`, `publishing` and `connectors` are built. The other five members of
- * `ShareFlowServices` — `media`, `engagement`, `leads`, `research`, `analytics` — are still ports with no
- * adapter, and this file is careful about what that means.
+ * **All ten are built.** Which retires the argument this file opened with — that a narrower type was the only
+ * honest shape while seven of them were ports — and the retirement is worth recording rather than deleting:
+ * the type narrowed to what existed at each step, and the last step happens to be everything.
+ *
+ * What has not changed is the rule that got it here. Where a method needs something outside a ShareFlow table
+ * — a platform connector, a media converter, a storage probe, a search provider, a suppression list — it is a
+ * **dependency**, and where a deployment cannot supply one the method **refuses** rather than approximating.
+ * Six of them do: `checkHealth`, `reply`, `convert`, `checkStorage`, and `search`/`readSource` through their
+ * required providers.
  *
  * `publishing` is the one that changes what a shadow run measures: it is the first adapter whose methods are
  * `external-write`, so it is the first whose suppressed writes are not an empty list.
@@ -36,9 +42,9 @@
  * file's docstring already claimed, that *"a wiring mistake should stop the process starting rather than
  * surface as a confusing catalogue on someone's first conversation"*.
  *
- * Twenty of the thirty-seven capabilities read only these five: five post tools, five campaign tools, two
- * generation tools, five publishing tools and three account tools. Adding, say, `MEDIA_TOOL_FACTORIES` to
- * that list is refused by name rather than failing when somebody asks for an image to be attached.
+ * All thirty-seven capabilities are now servable, so `createShareFlowToolProvider` will accept the complete
+ * factory list. The refusal it performs is not obsolete: a deployment may still register a narrower set, and
+ * `requires` is what keeps that a checked decision rather than a hopeful one.
  */
 
 import type { ContextProvider } from "@retinue/agentkit";
@@ -47,7 +53,12 @@ import type { SqlExecutor, TransactionRunner } from "@retinue/agentkit/adapters/
 import { createModelContentGenerator, type StructuredGenerate } from "./model/generator.js";
 import { createPostgresBrandService } from "./postgres/brand.js";
 import { createPostgresContentService } from "./postgres/content.js";
+import { createPostgresAnalyticsService } from "./postgres/analytics.js";
 import { createPostgresConnectorService, type ConnectorDeps } from "./postgres/connectors.js";
+import { createPostgresEngagementService, type EngagementDeps } from "./postgres/engagement.js";
+import { createPostgresLeadService, type LeadDeps } from "./postgres/leads.js";
+import { createPostgresMediaService, type MediaDeps } from "./postgres/media.js";
+import { createWebResearchService, type ResearchDeps } from "./web/research.js";
 import { createPostgresPublishingService, type PublishingDeps } from "./postgres/publishing.js";
 import {
   createAccountsContextProvider,
@@ -55,6 +66,7 @@ import {
   createBrandContextProvider,
   createClaimsContextProvider,
 } from "../context/providers.js";
+import { shareFlowBaseContextProviders } from "../context/providers.js";
 import type { ShareFlowServices } from "../services/index.js";
 
 /**
@@ -63,13 +75,28 @@ import type { ShareFlowServices } from "../services/index.js";
  * Named rather than inlined because the *complement* is the interesting half: a reader wants to know what is
  * missing, and `BACKED_SERVICES` / `UNBACKED_SERVICES` below say so in a form a test can assert.
  */
-export type BackedShareFlowServices = Pick<
-  ShareFlowServices,
-  "brand" | "connectors" | "content" | "generator" | "publishing"
->;
+/**
+ * Every member. The `Pick` is gone because there is nothing left to pick from — this now builds all ten.
+ *
+ * Kept as an alias rather than replaced by `ShareFlowServices` at the call sites, so the shape of the previous
+ * six months of comments still reads: `backedContextProviders` and `createShareFlowServices` were narrower
+ * than the interface for a reason, and the reason has been discharged rather than forgotten.
+ */
+export type BackedShareFlowServices = ShareFlowServices;
 
-/** What this file can build. */
-export const BACKED_SERVICES = ["brand", "connectors", "content", "generator", "publishing"] as const;
+/** What this file can build: all ten. */
+export const BACKED_SERVICES = [
+  "analytics",
+  "brand",
+  "connectors",
+  "content",
+  "engagement",
+  "generator",
+  "leads",
+  "media",
+  "publishing",
+  "research",
+] as const;
 
 /**
  * What it cannot, listed so the gap is data rather than a comment.
@@ -77,7 +104,7 @@ export const BACKED_SERVICES = ["brand", "connectors", "content", "generator", "
  * A test asserts these two arrays together account for exactly the ten members of `ShareFlowServices`, which
  * is what stops this list going stale the day an eighth service is written.
  */
-export const UNBACKED_SERVICES = ["analytics", "engagement", "leads", "media", "research"] as const;
+export const UNBACKED_SERVICES = [] as const;
 
 export type ShareFlowAdapterConfig = {
   /** ShareFlow's own database. The three adapters share one executor; none of them opens a connection. */
@@ -116,6 +143,25 @@ export type ShareFlowAdapterConfig = {
   readonly configuredPlatforms?: ConnectorDeps["configuredPlatforms"];
   /** A live per-account re-check. Absent means `checkHealth` refuses rather than answering from the store. */
   readonly probe?: ConnectorDeps["probe"];
+  /**
+   * Web search and page fetching, from the platform's guarded toolkit. **Required, because `research` is.**
+   *
+   * `createWebSearch` and `createFetchPage` are where the egress policy, the redirect refusal and the byte
+   * ceiling live. A second fetcher in this package would be a second egress policy, and the one that mattered
+   * would be whichever the caller happened to use.
+   */
+  readonly search: ResearchDeps["search"];
+  readonly fetchPage: ResearchDeps["fetchPage"];
+  /** Sends a reply on the platform. Absent means `EngagementService.reply` refuses, as the port asks. */
+  readonly sendReply?: EngagementDeps["send"];
+  /** Runs a media conversion. Absent means `MediaService.convert` refuses — no sweep would pick up a row. */
+  readonly convertMedia?: MediaDeps["convert"];
+  /** Proves the media path end to end. Absent means `checkStorage` refuses rather than reporting `ok`. */
+  readonly checkMediaStorage?: MediaDeps["checkStorage"];
+  /** The bucket post media lives in. Defaults to `media`, the bucket this schema ships. */
+  readonly mediaBucket?: string;
+  /** Whether an address must never be added as a lead. Absent means no lead is ever suppressed. */
+  readonly isSuppressed?: LeadDeps["isSuppressed"];
 };
 
 /**
@@ -156,6 +202,24 @@ export const createShareFlowServices = (config: ShareFlowAdapterConfig): BackedS
       validateContent: (context, input) => content.validateContent(context, input),
       ...(config.enqueue === undefined ? {} : { enqueue: config.enqueue }),
     }),
+    engagement: createPostgresEngagementService({
+      sql: config.sql,
+      transaction: config.transaction,
+      ...(config.sendReply === undefined ? {} : { send: config.sendReply }),
+    }),
+    leads: createPostgresLeadService({
+      sql: config.sql,
+      ...(config.isSuppressed === undefined ? {} : { isSuppressed: config.isSuppressed }),
+    }),
+    media: createPostgresMediaService({
+      sql: config.sql,
+      transaction: config.transaction,
+      ...(config.mediaBucket === undefined ? {} : { bucket: config.mediaBucket }),
+      ...(config.convertMedia === undefined ? {} : { convert: config.convertMedia }),
+      ...(config.checkMediaStorage === undefined ? {} : { checkStorage: config.checkMediaStorage }),
+    }),
+    analytics: createPostgresAnalyticsService({ sql: config.sql }),
+    research: createWebResearchService({ search: config.search, fetchPage: config.fetchPage }),
   };
 };
 
@@ -192,8 +256,22 @@ export const backedContextProviders = (services: BackedShareFlowServices): reado
   createAccountsContextProvider(services),
 ];
 
+/**
+ * Every context provider, now that every service exists.
+ *
+ * `shareFlowBaseContextProviders` is the platform-side list and this is the same set — kept as a separate
+ * export because `backedContextProviders` is what the previous five commits' callers pass, and silently
+ * widening it would change what a deployment assembles without anyone choosing to.
+ */
+export const allContextProviders = shareFlowBaseContextProviders;
+
 export * from "./model/generator.js";
 export * from "./postgres/brand.js";
 export * from "./postgres/content.js";
+export * from "./postgres/analytics.js";
 export * from "./postgres/connectors.js";
+export * from "./postgres/engagement.js";
+export * from "./postgres/leads.js";
+export * from "./postgres/media.js";
 export * from "./postgres/publishing.js";
+export * from "./web/research.js";
