@@ -1,6 +1,6 @@
 {
   "name": "@retinue/tools-github",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "GitHub tools for a Retinue agent: search code, read files, manage issues and pull requests \u2014 classified, gated and idempotent.",
   "license": "MIT",
   "type": "module",
@@ -27,7 +27,7 @@
     "prepublishOnly": "node ../../scripts/publish-guard.mjs"
   },
   "peerDependencies": {
-    "@retinue/agentkit": "^0.2.0"
+    "@retinue/agentkit": "^0.3.0"
   },
   "devDependencies": {
     "@retinue/agentkit": "*",

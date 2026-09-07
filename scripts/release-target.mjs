@@ -44,8 +44,11 @@ export const RELEASABLE = {
   react: { workspace: "@retinue/react", dir: "frontend" },
   // Toolkits, versioned independently of the runtime — the whole reason they are separate packages is that a
   // vendor API change must not be a runtime release.
+  "tools-azure": { workspace: "@retinue/tools-azure", dir: "tools/azure" },
+  "tools-browser": { workspace: "@retinue/tools-browser", dir: "tools/browser" },
   "tools-confluence": { workspace: "@retinue/tools-confluence", dir: "tools/confluence" },
   "tools-discord": { workspace: "@retinue/tools-discord", dir: "tools/discord" },
+  "tools-email": { workspace: "@retinue/tools-email", dir: "tools/email" },
   "tools-github": { workspace: "@retinue/tools-github", dir: "tools/github" },
   "tools-google": { workspace: "@retinue/tools-google", dir: "tools/google" },
   "tools-jira": { workspace: "@retinue/tools-jira", dir: "tools/jira" },
@@ -53,6 +56,7 @@ export const RELEASABLE = {
   "tools-meta": { workspace: "@retinue/tools-meta", dir: "tools/meta" },
   "tools-notion": { workspace: "@retinue/tools-notion", dir: "tools/notion" },
   "tools-reddit": { workspace: "@retinue/tools-reddit", dir: "tools/reddit" },
+  "tools-scrape": { workspace: "@retinue/tools-scrape", dir: "tools/scrape" },
   "tools-telegram": { workspace: "@retinue/tools-telegram", dir: "tools/telegram" },
   "tools-x": { workspace: "@retinue/tools-x", dir: "tools/x" },
   "tools-slack": { workspace: "@retinue/tools-slack", dir: "tools/slack" },

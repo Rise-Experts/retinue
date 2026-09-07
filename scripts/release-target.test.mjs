@@ -7,7 +7,12 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { distTag, RELEASABLE, resolveTag } from "./release-target.mjs";
+
+const HERE = dirname(fileURLToPath(import.meta.url));
 
 const manifests = { backend: { name: "@retinue/agentkit", version: "0.1.0" }, frontend: { name: "@retinue/react", version: "0.1.0" } };
 const read = (dir) => manifests[dir];
@@ -64,21 +69,45 @@ test("exactly the shipping packages are releasable, and no more", () => {
    * Exact rather than "contains", and it has now failed twice for the right reason: a package added to the
    * release path is a decision, and this is where it gets noticed.
    */
-  assert.deepEqual(Object.keys(RELEASABLE), [
-    "agentkit",
-    "react",
-    "tools-confluence",
-    "tools-discord",
-    "tools-github",
-    "tools-google",
-    "tools-jira",
-    "tools-linear",
-    "tools-meta",
-    "tools-notion",
-    "tools-reddit",
-    "tools-telegram",
-    "tools-x",
-    "tools-slack",
-    "tools-search",
-  ]);
+  /**
+   * Derived from the workspaces, not from a list somebody typed — and the change is the point.
+   *
+   * This assertion used to be `deepEqual(Object.keys(RELEASABLE), [ …fifteen names… ])`, and its docstring said
+   * it had "failed twice for the right reason". It had. What it could never do is notice the opposite mistake:
+   * a **publishable package with no release target**. `tools-azure`, `tools-browser`, `tools-email` and
+   * `tools-scrape` were all added to the repository, all shipped `private: false`, and none of them could be
+   * released — a tag naming any of them was refused, and nothing failed, because the list and the assertion
+   * were the same hand-maintained list agreeing with itself.
+   *
+   * So the comparison is now against the filesystem: every workspace that is not `private` must have a target,
+   * and every target must be a workspace. The count stays, because a glob that matched nothing would satisfy
+   * both directions.
+   */
+  const publishable = [];
+  for (const dir of ["", "tools"]) {
+    const base = resolve(HERE, "..", dir);
+    for (const entry of readdirSync(base, { withFileTypes: true })) {
+      if (!entry.isDirectory() || entry.name === "node_modules") continue;
+      const manifest = join(base, entry.name, "package.json");
+      if (!existsSync(manifest)) continue;
+      const parsed = JSON.parse(readFileSync(manifest, "utf8"));
+      if (parsed.private === true || typeof parsed.name !== "string") continue;
+      publishable.push(parsed.name.split("/")[1]);
+    }
+  }
+
+  const targets = Object.values(RELEASABLE).map((t) => t.workspace.split("/")[1]);
+  assert.deepEqual(
+    [...publishable].sort(),
+    [...targets].sort(),
+    "every publishable workspace needs a release target, and every target a workspace",
+  );
+  // Nineteen today. A glob that matched nothing would pass both directions above.
+  assert.equal(publishable.length, 19);
+
+  // And the directory each target names has to be the one the manifest is actually in.
+  for (const [short, target] of Object.entries(RELEASABLE)) {
+    const manifest = JSON.parse(readFileSync(resolve(HERE, "..", target.dir, "package.json"), "utf8"));
+    assert.equal(manifest.name, target.workspace, `${short} points at ${target.dir}`);
+  }
 });

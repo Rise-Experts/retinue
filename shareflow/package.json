@@ -26,7 +26,7 @@
     "scan:old-runtime-capabilities": "node scripts/scan-old-runtime-capabilities.mjs"
   },
   "dependencies": {
-    "@retinue/agentkit": "^0.2.0",
+    "@retinue/agentkit": "^0.3.0",
     "zod": "^3.25.76"
   },
   "devDependencies": {
