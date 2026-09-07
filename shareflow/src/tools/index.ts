@@ -13,6 +13,16 @@ import type { DelegatingToolDeps, ExecutionContext, ToolProvider } from "@retinu
 import { AgentPlatformError } from "@retinue/agentkit";
 import type { ShareFlowServices } from "../services/index.js";
 import type { ShareFlowServiceName, ShareFlowToolFactory } from "./factory.js";
+import { ACCOUNT_TOOL_FACTORIES, ACCOUNT_TOOL_NAMES } from "./accounts.js";
+import { ANALYTICS_TOOL_FACTORIES, ANALYTICS_TOOL_NAMES } from "./analytics.js";
+import { CAMPAIGN_TOOL_FACTORIES, CAMPAIGN_TOOL_NAMES } from "./campaigns.js";
+import { ENGAGEMENT_TOOL_FACTORIES, ENGAGEMENT_TOOL_NAMES } from "./engagement.js";
+import { GENERATE_TOOL_FACTORIES, GENERATE_TOOL_NAMES } from "./generate.js";
+import { LEAD_TOOL_FACTORIES, LEAD_TOOL_NAMES } from "./leads.js";
+import { MEDIA_TOOL_FACTORIES, MEDIA_TOOL_NAMES } from "./media.js";
+import { POSTS_TOOL_FACTORIES, POSTS_TOOL_NAMES } from "./posts.js";
+import { PUBLISHING_TOOL_FACTORIES, PUBLISHING_TOOL_NAMES } from "./publishing.js";
+import { RESEARCH_TOOL_FACTORIES, RESEARCH_TOOL_NAMES } from "./research.js";
 
 /**
  * The closed category vocabulary, from docs/07's tool-provider table.
@@ -143,3 +153,47 @@ export * from "./generate.js";
 export * from "./research.js";
 export * from "./analytics.js";
 
+
+/**
+ * Every ShareFlow tool factory, in one list — REQ-041 AC-1 (#190).
+ *
+ * Added because two callers were maintaining their own copy of it by hand: `layout.test.ts` spread the ten
+ * category constants, and the inventory needed the same set to check that a `replacement` names a tool that
+ * exists. Two hand-written copies of a list of ten is a list that will be nine somewhere the day an eleventh
+ * category is added — and the failure is silent in the worst direction, because a test that builds fewer tools
+ * passes.
+ *
+ * Declared here rather than in a category file because this module is the composition point, and the same
+ * reason keeps it free of cycles: the category files import from `./factory.js`, never from here.
+ */
+export const SHAREFLOW_TOOL_FACTORIES: readonly ShareFlowToolFactory[] = [
+  ...ACCOUNT_TOOL_FACTORIES,
+  ...ANALYTICS_TOOL_FACTORIES,
+  ...CAMPAIGN_TOOL_FACTORIES,
+  ...ENGAGEMENT_TOOL_FACTORIES,
+  ...GENERATE_TOOL_FACTORIES,
+  ...LEAD_TOOL_FACTORIES,
+  ...MEDIA_TOOL_FACTORIES,
+  ...POSTS_TOOL_FACTORIES,
+  ...PUBLISHING_TOOL_FACTORIES,
+  ...RESEARCH_TOOL_FACTORIES,
+];
+
+/**
+ * Every tool name the new runtime serves.
+ *
+ * From the per-category constants each of which is already pinned by its own test, rather than from building
+ * the factories — a name list should not need a `DelegatingToolDeps` to exist.
+ */
+export const SHAREFLOW_TOOL_NAMES: readonly string[] = [
+  ...ACCOUNT_TOOL_NAMES,
+  ...ANALYTICS_TOOL_NAMES,
+  ...CAMPAIGN_TOOL_NAMES,
+  ...ENGAGEMENT_TOOL_NAMES,
+  ...GENERATE_TOOL_NAMES,
+  ...LEAD_TOOL_NAMES,
+  ...MEDIA_TOOL_NAMES,
+  ...POSTS_TOOL_NAMES,
+  ...PUBLISHING_TOOL_NAMES,
+  ...RESEARCH_TOOL_NAMES,
+];

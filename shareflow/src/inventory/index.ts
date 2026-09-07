@@ -24,7 +24,32 @@
  * they carry their own coverage kind rather than borrowing the shadow count they will never earn.
  */
 
-export const CAPABILITY_STATUSES = ["implemented", "partial", "missing", "dropped"] as const;
+/**
+ * `retained` is the fifth, and it was added deliberately rather than found convenient — REQ-041 AC-1 (#190).
+ *
+ * Six of the 51 capabilities the scan finds live in `web/`, not in `ai_backend`: five inbound webhooks and the
+ * `chorus-schedule-sweep` cron job. Removing Agno does not remove them, and none of them calls the AI backend
+ * — checked, not assumed. Calling them `missing` would say we failed to build a Stripe webhook; calling them
+ * `dropped` would demand a signature for deleting something nobody is deleting. Both are false, and the
+ * inventory would then block the cutover on work that is not part of it.
+ *
+ * The hazard in adding a status is that `gateStatus` branches on the value, so a new one falls through every
+ * `if` and contributes **no problem** — a status that silently passes, which is the shape of defect this whole
+ * REQ is about. So `statusProblem` below is an exhaustive `switch` with a `never` default: adding a sixth
+ * status is a compile error until it is handled, and a test asserts every member of this list is covered.
+ */
+import { SHAREFLOW_TOOL_NAMES } from "../tools/index.js";
+import {
+  approvalParity,
+  approvalParityProblems,
+  manifestCapabilities,
+  skillParity,
+  verifyAgainstManifest,
+  type OldRuntimeManifest,
+} from "./manifest.js";
+import { OLD_RUNTIME_MANIFEST } from "./old-runtime.js";
+
+export const CAPABILITY_STATUSES = ["implemented", "partial", "missing", "dropped", "retained"] as const;
 export type CapabilityStatus = (typeof CAPABILITY_STATUSES)[number];
 
 /**
@@ -48,8 +73,18 @@ export type DropSignature = {
 export type CapabilityEntry = {
   /** The old runtime's name for it — a tool id, an endpoint, a job name. */
   readonly capability: string;
-  /** Where it lives in the old runtime, so a reviewer can read the thing being replaced. */
-  readonly oldRuntimePath: string;
+  /**
+   * A reference into the old-runtime manifest: `tool:publish_now`, `route:POST /campaign`,
+   * `webhook:/api/webhooks/stripe`, `cron:chorus-schedule-sweep` — REQ-041 AC-1.
+   *
+   * This replaced a hand-typed `oldRuntimePath` string, and the replacement is the substance of AC-1 rather
+   * than a tidy-up. A prose path cannot be wrong about anything, and the first scan of the real repository
+   * showed what that permits: entries for `post_writer`, `publish_guard`, `campaigns.create`, cron
+   * `publish_due_posts` and `POST /webhooks/:platform/comments`, **none of which exist** — while most of what
+   * does exist had no entry at all. A reference has to resolve, so a typo is a failing test, and the readable
+   * `path:line` now comes from the scan instead of from a typist.
+   */
+  readonly oldRuntimeRef: string;
   /** The new tool id, or `null` when `status` is `missing` or `dropped`. */
   readonly replacement: string | null;
   readonly status: CapabilityStatus;
@@ -78,6 +113,41 @@ export type CapabilityEntry = {
   readonly coverageEvidence?: string;
   /** A behavioural test against the *old* tool's observable contract. See `BEHAVIOURAL_CONTRACT`. */
   readonly contractTest?: string;
+  /**
+   * The docs/07 parity workflows whose runs reach this capability — REQ-041 AC-2.
+   *
+   * The link that was missing, and its absence made the `incomplete` verdict unreachable. #194 built the
+   * verdict and wired it into `evaluateWorkflow`'s optional `capabilities` argument; `evaluateParity` — the
+   * only thing the parity report calls — never passed one, so every workflow was evaluated against **no**
+   * capabilities and could never report `incomplete`. A gate built, tested and unreachable from the script
+   * whose job is to run it.
+   *
+   * Each name must be a real `PARITY_GATES` workflow and every gate must be named by at least one entry; both
+   * directions are asserted, because either half going stale restores the hole quietly.
+   *
+   * `[]` is a legitimate and common value — artifacts, PDFs, branding and the agent-skill tools belong to no
+   * docs/07 workflow — and it means **no gate covers this capability at all**. That is a worse position than
+   * failing one, so the report prints those entries rather than letting an empty list read as "nothing to do".
+   */
+  readonly workflows: readonly string[];
+  /**
+   * What it changes outside this process — AC-1 lists side effects alongside tools and prompts, and the
+   * previous shape had nowhere to put them.
+   *
+   * Required on **every** entry, with `"none — a read"` a legitimate value. Written rather than derived,
+   * because the interesting cases are the ones a type cannot see: `check_media_storage` PUTs a diagnostic
+   * object into a customer's bucket, and `reply_to_comment` writes to a customer's audience where a second
+   * attempt is a second public message. An optional field would have been left unset on 51 of 51 entries and
+   * would have documented an intention rather than a fact — the same reason `instructions` is required.
+   */
+  readonly sideEffects: string;
+  /**
+   * Why a `retained` capability stays where it is. Required for that status, and checked against the manifest:
+   * a capability whose source is under `ai_backend/` **cannot** be retained, because that is the runtime being
+   * removed. Without that guard, `retained` would be the escape hatch that empties this file of everything
+   * inconvenient.
+   */
+  readonly retainedBecause?: string;
 };
 
 /**
@@ -106,9 +176,88 @@ export type InventoryProblem = {
  * Structural checks only — that an entry says what it must — because the *counted* half (`shadowRuns`) cannot
  * come from the file. `coverageOf` does that, from the shadow data.
  */
-export const validateInventory = (entries: readonly CapabilityEntry[]): readonly InventoryProblem[] => {
+/**
+ * What one entry must say, given its status — and an exhaustive `switch` so a new status cannot pass silently.
+ *
+ * The `default` arm assigns to `never`, which makes adding a sixth `CapabilityStatus` a compile error until it
+ * is handled here. Without it a new value would fall through every branch and contribute no problem at all:
+ * a status that means "we have not built this" and gates nothing.
+ */
+const statusProblems = (entry: CapabilityEntry): readonly string[] => {
+  switch (entry.status) {
+    case "dropped": {
+      const problems: string[] = [];
+      // Both halves, and a reason. A signature without a date cannot be reviewed later, which is exactly when
+      // somebody asks who agreed to remove a customer's workflow.
+      if (entry.droppedBy === undefined) problems.push("is dropped with no signature — AC-1 requires a named decision");
+      else {
+        if (entry.droppedBy.by.trim() === "") problems.push("is dropped with an empty name");
+        if (!/^\d{4}-\d{2}-\d{2}/.test(entry.droppedBy.at)) problems.push("is dropped with no usable date");
+        if (entry.droppedBy.reason.trim() === "") problems.push("is dropped with no reason");
+      }
+      if (entry.replacement !== null) problems.push("is dropped but names a replacement; one or the other");
+      return problems;
+    }
+    case "missing":
+      return entry.replacement === null ? [] : ["is missing but names a replacement; one or the other"];
+    case "retained":
+      return [
+        ...(entry.replacement === null ? [] : ["is retained but names a replacement; a retained capability is not replaced, it stays"]),
+        ...((entry.retainedBecause ?? "").trim() === ""
+          ? ["is retained and does not say why it stays or where — AC-1. Name the runtime that keeps it"]
+          : []),
+      ];
+    case "implemented":
+    case "partial": {
+      const problems: string[] = [];
+      if (entry.replacement === null || entry.replacement.trim() === "") {
+        problems.push(`is ${entry.status} but names no replacement`);
+      }
+      if ((entry.contractTest ?? "").trim() === "") {
+        problems.push("has a replacement and no behavioural test against the old contract — AC-5");
+      }
+      /**
+       * Instructions, for anything with a replacement — AC-5.
+       *
+       * The AC is "prompts and instructions are accounted for", and an unset optional field accounts for
+       * nothing. `none` is allowed and has to be *written*, because the difference between "deterministic
+       * tool, no prose" and "nobody checked" is the whole point of the column.
+       */
+      if ((entry.instructions ?? "").trim() === "") {
+        problems.push(
+          "has a replacement and does not say which instruction set it runs under — AC-5. Name the skill, or " +
+            'write "none — …" with the reason',
+        );
+      }
+      return problems;
+    }
+    default: {
+      // Unreachable while the switch is exhaustive, and a compile error the moment it is not.
+      const unhandled: never = entry.status;
+      return [`has status ${String(unhandled)}, which no rule in validateInventory covers`];
+    }
+  }
+};
+
+/**
+ * Is the inventory usable as a precondition?
+ *
+ * Structural checks, plus the ones that need the old runtime — because the file alone cannot tell whether it
+ * describes anything real, and that turned out to be the defect rather than a hypothetical. The *counted* half
+ * (`shadowRuns`) still cannot come from here: `coverageOf` does that, from the shadow data.
+ *
+ * The manifest is a **parameter with a committed default**, not an option. Making it optional would recreate
+ * the hole one level up: a caller that omitted it would get a clean report for an inventory nothing had
+ * checked, which is the "did not look equals clean" this module exists to refuse.
+ */
+export const validateInventory = (
+  entries: readonly CapabilityEntry[],
+  manifest: OldRuntimeManifest = OLD_RUNTIME_MANIFEST,
+): readonly InventoryProblem[] => {
   const problems: InventoryProblem[] = [];
   const seen = new Set<string>();
+  const capabilities = manifestCapabilities(manifest);
+  const toolNames = new Set(SHAREFLOW_TOOL_NAMES);
 
   for (const entry of entries) {
     const at = (problem: string) => problems.push({ capability: entry.capability, problem });
@@ -116,20 +265,10 @@ export const validateInventory = (entries: readonly CapabilityEntry[]): readonly
     if (seen.has(entry.capability)) at("appears twice; one capability, one entry");
     seen.add(entry.capability);
 
-    if (entry.status === "dropped") {
-      // Both halves, and a reason. A signature without a date cannot be reviewed later, which is exactly when
-      // somebody asks who agreed to remove a customer's workflow.
-      if (entry.droppedBy === undefined) at("is dropped with no signature — AC-1 requires a named decision");
-      else {
-        if (entry.droppedBy.by.trim() === "") at("is dropped with an empty name");
-        if (!/^\d{4}-\d{2}-\d{2}/.test(entry.droppedBy.at)) at("is dropped with no usable date");
-        if (entry.droppedBy.reason.trim() === "") at("is dropped with no reason");
-      }
-      if (entry.replacement !== null) at("is dropped but names a replacement; one or the other");
-    } else if (entry.status === "missing") {
-      if (entry.replacement !== null) at("is missing but names a replacement; one or the other");
-    } else if (entry.replacement === null || entry.replacement.trim() === "") {
-      at(`is ${entry.status} but names no replacement`);
+    for (const problem of statusProblems(entry)) at(problem);
+
+    if (entry.sideEffects.trim() === "") {
+      at('does not say what it changes outside this process — AC-1. Write "none — a read" if that is the answer');
     }
 
     if (entry.invocation !== "interactive" && (entry.coverageEvidence ?? "").trim() === "") {
@@ -139,25 +278,73 @@ export const validateInventory = (entries: readonly CapabilityEntry[]): readonly
       at(`is ${entry.invocation} and shadow traffic cannot reach it — AC-7 requires its own coverage evidence`);
     }
 
-    if ((entry.status === "implemented" || entry.status === "partial") && (entry.contractTest ?? "").trim() === "") {
-      at("has a replacement and no behavioural test against the old contract — AC-5");
+    const capability = capabilities.get(entry.oldRuntimeRef);
+
+    /**
+     * A `replacement` on a tool entry has to be a tool the new runtime actually serves.
+     *
+     * The recurring defect in this package is a name that typechecks and resolves to nothing, and
+     * `replacement` was the last free-text field where one could hide: an entry naming `get_branding` as
+     * implemented would have read as covered forever, because nothing looked the name up. Checked only for
+     * `tool:` refs — a route or a webhook is replaced by a subsystem, not by a tool, and requiring a tool name
+     * there would force a false one.
+     */
+    if (
+      capability?.kind === "tool" &&
+      entry.replacement !== null &&
+      !toolNames.has(entry.replacement)
+    ) {
+      at(
+        `names "${entry.replacement}" as its replacement and the new runtime serves no tool by that name — ` +
+          "a replacement nothing resolves reads as covered and is not",
+      );
     }
 
     /**
-     * Instructions, for anything with a replacement — AC-5.
+     * `retained` is only available to capabilities that are not in the runtime being removed.
      *
-     * The AC is "prompts and instructions are accounted for", and an unset optional field accounts for nothing.
-     * `none` is allowed and has to be *written*, because the difference between "deterministic tool, no prose"
-     * and "nobody checked" is the whole point of the column.
+     * Without this, `retained` is the escape hatch: anything inconvenient becomes "it stays where it is" and
+     * the inventory empties. A capability under `ai_backend/` is in the Agno service, which the cutover
+     * deletes, so it has to be replaced or signed off — it cannot stay.
      */
-    if (
-      (entry.status === "implemented" || entry.status === "partial") &&
-      (entry.instructions ?? "").trim() === ""
-    ) {
+    if (entry.status === "retained" && capability !== undefined && capability.source.startsWith("ai_backend/")) {
       at(
-        "has a replacement and does not say which instruction set it runs under — AC-5. Name the skill, or " +
-          'write "none — …" with the reason',
+        `is marked retained and lives at ${capability.source}, inside the runtime the cutover removes — ` +
+          "a capability there cannot stay; replace it or have someone sign a drop",
       );
+    }
+  }
+
+  return problems;
+};
+
+/**
+ * Everything the inventory has to satisfy, including the two directions only the old runtime can decide.
+ *
+ * Separate from `validateInventory` because it composes rather than checks: the entry-shape rules above are
+ * per-entry, while `verifyAgainstManifest` compares *sets* (which capability has no entry) and `skillParity`
+ * and `approvalParity` compare the two runtimes. Kept in one function so no caller can run the cheap half and
+ * report a clean inventory.
+ */
+export const inventoryProblems = (input: {
+  readonly entries: readonly CapabilityEntry[];
+  readonly manifest?: OldRuntimeManifest;
+  /** The new runtime's built tools, for the approval comparison. Omitted skips only that check. */
+  readonly descriptors?: readonly { readonly name: string; readonly approvalPolicy: string }[];
+}): readonly InventoryProblem[] => {
+  const manifest = input.manifest ?? OLD_RUNTIME_MANIFEST;
+  const problems = [...validateInventory(input.entries, manifest)];
+
+  for (const problem of verifyAgainstManifest({ entries: input.entries, manifest })) {
+    problems.push({ capability: problem.ref, problem: problem.problem });
+  }
+  for (const problem of skillParity(manifest)) {
+    problems.push({ capability: problem.ref, problem: problem.problem });
+  }
+  if (input.descriptors !== undefined) {
+    const parity = approvalParity({ entries: input.entries, manifest, descriptors: input.descriptors });
+    for (const problem of approvalParityProblems(parity)) {
+      problems.push({ capability: problem.ref, problem: problem.problem });
     }
   }
 
@@ -215,22 +402,53 @@ export type InventoryGate = {
 export const gateStatus = (input: {
   readonly entries: readonly CapabilityEntry[];
   readonly shadowRuns: readonly { readonly toolsCalled: readonly string[] }[];
+  readonly manifest?: OldRuntimeManifest;
+  readonly descriptors?: readonly { readonly name: string; readonly approvalPolicy: string }[];
 }): InventoryGate => {
-  const problems = [...validateInventory(input.entries)];
+  const problems = [
+    ...inventoryProblems({
+      entries: input.entries,
+      ...(input.manifest === undefined ? {} : { manifest: input.manifest }),
+      ...(input.descriptors === undefined ? {} : { descriptors: input.descriptors }),
+    }),
+  ];
   const coverage = coverageOf(input);
 
+  /**
+   * Which statuses block, decided by an exhaustive `switch` rather than a pair of `if`s.
+   *
+   * The `if (status === "missing")` / `if (status === "partial")` pair this replaced is what made adding a
+   * status dangerous: `retained` would have matched neither and contributed nothing, so six capabilities would
+   * have gone from blocking to invisible with no test failing. Here a sixth status is a compile error.
+   */
   for (const entry of input.entries) {
-    if (entry.status === "missing") {
-      problems.push({
-        capability: entry.capability,
-        problem: "is missing — a capability the new runtime does not implement writes nothing, which the parity gate cannot tell from perfect agreement",
-      });
-    }
-    if (entry.status === "partial") {
-      problems.push({
-        capability: entry.capability,
-        problem: "is partial — the unimplemented half writes nothing and is invisible to a write-set comparison",
-      });
+    switch (entry.status) {
+      case "missing":
+        problems.push({
+          capability: entry.capability,
+          problem:
+            "is missing — a capability the new runtime does not implement writes nothing, which the parity gate cannot tell from perfect agreement",
+        });
+        break;
+      case "partial":
+        problems.push({
+          capability: entry.capability,
+          problem: "is partial — the unimplemented half writes nothing and is invisible to a write-set comparison",
+        });
+        break;
+      case "retained":
+      case "dropped":
+      case "implemented":
+        // None of these blocks: a retained capability is not part of the cutover, a dropped one carries a
+        // signature, and an implemented one is judged on its shadow coverage below rather than on its status.
+        break;
+      default: {
+        const unhandled: never = entry.status;
+        problems.push({
+          capability: entry.capability,
+          problem: `has status ${String(unhandled)}, which the gate has no rule for — refusing rather than passing it`,
+        });
+      }
     }
   }
 
@@ -253,4 +471,18 @@ export const gateStatus = (input: {
   return { status: problems.length === 0 ? "complete" : "incomplete", problems, unexercised };
 };
 
+/** How the inventory breaks down by status, for a report that has to say more than pass or fail. */
+export const inventoryTally = (
+  entries: readonly CapabilityEntry[],
+): Readonly<Record<CapabilityStatus, number>> => {
+  const tally = Object.fromEntries(CAPABILITY_STATUSES.map((status) => [status, 0])) as Record<
+    CapabilityStatus,
+    number
+  >;
+  for (const entry of entries) tally[entry.status] += 1;
+  return tally;
+};
+
+export * from "./manifest.js";
+export { OLD_RUNTIME_MANIFEST } from "./old-runtime.js";
 export { CAPABILITY_INVENTORY } from "./capabilities.js";

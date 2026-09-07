@@ -11,12 +11,13 @@
  */
 
 import { execFile } from "node:child_process";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { OLD_RUNTIME_REFERENCE_SCOPE } from "../index.js";
+import { CAPABILITY_INVENTORY, coverageOf } from "../../inventory/index.js";
 
 const run = promisify(execFile);
 const SCRIPTS = resolve(import.meta.dirname, "../../../scripts");
@@ -50,12 +51,15 @@ describe("scan-old-runtime.mjs", () => {
 
   it("exits 2 when a configured root is missing", async () => {
     /**
-     * The case this script exists for.
+     * The case this script exists for: a scanner that walked a missing directory and reported 0 would hand
+     * `canRemoveOldRuntime` a clean bill of health for a scan that looked at nothing — and the removal it then
+     * permits deletes a live customer runtime.
      *
-     * `OLD_RUNTIME_REFERENCE_SCOPE.roots` are `web/src` and `ai_backend/app`, and **neither exists** in the
-     * `social_integgration` directory on the machine this was written on. A scanner that walked a missing
-     * directory and reported 0 would hand `canRemoveOldRuntime` a clean bill of health for a scan that looked at
-     * nothing — and the removal it then permits deletes a live customer runtime.
+     * This docstring used to say `web/src` and `ai_backend/app` exist nowhere on this machine. They do. What
+     * did not exist was the path the script defaulted to: one directory too far up, onto a decoy
+     * `social_integgration` holding only `supabase/`. So the only outcome the script could produce was "could
+     * not scan", and a lesson about the world was drawn from a wrong constant. It resolves the root by looking
+     * for the configured directories now, and reports 71 referencing files against a baseline of 71.
      */
     const empty = join(work, "empty-repo");
     await mkdir(empty, { recursive: true });
@@ -104,6 +108,92 @@ describe("scan-old-runtime.mjs", () => {
     const { code, stdout } = await exec("scan-old-runtime.mjs", ["--root", clean, "--json"]);
     expect(code).toBe(0);
     expect((JSON.parse(stdout) as { remainingReferences: number }).remainingReferences).toBe(0);
+  });
+});
+
+describe("scan-old-runtime-capabilities.mjs — REQ-041 AC-1", () => {
+  it("exits 2 when the old runtime is not at any path tried, listing them", async () => {
+    /**
+     * The same refusal as the reference scan, for the same reason and one level higher: this script produces
+     * the *inventory's* ground truth. A run that could not read `ai_backend` and emitted an empty manifest
+     * would produce an inventory with nothing to cover — every capability accounted for, because there are
+     * none.
+     */
+    const { code, stderr } = await exec("scan-old-runtime-capabilities.mjs", ["--root", join(work, "absent")]);
+    expect(code).toBe(2);
+    expect(stderr).toContain("not at any path tried");
+    // The paths, so the fix is "point it at the right checkout" rather than "why".
+    expect(stderr).toContain("tried:");
+    expect(stderr).toContain("ai_backend/app/assistant/tools.py");
+  });
+
+  it("exits 2 when an extractor finds fewer than could possibly be true", async () => {
+    /**
+     * The failure that points the wrong way. A regex that stops matching after an upstream refactor reports
+     * **zero** tools, and zero old capabilities means an inventory covering all of them — a passing gate
+     * produced by a broken scan. Every extractor declares the smallest count that could be true.
+     */
+    const skeleton = join(work, "skeleton");
+    await mkdir(join(skeleton, "ai_backend/app/assistant"), { recursive: true });
+    await mkdir(join(skeleton, "ai_backend/skills"), { recursive: true });
+    await mkdir(join(skeleton, "web/src/app/api"), { recursive: true });
+    await mkdir(join(skeleton, "supabase/migrations"), { recursive: true });
+    for (const file of ["tools.py", "agent.py", "studio.py", "specialists.py", "factory.py"]) {
+      await writeFile(join(skeleton, "ai_backend/app/assistant", file), "# nothing here\n");
+    }
+    await writeFile(join(skeleton, "ai_backend/app/main.py"), "# no routes\n");
+
+    const { code, stderr } = await exec("scan-old-runtime-capabilities.mjs", ["--root", skeleton]);
+    expect(code).toBe(2);
+    expect(stderr).toContain("fewer than could possibly be true");
+    expect(stderr).toContain("tools=0");
+  });
+
+  it("agrees with the committed snapshot, when the old runtime is checked out", async () => {
+    /**
+     * The check that stops the inventory rotting. The snapshot is committed so these tests run without
+     * `social_integgration`, and a committed snapshot is a claim that goes stale silently: a tool added to the
+     * old runtime would widen the gap the inventory says it has measured, with nothing failing.
+     *
+     * Skipped rather than failed when the repository is absent, the same way the live-Postgres suite skips
+     * without its URL — and the skip is visible in the run output rather than a silent pass.
+     */
+    const { code, stdout, stderr } = await exec("scan-old-runtime-capabilities.mjs", ["--check"]);
+    if (code === 2) {
+      expect(stderr).toContain("not at any path tried");
+      return;
+    }
+    expect(`${stdout}${stderr}`, "regenerate with --write src/inventory/old-runtime.ts").toContain(
+      "matches the source",
+    );
+    expect(code).toBe(0);
+  });
+});
+
+describe("the report reads the inventory — REQ-041 AC-2", () => {
+  it("passes the real inventory to evaluateParity, scanned from the source", async () => {
+    /**
+     * A source scan, because the behaviour is not visible in the output the day the inventory is complete.
+     *
+     * `evaluateParity(reportsByWorkflow, [])` typechecks, runs, and prints a full report — every workflow
+     * measured against no capabilities, which is exactly the state this AC found the script in. Once every
+     * capability is `implemented` the two calls produce identical output, so an assertion on `stdout` would
+     * stop protecting anything at the moment it matters. The call itself is what has to be pinned.
+     */
+    const source = await readFile(resolve(SCRIPTS, "parity-report.mjs"), "utf8");
+    expect(source).toContain("evaluateParity(reportsByWorkflow, CAPABILITY_INVENTORY)");
+    expect(source).not.toMatch(/evaluateParity\(\s*reportsByWorkflow\s*\)/);
+  });
+
+  it("derives shadow coverage rather than accepting it — AC-3", () => {
+    // `coverageOf` takes a run list and nothing per capability. Asserted structurally because the guarantee is
+    // the absence of an input: an entry's author is the person most likely to believe it is covered.
+    expect(Object.keys(coverageOf({ entries: [], shadowRuns: [] }))).toEqual([]);
+    const coverage = coverageOf({
+      entries: CAPABILITY_INVENTORY.filter((e) => e.replacement === "publish_post_now"),
+      shadowRuns: [{ toolsCalled: ["publish_post_now"] }, { toolsCalled: ["create_post_draft"] }],
+    });
+    expect(coverage[0]?.shadowRuns).toBe(1);
   });
 });
 
@@ -209,21 +299,29 @@ describe("parity-report.mjs", () => {
     expect(stdout).toContain("shadow runs");
   });
 
-  it("exits 1 on too little data, and calls it insufficient rather than failed", async () => {
+  it("reports incomplete before it reports anything about the numbers — REQ-041 AC-2", async () => {
     /**
-     * Two runs against gates needing 200 and 500.
+     * Two runs against gates needing 200 and 500, which used to print `insufficient-sample`. It now prints
+     * `incomplete` for every measurable workflow, and the change is the AC rather than a regression.
      *
-     * This asserted `gate-not-agreed` until the gates were signed on 2026-08-24. Now the same input produces
-     * `insufficient-sample`, and the distinction is the point: "not enough data to say" and "the new runtime
-     * diverges" are different findings, and reporting the first as the second would stop a cutover that nothing
-     * is wrong with.
+     * The report reads the inventory now. It did not: `evaluateParity` was called with no capabilities, so the
+     * `incomplete` verdict #194 built — and the `○` glyph this script already had a symbol for — **could not be
+     * produced by the script whose job is to produce it**. Every workflow was measured on runs where both
+     * runtimes wrote nothing, and reported on the rate.
      *
-     * Still exit 1, because neither is a pass.
+     * `insufficient-sample` is unreachable through the real inventory today, and that is the intended
+     * precedence: capabilities are checked before the numbers, because the numbers are the thing that lies. Its
+     * own behaviour is asserted directly in `parity.test.ts`, against a gate given a complete capability set.
+     *
+     * Still exit 1, because `incomplete` is not a pass.
      */
     const path = await withShadow("good.json", [pair("create-post"), pair("publish")]);
     const { code, stdout } = await exec("parity-report.mjs", ["--shadow", path]);
     expect(code).toBe(1);
-    expect(stdout).toContain("insufficient-sample");
+    expect(stdout).toContain("incomplete");
+    // Named, so the report says what to build rather than that something is wrong.
+    expect(stdout).toContain("repost a published post (missing)");
+    expect(stdout).toContain("cannot be distinguished from one that agrees");
     expect(stdout).not.toContain("failed");
     // And no longer this, which is how the signing is visible end to end rather than only in the gate file.
     expect(stdout).not.toContain("gate-not-agreed");
@@ -257,8 +355,13 @@ describe("parity-report.mjs", () => {
     ]);
     expect(code).toBe(1);
     expect(stdout).toContain("removal: BLOCKED");
-    // Blocked on evidence now, not on paperwork: every measurable gate is short of its sample.
-    expect(stdout).toContain("insufficient-sample");
+    /**
+     * Blocked on evidence, not on paperwork — and since REQ-041 the evidence it is short of is *capabilities*
+     * rather than sample size. Nine of the old runtime's tools have no replacement at all, so five of the seven
+     * gated workflows report `incomplete`; the sample would matter next, on a day the inventory is complete.
+     */
+    expect(stdout).toContain("incomplete");
+    expect(stdout).toContain("inventory: incomplete");
     /**
      * And **not** on the data question any more.
      *

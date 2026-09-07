@@ -28,8 +28,11 @@ import {
   PARITY_GATES,
   VERDICTS,
   CAPABILITY_INVENTORY,
+  OLD_RUNTIME_MANIFEST,
   canRemoveOldRuntime,
+  coverageOf,
   gateStatus,
+  inventoryTally,
   gateFor,
   diffShadowRuns,
   evaluateParity,
@@ -153,7 +156,15 @@ if (unpaired.length > 0 && Object.keys(reportsByWorkflow).length === 0)
 if (unpaired.length > 0)
   console.log(`· ${unpaired.length} run(s) skipped for want of an old-runtime half: ${unpaired.join(", ")}\n`);
 
-const evaluation = evaluateParity(reportsByWorkflow);
+/**
+ * The inventory goes in here, not only into the removal check — REQ-041 AC-2.
+ *
+ * It used to be read only under `--removal`, which meant the report a rollout actually looks at every day
+ * could never print `incomplete`: `evaluateParity` was called with no capabilities, so a workflow whose tools
+ * are not built was measured on runs where both runtimes wrote nothing and reported `passed`. The verdict
+ * existed, the symbol for it existed, and nothing could produce it.
+ */
+const evaluation = evaluateParity(reportsByWorkflow, CAPABILITY_INVENTORY);
 
 console.log(`parity report — ${pairs.length} shadow pairs across ${Object.keys(reportsByWorkflow).length} workflow(s)\n`);
 /**
@@ -193,6 +204,59 @@ console.log(
     : `blocking: ${evaluation.blocking.join(", ")}`,
 );
 
+/**
+ * Coverage per **capability**, not per workflow — REQ-041 AC-3.
+ *
+ * A workflow can pass its gate while a tool inside it was never once exercised, because the gate is a rate over
+ * runs and a run that never called the tool contributes a matching pair of nothings. So the count is printed per
+ * capability, and it is *derived* from the shadow data here rather than accepted from anywhere: `coverageOf`
+ * matches each entry's replacement against the tools each run called.
+ *
+ * The old side of each pair, deliberately. Coverage asks "did shadow traffic exercise this", and traffic is what
+ * the old runtime did; reading the new side would count a capability as covered whenever the replacement
+ * happened to run, including on runs where the old one did something else entirely.
+ */
+const shadowRuns = pairs.map((pair) => ({
+  toolsCalled: (pair.old?.writes ?? []).map((w) => w?.tool).filter((t) => typeof t === "string"),
+}));
+
+const coverage = coverageOf({ entries: CAPABILITY_INVENTORY, shadowRuns });
+const tally = inventoryTally(CAPABILITY_INVENTORY);
+console.log(
+  `capability inventory — ${CAPABILITY_INVENTORY.length} capabilities in ${OLD_RUNTIME_MANIFEST.repository}: ` +
+    Object.entries(tally)
+      .map(([status, n]) => `${n} ${status}`)
+      .join(", "),
+);
+
+/**
+ * Every capability that could be exercised by traffic and was not.
+ *
+ * Printed as a list rather than a count: "3 uncovered" is a number to argue about and "reply to a comment was
+ * never exercised" is a thing to go and do.
+ */
+const unexercised = coverage.filter((c) => c.invocation === "interactive" && c.shadowRuns === 0 && c.status !== "missing");
+const exercised = coverage.filter((c) => c.shadowRuns > 0);
+console.log(`  exercised by shadow traffic: ${exercised.length}`);
+for (const c of exercised) console.log(`    ✓ ${c.capability} — ${c.shadowRuns} run(s)`);
+if (unexercised.length > 0) {
+  console.log(`  implemented and never exercised: ${unexercised.length}`);
+  for (const c of unexercised) console.log(`    ○ ${c.capability} (${c.status})`);
+}
+
+/**
+ * Capabilities no gate covers at all — worse than failing one, and previously invisible.
+ *
+ * A capability that belongs to no docs/07 workflow is not measured by any threshold, so nothing about it can
+ * fail. Artifacts, PDFs, diagrams, branding and the agent-skill tools are all in this position.
+ */
+const ungated = CAPABILITY_INVENTORY.filter((entry) => entry.workflows.length === 0);
+if (ungated.length > 0) {
+  console.log(`  covered by no parity gate: ${ungated.length}`);
+  for (const entry of ungated) console.log(`    · ${entry.capability} (${entry.status})`);
+}
+console.log("");
+
 if (!has("removal")) process.exit(evaluation.allMeasurablePassed ? 0 : 1);
 
 /**
@@ -214,19 +278,7 @@ const references = flag("references");
  * tell "wrote nothing" from "wrote the same thing" — so a missing feature read as perfect agreement. This is what
  * closes it, and it blocks rather than warns.
  */
-const inventory = gateStatus({
-  entries: CAPABILITY_INVENTORY,
-  /**
-   * Which tools each shadow run called, from the **old** side of the pair.
-   *
-   * The old side, deliberately: coverage asks "did shadow traffic exercise this capability", and traffic is what
-   * the old runtime did. Reading the new side would count a capability as covered whenever the replacement
-   * happened to run, including on the runs where the old one did something else entirely.
-   */
-  shadowRuns: pairs.map((pair) => ({
-    toolsCalled: (pair.old?.writes ?? []).map((w) => w?.tool).filter((t) => typeof t === "string"),
-  })),
-});
+const inventory = gateStatus({ entries: CAPABILITY_INVENTORY, shadowRuns });
 console.log(`\ninventory: ${inventory.status}`);
 for (const problem of inventory.problems) console.log(`  - ${problem.capability}: ${problem.problem}`);
 

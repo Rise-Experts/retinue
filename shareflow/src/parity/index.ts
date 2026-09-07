@@ -206,11 +206,33 @@ export type ParityEvaluation = {
   readonly blocking: readonly string[];
 };
 
-/** Evaluate every gate against reports grouped by workflow. */
+/**
+ * Evaluate every gate against reports grouped by workflow — and against the inventory, REQ-041 AC-2.
+ *
+ * `capabilities` is **required**, and that is the fix rather than a style choice. #194 built the `incomplete`
+ * verdict and wired it into `evaluateWorkflow`'s optional argument; this function — the only one the parity
+ * report calls — never passed one. So every workflow was evaluated against an empty capability list, the
+ * `incomplete` branch was unreachable from the script whose job is to run it, and a workflow whose capabilities
+ * are not built reported `passed` on runs where both runtimes wrote nothing. Exactly the defect #194 set out
+ * to close, surviving one level up.
+ *
+ * Required, not defaulted, because a default of `[]` is the same silence with a nicer signature: a caller who
+ * had not thought about it would get the old behaviour and no signal. Pass `CAPABILITY_INVENTORY`, or pass
+ * `[]` and mean it.
+ *
+ * Each gate sees the entries that name its workflow, which is why `CapabilityEntry.workflows` exists.
+ */
 export const evaluateParity = (
   reportsByWorkflow: Readonly<Record<string, readonly ParityReport[]>>,
+  capabilities: readonly CapabilityEntry[],
 ): ParityEvaluation => {
-  const verdicts = PARITY_GATES.map((g) => evaluateWorkflow(g.workflow, reportsByWorkflow[g.workflow] ?? []));
+  const verdicts = PARITY_GATES.map((g) =>
+    evaluateWorkflow(
+      g.workflow,
+      reportsByWorkflow[g.workflow] ?? [],
+      capabilities.filter((entry) => entry.workflows.includes(g.workflow)),
+    ),
+  );
   const blocking = verdicts.filter((v) => v.verdict !== "passed" && v.verdict !== "not-measurable");
   return {
     verdicts,

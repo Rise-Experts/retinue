@@ -16,8 +16,12 @@ import {
   CAPABILITY_INVENTORY,
   coverageOf,
   gateStatus,
+  inventoryTally,
+  manifestCapabilities,
   validateInventory,
+  OLD_RUNTIME_MANIFEST,
   type CapabilityEntry,
+  type OldRuntimeManifest,
 } from "../index.js";
 import { canRemoveOldRuntime, evaluateWorkflow } from "../../parity/index.js";
 import { SHAREFLOW_BUILT_IN_SKILLS } from "../../skills/index.js";
@@ -25,7 +29,10 @@ import type { ParityReport } from "../../shadow/index.js";
 
 const entry = (over: Partial<CapabilityEntry> = {}): CapabilityEntry => ({
   capability: "draft a post",
-  oldRuntimePath: "old: writer",
+  // A real reference, because `validateInventory` now looks entries up in the committed manifest to check the
+  // replacement names a tool that exists and that `retained` is not claimed inside `ai_backend/`. A fixture
+  // pointing at nothing would exercise neither.
+  oldRuntimeRef: "tool:create_draft",
   replacement: "create_post_draft",
   status: "implemented",
   invocation: "interactive",
@@ -33,7 +40,37 @@ const entry = (over: Partial<CapabilityEntry> = {}): CapabilityEntry => ({
   // AC-5: an entry with a replacement has to say which instruction set it runs under, and `none` is a value
   // somebody has to type rather than one they can reach by omission.
   instructions: "skills/post-composition",
+  // AC-1: what it changes outside this process, with "none — a read" a value someone has to write.
+  sideEffects: "inserts a post row",
+  // AC-2: the docs/07 gates this capability's runs reach. Without it the workflow verdict cannot see it.
+  workflows: ["create-post"],
   ...over,
+});
+
+/**
+ * A manifest containing exactly the fixture's capabilities.
+ *
+ * `gateStatus` compares *sets*: it fails an inventory that omits a capability the old runtime has, which is
+ * the half of AC-1 that was missing and the reason the shipped inventory grew from 27 entries to 51. A
+ * one-entry fixture judged against the real manifest is therefore incomplete by construction and would say
+ * nothing about the rule under test. So each test states its own premise about what the old runtime is,
+ * rather than being handed a weaker check.
+ */
+const manifestFor = (entries: readonly CapabilityEntry[]): OldRuntimeManifest => ({
+  repository: "fixture",
+  tools: entries
+    .filter((e) => e.oldRuntimeRef.startsWith("tool:"))
+    .map((e) => ({
+      name: e.oldRuntimeRef.slice("tool:".length),
+      confirmationStated: "false" as const,
+      requiresConfirmation: false,
+      source: "ai_backend/app/assistant/tools.py:1",
+    })),
+  agents: [],
+  routes: [],
+  skills: [],
+  webhooks: [],
+  scheduled: [],
 });
 
 /** A shadow run that agrees perfectly, which is what a missing capability produces. */
@@ -218,7 +255,7 @@ describe("coverage is counted, never supplied", () => {
 
 describe("zero shadow runs cannot contribute to a pass — AC-4", () => {
   it("reports an implemented, unexercised capability", () => {
-    const gate = gateStatus({ entries: [entry()], shadowRuns: [] });
+    const gate = gateStatus({ entries: [entry()], shadowRuns: [], manifest: manifestFor([entry()]) });
     expect(gate.status).toBe("incomplete");
     expect(gate.unexercised).toEqual(["draft a post"]);
   });
@@ -226,16 +263,18 @@ describe("zero shadow runs cannot contribute to a pass — AC-4", () => {
   it("does not demand shadow runs of a capability shadow traffic cannot reach", () => {
     // A webhook with evidence is covered. Counting its (necessarily zero) shadow runs against it would be
     // demanding the impossible and then calling its absence a defect.
-    const gate = gateStatus({
-      entries: [entry({ invocation: "webhook", coverageEvidence: "replayed fixture: webhooks.test.ts" })],
-      shadowRuns: [],
-    });
+    const webhook = entry({ invocation: "webhook", coverageEvidence: "replayed fixture: webhooks.test.ts" });
+    const gate = gateStatus({ entries: [webhook], shadowRuns: [], manifest: manifestFor([webhook]) });
     expect(gate.unexercised).toEqual([]);
     expect(gate.status).toBe("complete");
   });
 
   it("is complete when everything is built and exercised", () => {
-    const gate = gateStatus({ entries: [entry()], shadowRuns: [agreeing(["create_post_draft"])] });
+    const gate = gateStatus({
+      entries: [entry()],
+      shadowRuns: [agreeing(["create_post_draft"])],
+      manifest: manifestFor([entry()]),
+    });
     expect(gate.status).toBe("complete");
     expect(gate.problems).toEqual([]);
   });
@@ -260,7 +299,11 @@ describe("the removal check reads the inventory — AC-6", () => {
   it("blocks on an incomplete inventory, naming each problem", () => {
     const check = canRemoveOldRuntime({
       ...passing,
-      inventory: gateStatus({ entries: [entry({ status: "missing", replacement: null })], shadowRuns: [] }),
+      inventory: gateStatus({
+        entries: [entry({ status: "missing", replacement: null })],
+        shadowRuns: [],
+        manifest: manifestFor([entry()]),
+      }),
     });
     expect(check.allowed).toBe(false);
     expect(check.blockers.some((b) => b.includes("draft a post"))).toBe(true);
@@ -270,34 +313,59 @@ describe("the removal check reads the inventory — AC-6", () => {
     // The control: without it every test above could pass against a check that refuses unconditionally.
     const check = canRemoveOldRuntime({
       ...passing,
-      inventory: gateStatus({ entries: [entry()], shadowRuns: [agreeing(["create_post_draft"])] }),
+      inventory: gateStatus({
+        entries: [entry()],
+        shadowRuns: [agreeing(["create_post_draft"])],
+        manifest: manifestFor([entry()]),
+      }),
     });
     expect(check.allowed, check.blockers.join("; ")).toBe(true);
   });
 });
 
 describe("the shipped inventory", () => {
-  it("is structurally valid apart from the capabilities that genuinely are not built", () => {
-    const problems = validateInventory(CAPABILITY_INVENTORY);
+  it("is structurally valid — every entry says everything its status requires", () => {
     /**
-     * One problem, and it is a true statement about the world rather than a defect in the file: the scheduled
-     * publish is `partial`, so AC-5 asks for a behavioural test it cannot have — the thing being tested is a
-     * cron job in another repository that nothing here replaces.
+     * Zero problems, which it did not manage before the rewrite for a reason worth keeping in view: the old
+     * file also reported zero, while naming capabilities that do not exist. Structural validity was never the
+     * hard part — `verifyAgainstManifest` is, and it has its own tests in `manifest.test.ts`.
      */
-    expect(problems.map((p) => p.capability)).toEqual(["the scheduled publish itself"]);
+    expect(validateInventory(CAPABILITY_INVENTORY)).toEqual([]);
   });
 
   it("reports incomplete, which is the honest answer today", () => {
     const gate = gateStatus({ entries: CAPABILITY_INVENTORY, shadowRuns: [] });
     expect(gate.status).toBe("incomplete");
-    // The three that are genuinely not built. Named, so this test fails when one is finished — which is the
-    // point: finishing a capability should require editing the inventory in the same commit.
-    const notBuilt = CAPABILITY_INVENTORY.filter((c) => c.status === "missing" || c.status === "partial");
-    expect(notBuilt.map((c) => c.capability).sort()).toEqual([
-      "inbound comment webhook",
-      "nightly metrics refresh",
-      "the scheduled publish itself",
-    ]);
+
+    /**
+     * The tally, pinned. Named numbers rather than a list of 32 strings, because the list would be edited to
+     * match on every change and stop being a claim — but the *shape* of the migration is a claim: this package
+     * replaces 13 of the old runtime's capabilities outright, part of 3 more, and has not replaced 29.
+     *
+     * Nothing is dropped, and that is deliberate: a drop needs a named person, and nobody has agreed to remove
+     * artifacts, diagrams, PDFs or the studio agent's branding tools from a live product.
+     */
+    expect(inventoryTally(CAPABILITY_INVENTORY)).toEqual({
+      implemented: 13,
+      partial: 3,
+      missing: 29,
+      dropped: 0,
+      retained: 6,
+    });
+  });
+
+  it("marks nothing inside ai_backend as retained", () => {
+    /**
+     * `retained` is the status that could empty this file: "it stays where it is" is available for anything
+     * inconvenient. It is only true of the six capabilities in `web/` — five webhooks and the sweep — and
+     * `validateInventory` refuses it for a capability whose source is under `ai_backend/`, which is the runtime
+     * the cutover deletes.
+     */
+    const capabilities = manifestCapabilities(OLD_RUNTIME_MANIFEST);
+    for (const entry of CAPABILITY_INVENTORY.filter((e) => e.status === "retained")) {
+      expect(capabilities.get(entry.oldRuntimeRef)?.source, entry.capability).not.toMatch(/^ai_backend\//);
+    }
+    expect(CAPABILITY_INVENTORY.filter((e) => e.status === "retained")).toHaveLength(6);
   });
 
   it("every contract test it names is a file that exists", () => {

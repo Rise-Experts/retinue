@@ -215,13 +215,13 @@ describe("evaluating a workflow", () => {
   it("does not let an unmeasurable workflow block the cutover on its own", () => {
     // A judgement worth naming: blocking forever on something nobody can measure is how a gate gets quietly
     // removed. It is surfaced separately so proceeding without it is a visible decision.
-    const evaluation = evaluateParity({});
+    const evaluation = evaluateParity({}, []);
     expect([...evaluation.unmeasurable].sort()).toEqual(["analytics", "engagement-read"]);
     expect(evaluation.blocking).not.toContain("analytics");
   });
 
   it("blocks on every unpassed measurable workflow today", () => {
-    const evaluation = evaluateParity({});
+    const evaluation = evaluateParity({}, []);
     expect(evaluation.allMeasurablePassed).toBe(false);
     expect([...evaluation.blocking].sort()).toEqual([
       "campaign-planning",
@@ -251,7 +251,7 @@ describe("the removal gate", () => {
   const passing = { verdicts: [], allMeasurablePassed: true, unmeasurable: [], blocking: [] };
 
   it("refuses today, and says every reason", () => {
-    const check = canRemoveOldRuntime({ evaluation: evaluateParity({}) });
+    const check = canRemoveOldRuntime({ evaluation: evaluateParity({}, []) });
     expect(check.allowed).toBe(false);
     // Every reason, not the first: a reviewer fixing one blocker wants to know whether there are three
     // more.

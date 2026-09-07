@@ -5,11 +5,16 @@
  * produced that number: the check could be satisfied only by a caller typing one in, which is the same as no
  * check. This produces it.
  *
- * **A missing root is an error, never zero.** That distinction is the whole point of this script existing, and it
- * is not hypothetical — `OLD_RUNTIME_REFERENCE_SCOPE.roots` are `web/src` and `ai_backend/app`, and neither path
- * exists in the `social_integgration` directory on the machine this was written on. A scanner that walked a
- * missing directory and reported "0 references" would hand `canRemoveOldRuntime` a clean bill of health for a
- * scan that looked at nothing — and the removal it would then permit deletes a live customer runtime.
+ * **A missing root is an error, never zero.** A scanner that walked a missing directory and reported
+ * "0 references" would hand `canRemoveOldRuntime` a clean bill of health for a scan that looked at nothing —
+ * and the removal it would then permit deletes a live customer runtime.
+ *
+ * That refusal fired on the first run, and the reason it fired was **this script's own default path**, not a
+ * missing old runtime. The default resolved one directory too far up onto a decoy `social_integgration`
+ * containing only `supabase/`, so the roots were absent and the scan refused — the right refusal for the wrong
+ * reason, and the docstring here then generalised a local misconfiguration into a claim that `web/src` and
+ * `ai_backend/app` do not exist anywhere. They do; the resolution below finds them. A gate whose only runnable
+ * outcome is "could not scan" is a gate that gets satisfied by assertion at the moment it matters.
  *
  * So: the repository must exist, every configured root must exist, and only then is a count meaningful. Exit 2
  * for "could not scan", exit 0 for "scanned", whatever the count. A non-zero count is not this script's failure;
@@ -34,15 +39,40 @@ const flag = (name) => {
 };
 const asJson = args.includes("--json");
 
+const isDirectory = async (path) => {
+  try {
+    return (await stat(path)).isDirectory();
+  } catch {
+    return false;
+  }
+};
+
 /**
- * Where to look.
+ * Where to look — found rather than assumed, for the reason in the docstring above.
  *
- * Explicit beats inferred, but a default that is written down beats making everyone pass a path. The default is
- * a sibling of the working tree, which is where it sits in the layout this was written against — and if it is
- * wrong, the error says which path was tried rather than reporting an empty result.
+ * The candidates are tried in order and the first one carrying a configured root wins, so a directory that
+ * exists but is not the old runtime is skipped instead of producing a confusing refusal. An explicit `--root`
+ * or `RETINUE_OLD_RUNTIME_ROOT` is still honoured first and, when given, is the *only* candidate — a fallback
+ * behind an explicit path would silently scan somewhere the operator did not name.
  */
-const DEFAULT_ROOT = resolve(import.meta.dirname, "../../../..", OLD_RUNTIME_REFERENCE_SCOPE.repository);
-const root = resolve(flag("root") ?? process.env.RETINUE_OLD_RUNTIME_ROOT ?? DEFAULT_ROOT);
+const CANDIDATES = [
+  flag("root") ?? process.env.RETINUE_OLD_RUNTIME_ROOT,
+  resolve(import.meta.dirname, "../../..", OLD_RUNTIME_REFERENCE_SCOPE.repository),
+  resolve(import.meta.dirname, "../../../..", OLD_RUNTIME_REFERENCE_SCOPE.repository),
+].filter((path) => path !== undefined);
+const explicit = (flag("root") ?? process.env.RETINUE_OLD_RUNTIME_ROOT) !== undefined;
+
+let found;
+for (const candidate of explicit ? [CANDIDATES[0]] : CANDIDATES) {
+  const at = resolve(candidate);
+  let all = true;
+  for (const dir of OLD_RUNTIME_REFERENCE_SCOPE.roots) if (!(await isDirectory(join(at, dir)))) all = false;
+  if (all) {
+    found = at;
+    break;
+  }
+}
+const root = found ?? resolve(CANDIDATES[0] ?? ".");
 
 /** Directories never worth scanning: build output and dependencies are not the old runtime's source. */
 const SKIP = new Set(["node_modules", ".git", "dist", "build", ".next", "__pycache__", ".venv", "coverage"]);
@@ -56,14 +86,6 @@ const die = (message, detail) => {
   // 2, not 1: "could not scan" has to be distinguishable from "scanned and found things" by a caller that only
   // looks at the exit code.
   process.exit(2);
-};
-
-const isDirectory = async (path) => {
-  try {
-    return (await stat(path)).isDirectory();
-  } catch {
-    return false;
-  }
 };
 
 if (!(await isDirectory(root)))

@@ -295,6 +295,15 @@ export const duplicatePostDraftTool = shareFlowTool(["content"], ({ services, de
       ),
   }));
 
+/** The complete Posts catalog. The nine other categories each pin theirs; this one did not. */
+export const POSTS_TOOL_NAMES = [
+  "list_post_drafts",
+  "get_post_draft",
+  "create_post_draft",
+  "update_post_draft",
+  "duplicate_post_draft",
+] as const;
+
 /**
  * The Posts category, in the order a conversation uses them: find one, read it, write one, change it,
  * copy it.

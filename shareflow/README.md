@@ -591,18 +591,107 @@ The inventory makes coverage a precondition of comparison rather than a conclusi
 `canRemoveOldRuntime` blocks on an inventory that was never evaluated, for the same reason it blocks on an unrun
 reference scan: **"I did not look" must never be worth the same as "there is nothing there."**
 
+### It is read from the old runtime now, not written from memory
+
+`scripts/scan-old-runtime-capabilities.mjs` reads `social_integgration` and emits
+`src/inventory/old-runtime.ts`: every `@tool()` and whether it is confirmation-gated, which agent carries which
+tools, the FastAPI routes, the skills directory, the inbound webhook routes, and the `cron.schedule` calls in the
+migrations. `npm run scan:old-runtime-capabilities -- --check` fails when the committed snapshot and the live
+source disagree.
+
+That scan is why this section was rewritten. The previous inventory had 27 entries whose `oldRuntimePath` strings
+were typed from memory, and **almost none of them resolved**: there is no `post_writer`, no `ideation`, no
+`copywriter`, no `publish_guard`, no `publisher.publish`, no `scheduler.enqueue`, no `campaigns.create`, no
+`engagement.inbox`, no `analytics.attribution`, no `accounts.health`, no `leads.*`, no cron `publish_due_posts`,
+no cron `refresh_metrics` and no `POST /webhooks/:platform/comments`. Two thirds of the surface that *does* exist
+had no entry at all — artifacts, diagrams, PDFs, `read_pdf`, `delete_post`, `repost_post`, branding writes, the
+four agent-skill tools, fourteen HTTP endpoints, five webhooks.
+
+It passed `validateInventory` cleanly, which is the point worth keeping: **structural validity was never the hard
+part.** A prose path cannot be wrong about anything. So `oldRuntimePath` is gone and `oldRuntimeRef` replaces it —
+`tool:publish_now`, `route:POST /campaign`, `webhook:/api/webhooks/stripe`, `cron:chorus-schedule-sweep` — a
+reference that has to resolve against the scan, in a check that also fails when a capability has **no entry**.
+That second direction is the one that mattered.
+
 ### What it says today
 
-`incomplete`. Three capabilities are genuinely not built, and all three are ones normal traffic would never have
-revealed:
+`incomplete`, and honestly so. The old runtime is 31 Agno tools across 9 components, 14 purpose-built HTTP
+endpoints, 7 skills, 5 inbound webhooks and 1 cron job — 51 capabilities:
 
-- **the scheduled publish itself** — `schedule_post` records the intent; the job that fires at 03:00 lives in
-  `social_integgration` and nothing here replaces it. No shadow run happens at 03:00 either, so this workflow
-  would have compared nothing against nothing forever.
-- **the inbound comment webhook** — arrives when a platform decides, so no shadow run produces one.
-- **the nightly metrics refresh** — same shape.
+| | |
+|---|---|
+| 13 `implemented` | a replacement exists with a behavioural test against the old contract |
+| 3 `partial` | `convert_media` (the old tool queues video and this one cannot represent a running job) and the two generation endpoints, where the tool exists and the non-conversational HTTP entry point does not |
+| 29 `missing` | artifacts, diagrams, PDFs, `read_pdf`, `repost_post`, `delete_post`, branding reads and writes, the four agent-skill tools, and twelve endpoints |
+| 0 `dropped` | a drop needs a named person, and nobody has agreed to remove artifacts or the studio agent's branding tools from a live product |
+| 6 `retained` | five webhooks and the publish sweep, which live in `web/` and call the AI backend not at all — verified by grep. Removing Agno leaves every one of them running |
 
-Everything else is `implemented` with a behavioural test against the old contract. That is a weaker claim than
-parity and is meant to be: `implemented` means "a replacement exists and is tested against the old tool's
-observable contract", and the gate adds "and shadow traffic exercised it". No deployment runs both runtimes yet,
-so the second half is unearned by construction — which is why the file cannot assert it.
+`retained` is the fifth status and was added deliberately rather than found convenient. `missing` would claim we
+failed to build a Stripe webhook; `dropped` would demand a signature for deleting something nobody is deleting.
+The hazard in adding a status is that a new value falls through every `if` and contributes **no problem** — so
+both `validateInventory` and `gateStatus` switch exhaustively with a `never` default, and `validateInventory`
+refuses `retained` for any capability whose source is under `ai_backend/`. Without that guard, `retained` is the
+escape hatch that empties the file.
+
+### The verdict was unreachable from the report
+
+The defect this REQ found in its own predecessor. #194 built the `incomplete` verdict, tested it through
+`evaluateWorkflow`'s optional `capabilities` argument, and wired the inventory into `canRemoveOldRuntime`. But
+`evaluateParity` — the only function `parity-report.mjs` calls — **never passed capabilities**. Every workflow
+was evaluated against an empty list, the report had a `○` symbol nothing could produce, and a workflow whose
+tools are not built reported on the rate.
+
+`evaluateParity`'s second argument is required now, not defaulted: a default of `[]` is the same silence with a
+nicer signature. Each gate sees the entries naming its workflow, which is what `CapabilityEntry.workflows` is
+for, and both directions are asserted — every name must be a real gate, and every measurable gate must be named
+by at least one entry. 22 of the 51 name **no** workflow at all: artifacts, PDFs, branding, the agent-skill
+tools. No threshold measures them, so nothing about them can fail, which is worse than failing — the report
+prints them rather than letting an empty list read as nothing to do.
+
+### The approval requirement, compared rather than asserted
+
+The most extractable part of the old runtime's observable contract, and the one whose loss is invisible: a
+runtime asking for **fewer** approvals looks like an improvement in every metric anyone plots.
+
+Nine of the old tools are `@tool(requires_confirmation=True)`. `approvalParity` compares each against the new
+tool's `approvalPolicy`, read off the **built descriptor** — `defineTool` derives it from `effect`, so
+relabelling `publish_post_now` as `internal-write` to skip a prompt moves the number rather than leaving a
+hand-maintained list saying yes:
+
+| verdict | |
+|---|---|
+| `held` (3) | `publish_now`, `schedule_post`, `reply_to_comment` — all `external-write`, all still gated |
+| `no-replacement` (6) | `repost_post`, `delete_post`, `update_branding` and the three agent-skill writes |
+| `lost` (0) | the only verdict that is a defect |
+
+Deliberately one-directional. A new tool requiring approval where the old one did not is a stricter product, and
+failing that would turn the check into pressure to relax the gate.
+
+`absent` and `false` are kept as separate facts: 9 of the 31 tools never state `requires_confirmation`, and the
+derived boolean uses the old runtime's **own** reading of the default — `getattr(fn, "requires_confirmation",
+False)` in `ai_backend/tests/assistant/test_factory_and_studio.py` — rather than an assumption made here.
+
+### What no comparison can decide
+
+Both runtimes carry the same seven skills, by name, and `skillParity` checks it — a tool-for-tool match under
+different instructions is a different product, and that difference produces identical write sets on every run
+where the missing guidance did not happen to change a decision.
+
+The composition cannot be checked, only recorded. The old runtime is nine components: a generalist, a studio
+agent, six role-scoped specialists and a coordinating team, each with its own instructions and its own subset of
+the tools. This package is one assistant holding all 37. On any run where the old leader would have routed to the
+member that owns the work, both runtimes call the same tool and write the same rows, and the gate reads
+agreement. `compositionFinding` states it; nothing measures it.
+
+### The reference scan could not run
+
+Not part of this REQ, found while writing it, and worth recording because it is the same shape. `canRemoveOldRuntime`
+takes a `remainingReferences` count and refuses to treat an absent one as zero; `scan-old-runtime.mjs` exists to
+produce that number. Its default root resolved one directory too far up, onto a decoy `social_integgration`
+holding only `supabase/` — so the configured roots were absent, the scan refused, and **the only outcome it could
+produce was "could not scan"**. Its docstring then generalised the wrong constant into a claim that `web/src` and
+`ai_backend/app` do not exist anywhere.
+
+Both scans resolve the root by looking for the directories they need now, and an explicit `--root` is the only
+candidate when one is given — falling through from a named path to a guessed sibling meant answering about a
+repository the operator did not ask about. The scan reports **71 referencing files against a baseline of 71**.
