@@ -300,23 +300,27 @@ a service method, and R7 fails the build on an attempt.
 
 ## Wiring it up
 
-Four of the ten services now have adapters in this package. `content`, `brand` and `publishing` read
-ShareFlow's own tables through a `SqlExecutor`; `generator` fronts the host's model, because it is the one
-capability with no table behind it.
+Five of the ten services now have adapters in this package. `content`, `brand`, `publishing` and `connectors`
+read ShareFlow's own tables through a `SqlExecutor`; `generator` fronts the host's model, because it is the
+one capability with no table behind it.
 
 ```ts
 import { createShareFlowServices, backedContextProviders } from "@retinue/shareflow";
 
-const services = createShareFlowServices({ sql, transaction, generate });
+const services = createShareFlowServices({ sql, transaction, setup, generate });
 const providers = backedContextProviders(services);
 ```
+
+`setup` is required for the same reason `transaction` is — see below. `backedContextProviders` now includes
+the accounts provider, which it could not while `ConnectorService` had no adapter: it reads `connectors` on
+every turn, and a throwing provider takes the turn down.
 
 `transaction` is required rather than optional, and only because of `publishing`: `scheduled_items` has **no
 unique constraint** on `(post_id, social_account_id)`, so publish-once rests on `SELECT … FOR UPDATE` on the
 draft held across two statements on one connection — which `pool.query` cannot provide, since it takes a
 different connection per call. A deployment that cannot supply one should not be publishing.
 
-The other six — `connectors`, `media`, `engagement`, `leads`, `research`, `analytics` — are still ports, and `createShareFlowServices` returns a **narrower type** rather than a ten-member object
+The other five — `media`, `engagement`, `leads`, `research`, `analytics` — are still ports, and `createShareFlowServices` returns a **narrower type** rather than a ten-member object
 whose missing members throw. That is a measured decision, not caution: `backend/src/context/assembler.ts:35`
 runs context providers in a bare `for` loop with no `try`, and `createAccountsContextProvider` calls
 `services.connectors.listAccounts` on every turn — so a declare-and-throw object plus the standard base
@@ -341,9 +345,9 @@ these ShareFlow tools need services this deployment does not provide: publish_po
 schedule_post (publishing). Supply publishing, or leave those factories out of the list …
 ```
 
-That is what makes a partial rollout representable: seventeen of the thirty-seven capabilities read only the
-four implemented services — five post tools, five campaign tools, two generation tools and five publishing
-tools — so a deployment can serve those and nothing else.
+That is what makes a partial rollout representable: twenty of the thirty-seven capabilities read only the
+five implemented services — five post tools, five campaign tools, two generation tools, five publishing tools
+and three account tools — so a deployment can serve those and nothing else.
 
 Two properties keep the declaration honest, because it can go stale in both directions. Declaring **too
 little** does not compile, since `services` is a `Pick` of exactly `requires`. Declaring **too much** compiles
@@ -420,10 +424,48 @@ the runtime for a model error. `scripts/shadow-turn.mjs` checks every suppressed
 database and says so, which makes the pollution visible rather than silent. Fixing the ordering is a platform
 decision with its own trade: the registry would have to trust every preflight to be read-only.
 
-**`publish` is not yet a usable workflow, for a precise reason.** Nothing among the seventeen servable
-capabilities lists connected accounts — `list_accounts` needs `ConnectorService`, which has no adapter — so
-the model cannot learn a real account id and can only guess one. Publishing works; discovering where to
-publish does not.
+## Connectors, and two questions a database cannot answer
+
+`ConnectorService` exists because of a gap the publishing work exposed: all five publishing capabilities
+worked and **nothing could tell the assistant where to publish**. `list_accounts` is the only capability that
+surfaces an account id, so a real turn could do nothing but guess — and it did, inventing
+`accountIds: ["linkedin123"]`.
+
+`social_accounts` answers "which destinations exist and what does the store think of them". It does not answer
+two of the three methods' questions, so both are injected rather than invented:
+
+- **"Is the platform's OAuth app configured?"** In ShareFlow that is `connector.isConfigured()` — a runtime
+  read of environment variables **in ShareFlow's own process**, which this package cannot see and must not
+  try to. Absent `configuredPlatforms`, `not-configured` is *never reported* — which is not a claim that
+  everything is configured.
+- **"What does connecting this platform require?"** Redirect URLs, console field labels, scopes and
+  environment variable *names* are deployment knowledge. `setup` is required, because a default would have an
+  assistant confidently naming a variable this deployment does not use.
+
+`checkHealth` **refuses** without a `probe` rather than answering from the store, and it is the one place in
+these adapters where refusing beats returning what is known: the tool's own description is *"rather than
+reading the stored status"*, and the model reaches for it precisely when the stored status is what it has
+stopped trusting. `getClaimPolicy` answering empty is truthful; this answering `ACTIVE` from a row would be a
+false claim relayed to a user as a live check.
+
+`auth_tokens` is never selected — not merely dropped in the mapper. That is defence in depth rather than
+observable behaviour: sabotage added the column to the `SELECT` and every output assertion still passed,
+because the mapper does not copy it. For a column holding access and refresh tokens the defence is worth
+pinning, so a test scans the source and fails if the column list grows.
+
+### Read the constraint, not the calling code
+
+The account-status vocabulary was mapped from what ShareFlow *writes* — `ACTIVE` from the connect callback,
+`EXPIRED` from the refresh route and TikTok webhook — and the conclusion was that the port's `revoked` was
+unreachable. `social_accounts_status_check` says `ARRAY['ACTIVE', 'EXPIRED', 'DISCONNECTED']`, and the
+database refused a fixture until the map grew a `revoked` arm. **The constraint is the authority on what a
+column can hold; the calling code shows only what one version of it happens to write today.** Same lesson as
+the post-status trigger.
+
+One ordering matters: a lapsed `token_expires_at` overrides a stored `ACTIVE` — so `list_accounts` and
+`PublishingService.validate` reach the same conclusion instead of one saying "active" while the other refuses
+with `credential-expired` — but it does **not** override `DISCONNECTED`, because `revoked` is more specific
+and tells a user something different.
 
 ### What the first real turns found
 

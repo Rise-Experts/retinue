@@ -33,6 +33,7 @@ import {
   createShareFlowApp,
   createShareFlowServices,
   createShadowTurnRunner,
+  ACCOUNT_TOOL_FACTORIES,
   CAMPAIGN_TOOL_FACTORIES,
   GENERATE_TOOL_FACTORIES,
   POSTS_TOOL_FACTORIES,
@@ -71,7 +72,7 @@ if (messages.length === 0) {
     "Draft a short LinkedIn post announcing our new cordless impact driver. Propose angles first.",
     "Use the durability angle. Generate the caption and save it as a LinkedIn draft.",
     // The turn that produces a suppressed write. In a real run this publishes; in shadow it is recorded.
-    "Now publish that draft to our LinkedIn account.",
+    "List our destinations, then publish that draft to the LinkedIn one.",
   );
 }
 const out = flag("out");
@@ -171,7 +172,31 @@ const generate = async ({ system, prompt, schema }) => {
  */
 const transaction = createTransactionScope(createPoolOpener(pool)).runner;
 
-const services = createShareFlowServices({ sql, transaction, generate });
+/**
+ * The deployment's connection setup, which the connector adapter refuses to invent.
+ *
+ * Redirect URLs, console field labels and environment variable *names* belong to a deployment, so a default
+ * in the package would be an assistant confidently naming a variable this deployment does not use. These are
+ * this harness's, and they are the harness's to be wrong about.
+ */
+const setup = () => ({
+  redirectUrl: "http://localhost:3000/api/connect/callback",
+  credentialsPageUrl: "http://localhost:3000/settings/credentials",
+  platforms: [
+    {
+      platformId: "linkedin",
+      label: "LinkedIn",
+      consoleUrl: "https://www.linkedin.com/developers/apps",
+      credentialVariables: ["LINKEDIN_CLIENT_ID", "LINKEDIN_CLIENT_SECRET"],
+      consoleFields: [
+        { label: "Authorized redirect URL", url: "http://localhost:3000/api/connect/callback" },
+      ],
+      scopes: ["w_member_social", "r_liteprofile"],
+    },
+  ],
+});
+
+const services = createShareFlowServices({ sql, transaction, setup, generate });
 
 /**
  * An approval gate that **throws if consulted**.
@@ -205,7 +230,7 @@ const authorization = createAuthorizationPolicy({
     {
       roleId: "editor",
       permissions: [{ action: "*", resourceType: "*" }],
-      tools: ["posts", "campaigns", "publishing"],
+      tools: ["posts", "campaigns", "publishing", "accounts"],
     },
   ],
 });
@@ -219,6 +244,9 @@ const app = createShareFlowApp({
     // The publishing capabilities, which is what gives a shadow run something to suppress: every capability
     // before these is `read` or `internal-write`.
     ...PUBLISHING_TOOL_FACTORIES,
+    // The accounts capabilities. Without them nothing surfaces an account id, so the model could only guess
+    // one — and it did, inventing `accountIds: ["linkedin123"]`.
+    ...ACCOUNT_TOOL_FACTORIES,
   ],
   deps: { authorization, approvals, idempotency: createMemoryIdempotencyStore() },
   authorization,
@@ -230,7 +258,7 @@ const app = createShareFlowApp({
     modelPolicy: { role: "primary", requires: { tools: true } },
     authorizationPolicyId: "shareflow-shadow",
     limits: { maxSteps: 8, maxToolCalls: 8 },
-    categories: ["posts", "campaigns", "publishing"],
+    categories: ["posts", "campaigns", "publishing", "accounts"],
   },
 });
 

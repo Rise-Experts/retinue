@@ -1,9 +1,9 @@
 /**
  * Wiring the three implemented services — REQ-041 (#190).
  *
- * `content`, `brand`, `generator` and `publishing` are built. The other six members of `ShareFlowServices` —
- * `connectors`, `media`, `engagement`, `leads`, `research`, `analytics` — are still ports with no adapter, and
- * this file is careful about what that means.
+ * `content`, `brand`, `generator`, `publishing` and `connectors` are built. The other five members of
+ * `ShareFlowServices` — `media`, `engagement`, `leads`, `research`, `analytics` — are still ports with no
+ * adapter, and this file is careful about what that means.
  *
  * `publishing` is the one that changes what a shadow run measures: it is the first adapter whose methods are
  * `external-write`, so it is the first whose suppressed writes are not an empty list.
@@ -36,9 +36,9 @@
  * file's docstring already claimed, that *"a wiring mistake should stop the process starting rather than
  * surface as a confusing catalogue on someone's first conversation"*.
  *
- * Seventeen of the thirty-seven capabilities read only these four: five post tools, five campaign tools, two
- * generation tools and five publishing tools. Adding, say, `MEDIA_TOOL_FACTORIES` to that list is refused by
- * name rather than failing when somebody asks for an image to be attached.
+ * Twenty of the thirty-seven capabilities read only these five: five post tools, five campaign tools, two
+ * generation tools, five publishing tools and three account tools. Adding, say, `MEDIA_TOOL_FACTORIES` to
+ * that list is refused by name rather than failing when somebody asks for an image to be attached.
  */
 
 import type { ContextProvider } from "@retinue/agentkit";
@@ -47,8 +47,10 @@ import type { SqlExecutor, TransactionRunner } from "@retinue/agentkit/adapters/
 import { createModelContentGenerator, type StructuredGenerate } from "./model/generator.js";
 import { createPostgresBrandService } from "./postgres/brand.js";
 import { createPostgresContentService } from "./postgres/content.js";
+import { createPostgresConnectorService, type ConnectorDeps } from "./postgres/connectors.js";
 import { createPostgresPublishingService, type PublishingDeps } from "./postgres/publishing.js";
 import {
+  createAccountsContextProvider,
   createAudienceContextProvider,
   createBrandContextProvider,
   createClaimsContextProvider,
@@ -61,10 +63,13 @@ import type { ShareFlowServices } from "../services/index.js";
  * Named rather than inlined because the *complement* is the interesting half: a reader wants to know what is
  * missing, and `BACKED_SERVICES` / `UNBACKED_SERVICES` below say so in a form a test can assert.
  */
-export type BackedShareFlowServices = Pick<ShareFlowServices, "brand" | "content" | "generator" | "publishing">;
+export type BackedShareFlowServices = Pick<
+  ShareFlowServices,
+  "brand" | "connectors" | "content" | "generator" | "publishing"
+>;
 
 /** What this file can build. */
-export const BACKED_SERVICES = ["brand", "content", "generator", "publishing"] as const;
+export const BACKED_SERVICES = ["brand", "connectors", "content", "generator", "publishing"] as const;
 
 /**
  * What it cannot, listed so the gap is data rather than a comment.
@@ -72,7 +77,7 @@ export const BACKED_SERVICES = ["brand", "content", "generator", "publishing"] a
  * A test asserts these two arrays together account for exactly the ten members of `ShareFlowServices`, which
  * is what stops this list going stale the day an eighth service is written.
  */
-export const UNBACKED_SERVICES = ["analytics", "connectors", "engagement", "leads", "media", "research"] as const;
+export const UNBACKED_SERVICES = ["analytics", "engagement", "leads", "media", "research"] as const;
 
 export type ShareFlowAdapterConfig = {
   /** ShareFlow's own database. The three adapters share one executor; none of them opens a connection. */
@@ -94,6 +99,23 @@ export type ShareFlowAdapterConfig = {
   readonly transaction: TransactionRunner;
   /** Optional: hand a scheduled item to ShareFlow's queue immediately instead of waiting for its sweep. */
   readonly enqueue?: PublishingDeps["enqueue"];
+  /**
+   * What connecting a platform requires. **Required, because `connectors` is.**
+   *
+   * Redirect URLs, developer-console field labels, scopes and environment variable *names* are deployment
+   * knowledge rather than database rows, and a default here would be this package asserting another
+   * deployment's configuration — an assistant confidently naming a variable that deployment does not use.
+   */
+  readonly setup: ConnectorDeps["setup"];
+  /**
+   * Which platforms have working credentials, if the deployment can say.
+   *
+   * Absent means `not-configured` is never reported — not that everything is configured. ShareFlow decides it
+   * with a runtime environment read in its own process, which this package cannot see.
+   */
+  readonly configuredPlatforms?: ConnectorDeps["configuredPlatforms"];
+  /** A live per-account re-check. Absent means `checkHealth` refuses rather than answering from the store. */
+  readonly probe?: ConnectorDeps["probe"];
 };
 
 /**
@@ -122,6 +144,12 @@ export const createShareFlowServices = (config: ShareFlowAdapterConfig): BackedS
      * caption publishable" — and `PublishingService.validate` runs *before* the approval gate precisely so a
      * human is never asked to approve something that cannot succeed. The two disagreeing would defeat that.
      */
+    connectors: createPostgresConnectorService({
+      sql: config.sql,
+      setup: config.setup,
+      ...(config.configuredPlatforms === undefined ? {} : { configuredPlatforms: config.configuredPlatforms }),
+      ...(config.probe === undefined ? {} : { probe: config.probe }),
+    }),
     publishing: createPostgresPublishingService({
       sql: config.sql,
       transaction: config.transaction,
@@ -149,13 +177,23 @@ export const createShareFlowServices = (config: ShareFlowAdapterConfig): BackedS
  * and it is a better one than an assistant that cannot answer at all.
  */
 export const backedContextProviders = (services: BackedShareFlowServices): readonly ContextProvider[] => [
-  // No cast: these three now accept `Pick<ShareFlowServices, "brand">`, which is what they actually use.
+  // No cast: these three accept `Pick<ShareFlowServices, "brand">`, which is what they actually use.
   createBrandContextProvider(services),
   createClaimsContextProvider(services),
   createAudienceContextProvider(services),
+  /**
+   * The accounts provider, which this list omitted until `ConnectorService` existed.
+   *
+   * It reads `services.connectors.listAccounts` on **every** turn, and `assembler.ts:35` runs providers in a
+   * bare `for` loop with no `try` — so while there was no connector adapter, including it would have taken
+   * every turn down before the model was called. That was the whole argument for a narrower type, and it is
+   * now satisfied rather than worked around.
+   */
+  createAccountsContextProvider(services),
 ];
 
 export * from "./model/generator.js";
 export * from "./postgres/brand.js";
 export * from "./postgres/content.js";
+export * from "./postgres/connectors.js";
 export * from "./postgres/publishing.js";

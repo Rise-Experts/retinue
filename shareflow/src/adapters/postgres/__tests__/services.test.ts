@@ -23,12 +23,16 @@
  * rows in it — a suite that wrote into an existing workspace would be editing somebody's drafts.
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import type { AgentPlatformError } from "@retinue/agentkit";
 import { createPoolOpener, createTransactionScope, type TransactionRunner } from "@retinue/agentkit/adapters/postgres";
 
 import { createPostgresBrandService, BRAND_SUPPORTED } from "../brand.js";
 import { SWEEP_ALERT_MS, SWEEP_WORST_CASE_MS, UNCHECKED_CODES } from "../publishing.js";
+import { ACCOUNT_STATUS_FROM_DB, accountHealthFrom } from "../connectors.js";
 import {
   createPostgresContentService,
   cadenceFrom,
@@ -102,6 +106,28 @@ let transaction: TransactionRunner;
 let end: (() => Promise<void>) | undefined;
 let workspaceId = "";
 let userId = "";
+
+/**
+ * A `ConnectionSetup` this suite supplies, because the adapter refuses to invent one.
+ *
+ * Deliberately not a plausible-looking Meta/LinkedIn table: the point of the dependency is that redirect
+ * URLs, console field labels and environment variable *names* are a deployment's, and a default would be
+ * this package asserting another deployment's configuration.
+ */
+const SETUP = {
+  redirectUrl: "https://app.test/api/connect/callback",
+  credentialsPageUrl: "https://app.test/settings/credentials",
+  platforms: [
+    {
+      platformId: "linkedin",
+      label: "LinkedIn",
+      consoleUrl: "https://www.linkedin.com/developers/apps",
+      credentialVariables: ["LINKEDIN_CLIENT_ID", "LINKEDIN_CLIENT_SECRET"],
+      consoleFields: [{ label: "Authorized redirect URL", url: "https://app.test/api/connect/callback" }],
+      scopes: ["w_member_social"],
+    },
+  ],
+} as never;
 
 const context = () =>
   ({ tenantId: workspaceId, principalId: userId, roleIds: ["editor"], locale: "en", timezone: "UTC", requestId: "r" }) as never;
@@ -871,6 +897,298 @@ describe.skipIf(URL_ === undefined)("the campaign calendar, one row per destinat
 });
 
 
+describe.skipIf(URL_ === undefined)("ConnectorService — where the assistant learns it may publish", () => {
+  /**
+   * The fifth adapter, and it exists because of a gap the publishing work exposed: all five publishing
+   * capabilities worked and nothing could tell the assistant *where* to publish. `list_accounts` is the only
+   * capability that surfaces an account id, so a real turn could do nothing but guess — and it did, inventing
+   * `accountIds: ["linkedin123"]`.
+   */
+  const connectors = (over: Record<string, unknown> = {}) =>
+    createShareFlowServices({
+      sql: sql as never,
+      transaction,
+      setup: () => SETUP,
+      generate: (async () => ({})) as never,
+      ...over,
+    }).connectors;
+
+  let active = "";
+  let expiredByStatus = "";
+  let expiredByToken = "";
+  let unknownStatus = "";
+
+  beforeAll(async () => {
+    if (URL_ === undefined) return;
+    const rows = await sql.query<{ id: string }>(
+      `insert into public.social_accounts
+         (workspace_id, platform, platform_user_id, account_name, auth_tokens, status, token_expires_at)
+       values
+         ($1::uuid, 'linkedin', 'c-1', 'Acme Live',      '{"access_token":"SECRET-A"}'::jsonb, 'ACTIVE',  null),
+         ($1::uuid, 'linkedin', 'c-2', 'Acme Lapsed',    '{"access_token":"SECRET-B"}'::jsonb, 'EXPIRED', null),
+         -- ACTIVE with an expiry in the past: the disagreement healthOf exists to resolve.
+         ($1::uuid, 'x',        'c-3', 'Acme Stale',     '{"access_token":"SECRET-C"}'::jsonb, 'ACTIVE',  now() - interval '1 day'),
+         -- DISCONNECTED: permitted by the constraint and written by nothing in ShareFlow today.
+         ($1::uuid, 'x',        'c-4', 'Acme Cut Off',   '{"access_token":"SECRET-D"}'::jsonb, 'DISCONNECTED', null)
+       returning id`,
+      [workspaceId],
+    );
+    // Non-null: the insert returns four rows or the suite has no fixtures at all.
+    [active, expiredByStatus, expiredByToken, unknownStatus] = rows.map((row) => row.id) as [
+      string,
+      string,
+      string,
+      string,
+    ];
+  });
+
+  const byName = async (name: string) =>
+    (await connectors().listAccounts(context())).find((account) => account.displayName === name);
+
+  it("lists this workspace's destinations with their stored health", async () => {
+    const accounts = await connectors().listAccounts(context());
+    expect(accounts.length).toBeGreaterThanOrEqual(4);
+    expect((await byName("Acme Live"))?.health).toBe("active");
+    expect((await byName("Acme Lapsed"))?.health).toBe("expired");
+  });
+
+  it("never returns a credential", async () => {
+    const accounts = await connectors().listAccounts(context());
+    const serialised = JSON.stringify(accounts);
+    for (const secret of ["SECRET-A", "SECRET-B", "SECRET-C", "SECRET-D", "access_token", "auth_tokens"]) {
+      expect(serialised, secret).not.toContain(secret);
+    }
+  });
+
+  it("never asks the database for the credential column either", () => {
+    /**
+     * **Scanned from the source, because the output cannot show it.** Sabotage added `auth_tokens` to the
+     * `SELECT` and the assertion above still passed — the mapper does not copy it, so selecting it changes
+     * nothing observable.
+     *
+     * That makes not selecting it a defence in depth rather than a testable behaviour, and for a column
+     * holding access and refresh tokens the defence is worth pinning: the way a credential reaches a model
+     * prompt is a `select *`, or one field added to a column list by someone who did not think about it. The
+     * value never entering the process is stronger than a mapper remembering to drop it.
+     */
+    const source = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), "../connectors.ts"), "utf8");
+    const selects = [...source.matchAll(/select\s[\s\S]*?from public\.social_accounts/g)].map((m) => m[0]);
+    // Found the query rather than nothing: a regex that matched none would pass the loop below.
+    expect(selects.length).toBeGreaterThan(0);
+    for (const select of selects) expect(select).not.toContain("auth_tokens");
+  });
+
+  it("reports an ACTIVE row with a lapsed token as expired, agreeing with the publish refusal", async () => {
+    /**
+     * **The consistency that matters most in this file.** An account sits at `ACTIVE` with
+     * `token_expires_at` in the past whenever expiry has passed and ShareFlow's refresh route has not yet
+     * run.
+     *
+     * Reading only `status` would make `list_accounts` say "active" while `PublishingService.validate`
+     * refuses the same account with `credential-expired` — two answers to one question, and the assistant
+     * would relay the reassuring one and then fail to publish.
+     */
+    expect((await byName("Acme Stale"))?.health).toBe("expired");
+
+    const publishing = createShareFlowServices({
+      sql: sql as never,
+      transaction,
+      setup: () => SETUP,
+      generate: (async () => ({})) as never,
+    }).publishing;
+    const rows = await sql.query<{ id: string }>(
+      `insert into public.posts (workspace_id, author_id, raw_content, status, target_platforms)
+       values ($1::uuid, $2::uuid, 'for a stale account #a #b #c', 'DRAFT', '{x}') returning id`,
+      [workspaceId, userId],
+    );
+    const report = await publishing.validate(context(), {
+      draftId: rows[0]!.id as never,
+      accountIds: [expiredByToken] as never,
+    });
+    // The same conclusion from the other service, which is the point.
+    expect(report.issues.map((issue) => issue.code)).toContain("credential-expired");
+  });
+
+  it("maps DISCONNECTED to revoked, which grepping the calling code missed", async () => {
+    /**
+     * **The finding this fixture caused.** I mapped this vocabulary from what ShareFlow *writes* — `ACTIVE`
+     * from the connect callback, `EXPIRED` from the refresh route and the TikTok webhook — and concluded the
+     * port's `revoked` was unreachable. `social_accounts_status_check` says
+     * `ARRAY['ACTIVE', 'EXPIRED', 'DISCONNECTED']`, and the database refused this row until the map grew an
+     * arm for it.
+     *
+     * The constraint is the authority on what a column can hold; the calling code shows only what one version
+     * of it happens to write today. Same lesson as the post-status trigger.
+     */
+    expect((await byName("Acme Cut Off"))?.health).toBe("revoked");
+  });
+
+  it("reads an unrecognised status as expired, and cannot be reached through a row", () => {
+    /**
+     * Called directly, deliberately. The check constraint admits exactly the three mapped values, so a fourth
+     * can only arrive from a future migration — there is no row that exercises this arm, and writing one
+     * would mean dropping the constraint.
+     *
+     * The arm is not dead: that constraint has grown before, which is how `DISCONNECTED` came to be in it.
+     */
+    expect(accountHealthFrom("SOMETHING_NEW")).toBe("expired");
+    expect(accountHealthFrom(null)).toBe("expired");
+    // And the three real ones, so the map and the constraint are pinned together.
+    expect(Object.keys(ACCOUNT_STATUS_FROM_DB).sort()).toEqual(["ACTIVE", "DISCONNECTED", "EXPIRED"]);
+  });
+
+  it("keeps `revoked` distinct from `expired` even when the token has also lapsed", async () => {
+    /**
+     * Ordering, and it changes what a user is told: `revoked` means reconnect, `expired` means re-authorise.
+     * An expiry check that ran first would flatten the more specific answer away.
+     */
+    await sql.query(
+      "update public.social_accounts set token_expires_at = now() - interval '1 day' where id = $1::uuid",
+      [unknownStatus],
+    );
+    expect((await byName("Acme Cut Off"))?.health).toBe("revoked");
+    await sql.query("update public.social_accounts set token_expires_at = null where id = $1::uuid", [unknownStatus]);
+  });
+
+  it("never reports `not-configured` unless the deployment can say", async () => {
+    /**
+     * ShareFlow decides this with `isPlatformConfigured`, which calls `connector.isConfigured()` — a runtime
+     * read of environment variables **in ShareFlow's own process**. This package cannot see them, and
+     * `process.env` here is forbidden by the boundary checks for exactly this reason.
+     *
+     * So absent the dependency, `not-configured` is never reported — which is not the same as claiming
+     * everything is configured. Inventing the status from a row would be a guess presented as a fact.
+     */
+    const withoutIt = await connectors().listAccounts(context());
+    expect(withoutIt.map((account) => account.health)).not.toContain("not-configured");
+
+    // With it, a platform outside the list is reported — and it beats the stored status, because credentials
+    // missing at the deployment level break every account on that platform at once.
+    const withIt = await connectors({ configuredPlatforms: () => ["x"] }).listAccounts(context());
+    const linkedin = withIt.filter((account) => account.platformId === "linkedin");
+    expect(linkedin.length).toBeGreaterThan(0);
+    for (const account of linkedin) expect(account.health).toBe("not-configured");
+  });
+
+  it("does not set `healthDetail`, which the port says carries a token", async () => {
+    /**
+     * The port: free prose an adapter fills, the obvious way to fill it is the provider's error message, and
+     * that is where a token ends up. `tools/accounts.ts` does not propagate it either.
+     */
+    for (const account of await connectors().listAccounts(context())) {
+      expect(account).not.toHaveProperty("healthDetail");
+    }
+  });
+
+  it("refuses to re-check without a probe, rather than answering from the store", async () => {
+    /**
+     * **The one place in these adapters where refusing beats returning what is known.**
+     *
+     * `getClaimPolicy` and `getPerformanceBrief` answer empty because "nothing to say" truthfully answers
+     * their question. This method's question is *"what does the platform say right now"* — the tool's own
+     * description is "rather than reading the stored status" — and the model reaches for it precisely when
+     * the stored status is what it has stopped trusting, after a publish failed. Answering `ACTIVE` from a
+     * row would be a false claim relayed to a user as a live check.
+     */
+    const error = thrown(
+      await connectors().checkHealth(context(), { accountIds: [active] as never }).catch((r: unknown) => r),
+    );
+    expect(error.code).toBe("capability_unavailable");
+    // And it names the capability that does work, so the refusal is actionable.
+    expect(error.message).toContain("list_accounts");
+  });
+
+  it("re-checks against the platform when a probe is wired", async () => {
+    const asked: string[] = [];
+    const service = connectors({
+      probe: async ({ accountId }: { accountId: string }) => {
+        asked.push(accountId);
+        return "active";
+      },
+    });
+    const checked = await service.checkHealth(context(), { accountIds: [expiredByStatus] as never });
+    // The probe's answer wins over the stored `EXPIRED`, which is the whole purpose of a live re-check.
+    expect(checked[0]?.health).toBe("active");
+    expect(asked).toEqual([expiredByStatus]);
+  });
+
+  it("treats an unreachable platform as expired rather than losing the other answers", async () => {
+    /**
+     * One platform being down must not lose the answer for the others — and "we could not reach the
+     * platform" is much closer to "this destination may not work" than to "this destination is fine".
+     */
+    const service = connectors({
+      probe: async ({ accountId }: { accountId: string }) => {
+        if (accountId === active) throw new Error("the platform did not answer");
+        return "active";
+      },
+    });
+    const checked = await service.checkHealth(context(), {
+      accountIds: [active, expiredByStatus] as never,
+    });
+    expect(checked).toHaveLength(2);
+    expect(checked.find((account) => account.id === (active as never))?.health).toBe("expired");
+    expect(checked.find((account) => account.id === (expiredByStatus as never))?.health).toBe("active");
+  });
+
+  it("refuses the whole re-check when any id is unknown", async () => {
+    /**
+     * Returning the accounts that resolved and dropping the rest would have the assistant report on a subset
+     * while believing it asked about all of them — and the dropped id is the one the user asked about,
+     * because that is why it is being re-checked.
+     */
+    const other = await sql.query<{ id: string }>("insert into public.workspaces (name) values ('other-conn') returning id");
+    const theirs = await sql.query<{ id: string }>(
+      `insert into public.social_accounts (workspace_id, platform, platform_user_id, account_name, auth_tokens, status)
+       values ($1::uuid, 'linkedin', 'c-x', 'Theirs', '{}'::jsonb, 'ACTIVE') returning id`,
+      [other[0]!.id],
+    );
+    const service = connectors({ probe: async () => "active" });
+    const error = thrown(
+      await service
+        .checkHealth(context(), { accountIds: [active, theirs[0]!.id] as never })
+        .catch((rejection: unknown) => rejection),
+    );
+    // `not_found` covers absent and another tenant's alike — indistinguishable on purpose.
+    expect(error.code).toBe("not_found");
+    await sql.query("delete from public.workspaces where id = $1::uuid", [other[0]!.id]);
+  });
+
+  it("answers invalid_input for a malformed account id", async () => {
+    const error = thrown(
+      await connectors().checkHealth(context(), { accountIds: ["linkedin123"] as never }).catch((r: unknown) => r),
+    );
+    // The fabrication a real turn actually produced. `internal` with a Postgres cast error is not actionable.
+    expect(error.code).toBe("invalid_input");
+    expect(error.message).toContain("must be a UUID");
+  });
+
+  it("never lists another workspace's destinations", async () => {
+    const other = await sql.query<{ id: string }>("insert into public.workspaces (name) values ('other-l') returning id");
+    await sql.query(
+      `insert into public.social_accounts (workspace_id, platform, platform_user_id, account_name, auth_tokens, status)
+       values ($1::uuid, 'linkedin', 'c-z', 'THEIR SECRET ACCOUNT', '{}'::jsonb, 'ACTIVE')`,
+      [other[0]!.id],
+    );
+    const accounts = await connectors().listAccounts(context());
+    expect(accounts.some((account) => account.displayName.includes("THEIR SECRET"))).toBe(false);
+    await sql.query("delete from public.workspaces where id = $1::uuid", [other[0]!.id]);
+  });
+
+  it("hands back the deployment's setup rather than inventing one", async () => {
+    /**
+     * Redirect URLs, console field labels, scopes and environment variable *names* are deployment and
+     * platform knowledge, not rows. A default here would be an assistant confidently telling a user to set a
+     * variable that deployment does not use.
+     */
+    const setup = await connectors().getConnectionSetup(context());
+    expect(setup.redirectUrl).toBe("https://app.test/api/connect/callback");
+    expect(setup.platforms[0]?.credentialVariables).toContain("LINKEDIN_CLIENT_ID");
+    // Names only, never values — the port is explicit about it.
+    expect(JSON.stringify(setup)).not.toMatch(/CLIENT_SECRET"\s*:\s*"[^"]/);
+  });
+});
+
 describe.skipIf(URL_ === undefined)("PublishingService — the first adapter that writes outside the tenant", () => {
   /**
    * The fourth adapter, and the first whose methods are `external-write`. Everything before it was `read` or
@@ -878,7 +1196,7 @@ describe.skipIf(URL_ === undefined)("PublishingService — the first adapter tha
    * signal. This is where the signal comes from — and where a mistake reaches a customer's audience.
    */
   const publishing = () =>
-    createShareFlowServices({ sql: sql as never, transaction, generate: (async () => ({})) as never }).publishing;
+    createShareFlowServices({ sql: sql as never, transaction, setup: () => SETUP, generate: (async () => ({})) as never }).publishing;
   const content = () => createPostgresContentService(sql as never);
 
   let accountA = "";
@@ -1058,6 +1376,7 @@ describe.skipIf(URL_ === undefined)("PublishingService — the first adapter tha
     const withHold = createShareFlowServices({
       sql: sql as never,
       transaction: holding,
+      setup: () => SETUP,
       generate: (async () => ({})) as never,
     }).publishing;
 
@@ -1392,6 +1711,7 @@ describe.skipIf(URL_ === undefined)("wiring the three, which is what makes them 
     const services = createShareFlowServices({
       sql: sql as never,
       transaction,
+      setup: () => SETUP,
       generate: (async (input: { system: string }) => {
         systems.push(input.system);
         return { variants: [{ platformId: "instagram", caption: "generated" }] };
@@ -1421,19 +1741,23 @@ describe.skipIf(URL_ === undefined)("wiring the three, which is what makes them 
 
   it("offers only the context providers whose services exist", async () => {
     /**
-     * `shareFlowBaseContextProviders` includes `accounts`, which calls `services.connectors.listAccounts` on
-     * every turn — and there is no connector adapter. `backend/src/context/assembler.ts:35` runs providers in
-     * a bare `for` loop with no `try`, so one that throws aborts the assembly and with it the turn.
+     * `accounts` is in this list **now**, and its absence before was the whole argument for a narrower type.
      *
-     * This asserts the narrower list actually *runs* against the live database, which is the only way to know
-     * none of the three reaches a service that is not there.
+     * It calls `services.connectors.listAccounts` on every turn, and `backend/src/context/assembler.ts:35`
+     * runs providers in a bare `for` loop with no `try` — so while `ConnectorService` had no adapter,
+     * including it would have aborted the assembly and with it every turn, before the model was called. The
+     * constraint is satisfied rather than worked around.
+     *
+     * The assertion runs each provider against the live database, which is the only way to know none of them
+     * reaches a service that is not there.
      */
-    const services = createShareFlowServices({ sql: sql as never, transaction, generate: (async () => ({})) as never });
+    const services = createShareFlowServices({ sql: sql as never, transaction, setup: () => SETUP, generate: (async () => ({})) as never });
     const providers = backedContextProviders(services);
     expect(providers.map((provider) => provider.id)).toEqual([
       "shareflow.brand",
       "shareflow.claims",
       "shareflow.audience",
+      "shareflow.accounts",
     ]);
     for (const provider of providers) {
       const sections = await provider.provide(context());
@@ -1452,7 +1776,7 @@ describe.skipIf(URL_ === undefined)("wiring the three, which is what makes them 
      * construction. This builds one and asserts the catalogue is exactly the twelve capabilities those
      * three services can serve.
      */
-    const services = createShareFlowServices({ sql: sql as never, transaction, generate: (async () => ({})) as never });
+    const services = createShareFlowServices({ sql: sql as never, transaction, setup: () => SETUP, generate: (async () => ({})) as never });
     const app = createShareFlowApp({
       services,
       factories: [...POSTS_TOOL_FACTORIES, ...CAMPAIGN_TOOL_FACTORIES, ...GENERATE_TOOL_FACTORIES],
@@ -1497,7 +1821,7 @@ describe.skipIf(URL_ === undefined)("wiring the three, which is what makes them 
      * adapter — and the fact this had to be updated is the mechanism working: a service becoming available
      * changes what a deployment may register.
      */
-    const services = createShareFlowServices({ sql: sql as never, transaction, generate: (async () => ({})) as never });
+    const services = createShareFlowServices({ sql: sql as never, transaction, setup: () => SETUP, generate: (async () => ({})) as never });
     expect(() =>
       createShareFlowApp({
         services,
@@ -1530,7 +1854,7 @@ describe.skipIf(URL_ === undefined)("wiring the three, which is what makes them 
     expect(new Set(all).size).toBe(all.length);
     expect(all).toHaveLength(10);
     // Each name is a real member — the length check alone would accept ten wrong names.
-    const backed = createShareFlowServices({ sql: sql as never, transaction, generate: (async () => ({})) as never });
+    const backed = createShareFlowServices({ sql: sql as never, transaction, setup: () => SETUP, generate: (async () => ({})) as never });
     for (const name of BACKED_SERVICES) expect(backed[name]).toBeDefined();
   });
 });

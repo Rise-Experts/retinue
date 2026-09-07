@@ -85,7 +85,15 @@ difference between the two runtimes. And two states this specification describes
 deployment — there is no `awaiting-platform` status and no 24-hour give-up rule, so "stuck" is derived from
 the sweep's own alert threshold.
 
-The six remaining — connectors, media, engagement, leads, research and analytics — are ports
+`connectors` completes the publish path: `list_accounts` is the only capability that surfaces an account id,
+and without it an assistant with working publishing capabilities could only guess where to send a post. Two of
+its three methods depend on facts no database holds — whether a platform's OAuth app has credentials (a
+runtime environment read in ShareFlow's own process) and what connecting a platform requires (redirect URLs,
+console field labels, scopes, variable names) — so both are supplied by the deployment rather than derived.
+Re-checking an account against its platform refuses outright when no probe is wired, because answering from
+the stored status would be a false claim presented as a live check.
+
+The five remaining — media, engagement, leads, research and analytics — are ports
 without adapters, and the composer returns a narrower type rather than an object whose missing members throw.
 The reason is measurable rather than stylistic: the context assembler runs providers in a bare loop with no
 error handling, and the accounts provider reads `connectors` on every turn, so a declare-and-throw object plus

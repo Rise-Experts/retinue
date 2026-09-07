@@ -176,7 +176,16 @@ export const createAudienceContextProvider = (services: BrandOnly): ContextProvi
  * assistant should *propose*: suggesting a destination that cannot receive a post wastes a turn and
  * reads as the assistant not knowing the workspace.
  */
-export const createAccountsContextProvider = (services: ShareFlowServices): ContextProvider => ({
+/**
+ * What the accounts provider needs — one member, for the reason `BrandOnly` gives.
+ *
+ * Narrowing it is what lets `backedContextProviders` include this provider without a cast now that
+ * `ConnectorService` has an adapter: a provider demanding all ten would force one at the wiring site, which
+ * is how a service that is not there gets handed to something that will call it.
+ */
+type ConnectorsOnly = Pick<ShareFlowServices, "connectors">;
+
+export const createAccountsContextProvider = (services: ConnectorsOnly): ContextProvider => ({
   id: "shareflow.accounts",
   async provide(context: ExecutionContext) {
     const accounts = await services.connectors.listAccounts(context);
