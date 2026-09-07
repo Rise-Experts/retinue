@@ -104,13 +104,21 @@ jobs:
   # being present rather than failing without it.
   compose:
     runs-on: ubuntu-latest
+    # A dummy key, at the **job** level rather than per step.
+    #
+    # `RETINUE_MODEL_API_KEY` is `${VAR:?…}` in `compose.yaml` — no default, on purpose, so a real deployment
+    # cannot start without one. But *every* `docker compose` subcommand re-interpolates the file, so `logs`,
+    # `ps`, `exec` and `down` each need it too, not only `up`. It was set on two steps and the other four
+    # failed with `required variable RETINUE_MODEL_API_KEY is missing a value` — including `Down`, so the job
+    # could not even clean up after itself.
+    #
+    # No model call is made by any assertion in this job; the one step that needs a real key is gated on the
+    # secret below. A placeholder here is what lets the compose file keep its no-default guarantee.
+    env:
+      RETINUE_MODEL_API_KEY: ci-no-model-call-is-made
     steps:
       - uses: actions/checkout@v4
       - name: Bring the stack up from clean
-        # A dummy key: no model call is made by any assertion below, and the variable has no default on purpose
-        # so a real deployment cannot start without one.
-        env:
-          RETINUE_MODEL_API_KEY: ci-no-model-call-is-made
         run: docker compose up -d --build --wait
       - name: Migrations ran, once
         run: |
@@ -139,8 +147,6 @@ jobs:
           test "$(wc -c < /tmp/composer.js)" -gt 10000
           grep -q "AgentkitComposer" /tmp/composer.js
       - name: doctor, from inside the network
-        env:
-          RETINUE_MODEL_API_KEY: ci-no-model-call-is-made
         run: docker compose exec -T api node backend/dist/server/bin.js doctor
       - name: A conversation round-trips through the API and into Postgres
         run: |

@@ -36,31 +36,67 @@ afterAll(async () => {
 });
 
 /**
- * A fresh schema, and a pool per *worker* — which is the point.
+ * A fresh **database** per test, and a pool per *worker*.
  *
- * One pool shared between the four would let `pg` hand out the same connection twice and quietly serialise
- * them, which would make the reproduction pass for the wrong reason. Separate pools are what separate
- * processes look like from the database's side.
+ * The pool-per-worker half is the original point: one pool shared between the four would let `pg` hand out the
+ * same connection twice and quietly serialise them, which would make the reproduction pass for the wrong
+ * reason. Separate pools are what separate processes look like from the database's side.
+ *
+ * ## Why a database and not a schema
+ *
+ * This used to create a schema and set `search_path TO <schema>, public`, and it failed in CI while passing on
+ * a workstation — four of the six tests, not one, which is what pointed at the environment rather than the
+ * code.
+ *
+ * The provisioner reads its ledger with **`SELECT id FROM schema_migrations`, unqualified**, and does its DDL
+ * with `CREATE TABLE IF NOT EXISTS`, also unqualified. Both resolve through `search_path`. So on a database
+ * whose `public` schema is already migrated — which is every CI run, because the rest of the conformance suite
+ * migrates `public` first — the "fresh" schema sees a full ledger and existing tables: nothing is planned,
+ * nothing is created, and the race cannot race. The tests were passing here only because this developer's
+ * `public` happens to be empty.
+ *
+ * `public` cannot simply be dropped from the path: migration 30 pins pgvector to `public` on purpose
+ * (`CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public`) so the `vector` type resolves from any schema,
+ * and `vector(1536)` is written unqualified. Removing `public` breaks the one migration that comment exists
+ * for.
+ *
+ * A fresh database gives an empty `public` and needs no path games at all. `pg_advisory_lock` is
+ * per-database, so the four workers still contend exactly as before — which is the thing under test.
  */
 const freshSchema = async (
   name: string,
 ): Promise<{ workers: { sql: SqlExecutor; open: ConnectionOpener }[]; inspect: SqlExecutor }> => {
   const { Pool } = await import("pg");
-  const setup = new Pool({ connectionString: PG_URL, connectionTimeoutMillis: 5_000 });
-  closers.push(() => setup.end());
-  await setup.query(`DROP SCHEMA IF EXISTS ${name} CASCADE`);
-  await setup.query(`CREATE SCHEMA ${name}`);
+  const database = `retinue_test_${name}`;
+
+  // Administered from the URL's own database, which is the one place that cannot be the target.
+  const admin = new Pool({ connectionString: PG_URL, connectionTimeoutMillis: 5_000 });
+  // `FORCE` so a pool left open by an earlier failed run cannot block the drop and strand every later run.
+  await admin.query(`DROP DATABASE IF EXISTS ${database} WITH (FORCE)`);
+  await admin.query(`CREATE DATABASE ${database}`);
+  await admin.end();
+
+  const url = new URL(PG_URL as string);
+  url.pathname = `/${database}`;
+  const connectionString = url.toString();
+
+  const setup = new Pool({ connectionString, connectionTimeoutMillis: 5_000 });
+  closers.push(async () => {
+    await setup.end();
+    // Dropped rather than left behind: this suite makes a database per test and they are not small.
+    const cleanup = new Pool({ connectionString: PG_URL, connectionTimeoutMillis: 5_000 });
+    await cleanup.query(`DROP DATABASE IF EXISTS ${database} WITH (FORCE)`).catch(() => undefined);
+    await cleanup.end();
+  });
 
   const workers = await Promise.all(
     Array.from({ length: WORKERS }, async () => {
-      const pool = new Pool({ connectionString: PG_URL, connectionTimeoutMillis: 5_000 });
+      const pool = new Pool({ connectionString, connectionTimeoutMillis: 5_000 });
       closers.push(() => pool.end());
-      await pool.query(`SET search_path TO ${name}, public`);
       const sql: SqlExecutor = {
         async query<Row>(text: string, params?: readonly unknown[]): Promise<Row[]> {
           const client = await pool.connect();
           try {
-            await client.query(`SET search_path TO ${name}, public`);
             const result = await client.query(text, params ? [...params] : undefined);
             return result.rows as Row[];
           } finally {
@@ -68,7 +104,9 @@ const freshSchema = async (
           }
         },
       };
-      return { sql, open: createPoolOpener(pool, name) };
+      // `public`, explicitly: the database is fresh, so it is empty, and the provisioner's unqualified DDL
+      // lands there the way it does on a real deployment.
+      return { sql, open: createPoolOpener(pool, "public") };
     }),
   );
 
@@ -81,10 +119,9 @@ const freshSchema = async (
   return { workers, inspect };
 };
 
-const ledgerCount = async (inspect: SqlExecutor, schema: string): Promise<number> => {
-  const rows = await inspect.query<{ n: string }>(
-    `select count(*) as n from ${schema}.schema_migrations`,
-  );
+/** The ledger lives in `public` now, because each test owns its whole database. */
+const ledgerCount = async (inspect: SqlExecutor, _schema: string): Promise<number> => {
+  const rows = await inspect.query<{ n: string }>(`select count(*) as n from public.schema_migrations`);
   return Number(rows[0]?.n ?? 0);
 };
 
@@ -129,7 +166,7 @@ describe.skipIf(PG_URL === undefined)("concurrent auto-mode provisioning — #26
     const applied = await ledgerCount(inspect, schema);
     expect(applied).toBeGreaterThan(0);
     const distinct = await inspect.query<{ n: string }>(
-      `select count(distinct id) as n from ${schema}.schema_migrations`,
+      `select count(distinct id) as n from public.schema_migrations`,
     );
     expect(Number(distinct[0]?.n)).toBe(applied);
   }, 120_000);
