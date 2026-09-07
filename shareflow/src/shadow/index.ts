@@ -208,3 +208,5 @@ export const diffShadowRuns = (oldRun: ShadowRun, newRun: ShadowRun): ParityRepo
  */
 export const wouldPublishMoreThanBefore = (report: ParityReport): boolean =>
   report.approvalBearingWrites.new > report.approvalBearingWrites.old;
+
+export * from "./runner.js";

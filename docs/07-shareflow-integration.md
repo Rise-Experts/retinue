@@ -104,6 +104,28 @@ The suite for these adapters therefore runs against a real ShareFlow database an
 back to a fake** when one is not configured. A fake executor can only confirm that the adapter sends the SQL
 its author expected, which is the one thing already known.
 
+## Shadow runs
+
+`packages/shareflow/scripts/shadow-turn.mjs` drives a real turn against a real ShareFlow database with a real
+model and every gated effect suppressed, and writes the result as a `ShadowRun`. Before it, the recorder, the
+diff, the gates and the report all existed and nothing could produce a run.
+
+Two things about what it measures. First, a workflow is not one turn: asked once for a post, the assistant
+proposes angles and asks which to use, so a run has to be driven to its end before it is comparable. Second,
+suppression covers external and destructive effects and not internal ones — a shadow run really does create
+drafts, and it measures everything up to the external write and nothing after it, because what an agent does
+after publishing cannot be observed without publishing.
+
+The first real turns found seven defects that neither the compiler nor 52 adapter tests had: an authorization
+role with no matching tool entry silently produced an empty catalogue; a required `repairable` field omitted
+behind a cast disabled the whole generation repair loop; model-supplied ids and cursors reached SQL casts and
+surfaced as `internal`; a draft could be attached to another workspace's campaign, because the foreign key
+references the campaign table alone; an optional id field the model would not leave out defeated the workflow
+entirely until "none" was made sayable; and the parity report crashed on a run with no old-runtime half.
+
+The lesson generalises past this adapter: **every one arrived as a model argument**, and none of them was
+reachable by reading the code.
+
 ## Migration behavior
 
 - Current Agno workflows remain active until their replacement passes parity gates.

@@ -35,7 +35,7 @@ import {
   type PostDraftSummary,
 } from "../services/index.js";
 import type { ShareFlowToolFactory } from "./factory.js";
-import { shareFlowTool } from "./factory.js";
+import { cursorString, idString, shareFlowTool } from "./factory.js";
 
 /**
  * Platform ids, normalised.
@@ -64,7 +64,6 @@ const CAPTION_MAX = 20_000;
 
 const caption = z.string().min(1).max(CAPTION_MAX);
 const assetIds = z.array(z.string().min(1)).max(20);
-const idString = z.string().min(1);
 
 /** What a read returns. The caption is included — see the note on `PostDraftSummary`. */
 const draftView = (draft: PostDraft) => ({
@@ -119,7 +118,7 @@ const listPostDraftsSchema = z
      * choosing one — the caller fetches the body of the one it picked.
      */
     limit: z.number().int().min(1).max(25).default(10),
-    cursor: z.string().min(1).optional(),
+    cursor: cursorString.optional(),
   })
   .strict();
 
@@ -162,7 +161,31 @@ const createPostDraftSchema = z
     caption,
     targetPlatforms: platformList,
     mediaAssetIds: assetIds.optional(),
-    campaignId: idString.optional(),
+    /**
+     * **A choice, not an optional field** — and the shape is empirical.
+     *
+     * It was `campaignId: idString.optional()`, and a real gpt-4o turn defeated the workflow with it. Told in
+     * the user message not to attach a campaign, it called `create_post_draft` seven times in one turn,
+     * inventing an id each time: the all-zeros UUID, `12345678-1234-1234-1234-123456789abc`, then random
+     * ones. Every call was correctly refused and no draft was ever saved.
+     *
+     * Two weaker fixes were tried and measured. Adding a field description saying "omit this field entirely
+     * for a standalone post — that is the usual case" changed nothing. Removing the field entirely made the
+     * workflow complete on the first attempt, which is what identified it as the whole blocker.
+     *
+     * So the field stays and the affordance changes: the model has to *say* something, and "none" is now
+     * sayable. Omitting is what it could not do; choosing it can.
+     *
+     * A fabricated id is still refused — `createDraft` checks the campaign is this workspace's, because
+     * `posts_campaign_id_fkey` references `campaigns(id)` alone and would otherwise attach a draft to another
+     * tenant's campaign.
+     */
+    campaign: z
+      .discriminatedUnion("kind", [
+        z.object({ kind: z.literal("none") }).strict(),
+        z.object({ kind: z.literal("existing"), id: idString }).strict(),
+      ])
+      .describe('Use {"kind":"none"} for a standalone post. Only use "existing" with an id from `list_campaigns`.'),
   })
   .strict();
 
@@ -187,7 +210,7 @@ export const createPostDraftTool = shareFlowTool(["content"], ({ services, deps 
         ...(input.mediaAssetIds === undefined
           ? {}
           : { mediaAssetIds: input.mediaAssetIds as MediaAssetId[] }),
-        ...(input.campaignId === undefined ? {} : { campaignId: asId<CampaignId>(input.campaignId) }),
+        ...(input.campaign.kind === "none" ? {} : { campaignId: asId<CampaignId>(input.campaign.id) }),
       });
       return {
         ...draftView(created),

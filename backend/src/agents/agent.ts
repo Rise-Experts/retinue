@@ -28,7 +28,13 @@ import type { AuthorizationPolicy } from "../authorization/index.js";
 import { gatherSections, type ContextProvider } from "../context/index.js";
 import { randomBytes } from "node:crypto";
 import { makeNonce, renderContextBlock } from "../security/prompt-safety.js";
-import { createToolRegistry, type ToolProvider, type ToolSearch, type ToolsetResolver } from "../tools/index.js";
+import {
+  createToolRegistry,
+  type ShadowRecorder,
+  type ToolProvider,
+  type ToolSearch,
+  type ToolsetResolver,
+} from "../tools/index.js";
 import type { TokenBudget } from "../core/budget.js";
 import { createDurableWorker, type AgentEngine, type ProcessOutcome, type Run } from "../runtime/index.js";
 import {
@@ -211,6 +217,15 @@ export type CreateAgentConfig = {
    */
   readonly skills?: SkillResolver;
   readonly tenantId?: string;
+  /**
+   * Where a shadow run's suppressed writes go — required to run one at all.
+   *
+   * Without it `createAgent` cannot run a shadow turn: the registry refuses a gated tool when
+   * `context.shadow` is true and no recorder is configured, which is the correct fail-closed rule but meant
+   * this runner had no way to satisfy it. Parity measurement needs a run driven to completion in one process,
+   * and this is that seam.
+   */
+  readonly shadow?: ShadowRecorder;
   /** Test/advanced seam: override how a manifest resolves to a model (e.g. a mock model). */
   readonly resolveModel?: (manifest: AgentManifest, context: ExecutionContext) => ResolvedModelInfo;
   /** Test/advanced seam: supply the engine directly instead of building the default one. */
@@ -223,6 +238,18 @@ export type RunInput = {
   readonly message: string;
   readonly principalId?: string;
   readonly roleIds?: readonly string[];
+  /**
+   * Run with every gated effect suppressed and recorded instead of performed.
+   *
+   * Per-run rather than per-agent, because the same agent serves both: a parity harness shadows one turn and
+   * runs the next for real. `shadow` without `config.shadow` is refused by the registry rather than performed
+   * — announcing a shadow run with nowhere to record it is not a licence to publish.
+   *
+   * Note what shadow mode does **not** suppress: an `internal-write` still happens, so a shadow run really
+   * does create drafts. It measures everything up to the external write and nothing after it, because what an
+   * agent does after publishing cannot be observed without publishing.
+   */
+  readonly shadow?: boolean;
 };
 
 export type RunResult = {
@@ -278,6 +305,7 @@ export const createAgent = (config: CreateAgentConfig) => {
     ...(config.toolsets === undefined ? {} : { toolsets: config.toolsets }),
     ...(config.catalogBudget === undefined ? {} : { catalogBudget: config.catalogBudget }),
     ...(skillLoader === undefined ? {} : { skills: skillLoader }),
+    ...(config.shadow === undefined ? {} : { shadow: config.shadow }),
   });
 
   const resolveModel: NonNullable<CreateAgentConfig["resolveModel"]> =
@@ -500,6 +528,9 @@ export const createAgent = (config: CreateAgentConfig) => {
         requestId: asId(`req-${seq}`),
         conversationId,
         runId,
+        // Only when asked. Defaulting to shadow would make every existing run a shadow run; the dangerous
+        // direction — claiming shadow with nowhere to record it — is closed in the registry instead.
+        ...(input.shadow === true ? { shadow: true } : {}),
       };
       contextByRun.set(runId, context);
 

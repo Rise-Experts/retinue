@@ -159,6 +159,56 @@ describe("parity-report.mjs", () => {
     expect(stderr).toContain("malformed");
   });
 
+  it("reports a run with no old-runtime half rather than crashing on it", async () => {
+    /**
+     * **The input the migration actually has**, and the script threw an unhandled `TypeError` on it:
+     * `Cannot read properties of null (reading 'workflow')`.
+     *
+     * The guard was `pair?.old === undefined`, and **JSON cannot express `undefined`** — a file's absent half
+     * is `null`, which is not `undefined`, so it passed the check and reached `diffShadowRuns`. The one script
+     * whose job is to refuse bad input crashed on the most likely bad input there is.
+     *
+     * It is also a distinct case from malformed, and conflating them misdirects a reader: the new runtime can
+     * be recorded today and the Agno side cannot, so a file of new-only runs is the expected first artefact.
+     */
+    const one = pair("create-post");
+    const path = await withShadow("unpaired.json", [{ workflow: "create-post", old: null, new: one.new }]);
+    const { code, stderr } = await exec("parity-report.mjs", ["--shadow", path]);
+    expect(code).toBe(2);
+    expect(stderr).toContain("no old-runtime half");
+    // Not called malformed, because it is not.
+    expect(stderr).not.toContain("malformed");
+    // And it says what to do next, which is the whole point of distinguishing the two.
+    expect(stderr).toContain("Agno");
+  });
+
+  it("refuses a pair naming a workflow no gate covers, instead of counting it and measuring nothing", async () => {
+    /**
+     * `evaluateParity` reports per gate, so a pair keyed `publish-post` where the gate is `publish` fed
+     * nothing while still appearing in the "N shadow pairs" headline. The gate printed `0 run(s)` and the
+     * header said one pair, and nothing connected the two — I misread that output as a counted run.
+     *
+     * Same reasoning the script already applies to malformed pairs, and the same hole.
+     */
+    const path = await withShadow("unknown-workflow.json", [pair("publish-post")]);
+    const { code, stderr } = await exec("parity-report.mjs", ["--shadow", path]);
+    expect(code).toBe(2);
+    expect(stderr).toContain("no gate covers");
+    // The valid names, so the fix does not need a source dive.
+    expect(stderr).toContain("create-post");
+  });
+
+  it("labels the gate-agreement column, which reads as a run count without one", async () => {
+    /**
+     * `1 run(s)  agreed` sat two spaces after a run count and means something else entirely: whether a person
+     * has agreed the *gate*. A divergent run under an agreed gate prints exactly that string.
+     */
+    const path = await withShadow("labelled.json", [pair("create-post")]);
+    const { stdout } = await exec("parity-report.mjs", ["--shadow", path]);
+    expect(stdout).toContain("gate agreed?");
+    expect(stdout).toContain("shadow runs");
+  });
+
   it("exits 1 on too little data, and calls it insufficient rather than failed", async () => {
     /**
      * Two runs against gates needing 200 and 500.

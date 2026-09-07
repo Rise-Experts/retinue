@@ -41,9 +41,8 @@ import {
   type PostDraftId,
 } from "../services/index.js";
 import type { ShareFlowToolFactory } from "./factory.js";
-import { shareFlowTool } from "./factory.js";
+import { cursorString, idString, shareFlowTool } from "./factory.js";
 
-const idString = z.string().min(1);
 
 /**
  * Where the lead came from, structured.
@@ -107,7 +106,7 @@ const listLeadsSchema = z
   .object({
     status: z.enum(LEAD_STATUSES).optional(),
     limit: z.number().int().min(1).max(25).default(10),
-    cursor: z.string().min(1).optional(),
+    cursor: cursorString.optional(),
   })
   .strict();
 

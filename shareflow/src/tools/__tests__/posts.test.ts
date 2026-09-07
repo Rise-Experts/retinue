@@ -147,6 +147,7 @@ describe("reading a post", () => {
 describe("creating a draft", () => {
   it("passes the complete caption through and normalises the destinations", async () => {
     const result = await run(build(createPostDraftTool), {
+      campaign: { kind: "none" },
       caption: "Shipping the new pricing page today.",
       targetPlatforms: ["LinkedIn"],
     });
@@ -166,7 +167,7 @@ describe("creating a draft", () => {
       build(createPostDraftTool, {
         createDraft: async () => ({ ...draft(), captionLength: 9, droppedMedia: [] as MediaAssetId[] }),
       }),
-      { caption: "a much longer caption than nine characters", targetPlatforms: ["x"] },
+      { caption: "a much longer caption than nine characters", targetPlatforms: ["x"], campaign: { kind: "none" } },
     );
     expect(result).toMatchObject({ ok: true, data: { captionStoredInFull: false, captionLength: 9 } });
   });
@@ -185,26 +186,27 @@ describe("creating a draft", () => {
         caption: "Shipping the new pricing page today.",
         targetPlatforms: ["x"],
         mediaAssetIds: ["m9"],
+        campaign: { kind: "none" },
       },
     );
     expect(result).toMatchObject({ ok: true, data: { droppedMedia: ["m9"] } });
   });
 
   it("deduplicates destinations that differ only in case", async () => {
-    await run(build(createPostDraftTool), { caption: "hi there", targetPlatforms: ["X", "x"] });
+    await run(build(createPostDraftTool), { caption: "hi there", targetPlatforms: ["X", "x"], campaign: { kind: "none" } });
     expect(recorder.calls[0]?.args).toMatchObject({ targetPlatforms: ["x"] });
   });
 
   it("threads the envelope's idempotency key into the service", async () => {
     // Two layers, not one: the envelope stops a second agent call, this key stops a second delivery
     // of one accepted call inside ShareFlow. An empty placeholder would look fine and do nothing.
-    await run(build(createPostDraftTool), { caption: "hi there", targetPlatforms: ["x"] }, "key-abc");
+    await run(build(createPostDraftTool), { caption: "hi there", targetPlatforms: ["x"], campaign: { kind: "none" } }, "key-abc");
     expect(recorder.calls[0]?.args).toMatchObject({ idempotencyKey: "key-abc" });
   });
 
   it("does not create the draft twice when the call is retried", async () => {
     const tool = build(createPostDraftTool);
-    const input = { caption: "hi there", targetPlatforms: ["x"] };
+    const input = { caption: "hi there", targetPlatforms: ["x"], campaign: { kind: "none" } };
     await run(tool, input, "same");
     await run(tool, input, "same");
     expect(recorder.calls.filter((c) => c.method === "createDraft")).toHaveLength(1);
@@ -308,7 +310,7 @@ describe("effects", () => {
       services: { content: stubContent(recorder) } as unknown as ShareFlowServices,
       deps: { authorization: allowAll, idempotency },
     });
-    expect(await run(tool, { caption: "hi there", targetPlatforms: ["x"] })).toMatchObject({ ok: true });
+    expect(await run(tool, { caption: "hi there", targetPlatforms: ["x"], campaign: { kind: "none" } })).toMatchObject({ ok: true });
   });
 });
 
@@ -352,7 +354,7 @@ describe("argument validation", () => {
   it("rejects malformed arguments with no service call", async () => {
     const cases: unknown[] = [
       {},
-      { caption: "", targetPlatforms: ["x"] },
+      { caption: "", targetPlatforms: ["x"], campaign: { kind: "none" } },
       { caption: "hi there", targetPlatforms: [] },
       { caption: "hi there" },
       { caption: "x".repeat(20_001), targetPlatforms: ["x"] },

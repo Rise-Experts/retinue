@@ -30,9 +30,8 @@ import {
   type InboxCommentId,
 } from "../services/index.js";
 import type { ShareFlowToolFactory } from "./factory.js";
-import { shareFlowTool } from "./factory.js";
+import { cursorString, idString, shareFlowTool } from "./factory.js";
 
-const idString = z.string().min(1);
 
 /**
  * The key that makes one comment answerable once.
@@ -67,7 +66,7 @@ const listCommentsSchema = z
     replyState: z.enum(COMMENT_REPLY_STATES).optional(),
     platformId: z.string().trim().min(1).max(64).toLowerCase().optional(),
     limit: z.number().int().min(1).max(50).default(20),
-    cursor: z.string().min(1).optional(),
+    cursor: cursorString.optional(),
   })
   .strict();
 

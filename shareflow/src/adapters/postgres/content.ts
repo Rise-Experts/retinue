@@ -306,6 +306,54 @@ const calendarState = (status: string | null): PublishTargetState =>
   (status === null ? undefined : PUBLISH_STATE_FROM_DB[status.toUpperCase()]) ?? "publishing";
 
 /**
+ * A UUID, or `invalid_input` naming the field.
+ *
+ * Every id here arrives from a **model**, through a tool schema that types it as a string. A malformed one
+ * reaches `$1::uuid` and Postgres answers `invalid input syntax for type uuid: "1"`, which this adapter then
+ * reported as `internal` — a code that reads as a platform fault, is treated as retryable in places, and tells
+ * the model nothing it can act on. Found by running a real turn: the model passed `"1"` as an id.
+ */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+const asUuid = (field: string, value: string): string => {
+  if (!UUID.test(value.trim())) {
+    throw new AgentPlatformError({
+      code: "invalid_input",
+      message: `${field} must be a UUID — got ${JSON.stringify(value.slice(0, 60))}.`,
+      retryable: false,
+    });
+  }
+  return value.trim();
+};
+
+/**
+ * A cursor, which is an instant, or `invalid_input`.
+ *
+ * The case that motivated it is worth recording exactly. A real gpt-4o turn called `list_campaigns` with
+ *
+ *     cursor: "}.kwargs_0_0} 0_SKIP_TO_PARAMS_MULTI_0_GP.next_0_multi_tool_use.parallel…"
+ *
+ * — parallel-tool-call junk the model emitted. It reached `$3::timestamptz` and came back as
+ * `date/time field value out of range: "0"` under code `internal`. One malformed argument took out a turn
+ * that was otherwise complete, and the message named a Postgres type rather than the field.
+ *
+ * A cursor is opaque to the caller, so the only honest check is that it is the kind of value this adapter
+ * hands out: an instant.
+ */
+const asCursor = (value: string): string => {
+  if (!Number.isFinite(Date.parse(value))) {
+    throw new AgentPlatformError({
+      code: "invalid_input",
+      message:
+        `cursor must be one this endpoint returned — got ${JSON.stringify(value.slice(0, 60))}. ` +
+        "Pass `nextCursor` from a previous page, or omit it to start from the beginning.",
+      retryable: false,
+    });
+  }
+  return value;
+};
+
+/**
  * The three enum columns, checked here rather than by the constraint.
  *
  * The types already say `CampaignCadence`, so why check at runtime? Because these values arrive from a **model**
@@ -368,6 +416,46 @@ const toDraft = (row: PostRow): PostDraft => ({
 });
 
 export const createPostgresContentService = (sql: SqlExecutor): ContentService => {
+  /**
+   * A campaign id, checked to be **this workspace's**.
+   *
+   * `posts_campaign_id_fkey` is `FOREIGN KEY (campaign_id) REFERENCES campaigns(id)` and nothing more, so the
+   * database will happily attach workspace B's draft to workspace A's campaign. Verified against the live
+   * schema rather than assumed:
+   *
+   * ```
+   *  post_in_b | points_at_a_campaign
+   * -----------+----------------------
+   *  t         | t
+   * ```
+   *
+   * The id comes from a model argument, so this is reachable — and it is the same lesson as the status
+   * trigger, which skips validation entirely when `auth.uid()` is null: **the database does not guard this for
+   * a service-role caller, so the service must.**
+   *
+   * `not_found` rather than `forbidden`, for the reason `getDraft` gives: the two must be indistinguishable or
+   * the endpoint confirms the existence of other tenants' ids.
+   *
+   * It also fixes a worse-looking symptom that was the same bug. A well-formed id for a campaign that does not
+   * exist reached the insert and came back as
+   * `insert or update on table "posts" violates foreign key constraint` under code `internal` — a platform
+   * fault, as far as any caller could tell.
+   */
+  const campaignInWorkspace = async (context: ExecutionContext, id: string): Promise<string> => {
+    const found = await sql.query<{ id: string }>(
+      `select id from public.campaigns where workspace_id = $1::uuid and id = $2::uuid`,
+      [String(context.tenantId), asUuid("campaignId", id)],
+    );
+    if (found[0] === undefined) {
+      throw new AgentPlatformError({
+        code: "not_found",
+        message: `No campaign ${id}. Pass an id from \`list_campaigns\`, or omit it to leave the draft unattached.`,
+        retryable: false,
+      });
+    }
+    return found[0].id;
+  };
+
   const rulesFor = async (context: ExecutionContext, platforms: readonly string[]): Promise<RuleRow[]> => {
     if (platforms.length === 0) return [];
     /**
@@ -393,11 +481,39 @@ export const createPostgresContentService = (sql: SqlExecutor): ContentService =
     input: { caption: string; platformIds: readonly string[]; mediaAssetIds?: readonly string[] },
   ): Promise<ValidationReport> => {
     const issues: ValidationIssue[] = [];
+    /**
+     * **`repairable` is required, and omitting it silently killed the repair loop.**
+     *
+     * Every issue here was built with `as unknown as ValidationIssue` and no `repairable` field. The consumer
+     * is `generate_content`'s loop, which reads `issues.some((i) => !i.repairable)` and stops immediately on
+     * an unrepairable finding — and `!undefined` is `true`, so **every** finding read as unrepairable and
+     * generation never made a second attempt.
+     *
+     * The effect on a real workflow, found by running one: ShareFlow's shipped instagram rule requires five
+     * hashtags, gpt-4o writes two or three, and the repair loop recovers on the very next attempt when told.
+     * With this field missing it never got one, and `generate_content` refused with "no version could be
+     * written that passes the brand's rules and the destinations' limits" — which reads as the model being
+     * incapable rather than as a dropped field.
+     *
+     * The casts are gone with it. They are what allowed a required field to go missing, and the type is the
+     * only thing that would have said so.
+     */
     if (input.caption.trim() === "") {
-      issues.push({ code: "caption-empty", message: "The post has no text." } as ValidationIssue);
+      // Repairable: an empty caption is exactly what regenerating fixes.
+      issues.push({ code: "caption-empty", message: "The post has no text.", repairable: true });
     }
     if (input.platformIds.length === 0) {
-      issues.push({ code: "no-destination", message: "The post names no platform to publish to." } as ValidationIssue);
+      /**
+       * **Not** repairable, and the distinction is the point of the field.
+       *
+       * No amount of regenerating supplies a destination. The assistant must ask, and a repair attempt here
+       * would spend the bound to arrive at the same answer.
+       */
+      issues.push({
+        code: "no-destination",
+        message: "The post names no platform to publish to.",
+        repairable: false,
+      });
     }
 
     const rules = await rulesFor(context, input.platformIds);
@@ -412,33 +528,38 @@ export const createPostgresContentService = (sql: SqlExecutor): ContentService =
        * failure would surface as a rejected publish, long after the assistant said the post was fine.
        */
       if (rule === undefined) {
+        // A configuration gap, not a text problem: rewriting the caption will not create a rules row.
         issues.push({
           code: "platform-unknown",
-          platformId: platform,
+          platformId: platform as never,
           message: `No rules are configured for ${platform}, so its limits could not be checked.`,
-        } as unknown as ValidationIssue);
+          repairable: false,
+        });
         continue;
       }
       if (rule.char_limit !== null && input.caption.length > rule.char_limit) {
         issues.push({
           code: "caption-too-long",
-          platformId: platform,
+          platformId: platform as never,
           message: `${input.caption.length} characters; ${platform} allows ${rule.char_limit}.`,
-        } as unknown as ValidationIssue);
+          repairable: true,
+        });
       }
       if (rule.hashtag_max !== null && hashtags > rule.hashtag_max) {
         issues.push({
           code: "hashtags-too-many",
-          platformId: platform,
+          platformId: platform as never,
           message: `${hashtags} hashtags; ${platform} allows at most ${rule.hashtag_max}.`,
-        } as unknown as ValidationIssue);
+          repairable: true,
+        });
       }
       if (rule.hashtag_min !== null && hashtags < rule.hashtag_min) {
         issues.push({
           code: "hashtags-too-few",
-          platformId: platform,
+          platformId: platform as never,
           message: `${hashtags} hashtags; ${platform} expects at least ${rule.hashtag_min}.`,
-        } as unknown as ValidationIssue);
+          repairable: true,
+        });
       }
     }
     return { ok: issues.length === 0, issues };
@@ -449,7 +570,7 @@ export const createPostgresContentService = (sql: SqlExecutor): ContentService =
       const rows = await sql.query<PostRow>(
         `select id, campaign_id, status, raw_content, title, target_platforms, media_urls, updated_at
            from public.posts where workspace_id = $1::uuid and id = $2::uuid`,
-        [String(context.tenantId), String(input.id)],
+        [String(context.tenantId), asUuid("id", String(input.id))],
       );
       const row = rows[0];
       return row === undefined ? notFound(String(input.id)) : toDraft(row);
@@ -475,9 +596,9 @@ export const createPostgresContentService = (sql: SqlExecutor): ContentService =
           limit $5`,
         [
           String(context.tenantId),
-          input.campaignId === undefined ? null : String(input.campaignId),
+          input.campaignId === undefined ? null : asUuid("campaignId", String(input.campaignId)),
           input.status === undefined ? null : STATUS_TO_DB[input.status],
-          input.cursor ?? null,
+          input.cursor === undefined ? null : asCursor(input.cursor),
           limit + 1,
         ],
       );
@@ -528,6 +649,15 @@ export const createPostgresContentService = (sql: SqlExecutor): ContentService =
         });
       }
 
+      /**
+       * The campaign is resolved **before** the insert, not left to the foreign key.
+       *
+       * Two reasons and they are both about the answer the caller gets: the key cannot tell "no such campaign"
+       * from "another tenant's campaign", and it would allow the second.
+       */
+      const campaignId =
+        input.campaignId === undefined ? null : await campaignInWorkspace(context, String(input.campaignId));
+
       const rows = await sql.query<PostRow>(
         `insert into public.posts
            (workspace_id, author_id, title, raw_content, media_urls, status, target_platforms, campaign_id)
@@ -540,7 +670,7 @@ export const createPostgresContentService = (sql: SqlExecutor): ContentService =
           input.caption,
           [...(input.mediaAssetIds ?? [])],
           [...input.targetPlatforms],
-          input.campaignId === undefined ? null : String(input.campaignId),
+          campaignId,
         ],
       );
       const row = rows[0];
@@ -565,10 +695,11 @@ export const createPostgresContentService = (sql: SqlExecutor): ContentService =
     },
 
     async updateDraft(context, input) {
+      const id = asUuid("id", String(input.id));
       const current = await sql.query<PostRow>(
         `select id, campaign_id, status, raw_content, title, target_platforms, media_urls, updated_at
            from public.posts where workspace_id = $1::uuid and id = $2::uuid`,
-        [String(context.tenantId), String(input.id)],
+        [String(context.tenantId), id],
       );
       const row = current[0];
       if (row === undefined) return notFound(String(input.id));
@@ -611,7 +742,7 @@ export const createPostgresContentService = (sql: SqlExecutor): ContentService =
           returning id, campaign_id, status, raw_content, title, target_platforms, media_urls, updated_at`,
         [
           String(context.tenantId),
-          String(input.id),
+          id,
           caption,
           [...platforms],
           input.patch.mediaAssetIds === undefined ? null : [...input.patch.mediaAssetIds],
@@ -630,10 +761,11 @@ export const createPostgresContentService = (sql: SqlExecutor): ContentService =
     },
 
     async duplicateDraft(context, input) {
+      const id = asUuid("id", String(input.id));
       const rows = await sql.query<PostRow>(
         `select id, campaign_id, status, raw_content, title, target_platforms, media_urls, updated_at
            from public.posts where workspace_id = $1::uuid and id = $2::uuid`,
-        [String(context.tenantId), String(input.id)],
+        [String(context.tenantId), id],
       );
       const row = rows[0];
       if (row === undefined) return notFound(String(input.id));
@@ -654,7 +786,7 @@ export const createPostgresContentService = (sql: SqlExecutor): ContentService =
          returning id, campaign_id, status, raw_content, title, target_platforms, media_urls, updated_at`,
         [
           String(context.tenantId),
-          String(input.id),
+          id,
           String(context.principalId),
           [...((input.targetPlatforms ?? (row.target_platforms ?? [])) as readonly string[])],
         ],
@@ -679,7 +811,7 @@ export const createPostgresContentService = (sql: SqlExecutor): ContentService =
     async getCampaign(context, input) {
       const rows = await sql.query<CampaignRow>(`${CAMPAIGN_COLUMNS} where workspace_id = $1::uuid and id = $2::uuid`, [
         String(context.tenantId),
-        String(input.id),
+        asUuid("id", String(input.id)),
       ]);
       const row = rows[0];
       if (row === undefined) {
@@ -697,7 +829,12 @@ export const createPostgresContentService = (sql: SqlExecutor): ContentService =
             and ($3::timestamptz is null or created_at < $3::timestamptz)
           order by created_at desc
           limit $4`,
-        [String(context.tenantId), input.status ?? null, input.cursor ?? null, limit + 1],
+        [
+          String(context.tenantId),
+          input.status ?? null,
+          input.cursor === undefined ? null : asCursor(input.cursor),
+          limit + 1,
+        ],
       );
       const page = rows.slice(0, limit);
       const items = page.map((row) => {
@@ -736,7 +873,12 @@ export const createPostgresContentService = (sql: SqlExecutor): ContentService =
             and ($3::timestamptz is null or s.scheduled_at > $3::timestamptz)
           order by s.scheduled_at asc
           limit $4`,
-        [String(context.tenantId), String(input.id), input.cursor ?? null, limit + 1],
+        [
+          String(context.tenantId),
+          asUuid("id", String(input.id)),
+          input.cursor === undefined ? null : asCursor(input.cursor),
+          limit + 1,
+        ],
       );
       const page = rows.slice(0, limit);
       const items = page.map((row) => ({
@@ -800,9 +942,10 @@ export const createPostgresContentService = (sql: SqlExecutor): ContentService =
     },
 
     async updateCampaign(context, input) {
+      const campaignId = asUuid("id", String(input.id));
       const existing = await sql.query<CampaignRow>(
         `${CAMPAIGN_COLUMNS} where workspace_id = $1::uuid and id = $2::uuid`,
-        [String(context.tenantId), String(input.id)],
+        [String(context.tenantId), campaignId],
       );
       const row = existing[0];
       if (row === undefined) {
@@ -841,7 +984,7 @@ export const createPostgresContentService = (sql: SqlExecutor): ContentService =
                     cadence, channels, status, mode, media_type, created_at`,
         [
           String(context.tenantId),
-          String(input.id),
+          campaignId,
           input.patch.name ?? null,
           input.patch.theme ?? null,
           input.patch.goal ?? null,

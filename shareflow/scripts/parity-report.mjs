@@ -30,6 +30,7 @@ import {
   CAPABILITY_INVENTORY,
   canRemoveOldRuntime,
   gateStatus,
+  gateFor,
   diffShadowRuns,
   evaluateParity,
 } from "../dist/index.js";
@@ -71,21 +72,86 @@ if (!Array.isArray(pairs) || pairs.length === 0)
  * gate rests on.
  */
 const reportsByWorkflow = {};
-let malformed = 0;
-for (const pair of pairs) {
-  if (pair?.workflow === undefined || pair?.old === undefined || pair?.new === undefined) {
-    malformed += 1;
+const malformed = [];
+/**
+ * Pairs missing only the **old** half, tracked separately.
+ *
+ * Not the same thing as malformed input, and conflating them cost a real diagnosis. This is the migration's
+ * actual state: the new runtime can be recorded today and the Agno side cannot, so a file full of new-only
+ * runs is the expected first artefact rather than a mistake. Saying "malformed" about it sends a reader
+ * looking for a typo.
+ */
+const unpaired = [];
+/** Pairs naming a workflow no gate covers. Refused below, for the reason at the push site. */
+const unrecognised = [];
+
+/** A `ShadowRun` this script can diff: the three fields `diffShadowRuns` reads, with `writes` an array. */
+const isShadowRun = (value) =>
+  value !== null &&
+  typeof value === "object" &&
+  typeof value.workflow === "string" &&
+  typeof value.runtime === "string" &&
+  Array.isArray(value.writes);
+
+for (const [index, pair] of pairs.entries()) {
+  const label = `#${index}${typeof pair?.workflow === "string" ? ` (${pair.workflow})` : ""}`;
+  /**
+   * Checked with `isShadowRun`, not `=== undefined`.
+   *
+   * The previous guard was `pair?.old === undefined`, and **JSON cannot express `undefined`** — a file's
+   * absent half is `null`, which is not `undefined`, so it passed the guard and `diffShadowRuns` crashed with
+   * `Cannot read properties of null (reading 'workflow')`. The one script whose job is to refuse bad input
+   * threw an unhandled TypeError on the most likely bad input there is.
+   */
+  if (typeof pair?.workflow !== "string" || !isShadowRun(pair?.new)) {
+    malformed.push(label);
+    continue;
+  }
+  if (!isShadowRun(pair.old)) {
+    unpaired.push(label);
+    continue;
+  }
+  /**
+   * A workflow name no gate covers is **refused**, not counted and ignored.
+   *
+   * The same reasoning this script already applies to malformed pairs, and the same hole: `evaluateParity`
+   * reports per gate, so a pair keyed `publish-post` where the gate is `publish` contributed to nothing while
+   * still appearing in the "N shadow pairs" headline. I misread exactly that output as a counted run — the
+   * gate showed `0 run(s)` and the header said one pair, and nothing connected the two.
+   */
+  if (gateFor(pair.workflow) === undefined) {
+    unrecognised.push(`${label} → "${pair.workflow}"`);
     continue;
   }
   (reportsByWorkflow[pair.workflow] ??= []).push(diffShadowRuns(pair.old, pair.new));
 }
+
 // Counted and refused, not skipped quietly: a malformed pair is a run that produced no comparison, and letting
 // it vanish would shrink the sample towards the threshold without anyone seeing.
-if (malformed > 0)
-  die(`${malformed} of ${pairs.length} shadow pairs are malformed`, {
-    expected: "each entry needs workflow, old and new",
+if (malformed.length > 0)
+  die(`${malformed.length} of ${pairs.length} shadow pairs are malformed`, {
+    pairs: malformed.join(", "),
+    expected: "each entry needs a workflow name and a `new` run of { workflow, runtime, writes[] }",
     why: "silently dropping them shrinks the sample the gate is measured against",
   });
+
+if (unrecognised.length > 0)
+  die(`${unrecognised.length} shadow pair(s) name a workflow no gate covers`, {
+    pairs: unrecognised.join(", "),
+    gates: PARITY_GATES.map((gate) => gate.workflow).join(", "),
+    why: "a pair keyed to no gate is counted in the headline and measured by nothing",
+  });
+
+if (unpaired.length > 0 && Object.keys(reportsByWorkflow).length === 0)
+  die(`${unpaired.length} shadow run(s) have no old-runtime half, so there is nothing to compare`, {
+    pairs: unpaired.join(", "),
+    state: "the new runtime can be recorded today; the Agno side cannot",
+    next: "record the same workflow on the Agno deployment and pair the two runs",
+    why: "a one-sided run is not a diff, and reporting it as agreement is the one thing this gate must never do",
+  });
+
+if (unpaired.length > 0)
+  console.log(`· ${unpaired.length} run(s) skipped for want of an old-runtime half: ${unpaired.join(", ")}\n`);
 
 const evaluation = evaluateParity(reportsByWorkflow);
 
@@ -101,10 +167,20 @@ console.log(`parity report — ${pairs.length} shadow pairs across ${Object.keys
 const SYMBOL = { passed: "✓", failed: "✗", "gate-not-agreed": "✎", "insufficient-sample": "…", "not-measurable": "—", incomplete: "○" };
 for (const verdict of VERDICTS)
   if (SYMBOL[verdict] === undefined) throw new Error(`no symbol for verdict "${verdict}" — add one to SYMBOL`);
+/**
+ * A header, because the last column was unreadable without one.
+ *
+ * It is the **gate's** agreement status — whether a person has agreed the threshold — and it sat immediately
+ * after a run count, so `1 run(s)  agreed` read as "one run agreed". It says the opposite kind of thing: a
+ * divergent run under an agreed gate prints exactly that.
+ */
+console.log(`  ${"workflow".padEnd(20)} ${"verdict".padEnd(20)} ${"shadow runs".padStart(11)}  gate agreed?`);
 for (const v of evaluation.verdicts) {
   const gate = PARITY_GATES.find((g) => g.workflow === v.workflow);
   const n = (reportsByWorkflow[v.workflow] ?? []).length;
-  console.log(`${SYMBOL[v.verdict]} ${v.workflow.padEnd(20)} ${v.verdict.padEnd(20)} ${String(n).padStart(5)} run(s)  ${gate?.status ?? "no gate"}`);
+  console.log(
+    `${SYMBOL[v.verdict]} ${v.workflow.padEnd(20)} ${v.verdict.padEnd(20)} ${String(n).padStart(11)}  ${gate?.status ?? "no gate"}`,
+  );
   console.log(`  ${v.detail}`);
 }
 

@@ -369,6 +369,174 @@ describe.skipIf(URL_ === undefined)("ContentService over posts", () => {
   });
 });
 
+describe.skipIf(URL_ === undefined)("what a real shadow turn found, which no test had", () => {
+  /**
+   * Four defects, all reached from a **model argument** in a live `create-post` turn against this database.
+   * Every one of them was invisible to the compiler and to the 52 tests above.
+   */
+  const content = () => createPostgresContentService(sql as never);
+
+  /**
+   * **linkedin, not instagram, throughout this block.**
+   *
+   * The suite shares one workspace, and an earlier test installs a workspace override for instagram
+   * (`char_limit: 20, hashtag_min: 0`) to prove that a workspace's own limits beat the shipped defaults. That
+   * override then changes what *these* tests see — a 20-character ceiling refuses every fixture here, and a
+   * zero minimum removes the very finding the first test is about. Three of these failed on it first time.
+   *
+   * linkedin's shipped rule (3-5 hashtags, 3000 characters) is untouched by the suite, so these assertions
+   * are about the code rather than about test order.
+   */
+
+  it("marks every validation issue repairable or not — the field the repair loop reads", async () => {
+    /**
+     * **The defect that made the workflow impossible.** `ValidationIssue.repairable` is required in the port
+     * and every issue here was built with `as unknown as ValidationIssue` and no such field.
+     *
+     * `generate_content`'s loop is `issues.some((i) => !i.repairable)` and stops on the first unrepairable
+     * finding — and `!undefined` is `true`, so **every** finding read as unrepairable and generation never
+     * made a second attempt. ShareFlow's shipped instagram rule wants five hashtags, gpt-4o writes two or
+     * three, and the loop recovers on the very next attempt when told. It never got one: the tool refused
+     * with "no version could be written that passes the brand's rules and the destinations' limits", which
+     * reads as the model being incapable rather than as a dropped field.
+     */
+    const report = await content().validateContent(context(), {
+      caption: "one hashtag #a",
+      platformIds: ["linkedin"] as never,
+    });
+    expect(report.ok).toBe(false);
+    for (const issue of report.issues) expect(typeof issue.repairable).toBe("boolean");
+    // A hashtag count is exactly what regenerating fixes.
+    expect(report.issues.find((issue) => issue.code === "hashtags-too-few")?.repairable).toBe(true);
+
+    // And a missing destination is not: no amount of regenerating supplies one, so the assistant must ask.
+    const noDestination = await content().validateContent(context(), { caption: "text", platformIds: [] as never });
+    expect(noDestination.issues.find((issue) => issue.code === "no-destination")?.repairable).toBe(false);
+  });
+
+  it("answers invalid_input for a malformed id, not a Postgres cast error as `internal`", async () => {
+    /**
+     * A real turn passed `campaignId: "1"`. It reached `$7::uuid` and came back as
+     * `invalid input syntax for type uuid: "1"` under code `internal` — a code that reads as a platform
+     * fault and tells a model nothing it can act on.
+     */
+    const error = thrown(await content().getDraft(context(), { id: "1" as never }).catch((r: unknown) => r));
+    expect(error.code).toBe("invalid_input");
+    expect(error.message).toContain("must be a UUID");
+    // The field, so the model knows which argument to change.
+    expect(error.message).toContain("id");
+  });
+
+  it("answers invalid_input for a junk cursor, and does not let it reach a timestamptz cast", async () => {
+    /**
+     * Recorded verbatim because inventing this input would not have occurred to me. A live gpt-4o turn called
+     * `list_campaigns` with
+     *
+     *     cursor: "}.kwargs_0_0} 0_SKIP_TO_PARAMS_MULTI_0_GP.next_0_multi_tool_use.parallel…"
+     *
+     * and in another run, four times with `cursor: "/"`. Untyped, each reached `$3::timestamptz` and returned
+     * `date/time field value out of range: "0"` as `internal`. One malformed argument took out an otherwise
+     * complete turn.
+     */
+    for (const cursor of ["/", "}.kwargs_0_0} 0_SKIP_TO_PARAMS_MULTI_0_GP.next_0_multi_tool_use.parallel"]) {
+      const error = thrown(
+        await content().listDrafts(context(), { limit: 5, cursor }).catch((rejection: unknown) => rejection),
+      );
+      expect(error.code).toBe("invalid_input");
+      expect(error.message).toContain("cursor");
+    }
+    // A real cursor still works, so the check did not close the door it guards.
+    const page = await content().listDrafts(context(), { limit: 1 });
+    if (page.nextCursor !== undefined) {
+      await expect(content().listDrafts(context(), { limit: 1, cursor: page.nextCursor })).resolves.toBeDefined();
+    }
+  });
+
+  it("refuses to attach a draft to another workspace's campaign", async () => {
+    /**
+     * **A cross-tenant hole the database does not close.** `posts_campaign_id_fkey` is
+     * `FOREIGN KEY (campaign_id) REFERENCES campaigns(id)` and nothing more, so Postgres will happily attach
+     * workspace B's draft to workspace A's campaign. Verified directly against this schema before the fix:
+     *
+     * ```
+     *  post_in_b | points_at_a_campaign
+     * -----------+----------------------
+     *  t         | t
+     * ```
+     *
+     * The id comes from a model argument, so it is reachable. Same lesson as the status-transition trigger,
+     * which skips validation entirely when `auth.uid()` is null: the database does not guard this for a
+     * service-role caller, so the service must.
+     *
+     * `not_found`, never `forbidden` — the two must be indistinguishable, or the endpoint confirms the
+     * existence of other tenants' ids.
+     */
+    const other = await sql.query<{ id: string }>("insert into public.workspaces (name) values ('other-camp') returning id");
+    const theirs = await sql.query<{ id: string }>(
+      `insert into public.campaigns (workspace_id, name, theme, starts_on, ends_on, cadence, channels)
+       values ($1::uuid, 'theirs', 't', '2026-10-01', '2026-10-02', 'weekly', '{instagram}') returning id`,
+      [other[0]!.id],
+    );
+
+    const error = thrown(
+      await content()
+        .createDraft(context(), {
+          idempotencyKey: "xt-1" as never,
+          caption: "attaching to someone else's campaign #a #b #c #d #e",
+          targetPlatforms: ["linkedin"] as never,
+          campaignId: theirs[0]!.id as never,
+        })
+        .catch((rejection: unknown) => rejection),
+    );
+    expect(error.code).toBe("not_found");
+
+    // Nothing was written — the check runs before the insert, not as a cleanup after it.
+    const written = await sql.query<{ n: string }>(
+      "select count(*) as n from public.posts where workspace_id = $1::uuid and campaign_id = $2::uuid",
+      [workspaceId, theirs[0]!.id],
+    );
+    expect(written[0]!.n).toBe("0");
+    await sql.query("delete from public.workspaces where id = $1::uuid", [other[0]!.id]);
+  });
+
+  it("answers not_found for a campaign that does not exist, not a foreign-key violation", async () => {
+    // Same fix, kinder symptom: a well-formed id for no campaign used to surface as
+    // `insert or update on table "posts" violates foreign key constraint` under code `internal`.
+    const error = thrown(
+      await content()
+        .createDraft(context(), {
+          idempotencyKey: "xt-2" as never,
+          caption: "attaching to nothing #a #b #c #d #e",
+          targetPlatforms: ["linkedin"] as never,
+          campaignId: "00000000-0000-0000-0000-000000000000" as never,
+        })
+        .catch((rejection: unknown) => rejection),
+    );
+    expect(error.code).toBe("not_found");
+    expect(error.message).toContain("list_campaigns");
+  });
+
+  it("attaches a draft to this workspace's own campaign", async () => {
+    // The capability still works: the check refuses other tenants' ids, not every id.
+    const mine = await content().createCampaign(context(), {
+      idempotencyKey: "own-1" as never,
+      name: "Own campaign",
+      theme: "t",
+      startsOn: "2026-11-01" as never,
+      endsOn: "2026-11-30" as never,
+      cadence: "weekly" as never,
+      channels: ["linkedin"] as never,
+    });
+    const draft = await content().createDraft(context(), {
+      idempotencyKey: "own-2" as never,
+      caption: "in a campaign #a #b #c #d #e",
+      targetPlatforms: ["linkedin"] as never,
+      campaignId: mine.id,
+    });
+    expect(draft.campaignId).toBe(mine.id);
+  });
+});
+
 describe.skipIf(URL_ === undefined)("ContentService over campaigns — the five methods nothing exercised", () => {
   /**
    * ## Why this block exists

@@ -7,6 +7,8 @@
  * `posts.ts` before `index.ts`'s body and every factory hit `shareFlowTool is not a function` at import
  * time. Importing from here instead breaks the cycle, and `index.ts` re-exports it so no caller notices.
  */
+import { z } from "zod";
+
 import type { DelegatingToolDeps, Tool } from "@retinue/agentkit";
 
 import type { ShareFlowServices } from "../services/index.js";
@@ -83,3 +85,50 @@ export const shareFlowTool = <const R extends ShareFlowServiceName>(
   requires: readonly R[],
   build: (context: ShareFlowToolContext<R>) => Tool,
 ): ShareFlowToolFactory<R> => ({ requires, build });
+
+/**
+ * A store-issued id, as a tool argument.
+ *
+ * **A non-empty string, not a UUID — and that is a deliberate reversal.** I made it `.uuid()` after a real
+ * gpt-4o turn passed `campaignId: "1"`, and then measured what that actually bought: the model simply
+ * fabricated *well-formed* uuids instead (`00000000-…`, `12345678-1234-1234-1234-123456789abc`). It changed
+ * which garbage arrived, not whether garbage arrived. The fabrication was fixed by making "no campaign"
+ * sayable — see `createPostDraftSchema`.
+ *
+ * What it cost was worse than what it bought. `PostDraftId` and friends are **branded strings** in the port,
+ * not uuids; uuid is how *this* ShareFlow schema happens to store them. Asserting it here pushes a storage
+ * detail into the model-facing contract, so a deployment with opaque ids would have its valid ids refused by
+ * a tool that has no business knowing the format.
+ *
+ * The format check belongs in the adapter, which does know — `asUuid` in `adapters/postgres/content.ts`
+ * answers `invalid_input` naming the field, where the raw cast previously produced
+ * `invalid input syntax for type uuid` under code `internal`.
+ *
+ * The description stays, because it is contract-level rather than storage-level: where ids come from is true
+ * of every deployment.
+ *
+ * It was also defined **ten times**, once per tool file, which is why it lives here now. Ten copies of a
+ * validation rule is ten places for it to be right in nine of them.
+ */
+export const idString = z
+  .string()
+  .min(1)
+  .describe("An id this workspace's own tools returned. Never invent one — read it from a previous result.");
+
+/**
+ * A pagination cursor, as a tool argument.
+ *
+ * Described, not format-checked, for the reason `idString` gives at length: `Page.nextCursor` is **opaque** in
+ * the port, and that this adapter happens to make it an ISO instant is the adapter's business. A `.datetime()`
+ * here would refuse a valid cursor from any other `ContentService`.
+ *
+ * The motivating input is still worth recording. A real gpt-4o turn called `list_campaigns` four times with
+ * `cursor: "/"`, and another with a hundred characters of parallel-tool-call junk. Untyped, each reached
+ * `$3::timestamptz` and came back as `date/time field value out of range` under code `internal` — one
+ * malformed argument taking out an otherwise complete turn. `asCursor` in the adapter refuses those now, by
+ * name and as `invalid_input`, which is the layer that knows what a cursor is here.
+ */
+export const cursorString = z
+  .string()
+  .min(1)
+  .describe("The `nextCursor` from a previous page of this same tool. Omit it to start from the beginning.");

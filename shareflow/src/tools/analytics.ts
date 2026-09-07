@@ -39,9 +39,8 @@ import type {
   PostDraftId,
 } from "../services/index.js";
 import type { ShareFlowToolFactory } from "./factory.js";
-import { shareFlowTool } from "./factory.js";
+import { idString, shareFlowTool } from "./factory.js";
 
-const idString = z.string().min(1);
 
 const calendarDate = z
   .string()

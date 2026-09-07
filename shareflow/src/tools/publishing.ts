@@ -45,9 +45,8 @@ import {
 } from "../services/index.js";
 import type { ShareFlowToolFactory } from "./factory.js";
 import type { ShareFlowServices } from "../services/index.js";
-import { shareFlowTool } from "./factory.js";
+import { idString, shareFlowTool } from "./factory.js";
 
-const idString = z.string().min(1);
 const accountIds = z.array(idString).min(1).max(20);
 
 /** `YYYY-MM-DDTHH:MM:SSZ`-ish. Rejected here so a malformed time never reaches an approval request. */

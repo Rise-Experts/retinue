@@ -290,7 +290,7 @@ From Accounts:
 | `context/` | the eight providers from docs/07, the shared section builder, and the forbidden-claim checker |
 | `skills/` | the seven migrated skill bodies, validated at import time by the platform's own validator |
 | `manifests/` | the Social Assistant — `id` neutral, branding in the display name |
-| `shadow/` | shadow-run recording and the per-workflow parity diff |
+| `shadow/` | shadow-run recording, the per-workflow parity diff, and the runner that produces one |
 | `rollout/` | per-workspace runtime flags, rollback, and the written procedure |
 | `parity/` | the parity gates, their evaluator, the cutover runbook and the removal gate |
 | `adapters/` | three of the ten services, over ShareFlow's own tables and the host's model (#190) |
@@ -349,6 +349,48 @@ factories and compares each declaration with the `services.` accesses in its bod
 Registration validates at construction: a duplicate tool name, a category outside the vocabulary, or a
 capability whose service is absent stops the process starting, rather than producing a confusing catalog on
 someone's first conversation.
+
+## Running a real shadow turn
+
+Every part of the parity machinery existed for weeks except the measurement itself: the recorder (#126), the
+diff, the gates (#128), the flag (#127), and a report that correctly refused to run on an empty set. Nothing
+could produce a run.
+
+```bash
+RETINUE_TEST_SHAREFLOW_URL=postgresql://… node --env-file=../.env scripts/shadow-turn.mjs \
+  --workflow create-post \
+  --message "Draft an Instagram post about the launch. Propose angles first." \
+  --message "Use the durability angle, then save it as an Instagram draft." \
+  --out shadow-new.json
+```
+
+It makes real model calls against a real ShareFlow database and prints the tool calls, the suppressed writes,
+and the rows the turn actually wrote. `--message` is repeatable because **a workflow is not one turn**: asked
+once, the assistant proposes three angles and asks which to use — exactly as docs/07 step 5 says — and a
+comparison of "asked a question" against a completed old-runtime workflow measures nothing.
+
+**A shadow run does create real drafts.** Suppression covers `external-write` and `destructive`, not
+`internal-write`, so the script runs in a workspace of its own and prints what it made.
+
+### What the first real turns found
+
+Seven defects, none visible to the compiler and none to the 52 adapter tests, every one reached from a model
+argument:
+
+| | |
+|---|---|
+| An authorization role listing `tools: ["*"]` | there is no wildcard — `filterTools` is an exact name-or-category match, so the model got an **empty catalogue**, called nothing, and answered from memory. Nothing said the catalogue was empty. |
+| `ValidationIssue.repairable` omitted behind a cast | it is required, and `generate_content`'s repair loop reads `!i.repairable`. `!undefined` is `true`, so every finding read as unrepairable and generation never made a second attempt — instagram wants five hashtags, the model writes two, and the loop recovers on the very next attempt when told. |
+| `campaignId: "1"` from the model | reached `$7::uuid` and surfaced as `invalid input syntax for type uuid` under code `internal`. |
+| `cursor: "/"`, and once a hundred characters of parallel-tool-call junk | reached `$3::timestamptz` and surfaced as `date/time field value out of range` under `internal`. One bad argument took out an otherwise complete turn. |
+| A well-formed id for another workspace's campaign | `posts_campaign_id_fkey` references `campaigns(id)` **and nothing else**, so the database will attach workspace B's draft to workspace A's campaign. Verified, then closed in the service. |
+| `campaignId: idString.optional()` | told not to attach a campaign, gpt-4o called `create_post_draft` seven times in one turn inventing an id each time. A field description changed nothing; removing the field made the workflow complete first try. It is now a discriminated `campaign` union, so **"none" is sayable** rather than something to omit. |
+| `parity-report.mjs` on a run with no old half | crashed with `Cannot read properties of null`. The guard was `=== undefined`, and JSON cannot express `undefined`. The one script whose job is refusing bad input threw on the likeliest bad input there is. |
+
+Two changes were tried, measured and **reverted**: `.uuid()` on the tool-level `idString` and `.datetime()` on
+`cursorString`. Neither stopped the fabrication — the model simply produced well-formed garbage instead — and
+both pushed a storage detail into the model-facing contract, where `PostDraftId` is a branded string and
+`nextCursor` is opaque. Those checks live in the adapter, which is the layer that knows.
 
 ### What the adapters found
 

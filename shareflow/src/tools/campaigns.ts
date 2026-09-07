@@ -27,7 +27,7 @@ import {
   type PlatformId,
 } from "../services/index.js";
 import type { ShareFlowToolFactory } from "./factory.js";
-import { shareFlowTool } from "./factory.js";
+import { cursorString, idString, shareFlowTool } from "./factory.js";
 
 /**
  * Why there is no `boost_campaign`, `set_campaign_budget` or anything like them.
@@ -59,7 +59,6 @@ const channels = z
   // platform ids, and a model routinely sends "LinkedIn".
   .transform((values) => [...new Set(values.map((v) => v.toLowerCase()))] as PlatformId[]);
 
-const idString = z.string().min(1);
 const shortText = z.string().trim().min(1).max(200);
 const longText = z.string().trim().min(1).max(4_000);
 
@@ -114,7 +113,7 @@ const listCampaignsSchema = z
   .object({
     status: z.enum(CAMPAIGN_STATUSES).optional(),
     limit: z.number().int().min(1).max(25).default(10),
-    cursor: z.string().min(1).optional(),
+    cursor: cursorString.optional(),
   })
   .strict();
 
@@ -161,7 +160,7 @@ const getCampaignCalendarSchema = z
   .object({
     campaignId: idString,
     limit: z.number().int().min(1).max(50).default(25),
-    cursor: z.string().min(1).optional(),
+    cursor: cursorString.optional(),
   })
   .strict();
 

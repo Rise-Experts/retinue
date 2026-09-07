@@ -34,9 +34,8 @@ import {
   type ValidationIssue,
 } from "../services/index.js";
 import type { ShareFlowToolFactory } from "./factory.js";
-import { shareFlowTool } from "./factory.js";
+import { cursorString, idString, shareFlowTool } from "./factory.js";
 
-const idString = z.string().min(1);
 const assetIds = z.array(idString).min(1).max(20);
 
 const platformList = z
@@ -85,7 +84,7 @@ const storageView = (check: MediaStorageCheck) => ({
 const listMediaSchema = z
   .object({
     limit: z.number().int().min(1).max(25).default(10),
-    cursor: z.string().min(1).optional(),
+    cursor: cursorString.optional(),
   })
   .strict();
 
