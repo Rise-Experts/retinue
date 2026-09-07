@@ -322,6 +322,73 @@ describe("a rejection is never reported as a send — AC-6", () => {
     expect(sink.messages).toHaveLength(0);
   });
 
+  it("gives the TLS handshake a deadline, so a stalling server cannot wedge the send", async () => {
+    /**
+     * The assertion the failed release was asking for, and the one the test above could not make.
+     *
+     * `tlsConnect` has no timeout of its own, and the reply timer covers *commands* — during a handshake no
+     * SMTP command is outstanding, so nothing was watching. A server that advertises STARTTLS, answers the
+     * command and then goes quiet left the send pending forever. The sink does exactly that: it accepts the
+     * connection and never speaks TLS.
+     *
+     * This asserts the **message**, not just that the call returned. Without the deadline in
+     * `Connection.upgrade` the promise never settles, and the only way that shows up is as a harness timeout
+     * — which is precisely how it reached CI, passing here and failing there depending on whether the socket
+     * happened to error first.
+     */
+    /**
+     * `localhost`, not `127.0.0.1`, and the difference is the point: SNI is only sent for a *name*, so an
+     * address never reaches the handshake and would test nothing. Reaching the same sink by name is what makes
+     * it stall the way a real server does.
+     */
+    const sink = (open = await startSink({ capabilities: ["STARTTLS", "AUTH PLAIN"] }));
+    const started = Date.now();
+    const outcome = (await run(
+      smtpProvider({
+        host: "localhost",
+        port: sink.port,
+        requireTls: false,
+        credentialRef: "smtp",
+        resolver: basicResolver,
+        timeoutMs: 120,
+      }),
+      "email_send",
+      BASIC,
+    )) as { ok: false; error: { message: string } };
+    expect(outcome.ok).toBe(false);
+    expect(outcome.error.message).toMatch(/TLS handshake .* did not complete within 120ms/);
+    // Bounded, not merely eventual: well inside the harness's own limit rather than racing it.
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(sink.messages).toHaveLength(0);
+  });
+
+  it("upgrades a connection to an IP address, where SNI does not apply", async () => {
+    /**
+     * The assertion the SNI fix needed, and it was missing: sabotaging `isIpAddress` back to always sending
+     * `servername` broke **no test**, because the STARTTLS test above only checks the command was *issued* —
+     * which happens before the upgrade — and every other test reaches the sink by address without ever
+     * upgrading.
+     *
+     * Node refuses `servername` for an address outright, so before the fix `smtpProvider({ host: "10.0.0.5" })`
+     * could not do STARTTLS at all: the upgrade threw `Setting the TLS ServerName to an IP address is not
+     * permitted` before a byte was exchanged. An internal relay addressed by IP is an ordinary deployment.
+     *
+     * What makes this discriminating is *which* failure it asserts. The send still fails — the sink cannot
+     * speak TLS — but it must fail at the **handshake deadline**, meaning the handshake was actually
+     * attempted. The servername error would arrive instead, and says the upgrade never started.
+     */
+    const sink = (open = await startSink({ capabilities: ["STARTTLS", "AUTH PLAIN"] }));
+    const outcome = (await run(localSmtp(sink, { timeoutMs: 120 }), "email_send", BASIC)) as {
+      ok: false;
+      error: { message: string };
+    };
+    expect(outcome.ok).toBe(false);
+    expect(outcome.error.message).toMatch(/TLS handshake .* did not complete within 120ms/);
+    expect(outcome.error.message).not.toMatch(/ServerName/);
+    expect(sink.commands).toContain("STARTTLS");
+    expect(sink.messages).toHaveLength(0);
+  });
+
   it("refuses to send in the clear when the server offers no STARTTLS", async () => {
     // A downgrade an attacker on the path can force by stripping the advertisement, not a fallback.
     const sink = (open = await startSink());

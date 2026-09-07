@@ -89,6 +89,15 @@ type Connection = {
  * is the classic bug — the EHLO response is multi-line and its later lines are the capability list, so a
  * client that stops at the first has no idea whether STARTTLS is available.
  */
+/**
+ * Is this host an address rather than a name?
+ *
+ * Both families, because either is a legitimate `host` for a relay. Deliberately not a full validator — the
+ * only question is whether SNI applies, and anything that is not an address is a name as far as TLS cares.
+ */
+export const isIpAddress = (host: string): boolean =>
+  /^\d{1,3}(?:\.\d{1,3}){3}$/.test(host) || host.includes(":") || /^\[.*\]$/.test(host);
+
 const createConnection = (socket: Socket | TLSSocket, timeoutMs: number, host: string): Connection => {
   let buffer = "";
   let capabilities: readonly string[] = [];
@@ -163,11 +172,51 @@ const createConnection = (socket: Socket | TLSSocket, timeoutMs: number, host: s
     sendRaw(payload) {
       active.write(payload);
     },
+    /**
+     * Upgrade to TLS, **with a deadline on the handshake**.
+     *
+     * `tlsConnect` has no timeout of its own, and `timeoutMs` above guards only command *replies* — so a
+     * server that advertises STARTTLS, accepts the command and then never completes the handshake left this
+     * promise unsettled forever. Not a hypothetical: it is what a stalled or hostile server does, and there is
+     * no reply timer covering the window because no SMTP command is outstanding during a handshake.
+     *
+     * Found by a release failing on a hosted runner while passing on a workstation, which is the same fact
+     * seen from the test side: the sink accepts the connection and never speaks TLS, so whether the socket
+     * errored quickly or hung was the machine's choice. A test cannot be made deterministic while the code it
+     * drives can wait forever.
+     */
     async upgrade() {
       const plain = active as Socket;
       await new Promise<void>((resolve, reject) => {
-        const secured = tlsConnect({ socket: plain, servername: host }, () => resolve());
-        secured.on("error", reject);
+        let secured: TLSSocket | undefined;
+        const timer = setTimeout(() => {
+          // Destroyed rather than left dangling: a half-open handshake holds a socket and a file descriptor,
+          // and the caller is about to be told this connection is unusable.
+          secured?.destroy();
+          plain.destroy();
+          reject(new Error(`TLS handshake with ${host} did not complete within ${timeoutMs}ms.`));
+        }, timeoutMs);
+        // A pending handshake must not be the reason a process stays alive.
+        timer.unref?.();
+        const settle = <A>(fn: (value: A) => void) => (value: A) => {
+          clearTimeout(timer);
+          fn(value);
+        };
+        /**
+         * `servername` is omitted when the host is an IP literal, because Node refuses it outright:
+         * *"Setting the TLS ServerName to an IP address is not permitted."*
+         *
+         * A real defect, not a test artefact. Connecting to an internal SMTP relay by address —
+         * `smtpProvider({ host: "10.0.0.5" })` — is an ordinary deployment, and STARTTLS to it was
+         * impossible: every upgrade threw before a byte was exchanged. SNI exists to select a certificate by
+         * name and has no meaning for an address, so omitting it is what the protocol wants anyway.
+         *
+         * Certificate verification is untouched: `tlsConnect` still validates against the default CA store,
+         * and an address-only connection is checked against the certificate's IP SANs.
+         */
+        const sni = isIpAddress(host) ? {} : { servername: host };
+        secured = tlsConnect({ socket: plain, ...sni }, settle<void>(() => resolve())) as TLSSocket;
+        secured.on("error", settle<Error>(reject));
         active = secured;
         attach(secured);
       });
