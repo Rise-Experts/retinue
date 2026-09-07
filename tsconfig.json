@@ -17,10 +17,19 @@
       "path": "./services/api"
     },
     {
+      "path": "./tools/azure"
+    },
+    {
+      "path": "./tools/browser"
+    },
+    {
       "path": "./tools/confluence"
     },
     {
       "path": "./tools/discord"
+    },
+    {
+      "path": "./tools/email"
     },
     {
       "path": "./tools/github"
@@ -42,6 +51,9 @@
     },
     {
       "path": "./tools/reddit"
+    },
+    {
+      "path": "./tools/scrape"
     },
     {
       "path": "./tools/x"
