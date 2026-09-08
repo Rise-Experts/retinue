@@ -56,13 +56,93 @@ const postgres = async (config: { readonly databaseUrl: string; readonly databas
  * crash returning with the fix apparently in place. Two constants that must be equal are one constant.
  */
 
+/**
+ * Create the configured schema if it is not there, before anything tries to use it.
+ *
+ * `migrate` is the command that owns provisioning, so the namespace it was told to provision into is
+ * its job too. Without this the failure is technically clear and practically baffling: `pool.ts` sets
+ * `search_path` on every connection and destroys any connection where that fails, so a missing schema
+ * surfaces as every query failing rather than as "the schema does not exist".
+ *
+ * On its own connection with the **default** search path, which is the part that is easy to get wrong.
+ * A connection configured for `retinue` cannot be the one that creates `retinue` — `openPostgres`
+ * destroys it during setup, before a statement of ours runs.
+ *
+ * `IF NOT EXISTS` and nothing else: no owner, no grants, no drop. Provisioning a namespace is additive;
+ * deciding who may use it is a deployment's decision and not a migration's.
+ */
+/**
+ * Which `migrate` invocations must change nothing.
+ *
+ * Its own function because it is the link between a flag and a side effect, and that link is invisible
+ * to a test of either end: sabotaging it to `false` — so `--dry-run` provisions a schema — broke
+ * nothing, while every assertion about `ensureSchema` itself stayed green. The list is also the same
+ * one the read-only branch below uses, so a third flag added to one and not the other cannot silently
+ * become a writing dry run.
+ */
+export const READ_ONLY_FLAGS = ["--status", "--dry-run"] as const;
+export const isReadOnly = (flags: ReadonlySet<string>): boolean => READ_ONLY_FLAGS.some((flag) => flags.has(flag));
+
+export const ensureSchema = async (
+  config: { readonly databaseUrl: string; readonly databaseSchema?: string },
+  {
+    create,
+    // Injectable so a test can run this against a real Postgres — PGlite — without a live server. The
+    // default is the same `postgres` every command here uses.
+    connect = (settings: { readonly databaseUrl: string }) => postgres(settings),
+  }: {
+    readonly create: boolean;
+    readonly connect?: (settings: { readonly databaseUrl: string }) => Promise<{
+      readonly sql: { query<Row>(text: string, params?: readonly unknown[]): Promise<Row[]> };
+      readonly end: () => Promise<void>;
+    }>;
+  },
+): Promise<boolean> => {
+  if (config.databaseSchema === undefined) return true;
+  const { sql, end } = await connect({ databaseUrl: config.databaseUrl });
+  try {
+    if (create) {
+      // Validated as an unquoted identifier by `loadConfig` — the only reason this concatenation is safe,
+      // and the reason that check refuses anything Postgres would need quoted.
+      await sql.query(`CREATE SCHEMA IF NOT EXISTS ${config.databaseSchema}`);
+      console.log(`schema: ${config.databaseSchema} ready`);
+      return true;
+    }
+    /**
+     * The read-only paths report instead of creating, and that is not fussiness.
+     *
+     * `--dry-run` and `--status` are documented a few lines below as side-effect free — the note says
+     * `public` has 0 tables after a dry run against a fresh database — and a reader deciding whether to
+     * trust a dry run is exactly the reader who must not find it provisioned a schema. Creating one is
+     * a small side effect and a large broken promise.
+     */
+    const rows = await sql.query<{ readonly exists: boolean }>(
+      `select exists (select 1 from pg_namespace where nspname = $1) as exists`,
+      [config.databaseSchema],
+    );
+    if (rows[0]?.exists === true) return true;
+    console.error(
+      `schema: ${config.databaseSchema} does not exist. RETINUE_DATABASE_SCHEMA names it, so every query ` +
+        `would run there. Run \`retinue migrate\` — which creates it — or unset the variable to use the ` +
+        `connection's own schema.`,
+    );
+    return false;
+  } finally {
+    await end();
+  }
+};
+
 const migrate = async (flags: ReadonlySet<string>, env = process.env): Promise<number> => {
   const config = loadConfig(env);
+  // Before the pool that needs it, because `pool.ts` sets `search_path` on every connection and destroys
+  // any connection where that fails — so a missing schema otherwise surfaces as every query failing
+  // rather than as the one sentence that explains it. The read-only flags report rather than create.
+  if (!(await ensureSchema(config, { create: !isReadOnly(flags) }))) return 1;
   const { sql, open, end } = await postgres(config);
   try {
     const { createSchemaManager, MIGRATION_LOCK } = await import("../entries/adapters-postgres.js");
 
-    if (flags.has("--status") || flags.has("--dry-run")) {
+    if (isReadOnly(flags)) {
       // Read-only paths take no lock. `plan()` and `currentVersion()` are documented as side-effect free — only
       // `apply()` creates the ledger table — which is what makes a dry run honest rather than a dry run that
       // provisions one table. Verified: after `--dry-run` against a fresh database, `public` has 0 tables.
