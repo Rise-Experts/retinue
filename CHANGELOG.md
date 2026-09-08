@@ -1,3 +1,13 @@
+## agentkit 0.3.1
+
+### Added
+
+- **server**: `RETINUE_DATABASE_SCHEMA`, so the platform can share a database it does not own ([#190](https://github.com/Rise-Experts/retinue/issues/190)). Platform tables go in the named schema and `search_path` becomes `<schema>, public`, which is what lets one pool serve a platform schema and a product's `public` at once. `retinue migrate` creates the schema; `--status` and `--dry-run` report a missing one and change nothing.
+
+  A patch rather than a minor, deliberately. Nothing changes for a deployment that does not set the variable — no default, no new required configuration — and #193's independent per-package versions mean a `0.4.0` here would fall outside the `^0.3.0` that all eighteen toolkits declare, forcing a release of packages this does not touch.
+
+  Worth knowing why it is not merely a convenience: a missing schema does **not** error. `SET search_path TO retinue, public` succeeds when `retinue` does not exist, and every `CREATE TABLE` then lands in the next schema on the path. Without the provisioning step, 34 migrations would be created in `public` beside another project's tables, reporting success the whole way.
+
 ## Unreleased
 
 ### Changed — BREAKING

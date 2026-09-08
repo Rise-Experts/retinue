@@ -27,6 +27,9 @@
  * Both static and dynamic imports are collected. A dynamic one fails later than a static one -- on the
  * first turn that reaches it rather than at load -- which is worse, not better.
  *
+ * A copy of this script lives in the retinue monorepo, which ships the platform this package consumes.
+ * They are deliberately identical; if you change one, change the other.
+ *
  * Usage: `node scripts/collect-runtime-imports.mjs <entry.js> [entry.js ...] > imports.json`
  * Exit codes: 0 wrote a list, 2 an entry point does not exist or the walk failed.
  */
@@ -38,6 +41,9 @@ import { dirname, resolve as resolvePath } from "node:path";
 import ts from "typescript";
 
 const BUILTINS = new Set([...builtinModules, ...builtinModules.map((m) => `node:${m}`)]);
+
+/** The scope whose packages the walk follows into. See `localPackages`. */
+const OWN_SCOPE = "@retinue";
 
 /**
  * Resolve a relative specifier the way Node does for a directory or an extensionless path.
@@ -54,16 +60,21 @@ export const resolveRelative = (fromFile, specifier) => {
 };
 
 /**
- * Workspace packages, as `name -> directory`, from the root manifest's `workspaces` globs.
+ * Packages whose own sources the walk should follow, as `name -> directory`.
  *
- * Needed because the walk has to cross the workspace boundary. Stopping at `@retinue/agentkit` reached
+ * Needed because the walk has to cross the package boundary. Stopping at `@retinue/agentkit` reached
  * 113 files and reported twelve specifiers, none of them `bullmq`, `ioredis` or a single `@ai-sdk/*` --
  * every one of those is imported *inside* the runtime, which is exactly where an app forgets to declare
  * them. A check that stops at the boundary is blind to the whole class it was written for.
+ *
+ * Two sources, because the same package is reached two ways. In a monorepo it is a sibling workspace
+ * listed in the root manifest. Standing alone it is an ordinary dependency under `node_modules`, and a
+ * version of this that only knew about workspaces refused to walk at all — every `@retinue/*` subpath
+ * came back as an unfollowable crossing.
  */
-export const workspacePackages = (readJson, listDir) => {
-  const root = readJson("package.json");
+export const localPackages = (readJson, listDir) => {
   const out = new Map();
+  const root = readJson("package.json");
   for (const pattern of root?.workspaces ?? []) {
     const dirs = pattern.endsWith("/*")
       ? listDir(pattern.slice(0, -2)).map((name) => `${pattern.slice(0, -2)}/${name}`)
@@ -72,6 +83,25 @@ export const workspacePackages = (readJson, listDir) => {
       const manifest = readJson(`${dir}/package.json`);
       if (manifest?.name !== undefined) out.set(manifest.name, dir);
     }
+  }
+  /**
+   * Installed dependencies **under our own scope**, from the manifest rather than by listing
+   * `node_modules`.
+   *
+   * The scope restriction is the important part, and it took a wrong answer to find. Following every
+   * installed dependency reported 33 specifiers instead of 20, among them `pg-native` and
+   * `@ai-sdk/deepseek/internal`: `pg` requires `pg-native` inside a try/catch and it is deliberately
+   * not installed, so the verification step failed on a package that is *correctly* absent. A checker
+   * firing on a correct tree is the false alarm that gets a check deleted rather than fixed.
+   *
+   * The line is ownership. `@retinue/agentkit`'s optional peers are this deployment's problem, because
+   * this deployment is the application that has to declare them. What `pg` does inside itself is `pg`'s
+   * problem, and it already handles it.
+   */
+  for (const name of Object.keys(root?.dependencies ?? {})) {
+    if (out.has(name) || !name.startsWith(`${OWN_SCOPE}/`)) continue;
+    const dir = `node_modules/${name}`;
+    if (readJson(`${dir}/package.json`) !== null) out.set(name, dir);
   }
   return out;
 };
@@ -82,9 +112,9 @@ export const workspacePackages = (readJson, listDir) => {
  * The map is the authority, not a path convention: `@retinue/agentkit/hitl` is
  * `dist/entries/hitl.js`, which no amount of string surgery on the subpath would produce.
  */
-export const resolveWorkspace = (specifier, workspaces, readJson) => {
+export const resolveLocal = (specifier, locals, readJson) => {
   const name = specifier.startsWith("@") ? specifier.split("/").slice(0, 2).join("/") : specifier.split("/")[0];
-  const dir = workspaces.get(name);
+  const dir = locals.get(name);
   if (dir === undefined) return null;
   const manifest = readJson(`${dir}/package.json`);
   if (manifest === null) return null;
@@ -128,7 +158,7 @@ export const collect = (
     },
   } = {},
 ) => {
-  const workspaces = workspacePackages(readJson, listDir);
+  const locals = localPackages(readJson, listDir);
   const seen = new Set();
   const queue = [...entries.map((entry) => resolvePath(entry))];
   const specifiers = new Map();
@@ -164,7 +194,7 @@ export const collect = (
 
       // Cross into a sibling workspace and keep walking. Its own imports are the deployment's problem
       // just as much as the app's -- that is what an optional peer *means*.
-      const local = resolveWorkspace(fileName, workspaces, readJson);
+      const local = resolveLocal(fileName, locals, readJson);
       if (local !== null) {
         crossed.add(fileName);
         queue.push(local);
@@ -206,7 +236,8 @@ const main = () => {
   }
   if (blind.size > 0) {
     console.error(
-      `collect-runtime-imports: could not follow ${[...blind].join(", ")} into its workspace — the walk would ` +
+      `collect-runtime-imports: could not follow ${[...blind].join(", ")} into its own sources — the walk ` +
+        `would ` +
         `report only what the app imports directly, which is the smaller and wrong answer`,
     );
     process.exit(2);
@@ -226,7 +257,7 @@ const main = () => {
   process.stdout.write(`${JSON.stringify(out, null, 2)}\n`);
   console.error(
     `collect-runtime-imports: ${out.specifiers.length} specifiers from ${files} files ` +
-      `(crossed into ${crossed.size} workspace subpath(s))`,
+      `(crossed into ${crossed.size} local subpath(s))`,
   );
 };
 
