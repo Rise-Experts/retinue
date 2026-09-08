@@ -41,6 +41,7 @@ import { ACCOUNT_STATUS_FROM_DB, accountHealthFrom } from "../connectors.js";
 import { LEAD_SUPPRESSION, STORED_LEAD_STATUSES, encodeAttribution, normaliseEmail } from "../leads.js";
 import { ANALYTICS_REFRESH_WINDOW_MS } from "../analytics.js";
 import { MEDIA_UNCHECKED_CODE, createPostgresMediaService } from "../media.js";
+import { createPostgresEngagementService } from "../engagement.js";
 import { ARTIFACT_SCHEME, artifactReference, createPostgresArtifactService } from "../artifacts.js";
 import {
   createPostgresContentService,
@@ -3703,5 +3704,84 @@ describe.skipIf(URL_ === undefined)("MediaService — detach, replace and the qu
     } finally {
       await sql.query("delete from public.workspaces where id = $1::uuid", [foreign[0]!.id]);
     }
+  });
+});
+
+describe.skipIf(URL_ === undefined)("EngagementService.draftReply — the review step (#190)", () => {
+  /**
+   * `POST /reply` and `reply_to_comment` are two capabilities. This is the first: it drafts and sends
+   * nothing, leaving the comment in `needs_review` — the state that exists so a person looks before anything
+   * reaches a customer's audience. Mapping the two together would have claimed that step survived the
+   * migration.
+   */
+  const engagement = () => createPostgresEngagementService({ sql, transaction });
+
+  const comment = async (status: string) => {
+    const row = await sql.query<{ id: string }>(
+      `insert into public.inbox_comments
+         (workspace_id, platform, author_name, content, reply_status)
+       values ($1::uuid, 'linkedin', 'A reader', 'Is this available in the EU?', $2) returning id`,
+      [workspaceId, status],
+    );
+    return row[0]!.id;
+  };
+
+  it("writes the draft and leaves it for a person", async () => {
+    const id = await comment("needs_review");
+    const drafted = await engagement().draftReply(context(), {
+      idempotencyKey: "dr1" as never,
+      commentId: id as never,
+      text: "Yes — we ship to the EU, and duties are included.",
+    });
+    expect(drafted.replyState).toBe("needs-review");
+    expect(drafted.draftedReply).toContain("we ship to the EU");
+
+    // Nothing was sent: the row is still awaiting review, with no replied_at.
+    const row = await sql.query<{ reply_status: string; replied_at: string | null }>(
+      "select reply_status, replied_at from public.inbox_comments where id = $1::uuid",
+      [id],
+    );
+    expect(row[0]?.reply_status).toBe("needs_review");
+    expect(row[0]?.replied_at).toBeNull();
+  });
+
+  it("puts a dismissed comment back in the queue", async () => {
+    /**
+     * Drafting a reply to something previously set aside is a decision to look at it again. Leaving it
+     * `dismissed` would hide the draft from the only screen that shows drafts — the assistant would report
+     * writing one and nobody would ever see it.
+     */
+    const id = await comment("dismissed");
+    const drafted = await engagement().draftReply(context(), {
+      idempotencyKey: "dr2" as never,
+      commentId: id as never,
+      text: "Sorry for the delay — here is the answer.",
+    });
+    expect(drafted.replyState).toBe("needs-review");
+  });
+
+  it("refuses to draft over a reply that was already sent", async () => {
+    // A draft written over sent text would overwrite what actually went out and make the record read as
+    // though nobody had answered.
+    for (const sent of ["sent", "auto_sent"]) {
+      const id = await comment(sent);
+      const error = thrown(
+        await engagement()
+          .draftReply(context(), { idempotencyKey: `dr-${sent}` as never, commentId: id as never, text: "hello" })
+          .catch((r: unknown) => r),
+      );
+      expect(error.code, sent).toBe("conflict");
+      expect(error.message, sent).toContain("hide the reply that was sent");
+    }
+  });
+
+  it("refuses an empty draft", async () => {
+    const id = await comment("needs_review");
+    const error = thrown(
+      await engagement()
+        .draftReply(context(), { idempotencyKey: "dr4" as never, commentId: id as never, text: "   " })
+        .catch((r: unknown) => r),
+    );
+    expect(error.code).toBe("invalid_input");
   });
 });

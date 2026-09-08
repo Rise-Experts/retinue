@@ -23,8 +23,8 @@
  * ## What the honest picture is
  *
  * The old runtime is 31 Agno tools across 9 components, 14 purpose-built HTTP endpoints, 7 skills, 5 inbound
- * webhooks and 1 cron job. This package replaces 22 outright, part of 2 more, has **8 signed off as dropped**
- * on 2026-09-07, retains 6 that live in `web/` — and has not replaced 13. The inventory gate is therefore
+ * webhooks and 1 cron job. This package replaces 22 outright, part of 3 more, has **8 signed off as dropped**
+ * on 2026-09-07, retains 6 that live in `web/` — and has not replaced 12. The inventory gate is therefore
  * `incomplete`, which is the correct verdict and not a defect in the gate.
  *
  * The eight drops are the six workspace-configuration tools and two platform endpoints, and two of their
@@ -279,17 +279,28 @@ export const CAPABILITY_INVENTORY: readonly CapabilityEntry[] = [
     capability: "draft a reply without sending it",
     oldRuntimeRef: "route:POST /reply",
     workflows: ["engagement-reply"],
-    replacement: null,
-    status: "missing",
-    invocation: "triggered",
+    replacement: "draft_comment_reply",
     /**
-     * Not the same capability as `reply_to_comment`, and mapping the two would be the most tempting wrong
-     * entry in this file. `POST /reply` **drafts** text for the inbox review queue and sends nothing; the new
-     * tool sends. A reviewer reading "replaced by reply_to_comment" would conclude the review step survived
-     * the migration, and it did not.
+     * `partial`, on the same reading as the two generation endpoints: the **capability** is replaced and the
+     * **entry point** is not. A user asking the assistant to draft a reply is covered; the inbox screen
+     * posting to `/reply` from a form is not, because the new shell serves `/api/message` and `/api/events`.
      */
-    sideEffects: "none — returns suggested text for a person to approve",
-    coverageEvidence: NO_TRIGGER_YET,
+    status: "partial",
+    invocation: "triggered",
+    instructions:
+      "skills/post-composition for tone; the review step itself is the tool's own description — you cannot approve your own draft",
+    /**
+     * Two capabilities, not one, which is why this entry exists separately from `reply_to_comment`.
+     *
+     * `/reply` drafts into the review queue and sends nothing; `reply_to_comment` sends. Mapping them
+     * together would have claimed the step where a person looks before a public reply survived the
+     * migration, and it would not have.
+     */
+    sideEffects:
+      "writes a drafted reply and puts the comment back into needs-review. Nothing leaves the tenant, which is why it is not approval-gated",
+    contractTest: "shareflow/src/tools/__tests__/engagement-leads.test.ts",
+    coverageEvidence:
+      "the tool is exercised by engagement-leads.test.ts and by the live-DB suite; the HTTP entry point has no replacement — the new shell serves /api/message and /api/events only",
   },
 
   // ---- Media ----------------------------------------------------------------------------------------------

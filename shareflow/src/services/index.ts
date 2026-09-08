@@ -1103,6 +1103,31 @@ export interface EngagementService {
     },
   ): Promise<CommentReplyReceipt>;
 
+  /**
+   * Draft a reply and send **nothing** — REQ-041 (#190).
+   *
+   * The old runtime's `POST /reply` and `reply_to_comment` are two capabilities, not one, and mapping them
+   * together would have claimed the review step survived the migration. This drafts into
+   * `inbox_comments.reply` and leaves `reply_status = 'needs_review'`, which is the state that exists so a
+   * person looks before anything reaches a customer's audience.
+   *
+   * Deliberately **not** approval-gated, because nothing leaves the tenant — and deliberately unable to send:
+   * an assistant that could approve its own draft would be routing around the review step rather than passing
+   * through it, which is why `InboxComment.draftedReply` is surfaced read-only and there is no
+   * `approveComment`.
+   *
+   * `conflict` on an answered comment, as `reply` gives: a draft written over a sent reply would make the
+   * record read as though nobody had answered.
+   */
+  draftReply(
+    context: ExecutionContext,
+    input: {
+      readonly idempotencyKey: ServiceIdempotencyKey;
+      readonly commentId: InboxCommentId;
+      readonly text: string;
+    },
+  ): Promise<InboxComment>;
+
   /** Take a comment out of the review queue without answering it. Internal; nothing leaves the tenant. */
   dismiss(
     context: ExecutionContext,

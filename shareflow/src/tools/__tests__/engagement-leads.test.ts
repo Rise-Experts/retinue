@@ -475,6 +475,7 @@ describe("catalogs and delegation", () => {
         .map((d) => [d.name, d.delegatesTo]),
     ).toEqual([
       ["list_comments", "EngagementService.listComments"],
+      ["draft_comment_reply", "EngagementService.draftReply"],
       ["reply_to_comment", "EngagementService.reply"],
       ["dismiss_comment", "EngagementService.dismiss"],
       ["list_leads", "LeadService.listLeads"],

@@ -279,6 +279,52 @@ export const createPostgresEngagementService = (deps: EngagementDeps): Engagemen
       };
     },
 
+    async draftReply(context, input): Promise<InboxComment> {
+      if (input.text.trim() === "") {
+        throw new AgentPlatformError({
+          code: "invalid_input",
+          message: "A draft needs text.",
+          retryable: false,
+        });
+      }
+      const comment = await one(context, String(input.commentId));
+
+      /**
+       * The terminal-state guard is in the statement, exactly as `reply`'s is.
+       *
+       * `where reply_status in ('needs_review','dismissed')` — a draft written over a `sent` or `auto_sent`
+       * reply would overwrite the text that actually went out and make the record read as though nobody had
+       * answered. A read-then-write would find the conflict after clobbering it.
+       *
+       * A dismissed comment may be drafted into, and doing so puts it **back** in the queue: drafting a reply
+       * to something previously set aside is a decision to look at it again, and leaving it dismissed would
+       * hide the draft from the only screen that shows drafts.
+       */
+      const updated = await deps.transaction.transaction(async (tx) => {
+        const rows = await tx.query<CommentRow>(
+          `update public.inbox_comments
+              set reply = $3, reply_status = 'needs_review'
+            where workspace_id = $1::uuid and id = $2::uuid
+              and reply_status in ('needs_review', 'dismissed')
+            returning id, platform, author_name, author_handle, post_ref, content, reply, reply_status,
+                      created_at`,
+          [String(context.tenantId), comment.id, input.text],
+        );
+        return rows[0];
+      });
+
+      if (updated === undefined) {
+        throw new AgentPlatformError({
+          code: "conflict",
+          message:
+            `That comment is already ${replyStateFrom(comment.reply_status)}, so it has been answered. ` +
+            "Drafting over it would hide the reply that was sent.",
+          retryable: false,
+        });
+      }
+      return toComment(updated);
+    },
+
     async dismiss(context, input): Promise<InboxComment> {
       const comment = await one(context, String(input.commentId));
       /**

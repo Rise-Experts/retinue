@@ -154,10 +154,45 @@ export const dismissCommentTool = shareFlowTool(["engagement"], ({ services, dep
   }));
 
 /** The complete Engagement catalog, pinned by a test. */
-export const ENGAGEMENT_TOOL_NAMES = ["list_comments", "reply_to_comment", "dismiss_comment"] as const;
+const draftReplySchema = z.object({ commentId: idString, text: z.string().trim().min(1).max(4_000) }).strict();
+
+export const draftCommentReplyTool = shareFlowTool(["engagement"], ({ services, deps }): Tool =>
+  defineDelegatingTool(deps, {
+    name: "draft_comment_reply",
+    label: "Draft a reply",
+    description:
+      "Write a reply and leave it for a person to approve — this sends nothing. The comment goes back to `needs-review`, which is the queue someone checks before anything appears publicly. Use this when the user asks you to draft, suggest or prepare a reply, and `reply_to_comment` only when they have asked for it to go out now. You cannot approve your own draft; a person does that in the app.",
+    category: "engagement",
+    /**
+     * `internal-write`, so no approval gate — nothing leaves the tenant.
+     *
+     * The contrast with `reply_to_comment` is the point of having both: that one is `external-write` and
+     * waits for a person because it reaches a customer's audience. This one *creates* the thing a person
+     * approves, so gating it would ask for approval to prepare something for approval.
+     */
+    effect: "internal-write",
+    inputSchema: draftReplySchema,
+    delegatesTo: "EngagementService.draftReply",
+    delegate: async (input: z.infer<typeof draftReplySchema>, context, { idempotencyKey }) =>
+      commentView(
+        await services.engagement.draftReply(context, {
+          idempotencyKey,
+          commentId: asId<InboxCommentId>(input.commentId),
+          text: input.text,
+        }),
+      ),
+  }));
+
+export const ENGAGEMENT_TOOL_NAMES = [
+  "list_comments",
+  "draft_comment_reply",
+  "reply_to_comment",
+  "dismiss_comment",
+] as const;
 
 export const ENGAGEMENT_TOOL_FACTORIES: readonly ShareFlowToolFactory[] = [
   listCommentsTool,
+  draftCommentReplyTool,
   replyToCommentTool,
   dismissCommentTool,
 ];

@@ -171,7 +171,7 @@ describe("the tool provider", () => {
      * passes**. The artifacts category was the eleventh, and it is why the aggregate exists.
      */
     const factories = SHAREFLOW_TOOL_FACTORIES;
-    expect(factories).toHaveLength(45);
+    expect(factories).toHaveLength(46);
     for (const factory of factories) {
       expect(() => factory.build({ services: explode, deps })).not.toThrow();
     }
@@ -216,7 +216,7 @@ describe("the tool provider", () => {
 
     expect(problems).toEqual([]);
     // The scan found the factories rather than nothing — a regex that matched none would pass above.
-    expect(seen).toBe(45);
+    expect(seen).toBe(46);
     // And it scanned every category file, so a new one cannot arrive unscanned while the count still adds up.
     expect(seen).toBe(SHAREFLOW_TOOL_FACTORIES.length);
   });
