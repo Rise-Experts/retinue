@@ -30,9 +30,28 @@ const PG_URL = process.env["RETINUE_TEST_PG_URL"];
 const WORKERS = 4;
 
 const closers: (() => Promise<void>)[] = [];
+/**
+ * Databases to drop, dropped **after every pool has closed** — and the ordering is the whole of it.
+ *
+ * The first version registered the drop as a `closer` alongside the pools, and `closers` runs in registration
+ * order: the drop went first, `WITH (FORCE)` terminated the four worker connections still open to that
+ * database, and each one surfaced as `terminating connection due to administrator command`. Twelve of them,
+ * four per test — every assertion still passed, so a run filtered to failures looked clean while vitest
+ * counted twelve unhandled errors and exited non-zero.
+ *
+ * Two lists, therefore, rather than one with a convention about what goes where.
+ */
+const databases: string[] = [];
 
 afterAll(async () => {
   for (const close of closers) await close();
+  const { Pool } = await import("pg");
+  const cleanup = new Pool({ connectionString: PG_URL, connectionTimeoutMillis: 5_000 });
+  for (const database of databases) {
+    // `FORCE` still, as a backstop: a pool that failed to end must not strand every later run.
+    await cleanup.query(`DROP DATABASE IF EXISTS ${database} WITH (FORCE)`).catch(() => undefined);
+  }
+  await cleanup.end();
 });
 
 /**
@@ -81,13 +100,10 @@ const freshSchema = async (
   const connectionString = url.toString();
 
   const setup = new Pool({ connectionString, connectionTimeoutMillis: 5_000 });
-  closers.push(async () => {
-    await setup.end();
-    // Dropped rather than left behind: this suite makes a database per test and they are not small.
-    const cleanup = new Pool({ connectionString: PG_URL, connectionTimeoutMillis: 5_000 });
-    await cleanup.query(`DROP DATABASE IF EXISTS ${database} WITH (FORCE)`).catch(() => undefined);
-    await cleanup.end();
-  });
+  closers.push(() => setup.end());
+  // Dropped rather than left behind — this suite makes a database per test and they are not small — but only
+  // once every pool above has closed. See `databases`.
+  databases.push(database);
 
   const workers = await Promise.all(
     Array.from({ length: WORKERS }, async () => {

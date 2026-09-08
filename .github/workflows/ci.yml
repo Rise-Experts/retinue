@@ -121,9 +121,21 @@ jobs:
       - name: Bring the stack up from clean
         run: docker compose up -d --build --wait
       - name: Migrations ran, once
+        # The count is **derived, not written down**. This said `applied 30 migration(s)` and the schema is at
+        # 34 — the number went stale the moment a migration was added, and the job then failed for a reason
+        # that had nothing to do with the stack it exists to exercise.
+        #
+        # What actually matters is the pair: the same N in both halves of the sentence, so a partial apply is
+        # caught, and exactly **one** apply line, so a re-run that migrated twice is too. Neither needs a
+        # magic number, and neither goes stale.
         run: |
           docker compose logs migrate | tee /tmp/migrate.log
-          grep -q "applied 30 migration(s)" /tmp/migrate.log
+          grep -oE "applied [0-9]+ migration\(s\); schema now at [0-9]+" /tmp/migrate.log | tee /tmp/applied.log
+          test "$(wc -l < /tmp/applied.log)" -eq 1
+          n=$(sed -E 's/applied ([0-9]+) migration.*/\1/' /tmp/applied.log)
+          at=$(sed -E 's/.*schema now at ([0-9]+)/\1/' /tmp/applied.log)
+          echo "applied $n, schema at $at"
+          test -n "$n" && test "$n" = "$at"
       - name: Every service healthy
         run: |
           docker compose ps
