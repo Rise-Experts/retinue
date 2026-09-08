@@ -78,8 +78,16 @@ export const scrub = (message: string): string =>
 
 export type DoctorDeps = {
   readonly env?: Readonly<Record<string, string | undefined>>;
-  /** Injected so the checks are testable without a database or a Redis. */
-  readonly connectPostgres?: (url: string) => Promise<{
+  /**
+   * Injected so the checks are testable without a database or a Redis.
+   *
+   * Takes the whole connection setting rather than a URL, because `databaseSchema` changes the answer:
+   * the schema probe counts applied migrations, and reading `public` when the deployment configured
+   * `retinue` reports "0 of 35 applied → run migrate" about a schema that is fully migrated. The
+   * comment below already names that class of bug — a diagnostic sending an operator to fix the wrong
+   * thing — and a URL-only signature is how this one would have got in.
+   */
+  readonly connectPostgres?: (settings: { readonly databaseUrl: string; readonly databaseSchema?: string }) => Promise<{
     query(text: string, params?: readonly unknown[]): Promise<unknown>;
     end(): Promise<void>;
   }>;
@@ -217,7 +225,7 @@ export const runChecks = async (deps: DoctorDeps = {}): Promise<readonly CheckRe
      */
     let reachable = false;
     try {
-      sql = await withTimeout("postgres", connectPostgres(config.databaseUrl));
+      sql = await withTimeout("postgres", connectPostgres(config));
       await withTimeout("postgres", sql.query("select 1"));
       reachable = true;
       results.push({ name: "postgres", ok: true, detail: `reachable at ${describeUrl(config.databaseUrl)}` });

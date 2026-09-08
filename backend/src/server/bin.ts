@@ -32,15 +32,20 @@ const USAGE = `retinue <command>
 
 Configuration comes from the environment; see .env.example.`;
 
-/** Opened lazily and per command, so `doctor` and `migrate` never load a driver they do not use. */
-const postgres = async (url: string) => {
-  const { Pool } = await import("pg");
-  const { createPgExecutor, createPoolOpener } = await import("../entries/adapters-postgres.js");
-  // A connect timeout, because the default is *none*: `doctor` against a refused port sat silently instead of
-  // reporting the failure it exists to report. Short, since every command here either connects immediately or
-  // is misconfigured.
-  const pool = new Pool({ connectionString: url, connectionTimeoutMillis: 5_000 });
-  return { sql: createPgExecutor(pool), open: createPoolOpener(pool), end: () => pool.end() };
+/**
+ * Opened lazily and per command, so `doctor` and `migrate` never load a driver they do not use.
+ *
+ * The pool itself comes from `pool.ts`, which is also what the API host and the worker use — the schema
+ * a deployment configures has to be the same one migrations run against, and that is only true while
+ * there is one place that decides it.
+ *
+ * A connect timeout, because the default is *none*: `doctor` against a refused port sat silently instead
+ * of reporting the failure it exists to report. Short, since every command here either connects
+ * immediately or is misconfigured.
+ */
+const postgres = async (config: { readonly databaseUrl: string; readonly databaseSchema?: string }) => {
+  const { openPostgres } = await import("./pool.js");
+  return openPostgres({ ...config, connectionTimeoutMillis: 5_000 });
 };
 
 /**
@@ -53,7 +58,7 @@ const postgres = async (url: string) => {
 
 const migrate = async (flags: ReadonlySet<string>, env = process.env): Promise<number> => {
   const config = loadConfig(env);
-  const { sql, open, end } = await postgres(config.databaseUrl);
+  const { sql, open, end } = await postgres(config);
   try {
     const { createSchemaManager, MIGRATION_LOCK } = await import("../entries/adapters-postgres.js");
 
@@ -119,8 +124,8 @@ const migrate = async (flags: ReadonlySet<string>, env = process.env): Promise<n
 const doctor = async (env = process.env): Promise<number> => {
   const results = await runChecks({
     env,
-    connectPostgres: async (url) => {
-      const { sql, end } = await postgres(url);
+    connectPostgres: async (settings) => {
+      const { sql, end } = await postgres(settings);
       return { query: (text, params) => sql.query(text, params as never), end };
     },
     connectRedis: async (url) => {

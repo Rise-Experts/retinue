@@ -60,9 +60,12 @@ export const runWorker = async (
   const { config, sql } = await boot({
     env,
     connect: async (loaded) => {
-      const { Pool } = await import("pg");
-      const { createPgExecutor } = await import("../entries/adapters-postgres.js");
-      return { sql: createPgExecutor(new Pool({ connectionString: loaded.databaseUrl })) };
+      const { openPostgres } = await import("./pool.js");
+      // Through the shared pool for the schema, which matters most here: the worker is the process whose
+      // writes nobody watches, so a worker in `public` while the host is in `retinue` is a split brain
+      // that shows up as runs that vanish rather than as an error.
+      const { sql } = await openPostgres(loaded);
+      return { sql };
     },
   });
 

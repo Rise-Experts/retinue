@@ -237,6 +237,7 @@ Validated at startup: a missing or malformed variable fails the boot with a mess
 | `RETINUE_DATABASE_URL` | yes | — | `postgres://…` |
 | `RETINUE_REDIS_URL` | yes | — | `redis://…`, for the job queue and the lock |
 | `RETINUE_SCHEMA_MODE` | no | `off` | `off` \| `plan` \| `auto`. Keep `off` in production so managed migrations stay in control; `plan` logs the pending diff and applies nothing |
+| `RETINUE_DATABASE_SCHEMA` | no | the connection's own | The schema the platform's tables live in. Set it when sharing a database with something that owns `public` — `search_path` becomes `<schema>, public`, so the `vector` type and any `public.`-qualified queries still resolve. Migrations, the host and the worker all read it, so set it for **every** process or they diverge silently |
 | `RETINUE_WORKER_CONCURRENCY` | no | `4` | Runs handled at once per worker |
 | `RETINUE_LOG_LEVEL` | no | `info` | `debug` \| `info` \| `warn` \| `error` |
 | `PORT` | no | `4000` | API host only |

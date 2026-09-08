@@ -76,12 +76,14 @@ export const runApiHost = async (
   const { config, sql, runner } = await boot({
     env,
     connect: async (loaded) => {
-      const { Pool } = await import("pg");
-      const { createPgExecutor, createPoolOpener } = await import("../entries/adapters-postgres.js");
-      const pool = new Pool({ connectionString: loaded.databaseUrl });
+      const { openPostgres } = await import("./pool.js");
       // `open` is what lets `boot` build a transaction scope. Without it the API host had no runner and
       // `sendMessage` could not claim a conversation — #254.
-      return { sql: createPgExecutor(pool), open: createPoolOpener(pool) };
+      //
+      // The whole config is passed, not just the URL: `databaseSchema` has to reach the pool or the host
+      // reads and writes `public` while migrations ran somewhere else.
+      const { sql, open } = await openPostgres(loaded);
+      return { sql, open };
     },
   });
 

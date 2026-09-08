@@ -18,6 +18,16 @@ export type RetinueConfig = {
   readonly redisUrl: string;
   /** How the schema is provisioned at boot. `off` in production, so managed migrations stay in control. */
   readonly schemaMode: SchemaMode;
+  /**
+   * The Postgres schema the platform's own tables live in, or `undefined` for the connection's default.
+   *
+   * Exists because a deployment may be sharing a database with a product that owns `public` — which is
+   * exactly the ShareFlow case: its adapters qualify every one of their queries as `public.`, so with this
+   * set to `retinue` one pool serves both, platform tables in one schema and product tables in the other.
+   * Without it the platform's 35 migrations land in `public` alongside the product's, and the first name
+   * they share is a migration that fails or, worse, one that succeeds against the wrong table.
+   */
+  readonly databaseSchema?: string;
   readonly port: number;
   readonly workerConcurrency: number;
   readonly logLevel: "debug" | "info" | "warn" | "error";
@@ -101,6 +111,24 @@ export const loadConfig = (env: Env): RetinueConfig => {
     fail(named("SCHEMA_MODE"), `must be one of ${SCHEMA_MODES.join(", ")}, got "${rawSchemaMode}"`);
   }
 
+  /**
+   * A schema name, validated as an identifier rather than quoted.
+   *
+   * `SET search_path` takes no parameters — it is not a value position, so there is no placeholder to bind
+   * and the name is concatenated into SQL. That makes this the one config value where a lax check is a SQL
+   * injection with the deployment's own credentials, so the pattern is deliberately narrow: what Postgres
+   * accepts unquoted, and nothing else. A rejected name fails boot, where it is one line to fix.
+   */
+  const rawSchema = lookup("DATABASE_SCHEMA");
+  const databaseSchema = rawSchema === undefined || rawSchema.trim() === "" ? undefined : rawSchema.trim();
+  if (databaseSchema !== undefined && !/^[A-Za-z_][A-Za-z0-9_$]*$/.test(databaseSchema)) {
+    fail(
+      named("DATABASE_SCHEMA"),
+      `must be an unquoted Postgres identifier — letters, digits, underscore and $, not starting with a ` +
+        `digit — got "${databaseSchema.slice(0, 24)}"`,
+    );
+  }
+
   const positiveInt = (suffix: string, fallback: number): number => {
     // `PORT` has no prefix — it is the conventional name and always has been, so it is read directly.
     const variable = suffix === "PORT" ? "PORT" : named(suffix);
@@ -130,6 +158,9 @@ export const loadConfig = (env: Env): RetinueConfig => {
     databaseUrl,
     redisUrl,
     schemaMode: rawSchemaMode as SchemaMode,
+    // Spread, not `databaseSchema: undefined` — `exactOptionalPropertyTypes` is on, so an explicit
+    // undefined is a different type from an absent key.
+    ...(databaseSchema === undefined ? {} : { databaseSchema }),
     port,
     workerConcurrency,
     logLevel: rawLogLevel as RetinueConfig["logLevel"],
@@ -148,6 +179,7 @@ export const loadConfig = (env: Env): RetinueConfig => {
 export const REQUIRED_VARIABLES = ["RETINUE_DATABASE_URL", "RETINUE_REDIS_URL"] as const;
 export const OPTIONAL_VARIABLES = [
   "SCHEMA_MODE",
+  "DATABASE_SCHEMA",
   "WORKER_CONCURRENCY",
   "LOG_LEVEL",
   "PORT",
