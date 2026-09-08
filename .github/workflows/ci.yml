@@ -104,7 +104,7 @@ jobs:
   # being present rather than failing without it.
   compose:
     runs-on: ubuntu-latest
-    # A dummy key, at the **job** level rather than per step.
+    # The model key, at the **job** level, real when there is one.
     #
     # `RETINUE_MODEL_API_KEY` is `${VAR:?…}` in `compose.yaml` — no default, on purpose, so a real deployment
     # cannot start without one. But *every* `docker compose` subcommand re-interpolates the file, so `logs`,
@@ -112,10 +112,17 @@ jobs:
     # failed with `required variable RETINUE_MODEL_API_KEY is missing a value` — including `Down`, so the job
     # could not even clean up after itself.
     #
-    # No model call is made by any assertion in this job; the one step that needs a real key is gated on the
-    # secret below. A placeholder here is what lets the compose file keep its no-default guarantee.
+    # **The secret first, the placeholder as a fallback**, and that ordering is the fix for a second failure.
+    # The stack is built and started once, at the top of this job, so whatever key is in the environment
+    # *then* is the key the containers hold for the rest of it. With a placeholder there, the real-agent-turn
+    # step below failed with `Incorrect API key provided: ci-no-mo…made` — it had a real secret in its own
+    # `env` and was talking to a worker that did not. Nobody saw it until the secret was first set, because
+    # the step had always skipped.
+    #
+    # No assertion above that step makes a model call, so a real key is unused by all of them; a fork has no
+    # secret, gets the placeholder, and the one step that needs a key skips instead of failing.
     env:
-      RETINUE_MODEL_API_KEY: ci-no-model-call-is-made
+      RETINUE_MODEL_API_KEY: ${{ secrets.RETINUE_MODEL_API_KEY || 'ci-no-model-call-is-made' }}
     steps:
       - uses: actions/checkout@v4
       - name: Bring the stack up from clean
@@ -172,7 +179,11 @@ jobs:
       - name: A real agent turn reaches a terminal state — #267, AC-4
         # Gated on the secret rather than failing without it: a fork has no access to it, and a job that goes
         # red on every fork PR is a job people learn to ignore. Skipped is honest; failing is not.
-        if: ${{ env.MODEL_KEY != '' }}
+        #
+        # Gated on the **job's** value rather than a step-local copy, so the condition asks the same question
+        # the containers were started with. A step that ran because its own `env` held a secret, against a
+        # stack that held a placeholder, is the failure this line now prevents.
+        if: ${{ env.RETINUE_MODEL_API_KEY != 'ci-no-model-call-is-made' }}
         env:
           MODEL_KEY: ${{ secrets.RETINUE_MODEL_API_KEY }}
         run: |
