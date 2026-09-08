@@ -28,6 +28,8 @@ import { defineDelegatingTool } from "@retinue/agentkit/tools";
 import {
   type MediaAsset,
   type MediaAssetId,
+  type MediaConversion,
+  type MediaConversionJobId,
   type MediaStorageCheck,
   type PlatformId,
   type PostDraftId,
@@ -205,13 +207,13 @@ export const convertMediaTool = shareFlowTool(["media"], ({ services, deps }): T
     name: "convert_media",
     label: "Convert a file",
     description:
-      "Convert a file to another format, producing a new file and leaving the original alone. Ask for a format, not a platform — which format a destination needs comes from `check_media_for_platforms`. If the format is not supported the error names the ones that are.",
+      "Convert a file to another format, producing a new file and leaving the original alone. Ask for a format, not a platform — which format a destination needs comes from `check_media_for_platforms`. If the format is not supported the error names the ones that are. **Video conversion is queued**: you get a `state` of `queued` or `running` and no file. Only `succeeded` means the file exists — poll `check_conversion` with the `jobId`, and never attach or describe a file until then.",
     category: "media",
     effect: "internal-write",
     inputSchema: convertMediaSchema,
     delegatesTo: "MediaService.convert",
     delegate: async (input: z.infer<typeof convertMediaSchema>, context, { idempotencyKey }) =>
-      assetView(
+      conversionView(
         await services.media.convert(context, {
           idempotencyKey,
           id: asId<MediaAssetId>(input.mediaAssetId),
@@ -252,21 +254,122 @@ export const checkMediaStorageTool = shareFlowTool(["media"], ({ services, deps,
       storageView(await services.media.checkStorage(context, { idempotencyKey })),
   }));
 
+/**
+ * A conversion, as the model sees it.
+ *
+ * `asset` appears **only** when the state is `succeeded`, because the port only carries one then. That is the
+ * old tool's rule made structural: *"Only 'succeeded' means the file exists — until then there is no path to
+ * use or show. If it is still queued or running, say so; do not guess a path, and do not attach one to a
+ * post."* A view that always emitted an asset field, empty or not, would invite exactly the attach it forbids.
+ */
+/**
+ * The attachment set a draft now carries. Ids only — no bytes, no URL — as `attach_media_to_post` returns.
+ *
+ * Shared by all three writers so a reply can say what the post holds without a second read, and so the three
+ * cannot disagree about what that field is.
+ */
+const draftMediaView = (result: {
+  readonly draftId: PostDraftId;
+  readonly mediaAssetIds: readonly MediaAssetId[];
+}) => ({ postDraftId: result.draftId, mediaAssetIds: result.mediaAssetIds });
+
+const conversionView = (conversion: MediaConversion) => ({
+  jobId: String(conversion.jobId),
+  state: conversion.state,
+  targetFormat: conversion.targetFormat,
+  ...(conversion.asset === undefined ? {} : { asset: assetView(conversion.asset) }),
+  ...(conversion.failure === undefined ? {} : { failure: conversion.failure }),
+});
+
+const checkConversionSchema = z.object({ jobId: idString }).strict();
+
+export const checkConversionTool = shareFlowTool(["media"], ({ services, deps }): Tool =>
+  defineDelegatingTool(deps, {
+    name: "check_conversion",
+    label: "Check a conversion",
+    description:
+      "Check a queued conversion started by `convert_media`. `state` is queued, running, succeeded or failed. **Only `succeeded` means the file exists** — until then there is no path to use or show, so say it is still converting rather than guessing one, and do not attach anything to a post. On `failed`, `failure` says why.",
+    category: "media",
+    effect: "read",
+    inputSchema: checkConversionSchema,
+    delegatesTo: "MediaService.getConversion",
+    delegate: async (input: z.infer<typeof checkConversionSchema>, context) =>
+      conversionView(
+        await services.media.getConversion(context, { jobId: asId<MediaConversionJobId>(input.jobId) }),
+      ),
+  }));
+
+const detachMediaSchema = z
+  .object({ postDraftId: idString, mediaAssetIds: assetIds })
+  .strict();
+
+export const detachMediaTool = shareFlowTool(["media"], ({ services, deps }): Tool =>
+  defineDelegatingTool(deps, {
+    name: "detach_media_from_post",
+    label: "Remove files from a post",
+    description:
+      "Remove files from a post that has not published yet. Reversible, and the file itself is **not** deleted from storage — only its attachment to this post — so it can be re-attached or used elsewhere. Refused if none of the files are attached, so a reply saying it was removed always means it was.",
+    category: "media",
+    effect: "internal-write",
+    inputSchema: detachMediaSchema,
+    delegatesTo: "MediaService.detachFromDraft",
+    delegate: async (input: z.infer<typeof detachMediaSchema>, context, { idempotencyKey }) =>
+      draftMediaView(
+        await services.media.detachFromDraft(context, {
+          idempotencyKey,
+          draftId: asId<PostDraftId>(input.postDraftId),
+          assetIds: input.mediaAssetIds.map((id) => asId<MediaAssetId>(id)),
+        }),
+      ),
+  }));
+
+const replaceMediaSchema = z
+  .object({ postDraftId: idString, remove: idString, add: idString })
+  .strict();
+
+export const replaceMediaTool = shareFlowTool(["media"], ({ services, deps }): Tool =>
+  defineDelegatingTool(deps, {
+    name: "replace_media_on_post",
+    label: "Swap a file on a post",
+    description:
+      "Swap one attached file for another on a post that has not published yet. It replaces **in place**, so the file keeps its position — which matters because media order is the order a platform shows a carousel in. Use this after `convert_media` to put the converted file where the incompatible original was; removing and re-adding would move it to the end.",
+    category: "media",
+    effect: "internal-write",
+    inputSchema: replaceMediaSchema,
+    delegatesTo: "MediaService.replaceOnDraft",
+    delegate: async (input: z.infer<typeof replaceMediaSchema>, context, { idempotencyKey }) =>
+      draftMediaView(
+        await services.media.replaceOnDraft(context, {
+          idempotencyKey,
+          draftId: asId<PostDraftId>(input.postDraftId),
+          remove: asId<MediaAssetId>(input.remove),
+          add: asId<MediaAssetId>(input.add),
+        }),
+      ),
+  }));
+
 /** The complete Media catalog, pinned by a test. */
 export const MEDIA_TOOL_NAMES = [
   "list_media",
   "inspect_media",
   "check_media_for_platforms",
   "attach_media_to_post",
+  "detach_media_from_post",
+  "replace_media_on_post",
   "convert_media",
+  "check_conversion",
   "check_media_storage",
 ] as const;
 
+/** In the order a conversation uses them: find, read, check, attach, change, convert, poll, diagnose. */
 export const MEDIA_TOOL_FACTORIES: readonly ShareFlowToolFactory[] = [
   listMediaTool,
   inspectMediaTool,
   checkMediaForPlatformsTool,
   attachMediaTool,
+  detachMediaTool,
+  replaceMediaTool,
   convertMediaTool,
+  checkConversionTool,
   checkMediaStorageTool,
 ];

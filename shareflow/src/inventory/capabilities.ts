@@ -23,8 +23,8 @@
  * ## What the honest picture is
  *
  * The old runtime is 31 Agno tools across 9 components, 14 purpose-built HTTP endpoints, 7 skills, 5 inbound
- * webhooks and 1 cron job. This package replaces 18 outright, part of 3 more, has **8 signed off as dropped**
- * on 2026-09-07, retains 6 that live in `web/` — and has not replaced 16. The inventory gate is therefore
+ * webhooks and 1 cron job. This package replaces 22 outright, part of 2 more, has **8 signed off as dropped**
+ * on 2026-09-07, retains 6 that live in `web/` — and has not replaced 13. The inventory gate is therefore
  * `incomplete`, which is the correct verdict and not a defect in the gate.
  *
  * The eight drops are the six workspace-configuration tools and two platform endpoints, and two of their
@@ -309,28 +309,30 @@ export const CAPABILITY_INVENTORY: readonly CapabilityEntry[] = [
     oldRuntimeRef: "tool:convert_media",
     workflows: ["create-post"],
     replacement: "convert_media",
-    status: "partial",
+    status: "implemented",
     invocation: "interactive",
     instructions: "skills/platform-media-rules — ask for a format, not a platform",
     /**
-     * `partial`, and the missing half is video.
-     *
-     * The old tool queues: video conversion returns a `jobId` and the caller polls `check_conversion` until
-     * `succeeded`, and its docstring is explicit that *only* succeeded means a file exists. The new
-     * `MediaService.convert` returns a finished `MediaAsset`, so there is no representation for a conversion
-     * still running — which for a long video is the normal case, not an edge one.
+     * `partial` no longer: `MediaService.convert` returns a **conversion** rather than an asset, so the
+     * queued case — which is the normal one for video — is representable, and `check_conversion` polls it.
+     * The asset is attached only on `succeeded`, which makes the old docstring's rule structural rather than
+     * advisory: there is no path to read off an unfinished job.
      */
-    sideEffects: "writes a new file to the tenant's media storage; the original is left alone",
+    sideEffects:
+      "queues a conversion and writes a new file to the tenant's media storage when it finishes; the original is left alone",
     contractTest: "shareflow/src/tools/__tests__/media.test.ts",
   },
   {
     capability: "check a queued conversion",
     oldRuntimeRef: "tool:check_conversion",
     workflows: ["create-post"],
-    replacement: null,
-    status: "missing",
+    replacement: "check_conversion",
+    status: "implemented",
     invocation: "interactive",
-    sideEffects: "none — a read of job state",
+    instructions:
+      "skills/platform-media-rules — and the clause that matters is the tool's own: only `succeeded` means the file exists",
+    sideEffects: "none — a read of media_conversion_jobs",
+    contractTest: "shareflow/src/tools/__tests__/media.test.ts",
   },
   {
     capability: "attach files to a post",
@@ -347,24 +349,34 @@ export const CAPABILITY_INVENTORY: readonly CapabilityEntry[] = [
     capability: "detach files from a post",
     oldRuntimeRef: "tool:remove_post_media",
     workflows: ["create-post"],
-    replacement: null,
-    status: "missing",
+    replacement: "detach_media_from_post",
+    status: "implemented",
     invocation: "interactive",
-    sideEffects: "removes attachments from a draft",
+    instructions: "skills/platform-media-rules",
+    /**
+     * One documented difference from the old tool, and it is a *gap* rather than a choice.
+     *
+     * ShareFlow refuses a removal that would leave the post incompatible with its destinations — removing the
+     * only image from an Instagram post. This adapter cannot: `platform_rules` holds `char_limit`,
+     * `hashtag_min` and `hashtag_max` and **nothing about media**, which is the same absence
+     * `checkPlatformCompatibility` reports as `media-unchecked`. So this is more permissive than the old tool,
+     * and the failure it lets through arrives at publish time.
+     */
+    sideEffects:
+      "removes attachments from a draft; the file stays in storage. More permissive than the old tool: the outgoing compatibility check has no rules to run against in this deployment",
+    contractTest: "shareflow/src/tools/__tests__/media.test.ts",
   },
   {
     capability: "swap one attached file for another, in place",
     oldRuntimeRef: "tool:replace_post_media",
     workflows: ["create-post"],
-    replacement: null,
-    status: "missing",
+    replacement: "replace_media_on_post",
+    status: "implemented",
     invocation: "interactive",
-    /**
-     * Not covered by attach-then-detach, which is why it is its own entry rather than folded into
-     * `attach_media_to_post`. The old tool replaces **in place** so the file keeps its position, and position
-     * is the order a platform shows a carousel in.
-     */
-    sideEffects: "replaces one attachment with another, preserving carousel order",
+    instructions: "skills/platform-media-rules — the repair after a conversion is this tool, not remove-then-add",
+    sideEffects:
+      "replaces one attachment with another at the same index, so carousel order is preserved. Refuses when the outgoing file is not attached or the incoming one already is",
+    contractTest: "shareflow/src/tools/__tests__/media.test.ts",
   },
   {
     capability: "inspect a file",

@@ -27,6 +27,7 @@ import {
   serviceFailure,
   type MediaAsset,
   type MediaAssetId,
+  type MediaConversionJobId,
   type MediaService,
   type PostDraftId,
   type ShareFlowServices,
@@ -75,7 +76,29 @@ const stubMedia = (recorder: Recorder, overrides: Partial<MediaService> = {}): M
       draftId: asId<PostDraftId>("d1"),
       mediaAssetIds: [M1, asId<MediaAssetId>("m2")],
     }),
-    convert: record("convert", asset({ id: asId<MediaAssetId>("m9"), mimeType: "video/mp4", label: "launch-teaser.mp4" })),
+    /**
+     * A **conversion**, not an asset — the port changed shape in REQ-041 (#190) so a queued video conversion
+     * could be represented at all. `succeeded` here, so the asset is present; the queued case has its own test.
+     */
+    convert: record("convert", {
+      jobId: asId<MediaConversionJobId>("job1"),
+      state: "succeeded",
+      targetFormat: "mp4",
+      asset: asset({ id: asId<MediaAssetId>("m9"), mimeType: "video/mp4", label: "launch-teaser.mp4" }),
+    }),
+    getConversion: record("getConversion", {
+      jobId: asId<MediaConversionJobId>("job1"),
+      state: "running",
+      targetFormat: "mp4",
+    }),
+    detachFromDraft: record("detachFromDraft", {
+      draftId: asId<PostDraftId>("d1"),
+      mediaAssetIds: [M1],
+    }),
+    replaceOnDraft: record("replaceOnDraft", {
+      draftId: asId<PostDraftId>("d1"),
+      mediaAssetIds: [asId<MediaAssetId>("m9")],
+    }),
     checkStorage: record("checkStorage", { ok: true, stage: "complete" }),
     ...overrides,
   } as unknown as MediaService;
@@ -329,7 +352,15 @@ describe("conversion delegates", () => {
     // #114 had `targetPlatformId`. Deciding which format a platform accepts is platform-rules knowledge
     // this provider must not hold, so the parameter is the format the existing service actually takes.
     const result = await run(build(convertMediaTool), { mediaAssetId: "m1", targetFormat: "MP4" });
-    expect(result).toMatchObject({ ok: true, data: { mediaAssetId: "m9", mimeType: "video/mp4" } });
+    /**
+     * The asset now sits **under** the conversion, because the port returns a job. That nesting is the
+     * point: a caller has to look at `state` before it can reach a file, so there is no path to read off a
+     * conversion that has not finished.
+     */
+    expect(result).toMatchObject({
+      ok: true,
+      data: { state: "succeeded", targetFormat: "mp4", asset: { mediaAssetId: "m9", mimeType: "video/mp4" } },
+    });
     expect(recorder.calls[0]).toEqual({
       method: "convert",
       args: { idempotencyKey: "k1", id: "m1", targetFormat: "mp4" },
@@ -403,7 +434,10 @@ describe("delegation and the catalog", () => {
       ["inspect_media", "MediaService.inspect"],
       ["check_media_for_platforms", "MediaService.checkPlatformCompatibility"],
       ["attach_media_to_post", "MediaService.attachToDraft"],
+      ["detach_media_from_post", "MediaService.detachFromDraft"],
+      ["replace_media_on_post", "MediaService.replaceOnDraft"],
       ["convert_media", "MediaService.convert"],
+      ["check_conversion", "MediaService.getConversion"],
       ["check_media_storage", "MediaService.checkStorage"],
     ]);
   });
@@ -457,6 +491,12 @@ function inputFor(name: string): unknown {
       return { postDraftId: "d1", mediaAssetIds: ["m2"] };
     case "convert_media":
       return { mediaAssetId: "m1", targetFormat: "mp4" };
+    case "check_conversion":
+      return { jobId: "job1" };
+    case "detach_media_from_post":
+      return { postDraftId: "d1", mediaAssetIds: ["m1"] };
+    case "replace_media_on_post":
+      return { postDraftId: "d1", remove: "m1", add: "m9" };
     default:
       throw new Error(`no input defined for ${name}`);
   }

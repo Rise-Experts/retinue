@@ -40,7 +40,7 @@ import {
 import { ACCOUNT_STATUS_FROM_DB, accountHealthFrom } from "../connectors.js";
 import { LEAD_SUPPRESSION, STORED_LEAD_STATUSES, encodeAttribution, normaliseEmail } from "../leads.js";
 import { ANALYTICS_REFRESH_WINDOW_MS } from "../analytics.js";
-import { MEDIA_UNCHECKED_CODE } from "../media.js";
+import { MEDIA_UNCHECKED_CODE, createPostgresMediaService } from "../media.js";
 import { ARTIFACT_SCHEME, artifactReference, createPostgresArtifactService } from "../artifacts.js";
 import {
   createPostgresContentService,
@@ -2338,6 +2338,8 @@ describe.skipIf(URL_ === undefined)("MediaService over generated_assets and stor
 
   let job = "";
   let withObject = "";
+  /** The same object's storage path, so a conversion job can name it as its result. */
+  let withObjectPath = "";
   let orphan = "";
 
   beforeAll(async () => {
@@ -2363,6 +2365,7 @@ describe.skipIf(URL_ === undefined)("MediaService over generated_assets and stor
        values ('media', $1, jsonb_build_object('size', 204800, 'mimetype', 'image/png'))`,
       [path],
     );
+    withObjectPath = path;
     withObject = (
       await sql.query<{ id: string }>(
         `insert into public.generated_assets (job_id, workspace_id, storage_path, mime, width, height)
@@ -2550,18 +2553,27 @@ describe.skipIf(URL_ === undefined)("MediaService over generated_assets and stor
     expect(storage.message).toContain("private bucket");
   });
 
-  it("converts through the wired service and returns an asset with a real object", async () => {
-    const service = media({
-      convertMedia: async () => ({ assetId: withObject }),
-    });
+  it("converts through the wired service and returns a finished conversion carrying a real object", async () => {
+    /**
+     * The seam returns a **job id** now, not an asset id — REQ-041 (#190). ShareFlow's converter is
+     * asynchronous for video and records `media_conversion_jobs` rows, so a job id is what it actually
+     * produces; a synchronous one returns a row that is already `succeeded`. This is that case.
+     */
+    const finished = await sql.query<{ id: string }>(
+      `insert into public.media_conversion_jobs (workspace_id, source_path, target, status, result_path)
+       values ($1::uuid, 'src.png', 'webp', 'succeeded', $2) returning id`,
+      [workspaceId, withObjectPath],
+    );
+    const service = media({ convertMedia: async () => ({ jobId: finished[0]!.id }) });
     const converted = await service.convert(context(), {
       idempotencyKey: "c3" as never,
       id: withObject as never,
       targetFormat: "webp",
     });
-    // Read back rather than trusted: the returned asset carries a real size and a real object, the same
-    // guarantee every other asset this service hands out has.
-    expect(converted.bytes).toBe(204_800);
+    expect(converted.state).toBe("succeeded");
+    // Read back rather than trusted: the asset carries a real size and a real object, the same guarantee
+    // every other asset this service hands out has.
+    expect(converted.asset?.bytes).toBe(204_800);
   });
 
   it("never returns another workspace's assets", async () => {
@@ -3435,5 +3447,261 @@ describe.skipIf(URL_ === undefined)("repost and delete — the two publish capab
     expect(asked).toBe(0);
     expect(result.removedFromDatabase).toBe(true);
     expect(result.platforms).toEqual([]);
+  });
+});
+
+describe.skipIf(URL_ === undefined)("MediaService — detach, replace and the queued conversion (#190)", () => {
+  /**
+   * Three capabilities the old runtime had and this package did not. The assertions that matter are the two
+   * the old tools' docstrings are explicit about:
+   *
+   * - **a replacement keeps its position**, because media order is the order a platform shows a carousel in;
+   * - **only `succeeded` means the file exists**, so an unfinished conversion carries no path to attach.
+   */
+  const media = () =>
+    createPostgresMediaService({
+      sql,
+      transaction,
+      convert: async () => ({ jobId: queuedJob }),
+    });
+
+  let queuedJob = "";
+  /** `generated_assets.job_id` is NOT NULL, so every asset needs a generation job to hang off. */
+  let mediaJob = "";
+
+  beforeAll(async () => {
+    if (URL_ === undefined) return;
+    mediaJob = (
+      await sql.query<{ id: string }>(
+        `insert into public.generation_jobs (workspace_id, kind, prompt, status)
+         values ($1::uuid, 'image', 'media capability fixtures', 'succeeded') returning id`,
+        [workspaceId],
+      )
+    )[0]!.id;
+  });
+
+  /** A draft with three attachments, so "in place" is distinguishable from "appended". */
+  const draftWithThree = async () => {
+    const paths = ["a.jpg", "b.jpg", "c.jpg"].map((n) => `${workspaceId}/${n}`);
+    const ids: string[] = [];
+    for (const path of paths) {
+      const row = await sql.query<{ id: string }>(
+        `insert into public.generated_assets (job_id, workspace_id, storage_path, mime)
+         values ($1::uuid, $2::uuid, $3, 'image/jpeg') returning id`,
+        [mediaJob, workspaceId, path],
+      );
+      ids.push(row[0]!.id);
+      await sql.query(
+        `insert into storage.objects (bucket_id, name, metadata) values ('media', $1, '{"size": 1024}'::jsonb)
+         on conflict do nothing`,
+        [path],
+      );
+    }
+    const post = await sql.query<{ id: string }>(
+      `insert into public.posts (workspace_id, author_id, raw_content, status, target_platforms, media_urls)
+       values ($1::uuid, $2::uuid, 'three files', 'DRAFT', '{linkedin}', $3::text[]) returning id`,
+      [workspaceId, userId, paths],
+    );
+    return { postId: post[0]!.id, ids, paths };
+  };
+
+  it("keeps the replacement in the position the original held", async () => {
+    /**
+     * **The assertion this capability exists for.** ShareFlow: *"It replaces IN PLACE, so the file keeps its
+     * position — which matters because media order is the order a platform shows a carousel in."* Detach then
+     * attach would put the new file last, which reorders the user's carousel without telling them.
+     */
+    const { postId, ids, paths } = await draftWithThree();
+    const replacement = `${workspaceId}/b-converted.mp4`;
+    const newAsset = await sql.query<{ id: string }>(
+      `insert into public.generated_assets (job_id, workspace_id, storage_path, mime)
+       values ($1::uuid, $2::uuid, $3, 'video/mp4') returning id`,
+      [mediaJob, workspaceId, replacement],
+    );
+    await sql.query(
+      `insert into storage.objects (bucket_id, name, metadata) values ('media', $1, '{"size": 2048}'::jsonb)
+       on conflict do nothing`,
+      [replacement],
+    );
+
+    const result = await media().replaceOnDraft(context(), {
+      idempotencyKey: "r1" as never,
+      draftId: postId as never,
+      remove: ids[1]! as never,
+      add: newAsset[0]!.id as never,
+    });
+
+    // Index 1, not index 2: the middle slide is still the middle slide.
+    expect(result.mediaAssetIds).toEqual([paths[0], replacement, paths[2]]);
+  });
+
+  it("refuses a replacement that is already attached, rather than shortening the post", async () => {
+    // Writing it over the outgoing slot would leave the same file twice and dedupe to one — a carousel one
+    // slide shorter than the user built, with nothing saying so.
+    const { postId, ids } = await draftWithThree();
+    const error = thrown(
+      await media()
+        .replaceOnDraft(context(), {
+          idempotencyKey: "r2" as never,
+          draftId: postId as never,
+          remove: ids[0]! as never,
+          add: ids[2]! as never,
+        })
+        .catch((r: unknown) => r),
+    );
+    expect(error.code).toBe("conflict");
+    expect(error.message).toContain("already attached");
+  });
+
+  it("removes an attachment and leaves the file in storage", async () => {
+    // The old tool calls itself reversible in its first line: *"The file is NOT deleted from storage — only
+    // its attachment to this post — so it can be re-attached or used elsewhere."*
+    const { postId, ids, paths } = await draftWithThree();
+    const result = await media().detachFromDraft(context(), {
+      idempotencyKey: "d1" as never,
+      draftId: postId as never,
+      assetIds: [ids[1]! as never],
+    });
+    expect(result.mediaAssetIds).toEqual([paths[0], paths[2]]);
+
+    const stillThere = await sql.query<{ n: string }>(
+      `select count(*) as n from storage.objects where bucket_id = 'media' and name = $1`,
+      [paths[1]],
+    );
+    expect(Number(stillThere[0]?.n)).toBe(1);
+  });
+
+  it("refuses a removal that would change nothing", async () => {
+    // A silent no-op lets an assistant report a file removed that was never there, while the one it meant to
+    // remove is still on the post.
+    const { postId } = await draftWithThree();
+    const other = await sql.query<{ id: string }>(
+      `insert into public.generated_assets (job_id, workspace_id, storage_path, mime)
+       values ($1::uuid, $2::uuid, $3, 'image/jpeg') returning id`,
+      [mediaJob, workspaceId, `${workspaceId}/unattached.jpg`],
+    );
+    const error = thrown(
+      await media()
+        .detachFromDraft(context(), {
+          idempotencyKey: "d2" as never,
+          draftId: postId as never,
+          assetIds: [other[0]!.id as never],
+        })
+        .catch((r: unknown) => r),
+    );
+    expect(error.code).toBe("not_found");
+    expect(error.message).toContain("None of those files are attached");
+  });
+
+  it("removes an orphan whose file has gone missing", async () => {
+    /**
+     * `attachToDraft` requires the storage object to exist, because attaching a path the platforms cannot
+     * fetch fails at publish time. Detaching is the opposite case: an asset whose file has vanished is
+     * exactly the one a caller most needs to take off a draft, and requiring the object would make it
+     * unremovable.
+     */
+    const orphanPath = `${workspaceId}/orphan.jpg`;
+    const orphan = await sql.query<{ id: string }>(
+      `insert into public.generated_assets (job_id, workspace_id, storage_path, mime)
+       values ($1::uuid, $2::uuid, $3, 'image/jpeg') returning id`,
+      [mediaJob, workspaceId, orphanPath],
+    );
+    const post = await sql.query<{ id: string }>(
+      `insert into public.posts (workspace_id, author_id, raw_content, status, target_platforms, media_urls)
+       values ($1::uuid, $2::uuid, 'orphan', 'DRAFT', '{linkedin}', $3::text[]) returning id`,
+      [workspaceId, userId, [orphanPath]],
+    );
+    const result = await media().detachFromDraft(context(), {
+      idempotencyKey: "d3" as never,
+      draftId: post[0]!.id as never,
+      assetIds: [orphan[0]!.id as never],
+    });
+    expect(result.mediaAssetIds).toEqual([]);
+  });
+
+  it("reports a queued conversion with no file, and the finished one with it", async () => {
+    /**
+     * **The rule the old docstring states and this makes structural:** *"Only 'succeeded' means the file
+     * exists — until then there is no path to use or show."* A shape carrying a path on every state invites a
+     * model to read one off a `running` job, attach it, and have the post fail at publish with a file that
+     * was never written.
+     */
+    const source = await sql.query<{ id: string }>(
+      `insert into public.generated_assets (job_id, workspace_id, storage_path, mime)
+       values ($1::uuid, $2::uuid, $3, 'video/quicktime') returning id`,
+      [mediaJob, workspaceId, `${workspaceId}/clip.mov`],
+    );
+    const job = await sql.query<{ id: string }>(
+      `insert into public.media_conversion_jobs (workspace_id, source_path, target, status)
+       values ($1::uuid, $2, 'mp4', 'running') returning id`,
+      [workspaceId, `${workspaceId}/clip.mov`],
+    );
+    queuedJob = job[0]!.id;
+
+    const queued = await media().convert(context(), {
+      idempotencyKey: "c1" as never,
+      id: source[0]!.id as never,
+      targetFormat: "mp4",
+    });
+    expect(queued.state).toBe("running");
+    // There is nothing to attach, and the shape says so by omission rather than with an empty string.
+    expect(queued.asset).toBeUndefined();
+
+    // Finish it, and the asset appears.
+    const outPath = `${workspaceId}/clip.mp4`;
+    await sql.query(
+      `insert into public.generated_assets (job_id, workspace_id, storage_path, mime)
+       values ($1::uuid, $2::uuid, $3, 'video/mp4')`,
+      [mediaJob, workspaceId, outPath],
+    );
+    await sql.query(
+      `insert into storage.objects (bucket_id, name, metadata) values ('media', $1, '{"size": 4096}'::jsonb)
+       on conflict do nothing`,
+      [outPath],
+    );
+    await sql.query(
+      `update public.media_conversion_jobs set status = 'succeeded', result_path = $2 where id = $1::uuid`,
+      [queuedJob, outPath],
+    );
+
+    const done = await media().getConversion(context(), { jobId: queuedJob as never });
+    expect(done.state).toBe("succeeded");
+    expect(done.asset?.mimeType).toBe("video/mp4");
+  });
+
+  it("reports a succeeded job with no output as failed, not as finished", async () => {
+    /**
+     * The combination that is indistinguishable from success to any caller reading `state` alone: the
+     * converter recorded success and wrote nothing. Reported as `failed` with a sentence, because the
+     * alternative is an assistant telling a user the file is ready and attaching nothing.
+     */
+    const job = await sql.query<{ id: string }>(
+      `insert into public.media_conversion_jobs (workspace_id, source_path, target, status, result_path)
+       values ($1::uuid, $2, 'mp4', 'succeeded', null) returning id`,
+      [workspaceId, `${workspaceId}/nowhere.mov`],
+    );
+    const outcome = await media().getConversion(context(), { jobId: job[0]!.id as never });
+    expect(outcome.state).toBe("failed");
+    expect(outcome.failure).toContain("recorded no output file");
+  });
+
+  it("reads another workspace's conversion as not-found", async () => {
+    const foreign = await sql.query<{ id: string }>(
+      "insert into public.workspaces (name) values ($1) returning id",
+      ["media-conversion-foreign"],
+    );
+    const job = await sql.query<{ id: string }>(
+      `insert into public.media_conversion_jobs (workspace_id, source_path, target, status)
+       values ($1::uuid, 'x.mov', 'mp4', 'queued') returning id`,
+      [foreign[0]!.id],
+    );
+    try {
+      const error = thrown(
+        await media().getConversion(context(), { jobId: job[0]!.id as never }).catch((r: unknown) => r),
+      );
+      expect(error.code).toBe("not_found");
+    } finally {
+      await sql.query("delete from public.workspaces where id = $1::uuid", [foreign[0]!.id]);
+    }
   });
 });

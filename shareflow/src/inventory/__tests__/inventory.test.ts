@@ -340,8 +340,8 @@ describe("the shipped inventory", () => {
     /**
      * The tally, pinned. Named numbers rather than a list of strings, because the list would be edited to match
      * on every change and stop being a claim — but the *shape* of the migration is a claim: this package
-     * replaces 18 of the old runtime's capabilities outright, part of 3 more, has 8 signed off as dropped, and
-     * has not replaced 16.
+     * replaces 22 of the old runtime's capabilities outright, part of 2 more, has 8 signed off as dropped, and
+     * has not replaced 13.
      *
      * 13 → 16 when the three artifact tools shipped, → 18 with `repost_post` and `delete_post`. All five were
      * listed as needing only a tool over services that already existed, and that turned out to be exactly
@@ -349,9 +349,9 @@ describe("the shipped inventory", () => {
      * connector seam for the other two.
      */
     expect(inventoryTally(CAPABILITY_INVENTORY)).toEqual({
-      implemented: 18,
-      partial: 3,
-      missing: 16,
+      implemented: 22,
+      partial: 2,
+      missing: 13,
       dropped: 8,
       retained: 6,
     });

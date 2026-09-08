@@ -35,8 +35,11 @@
 import { AgentPlatformError, type ExecutionContext } from "@retinue/agentkit";
 import type { SqlExecutor, TransactionRunner } from "@retinue/agentkit/adapters/postgres";
 
+import { MEDIA_CONVERSION_STATES } from "../../services/index.js";
 import type {
   MediaAsset,
+  MediaConversion,
+  MediaConversionState,
   MediaService,
   MediaStorageCheck,
   Page,
@@ -151,12 +154,20 @@ export type MediaDeps = {
    * "enqueued before its row exists" failure with the halves swapped, and refusing is better than a queue
    * with no consumer.
    */
+  /**
+   * Queues a conversion and returns its **job id** — REQ-041 (#190).
+   *
+   * It used to return an asset id, which could only describe a conversion that had already finished.
+   * ShareFlow's converter is asynchronous for video and records `media_conversion_jobs` rows, so a job id is
+   * what it actually produces; a synchronous converter simply returns one whose row is already `succeeded`.
+   * The adapter reads the row back either way, so there is one story about what a conversion is.
+   */
   readonly convert?: (input: {
     readonly context: ExecutionContext;
     readonly assetId: string;
     readonly sourcePath: string;
     readonly targetFormat: string;
-  }) => Promise<{ readonly assetId: string }>;
+  }) => Promise<{ readonly jobId: string }>;
   /**
    * Proves the media path end to end. **Absent means `checkStorage` refuses.**
    *
@@ -211,6 +222,119 @@ export const createPostgresMediaService = (deps: MediaDeps): MediaService => {
     throw new AgentPlatformError({ code: "not_found", message: `No media asset ${id}.`, retryable: false });
   };
 
+  /**
+   * One conversion, read from `media_conversion_jobs`.
+   *
+   * **The asset is attached only on `succeeded`.** The old tool's docstring is the rule: *"Only 'succeeded'
+   * means the file exists — until then there is no path to use or show. If it is still queued or running, say
+   * so; do not guess a path, and do not attach one to a post."* A shape that carried a path on every state
+   * would invite a model to read one off a `running` job and attach it, and the post would fail at publish
+   * with a file that was never written.
+   */
+  /**
+   * The draft, locked, with its editability re-asserted **at write time**.
+   *
+   * ShareFlow's writer does the same and says why: *"the post may have been approved and published between
+   * the read above and this update."* Shared by all three attachment writers so the guard cannot be present
+   * in two of them and forgotten in the third.
+   */
+  const lockedDraft = async (
+    tx: { query<Row>(text: string, params?: readonly unknown[]): Promise<Row[]> },
+    context: ExecutionContext,
+    draftId: string,
+  ): Promise<{ id: string; status: string; media_urls: string[] | null }> => {
+    const rows = await tx.query<{ id: string; status: string; media_urls: string[] | null }>(
+      `select id, status, media_urls from public.posts
+        where workspace_id = $1::uuid and id = $2::uuid for update`,
+      [String(context.tenantId), draftId],
+    );
+    const draft = rows[0];
+    if (draft === undefined) {
+      throw new AgentPlatformError({ code: "not_found", message: `No post draft ${draftId}.`, retryable: false });
+    }
+    if (draft.status.toUpperCase() === "PUBLISHED") {
+      throw new AgentPlatformError({
+        code: "conflict",
+        message:
+          "That post is already published, so its attachments cannot be changed. Duplicate it to make an " +
+          "edited copy.",
+        retryable: false,
+        details: { remedy: "duplicate" },
+      });
+    }
+    return draft;
+  };
+
+  const conversionOf = async (context: ExecutionContext, jobId: string): Promise<MediaConversion> => {
+    const rows = await sql.query<{
+      id: string;
+      status: string;
+      target: string;
+      result_path: string | null;
+      error: string | null;
+    }>(
+      `select id, status, target, result_path, error from public.media_conversion_jobs
+        where workspace_id = $1::uuid and id = $2::uuid`,
+      [String(context.tenantId), asUuid("jobId", jobId)],
+    );
+    const row = rows[0];
+    if (row === undefined) {
+      // `not_found` for absent and for another workspace's alike, as everywhere else.
+      throw new AgentPlatformError({ code: "not_found", message: `No conversion ${jobId}.`, retryable: false });
+    }
+
+    const state = MEDIA_CONVERSION_STATES.includes(row.status as MediaConversionState)
+      ? (row.status as MediaConversionState)
+      : /**
+         * An unrecognised status reads as `running`, which is the reading that invites another look.
+         *
+         * `succeeded` would claim a file exists, and `failed` would tell a user to start again — both worse
+         * than "not finished yet" when the truth is that this code does not recognise the value.
+         */
+        "running";
+
+    /**
+     * The asset is resolved from `result_path`, and a `succeeded` job with no path is reported as `failed`.
+     *
+     * That combination means the converter recorded success and wrote nothing, which is indistinguishable
+     * from a finished conversion to any caller reading `state` alone — and the caller would then attach
+     * nothing to a post and be told it worked.
+     */
+    if (state === "succeeded") {
+      if (row.result_path === null || row.result_path === "") {
+        return {
+          jobId: jobId as never,
+          state: "failed",
+          targetFormat: row.target,
+          failure:
+            "The conversion reported success but recorded no output file, so there is nothing to attach. " +
+            "Convert it again.",
+        };
+      }
+      const asset = await sql.query<AssetRow>(
+        `${ASSET_COLUMNS} where a.workspace_id = $1::uuid and a.storage_path = $3::text`,
+        [String(context.tenantId), bucket, row.result_path],
+      );
+      return asset[0] === undefined
+        ? {
+            jobId: jobId as never,
+            state: "failed",
+            targetFormat: row.target,
+            failure:
+              `The conversion finished but its output (${row.result_path}) is not a readable file in this ` +
+              "workspace, so it cannot be attached or published.",
+          }
+        : { jobId: jobId as never, state: "succeeded", targetFormat: row.target, asset: toAsset(asset[0]) };
+    }
+
+    return {
+      jobId: jobId as never,
+      state,
+      targetFormat: row.target,
+      ...(state === "failed" && row.error !== null && row.error !== "" ? { failure: row.error } : {}),
+    };
+  };
+
   return {
     async listAssets(context, input): Promise<Page<MediaAsset>> {
       const limit = Math.min(Math.max(Math.trunc(input.limit), 1), MAX_ASSET_LIMIT);
@@ -233,7 +357,7 @@ export const createPostgresMediaService = (deps: MediaDeps): MediaService => {
       return inspectOne(context, String(input.id));
     },
 
-    async convert(context, input): Promise<MediaAsset> {
+    async convert(context, input): Promise<MediaConversion> {
       const id = asUuid("id", String(input.id));
       if (input.targetFormat.trim() === "") {
         throw new AgentPlatformError({
@@ -268,15 +392,25 @@ export const createPostgresMediaService = (deps: MediaDeps): MediaService => {
         });
       }
 
-      const converted = await run({
+      const queued = await run({
         context,
         assetId: id,
         sourcePath: source[0].storage_path,
         targetFormat: input.targetFormat.trim(),
       });
-      // Read back, so the returned asset carries a real size and a real object — the same guarantee every
-      // other asset this service hands out has.
-      return inspectOne(context, converted.assetId);
+      /**
+       * Read the job back rather than trusting what the converter returned.
+       *
+       * Same reason the old code read the asset back: the row is what the rest of the system sees, and a
+       * converter that reported success while writing nothing would otherwise hand a caller a path that does
+       * not exist. For a synchronous converter this returns `succeeded` immediately; for video it returns
+       * `queued`, which is the case that could not be expressed before.
+       */
+      return conversionOf(context, queued.jobId);
+    },
+
+    async getConversion(context, input): Promise<MediaConversion> {
+      return conversionOf(context, String(input.jobId));
     },
 
     async attachToDraft(context, input) {
@@ -376,6 +510,159 @@ export const createPostgresMediaService = (deps: MediaDeps): MediaService => {
        * content adapter reports `mediaAssetIds` from the same column for the same reason — one story about
        * what that field is, rather than two.
        */
+      return { draftId: draftId as never, mediaAssetIds: (updated.media_urls ?? []) as never };
+    },
+
+    async detachFromDraft(context, input) {
+      /**
+       * Removal resolves ids to paths **without** requiring the storage object to exist.
+       *
+       * `attachToDraft` joins `storage.objects` because attaching a path the platforms cannot fetch fails at
+       * publish time. Detaching is the opposite: an asset whose file has gone missing is exactly the one a
+       * caller most needs to take off a draft, and requiring the object would make the orphan unremovable.
+       */
+      const draftId = asUuid("draftId", String(input.draftId));
+      const assetIds = input.assetIds.map((assetId) => asUuid("assetIds", String(assetId)));
+      if (assetIds.length === 0) {
+        throw new AgentPlatformError({
+          code: "invalid_input",
+          message: "No asset was given to remove.",
+          retryable: false,
+        });
+      }
+
+      const resolved = await sql.query<{ id: string; storage_path: string }>(
+        `select id, storage_path from public.generated_assets
+          where workspace_id = $1::uuid and id = any($2::uuid[])`,
+        [String(context.tenantId), assetIds],
+      );
+      /**
+       * An id this workspace does not own is `not_found`, but an id it owns that is simply *not attached* is
+       * handled below against the draft — those are different facts and a caller can act on each.
+       */
+      if (resolved.length !== assetIds.length) {
+        const found = new Set(resolved.map((row) => row.id));
+        throw new AgentPlatformError({
+          code: "not_found",
+          message: `These are not assets in this workspace: ${assetIds.filter((id) => !found.has(id)).join(", ")}.`,
+          retryable: false,
+        });
+      }
+
+      const updated = await deps.transaction.transaction(async (tx) => {
+        const draft = await lockedDraft(tx, context, draftId);
+        const existing = draft.media_urls ?? [];
+        const removing = new Set(resolved.map((row) => row.storage_path));
+        const next = existing.filter((path) => !removing.has(path));
+
+        /**
+         * Refused when nothing was attached, rather than reported as a success that changed nothing.
+         *
+         * ShareFlow says *"None of those files are attached to that post"* and 404s. A silent no-op would let
+         * an assistant tell a user it removed a file that was never there — and the file it meant to remove
+         * is still on the post.
+         */
+        if (next.length === existing.length) {
+          throw new AgentPlatformError({
+            code: "not_found",
+            message: "None of those files are attached to that post.",
+            retryable: false,
+          });
+        }
+
+        const written = await tx.query<{ media_urls: string[] | null }>(
+          `update public.posts set media_urls = $3::text[], updated_at = now()
+            where workspace_id = $1::uuid and id = $2::uuid
+            returning media_urls`,
+          [String(context.tenantId), draftId, next],
+        );
+        return written[0];
+      });
+
+      if (updated === undefined) {
+        throw new AgentPlatformError({ code: "internal", message: "The removal was not written.", retryable: true });
+      }
+      return { draftId: draftId as never, mediaAssetIds: (updated.media_urls ?? []) as never };
+    },
+
+    async replaceOnDraft(context, input) {
+      /**
+       * In place, by index — which is the whole reason this is not detach-then-attach.
+       *
+       * ShareFlow: *"It replaces IN PLACE, so the file keeps its position — which matters because media order
+       * is the order a platform shows a carousel in."* Two calls would move the new file to the end.
+       */
+      const draftId = asUuid("draftId", String(input.draftId));
+      const outgoing = asUuid("remove", String(input.remove));
+      const incoming = asUuid("add", String(input.add));
+
+      // The incoming file must be attachable — the same join `attachToDraft` uses, for the same reason. The
+      // outgoing one is only ever compared against what is stored, so it needs no object.
+      const rows = await sql.query<{ id: string; storage_path: string; attachable: boolean }>(
+        `select a.id, a.storage_path,
+                exists (select 1 from storage.objects o where o.bucket_id = $2::text and o.name = a.storage_path) as attachable
+           from public.generated_assets a
+          where a.workspace_id = $1::uuid and a.id = any($3::uuid[])`,
+        [String(context.tenantId), bucket, [outgoing, incoming]],
+      );
+      const byId = new Map(rows.map((row) => [row.id, row]));
+      const out = byId.get(outgoing);
+      const inc = byId.get(incoming);
+      if (out === undefined || inc === undefined) {
+        throw new AgentPlatformError({
+          code: "not_found",
+          message: `${out === undefined ? outgoing : incoming} is not an asset in this workspace.`,
+          retryable: false,
+        });
+      }
+      if (!inc.attachable) {
+        throw new AgentPlatformError({
+          code: "not_found",
+          message:
+            `Asset ${incoming} is recorded but its file is missing from storage, so it cannot replace ` +
+            "anything — the platforms fetch the file themselves. Re-upload it.",
+          retryable: false,
+        });
+      }
+
+      const updated = await deps.transaction.transaction(async (tx) => {
+        const draft = await lockedDraft(tx, context, draftId);
+        const existing = [...(draft.media_urls ?? [])];
+        const at = existing.indexOf(out.storage_path);
+        if (at === -1) {
+          throw new AgentPlatformError({
+            code: "conflict",
+            message: "That file is not attached to that post, so there is nothing to replace.",
+            retryable: false,
+          });
+        }
+        /**
+         * Refused when the replacement is already attached.
+         *
+         * ShareFlow refuses it too, and the reason is the carousel again: writing it over the outgoing slot
+         * would leave the same file twice and then dedupe to one, silently shortening the post by a slide.
+         */
+        if (existing.includes(inc.storage_path) && inc.storage_path !== out.storage_path) {
+          throw new AgentPlatformError({
+            code: "conflict",
+            message: "That replacement is already attached to the post.",
+            retryable: false,
+          });
+        }
+
+        existing[at] = inc.storage_path;
+        const written = await tx.query<{ media_urls: string[] | null }>(
+          `update public.posts set media_urls = $3::text[], updated_at = now()
+            where workspace_id = $1::uuid and id = $2::uuid
+            returning media_urls`,
+          [String(context.tenantId), draftId, existing],
+        );
+        return written[0];
+      });
+
+      if (updated === undefined) {
+        throw new AgentPlatformError({ code: "internal", message: "The replacement was not written.", retryable: true });
+      }
       return { draftId: draftId as never, mediaAssetIds: (updated.media_urls ?? []) as never };
     },
 

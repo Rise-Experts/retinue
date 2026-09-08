@@ -31,6 +31,7 @@ import type { ExecutionContext } from "@retinue/agentkit";
 import type {
   ArtifactId,
   CampaignId,
+  MediaConversionJobId,
   InboxCommentId,
   LeadId,
   MediaAssetId,
@@ -588,6 +589,15 @@ export interface MediaService {
    * service's determinism point the same way. Long-running (a queued job), so the returned asset may
    * differ in id from the source.
    */
+  /**
+   * Returns a **conversion**, not an asset — REQ-041 (#190).
+   *
+   * It used to return `MediaAsset`, which made a queued conversion unrepresentable. ShareFlow's converter is
+   * asynchronous for video: `media_conversion_jobs` rows go `queued → running → succeeded | failed`, and the
+   * old runtime's `convert_media` returns a `jobId` that `check_conversion` polls. For a long video the
+   * queued case is the normal one, not an edge, so a return type that could only describe a finished file
+   * meant this adapter could only describe the half that happens to be fast.
+   */
   convert(
     context: ExecutionContext,
     input: {
@@ -595,7 +605,17 @@ export interface MediaService {
       readonly id: MediaAssetId;
       readonly targetFormat: string;
     },
-  ): Promise<MediaAsset>;
+  ): Promise<MediaConversion>;
+
+  /**
+   * Poll a conversion — REQ-041 (#190).
+   *
+   * The other half of `convert`. `not_found` for another workspace's job, as everywhere else.
+   */
+  getConversion(
+    context: ExecutionContext,
+    input: { readonly jobId: MediaConversionJobId },
+  ): Promise<MediaConversion>;
 
   /**
    * Add attachments to a draft, by reference.
@@ -616,6 +636,45 @@ export interface MediaService {
       readonly idempotencyKey: ServiceIdempotencyKey;
       readonly draftId: PostDraftId;
       readonly assetIds: readonly MediaAssetId[];
+    },
+  ): Promise<{ readonly draftId: PostDraftId; readonly mediaAssetIds: readonly MediaAssetId[] }>;
+
+  /**
+   * Remove attachments from a draft — REQ-041 (#190).
+   *
+   * **The file is not deleted from storage**, only its attachment to this draft, so it can be re-attached or
+   * used elsewhere. The old tool says so in its first line and calls itself reversible.
+   *
+   * The compatibility check runs **on the way out**, which is the part worth stating: removing the only image
+   * from an Instagram-targeted post leaves it unpublishable, and ShareFlow refuses that now rather than at
+   * publish time. So this raises `invalid_input` with `issues` for the same reason `attachToDraft` does.
+   */
+  detachFromDraft(
+    context: ExecutionContext,
+    input: {
+      readonly idempotencyKey: ServiceIdempotencyKey;
+      readonly draftId: PostDraftId;
+      readonly assetIds: readonly MediaAssetId[];
+    },
+  ): Promise<{ readonly draftId: PostDraftId; readonly mediaAssetIds: readonly MediaAssetId[] }>;
+
+  /**
+   * Swap one attachment for another, **in place** — REQ-041 (#190).
+   *
+   * Not detach-then-attach, and the difference is the whole reason it exists: the replacement keeps the
+   * file's *position*, and position is the order a platform shows a carousel in. Two calls would put the new
+   * file last.
+   *
+   * `conflict` when the outgoing file is not attached, and when the incoming one already is — a replacement
+   * that is already there would silently shorten the carousel.
+   */
+  replaceOnDraft(
+    context: ExecutionContext,
+    input: {
+      readonly idempotencyKey: ServiceIdempotencyKey;
+      readonly draftId: PostDraftId;
+      readonly remove: MediaAssetId;
+      readonly add: MediaAssetId;
     },
   ): Promise<{ readonly draftId: PostDraftId; readonly mediaAssetIds: readonly MediaAssetId[] }>;
 
@@ -649,6 +708,33 @@ export interface MediaService {
     input: { readonly idempotencyKey: ServiceIdempotencyKey },
   ): Promise<MediaStorageCheck>;
 }
+
+/**
+ * From `media_conversion_jobs_status_check`. Four values, and the constraint is the authority.
+ */
+export const MEDIA_CONVERSION_STATES = ["queued", "running", "succeeded", "failed"] as const;
+export type MediaConversionState = (typeof MEDIA_CONVERSION_STATES)[number];
+
+/**
+ * A conversion, finished or not.
+ *
+ * **`asset` is present only when `state` is `succeeded`**, and that is the point rather than a detail. The old
+ * tool's docstring is explicit: *"Only 'succeeded' means the file exists — until then there is no path to use
+ * or show. If it is still queued or running, say so; do not guess a path, and do not attach one to a post."*
+ *
+ * A shape carrying a path on every state invites exactly that: a model reads `asset.storagePath` off a
+ * `running` job, attaches it, and the post fails at publish with a file that was never written. Absent is the
+ * only representation of "there is nothing to attach yet" that cannot be misread.
+ */
+export type MediaConversion = {
+  readonly jobId: MediaConversionJobId;
+  readonly state: MediaConversionState;
+  readonly targetFormat: string;
+  /** Present only on `succeeded`. */
+  readonly asset?: MediaAsset;
+  /** Present only on `failed`. The stored reason, never a provider's raw body. */
+  readonly failure?: string;
+};
 
 /**
  * The outcome of a storage check.
