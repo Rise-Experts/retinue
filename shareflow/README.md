@@ -633,6 +633,47 @@ both `validateInventory` and `gateStatus` switch exhaustively with a `never` def
 refuses `retained` for any capability whose source is under `ai_backend/`. Without that guard, `retained` is the
 escape hatch that empties the file.
 
+### Decisions of 2026-09-08 — full replacement, and how replay is measured
+
+Four decisions, recorded here because the inventory carries statuses and not reasons.
+
+**1. `ai_backend` is replaced completely.** No partial cutover, no cluster left behind. Every one of the 19
+unreplaced capabilities gets built — including the five I recommended leaving on Agno (diagrams, PDFs,
+`/vision/describe`, `/capture`, `/plan-video-scenes`) and the five campaign/repurpose endpoints. Nothing
+further is dropped.
+
+**2. Replay restores a snapshot.** The recorder logs each old-runtime turn against a database snapshot taken
+when recording starts; the replay restores that snapshot and runs the same turn through the new runtime in
+shadow mode. So the reads are identical and **any write-set difference is the runtime** rather than the world
+having moved. The alternative — logging the read set and discarding runs whose reads changed — needs no
+snapshot but throws away sample size on exactly the busy workspaces worth measuring.
+
+**3. `skills/mermaid-diagrams` flips to `active` when `render_diagram` ships**, for the same reason
+`document-generation` did: a skill describing tools that do not exist instructs the model into nothing, and
+tools shipping without their instructions is the AC-5 defect.
+
+**4. The reply review step is built.** `POST /reply` drafts into `needs_review` and sends nothing;
+`reply_to_comment` sends. They are different capabilities and the queue where a human looks first is kept.
+
+## The premise that changed, and what it bears on
+
+The decision above came with a fact that was not on the table when the eight drops were signed on
+2026-09-07: **there are no public users yet — the platform is in testing.**
+
+That matters, because the case for each of those eight was partly that dropping them removes capability *a
+user has today*. Two are worth revisiting on the new premise rather than left standing on the old one:
+
+- **`update_branding`** is the only writer of `workspace_ai_profile` anywhere in the product. After the
+  cutover, `brand_voice`, `audience` and `custom_instructions` can be changed only in the database — and six
+  generation routes read them.
+- **the four agent-skill tools** are the only surface `workspace_agent_skills` has. Per-workspace custom
+  skills stop being editable at all.
+
+Neither drop is wrong. Both were signed knowing the cost — it is written into `droppedBy.reason`. But a
+signature given for "no user loses this" reads differently from one given for "no user exists yet", and the
+second is the one that is now true. Reversing either is a one-line status change plus a tool; leaving them
+dropped is equally defensible. It is a decision, and it should be made on the premise that holds.
+
 ### The three that were a tool away
 
 `create_artifact`, `update_artifact` and `get_artifact`, built once the inventory said what they needed.
