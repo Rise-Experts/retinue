@@ -31,6 +31,9 @@ import { createToolRegistry, createToolSearch } from "@retinue/agentkit/tools";
 import type { SqlExecutor, TransactionRunner } from "@retinue/agentkit/adapters/postgres";
 
 import { createShareFlowApp } from "./index.js";
+import type { ConnectorDeps } from "../adapters/postgres/connectors.js";
+import type { ConnectionSetup } from "../services/index.js";
+import type { StructuredGenerate } from "../adapters/model/generator.js";
 import { createShareFlowServices } from "../adapters/index.js";
 import { SHAREFLOW_TOOL_FACTORIES } from "../tools/index.js";
 import { SHAREFLOW_BUILT_IN_SKILLS } from "../skills/index.js";
@@ -72,38 +75,188 @@ export const createAuthenticator = (env: Readonly<Record<string, string | undefi
 };
 
 /**
- * The four dependencies `createShareFlowServices` cannot invent, refused loudly when absent.
+ * The four dependencies `createShareFlowServices` cannot invent, wired from the environment.
  *
- * **This is the honest form of an unfinished deployment.** The first version of this module passed
- * `undefined as never` for all four: it typechecked, it would have built a container that booted and reported
- * healthy, and it would have failed on the first turn that used a connector, the web, or the model. A backend
- * that starts and then cannot work is worse than one that refuses to start, because the refusal names the
- * cause and the crash does not.
- *
- * So construction fails, listing exactly what is unwired. What each needs:
- *
- * - **`setup`** — `ConnectionSetup`: redirect URLs, console field labels and the *names* of each platform's
- *   credential variables. Deployment-specific by definition, which is why the port refuses a default: a
- *   default here would be this package asserting another deployment's configuration.
- * - **`search` / `fetchPage`** — the platform's `createWebSearch` / `createFetchPage`, where the egress
- *   policy, the redirect refusal and the body ceiling live. Wiring a second fetcher would be a second egress
- *   policy, and the one that mattered would be whichever the caller happened to use.
- * - **`generate`** — the model call.
- *
- * None is hard; all three are a deployment's decisions rather than this file's, and none should be guessed.
+ * **This replaced a version that passed `undefined as never` for all four.** It typechecked, and it would have
+ * built a container that booted, reported healthy, and failed on the first turn touching a connector, the web
+ * or the model. Each of these now either works or refuses by name — and two of them *legitimately* degrade
+ * rather than refuse, which is the distinction worth keeping.
  */
-const requireIntegrations = (): never => {
-  throw new Error(
-    "This ShareFlow module is not yet deployable: `setup`, `search`, `fetchPage` and `generate` are " +
-      "unwired.\n" +
-      "  setup     — ConnectionSetup (redirect URL, per-platform console fields and credential variable " +
-      "names). Deployment-specific; the port refuses a default on purpose.\n" +
-      "  search    — @retinue/agentkit's createWebSearch\n" +
-      "  fetchPage — @retinue/agentkit's createFetchPage (egress policy, redirect refusal, body ceiling)\n" +
-      "  generate  — the model call\n" +
-      "Refusing at construction rather than at the first turn: a backend that boots and then cannot work " +
-      "hides its own cause.",
-  );
+
+/**
+ * `ConnectionSetup` — what a person needs in order to connect an account.
+ *
+ * Deployment-specific by definition: the redirect URL is this deployment's, the credential entries are the
+ * *names* of its environment variables, and the console URLs are each platform's. The port refuses a default
+ * for that reason, so this is built from `PUBLIC_APP_URL` and refuses without it — a setup naming the wrong
+ * redirect URL sends a person to a console to paste a value that will never match, which is worse than
+ * saying the deployment is unconfigured.
+ *
+ * **Never a credential value, only a name.** `credentialVariables` is what `check_account_health` and
+ * `get_connection_setup` surface, and `assertNoSecrets` in the accounts tools exists because a setup carrying
+ * a real secret would put it in a tool result, which is persisted in the run event log.
+ */
+export const connectionSetupFrom = (
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): ConnectorDeps["setup"] => {
+  const appUrl = env["PUBLIC_APP_URL"];
+  if (appUrl === undefined || appUrl === "") {
+    throw new Error(
+      "PUBLIC_APP_URL is required: the connection setup tells a person which redirect URL to paste into a " +
+        "platform's developer console, and a wrong one fails at consent with no explanation.",
+    );
+  }
+  const origin = appUrl.replace(/\/$/, "");
+  const redirectUrl = `${origin}/api/connect/callback`;
+
+  /**
+   * A real condition the type asks about: every platform refuses a plain-http redirect outside localhost, so
+   * connecting cannot work until the deployment's URL is fixed. Saying so here is the difference between a
+   * person understanding why consent failed and them re-pasting a correct-looking URL forever.
+   */
+  const insecure = origin.startsWith("http://") && !/^http:\/\/(localhost|127\.0\.0\.1)(:|$|\/)/.test(origin);
+  const setup: ConnectionSetup = {
+    redirectUrl,
+    credentialsPageUrl: `${origin}/settings`,
+    ...(insecure
+      ? {
+          warning:
+            `PUBLIC_APP_URL is plain http (${origin}). Every platform below refuses a non-https redirect ` +
+            `outside localhost, so connecting will fail at consent until the deployment is served over https.`,
+        }
+      : {}),
+    /**
+     * The platforms this deployment's web app actually has connect routes for. Names only — the values live
+     * in the web app's environment and must never reach a tool result.
+     */
+    platforms: [
+      {
+        platformId: "linkedin",
+        label: "LinkedIn",
+        consoleUrl: "https://www.linkedin.com/developers/apps",
+        credentialVariables: ["LINKEDIN_CLIENT_ID", "LINKEDIN_CLIENT_SECRET"],
+        consoleFields: [{ label: "Authorized redirect URL", url: redirectUrl }],
+        scopes: ["w_member_social", "r_basicprofile"],
+      },
+      {
+        platformId: "instagram",
+        label: "Instagram",
+        consoleUrl: "https://developers.facebook.com/apps",
+        credentialVariables: ["META_APP_ID", "META_APP_SECRET"],
+        consoleFields: [{ label: "Valid OAuth Redirect URI", url: redirectUrl }],
+        scopes: ["instagram_content_publish", "pages_show_list"],
+      },
+      {
+        platformId: "tiktok",
+        label: "TikTok",
+        consoleUrl: "https://developers.tiktok.com/apps",
+        credentialVariables: ["TIKTOK_CLIENT_KEY", "TIKTOK_CLIENT_SECRET"],
+        consoleFields: [{ label: "Redirect URI", url: redirectUrl }],
+        scopes: ["video.publish"],
+      },
+    ],
+  };
+
+  /**
+   * A **function**, because that is what `ConnectorDeps.setup` is — `createPostgresConnectorService` calls
+   * `deps.setup(context)`. The first version of this returned the object above cast through
+   * `as unknown as ConnectorDeps["setup"]`: it typechecked, and the first person to ask how to connect
+   * LinkedIn would have got `deps.setup is not a function`. The cast was the whole defect, so there is none
+   * now — the annotation on `setup` is checked, and the return type is inferred against the real one.
+   */
+  return () => setup;
+};
+
+/**
+ * The web toolkit, from the platform — never a second fetcher.
+ *
+ * `createFetchPage` is where the egress policy, the redirect refusal and the body ceiling live. Writing one
+ * here would be a second egress policy, and the one that mattered would be whichever the caller happened to
+ * use.
+ *
+ * **Search degrades rather than refuses.** With no provider configured `createWebSearch` returns
+ * `{ searched: false, reason: "not-configured" }`, which `ResearchService` passes straight through — and that
+ * is the whole point of the port: the old runtime's `websearch.py` was *"deliberately fail-soft: network
+ * errors, timeouts, or a missing package yield an empty result list"*, and an empty list is
+ * indistinguishable from "nothing out there", which invites a model to answer from what it believes. A
+ * refusal with a reason is usable; an empty list is a lie.
+ */
+export const webToolkitFrom = async (env: Readonly<Record<string, string | undefined>> = process.env) => {
+  const { createWebSearch, createFetchPage } = await import("@retinue/agentkit/tools");
+  const apiKey = env["RETINUE_SEARCH_API_KEY"];
+  const endpoint = env["RETINUE_SEARCH_ENDPOINT"];
+
+  const provider =
+    apiKey === undefined || endpoint === undefined
+      ? undefined
+      : {
+          endpoint: (query: string, limit: number) =>
+            `${endpoint}?q=${encodeURIComponent(query)}&count=${String(limit)}`,
+          headers: { Authorization: `Bearer ${apiKey}` },
+        };
+
+  return {
+    search: createWebSearch(provider === undefined ? {} : { provider: provider as never }),
+    fetchPage: createFetchPage(),
+  };
+};
+
+/**
+ * Structured generation over the configured model.
+ *
+ * `generateObject` rather than prose parsing, for `ContentGenerator`'s own reason: asking for prose and
+ * parsing it fails the day a model writes "Here are three angles:" before the list, and that failure looks
+ * like the model being bad at the task rather than the adapter being bad at reading.
+ *
+ * Pricing is zeroed deliberately — a cost derived from invented prices is worse than an obvious zero, and the
+ * usage ledger showing 0 is readable as "not priced" where a plausible wrong number is not.
+ */
+export const structuredGenerateFrom = async (
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): Promise<StructuredGenerate> => {
+  const apiKey = env["RETINUE_MODEL_API_KEY"];
+  if (apiKey === undefined || apiKey === "") {
+    throw new Error(
+      "RETINUE_MODEL_API_KEY is required: content generation is a model call, and a deployment without one " +
+        "would admit a drafting turn and fail inside it.",
+    );
+  }
+  const modelId = env["RETINUE_MODEL_ID"] ?? "gpt-4o";
+  const { createProviderFactory } = await import("@retinue/agentkit/providers");
+  const { generateObject } = await import("ai");
+  const factory = createProviderFactory({
+    credentials: { openai: { apiKey, name: "shareflow" } },
+  } as never);
+  const definition = {
+    id: modelId,
+    provider: "openai",
+    modelId,
+    displayName: modelId,
+    capabilities: { tools: true, streaming: true, structuredOutput: true },
+    limits: { contextWindow: 0, maxOutputTokens: 0 },
+    pricing: { currency: "USD", inputPerMillion: 0, outputPerMillion: 0 },
+  };
+  return (async ({ system, prompt, schema }) => {
+    /**
+     * The options object is cast, and the reason is the overload rather than the behaviour.
+     *
+     * This exact call — `generateObject({ model, system, prompt, schema })` — is what
+     * `scripts/shadow-turn.mjs` runs against a real model, and it produced the one valid parity datum this
+     * project has. The script is `.mjs` and therefore untyped; typed, this `ai` version's `generateObject`
+     * resolves to an overload whose options do not admit `schema` in that position.
+     *
+     * So the cast records "the types disagree with a call that demonstrably works", not "I do not know what
+     * this returns". The narrow alternative — restating the whole option union — would be a second copy of
+     * a vendor's types to keep in step, and it would be the copy that went stale.
+     */
+    const result = await generateObject({
+      model: (factory as { languageModel: (d: unknown) => never }).languageModel(definition),
+      system,
+      prompt,
+      schema,
+    } as never);
+    return (result as { object: unknown }).object;
+  }) as StructuredGenerate;
 };
 
 const requireRunner = (runner: TransactionRunner | undefined): TransactionRunner => {
@@ -191,6 +344,9 @@ export const shareFlowDeps = async (input: ShareFlowModuleInput) => {
     );
   }
 
+  const web = await webToolkitFrom();
+  const generate = await structuredGenerateFrom();
+
   const app = createShareFlowApp({
     /**
      * The manifest's four required fields are deployment decisions, so they are made here and visibly.
@@ -226,7 +382,10 @@ export const shareFlowDeps = async (input: ShareFlowModuleInput) => {
     services: createShareFlowServices({
       sql,
       transaction: requireRunner(input.runner),
-      ...(requireIntegrations() as unknown as { setup: never; search: never; fetchPage: never; generate: never }),
+      setup: connectionSetupFrom(),
+      search: web.search,
+      fetchPage: web.fetchPage,
+      generate,
     }),
     deps: { authorization: PLACEHOLDER_AUTHORIZATION, idempotency, approvals: createApprovalGate({ grants, interactions }) },
     authorization: PLACEHOLDER_AUTHORIZATION,
