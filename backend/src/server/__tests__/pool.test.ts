@@ -22,7 +22,18 @@ describe("searchPathFor", () => {
      * of their queries as `public.`. A bare `SET search_path TO retinue` makes the first fail with
      * `type "vector" does not exist` on a machine where the extension is installed and working.
      */
-    expect(searchPathFor("retinue")).toBe("retinue, public");
+    expect(searchPathFor("retinue")).toBe("retinue,public");
+  });
+
+  it("puts no space after the comma, because libpq would read one as another option", () => {
+    /**
+     * The assertion a real database earned. This string becomes `-c search_path=…`, and in libpq's
+     * option syntax a space separates options -- so `retinue, public` arrives as `search_path` =
+     * `retinue,` plus a stray `public`, and Postgres refuses the connection outright:
+     * `invalid value for parameter "search_path": "retinue,"`. Every test here passed with the spaced
+     * version; `migrate` against a real server did not.
+     */
+    expect(searchPathFor("retinue")).not.toMatch(/,\s/);
   });
 
   it("is undefined when no schema is configured, rather than a guess", () => {
@@ -42,6 +53,13 @@ describe("openPostgres", () => {
    */
   const load = async (
     settings: { databaseUrl: string; databaseSchema?: string; connectionTimeoutMillis?: number },
+    /**
+     * What the database reports for `show search_path`.
+     *
+     * Defaults to what the settings ask for, so a test that is not about the assertion does not have
+     * to restate it. A test that *is* about it passes something else.
+     */
+    reportedSearchPath?: string,
   ) => {
     const queries: string[] = [];
     const listeners: Record<string, ((...args: unknown[]) => void)[]> = {};
@@ -58,7 +76,16 @@ describe("openPostgres", () => {
         (listeners[event] ??= []).push(listener);
       },
       emit: vi.fn(),
-      query: vi.fn(() => Promise.resolve({ rows: [] })),
+      query: vi.fn((text: string) => {
+        queries.push(text);
+        if (/show search_path/i.test(text)) {
+          const path =
+            reportedSearchPath ??
+            (settings.databaseSchema === undefined ? '"$user", public' : `${settings.databaseSchema}, public`);
+          return Promise.resolve({ rows: [{ search_path: path }] });
+        }
+        return Promise.resolve({ rows: [] });
+      }),
       connect: vi.fn(() => Promise.resolve(client)),
       end: vi.fn(() => Promise.resolve()),
     };
@@ -93,31 +120,56 @@ describe("openPostgres", () => {
     };
   };
 
-  it("sets the search path on every new connection, not once at startup", async () => {
+  it("sets the search path as a startup parameter, so it is applied before any statement", async () => {
     /**
-     * The heart of it. `createPgExecutor` calls `pool.query`, which checks out whichever connection is
-     * free and hands back one carrying whatever `search_path` its previous borrower left. A single `SET`
-     * at startup therefore governs the first statements and nothing after them -- so migration 1 lands
-     * in `retinue` and migration 20 lands in `public`, and both report success.
+     * The heart of it, and why it is a *startup parameter* rather than a `SET`.
+     *
+     * `createPgExecutor` calls `pool.query`, which checks out whichever connection is free and hands
+     * back one carrying whatever `search_path` its previous borrower left. So setting it once at
+     * startup governs the first statements and nothing after them -- migration 1 in `retinue`,
+     * migration 20 in `public`, both reporting success.
+     *
+     * The first version did it per connection with `pool.on("connect", (c) => c.query("SET …"))`,
+     * node-postgres's documented idiom. That works and pg deprecated it: *"Calling client.query() when
+     * the client is already executing a query is deprecated and will be removed in pg@9.0"*, printed
+     * on every boot. `options` needs no query, so the ordering question does not arise.
      */
-    const { listeners, client, queries } = await load({ databaseUrl: "postgres://x/y", databaseSchema: "retinue" });
-    expect(listeners["connect"]).toHaveLength(1);
-    listeners["connect"]?.[0]?.(client);
-    await Promise.resolve();
-    expect(queries).toEqual(["SET search_path TO retinue, public"]);
+    const { constructedWith, listeners } = await load({ databaseUrl: "postgres://x/y", databaseSchema: "retinue" });
+    expect(constructedWith()?.["options"]).toBe("-c search_path=retinue,public");
+    // And no `connect` listener: the deprecated mechanism is gone, not merely supplemented.
+    expect(listeners["connect"]).toBeUndefined();
   });
 
-  it("destroys a connection whose search path could not be set", async () => {
+  it("refuses to start when the reported search path is not the one asked for", async () => {
     /**
-     * The alternative is a connection silently reading the wrong schema for the rest of its life, which
-     * is the outcome this whole file exists to prevent. A failure here means the schema is missing or
-     * the role cannot use it -- both worth failing the borrower's query over.
+     * Because `options` is the kind of mechanism that fails silently. A pooler that dropped it --
+     * PgBouncer rejects unknown startup parameters by default, and a managed pooler can change
+     * behaviour under you -- would leave every connection on the default path and every table this
+     * process creates in the wrong schema, with no error and no log line.
+     *
+     * One round-trip at startup turns that into a refusal.
      */
-    const { listeners, client } = await load({ databaseUrl: "postgres://x/y", databaseSchema: "retinue" });
-    client.query.mockReturnValueOnce(Promise.reject(new Error("permission denied for schema retinue")) as never);
-    listeners["connect"]?.[0]?.(client);
-    await new Promise((done) => setTimeout(done, 0));
-    expect(client.end).toHaveBeenCalled();
+    const { load: loadWith } = { load };
+    const rejected = loadWith({ databaseUrl: "postgres://x/y", databaseSchema: "retinue" }, "public");
+    await expect(rejected).rejects.toThrow(/were not applied/);
+  });
+
+  it("accepts a path that differs only in spacing, since Postgres echoes its own formatting", async () => {
+    // `retinue, public` and `retinue,public` are the same path. Comparing strings would refuse a
+    // correctly configured database, which is the false alarm that gets a check deleted.
+    await expect(
+      load({ databaseUrl: "postgres://x/y", databaseSchema: "retinue" }, "retinue,public"),
+    ).resolves.toBeDefined();
+    await expect(
+      load({ databaseUrl: "postgres://x/y", databaseSchema: "retinue" }, '"retinue", public'),
+    ).resolves.toBeDefined();
+  });
+
+  it("refuses a path with the right schemas in the wrong order", async () => {
+    // Order is the whole meaning of a search path: `public, retinue` creates in `public`.
+    await expect(
+      load({ databaseUrl: "postgres://x/y", databaseSchema: "retinue" }, "public, retinue"),
+    ).rejects.toThrow(/were not applied/);
   });
 
   it("also sets it on the checked-out connection the transaction scope uses", async () => {
@@ -128,7 +180,7 @@ describe("openPostgres", () => {
      * Dropping this argument changed nothing that any other assertion here could see.
      */
     const { openerSearchPath } = await load({ databaseUrl: "postgres://x/y", databaseSchema: "retinue" });
-    expect(openerSearchPath()).toBe("retinue, public");
+    expect(openerSearchPath()).toBe("retinue,public");
   });
 
   it("adds no listener and no search path when none is configured", async () => {

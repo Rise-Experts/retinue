@@ -7,16 +7,28 @@
  * the ones that must land in the same schema as everything else.
  *
  * **What it adds over `new Pool`.** `RETINUE_DATABASE_SCHEMA` names the schema the platform's tables
- * live in, and honouring it takes two things that must agree:
+ * live in, and honouring it takes three things:
  *
- *  - `pool.on("connect")` sets `search_path` on **every** connection, because `createPgExecutor` runs
- *    each query through `pool.query`, which takes a different connection per call. A pooled connection
- *    carries whatever `search_path` its last user left, so setting it once at startup means the first
- *    few statements land in the right schema and the rest land wherever. That failure is not loud: it
- *    is a table created in `public` by a migration that reported success.
- *  - `createPoolOpener(pool, …)` sets it again per checkout, which is what the transaction scope uses.
- *    Redundant on paper and deliberately kept: the opener is the path that holds `SELECT … FOR UPDATE`
- *    across statements, and it must not depend on a listener having fired.
+ *  - `options: "-c search_path=…"`, a **startup parameter**, so every connection has it before it runs
+ *    a single statement. This matters because `createPgExecutor` runs each query through `pool.query`,
+ *    which takes a different connection per call and hands back one carrying whatever `search_path` its
+ *    last borrower left.
+ *
+ *    The first version of this did it with `pool.on("connect", (c) => c.query("SET search_path …"))`,
+ *    node-postgres's documented idiom for session state. It worked, and pg deprecated it while this was
+ *    being written: *"Calling client.query() when the client is already executing a query is deprecated
+ *    and will be removed in pg@9.0"* — printed on every boot. A startup parameter needs no query at
+ *    all, so the ordering question disappears rather than being answered.
+ *
+ *    Verified against a real pooler before relying on it: Supabase's Supavisor forwards `options`
+ *    on the session port, both in the config and in the URL's query string. That was the open
+ *    question, since PgBouncer historically rejects unknown startup parameters.
+ *  - `assertSearchPath`, one query at startup, because the mechanism above is the kind that fails
+ *    silently. A pooler that swallowed `options` would leave every connection on the default path and
+ *    every write in the wrong schema, with nothing to see. One round-trip turns that into a refusal.
+ *  - `createPoolOpener(pool, …)` sets it per checkout as well, which is what the transaction scope
+ *    uses. Belt and braces, deliberately: the opener is the path that holds `SELECT … FOR UPDATE`
+ *    across statements, and it is worth its own guarantee.
  *
  * **`public` stays on the path** after the named schema. Two things need it: the `vector` type is
  * pinned to `public` so it resolves from any schema (see the note in `migrations.ts`), and ShareFlow's
@@ -49,7 +61,46 @@ export type PoolSettings = {
  * cheaper than reading two call sites to find out what a deployment actually gets.
  */
 export const searchPathFor = (schema: string | undefined): string | undefined =>
-  schema === undefined || schema === "" ? undefined : `${schema}, public`;
+  // **No space after the comma**, and that is not a style choice. This string is passed as libpq's
+  // `-c search_path=…`, where a space separates one option from the next: `-c search_path=retinue,
+  // public` reaches Postgres as `search_path` = `retinue,` and a stray `public`, and the server
+  // refuses it outright — `invalid value for parameter "search_path": "retinue,"`. Found by running
+  // `migrate` against a real database, not by reading the code. `SET search_path TO retinue,public` is
+  // equally valid, so one representation serves both uses.
+  schema === undefined || schema === "" ? undefined : `${schema},public`;
+
+/**
+ * One query, to prove the startup parameter actually took effect.
+ *
+ * Without it the mechanism is silent when it fails. A pooler that dropped `options` — PgBouncer
+ * rejects unknown startup parameters by default, and a managed pooler can change behaviour under you —
+ * would leave every connection on the default `search_path`, and every table the platform creates
+ * would land in whatever schema comes first there. No error, no log line, and the symptom is two
+ * projects quietly sharing a namespace.
+ *
+ * Compared as a set rather than as a string: Postgres echoes what it was given, and `retinue, public`
+ * is the same path as `retinue,public` while being a different string.
+ */
+export const assertSearchPath = async (pool: Pool, expected: string): Promise<void> => {
+  const normalise = (value: string) =>
+    value
+      .split(",")
+      .map((part) => part.trim().replace(/^"|"$/g, ""))
+      .filter((part) => part !== "");
+  const rows = await pool.query<{ readonly search_path: string }>("show search_path");
+  const actual = normalise(rows.rows[0]?.search_path ?? "");
+  const wanted = normalise(expected);
+  const matches = wanted.length === actual.length && wanted.every((part, index) => part === actual[index]);
+  if (!matches) {
+    await pool.end().catch(() => undefined);
+    throw new Error(
+      `RETINUE_DATABASE_SCHEMA asked for search_path "${expected}" but this connection reports ` +
+        `"${rows.rows[0]?.search_path ?? "(nothing)"}". The connection options were not applied — a ` +
+        `pooler in front of Postgres may be dropping them. Refusing to start, because every table this ` +
+        `process creates would otherwise land in the wrong schema with no error.`,
+    );
+  }
+};
 
 export const openPostgres = async (settings: PoolSettings): Promise<PostgresConnection> => {
   const { Pool } = await import("pg");
@@ -58,39 +109,15 @@ export const openPostgres = async (settings: PoolSettings): Promise<PostgresConn
   const searchPath = searchPathFor(settings.databaseSchema);
   const pool = new Pool({
     connectionString: settings.databaseUrl,
+    // The startup parameter, applied by the server before the connection is usable. `-c key=value` is
+    // libpq's form and node-postgres passes it straight through.
+    ...(searchPath === undefined ? {} : { options: `-c search_path=${searchPath}` }),
     ...(settings.connectionTimeoutMillis === undefined
       ? {}
       : { connectionTimeoutMillis: settings.connectionTimeoutMillis }),
   });
 
-  if (searchPath !== undefined) {
-    /**
-     * Queued on the client, not awaited — which is what makes it correct rather than racy.
-     *
-     * node-postgres queues queries per client in order, so this `SET` is ahead of whatever the borrower
-     * runs next on that same connection. An `await` here would have nothing to attach to: `connect` is
-     * an event, and the pool hands the client out regardless of what a listener is still doing.
-     *
-     * A failure is surfaced rather than swallowed, and it is worth being precise about what it can and
-     * cannot catch. It means the role may not *use* the schema. It does **not** mean the schema is
-     * missing: `SET search_path TO retinue, public` succeeds when `retinue` does not exist, because a
-     * missing entry is skipped rather than rejected, and every write then lands in `public` with no
-     * error anywhere. Nothing at this layer can see that — which is why `retinue migrate` creates the
-     * schema before anything connects, and why this listener is not the guard against it.
-     */
-    pool.on("connect", (client) => {
-      void client.query(`SET search_path TO ${searchPath}`).catch((error: unknown) => {
-        (client as unknown as { end: () => void }).end();
-        pool.emit(
-          "error",
-          error instanceof Error
-            ? new Error(`could not SET search_path TO ${searchPath}: ${error.message}`, { cause: error })
-            : new Error(`could not SET search_path TO ${searchPath}`),
-          client,
-        );
-      });
-    });
-  }
+  if (searchPath !== undefined) await assertSearchPath(pool as unknown as Pool, searchPath);
 
   return {
     sql: createPgExecutor(pool as unknown as Pool),

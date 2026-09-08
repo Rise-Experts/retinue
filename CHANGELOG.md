@@ -8,6 +8,18 @@
 
   Worth knowing why it is not merely a convenience: a missing schema does **not** error. `SET search_path TO retinue, public` succeeds when `retinue` does not exist, and every `CREATE TABLE` then lands in the next schema on the path. Without the provisioning step, 34 migrations would be created in `public` beside another project's tables, reporting success the whole way.
 
+## agentkit 0.3.2
+
+### Fixed
+
+- **server**: the schema is set with a connection **startup parameter** rather than a per-connection `SET`, and verified once at boot ([#190](https://github.com/Rise-Experts/retinue/issues/190)).
+
+  0.3.1 used `pool.on("connect", (c) => c.query("SET search_path …"))`, node-postgres's documented idiom for session state. It works, and pg deprecated it: *"Calling client.query() when the client is already executing a query is deprecated and will be removed in pg@9.0"* — printed on every boot of every process. `options: "-c search_path=…"` needs no query, so the ordering question does not arise at all. Verified that Supabase's pooler forwards it, which was the open question since PgBouncer rejects unknown startup parameters by default.
+
+  A startup parameter fails silently if a pooler drops it — every connection on the default path, every table in the wrong schema, no error anywhere — so one `show search_path` at startup now refuses to boot unless the path is the one that was asked for. Compared as an ordered list rather than a string, since `retinue,public` and `retinue, public` are the same path.
+
+  And a bug that only a real server found: the path carries **no space after the comma**. In libpq's option syntax a space separates options, so `-c search_path=retinue, public` arrives as `search_path` = `retinue,` plus a stray `public`, and Postgres refuses the connection: `invalid value for parameter "search_path": "retinue,"`. Every unit test passed with the spaced form.
+
 ## Unreleased
 
 ### Changed — BREAKING
