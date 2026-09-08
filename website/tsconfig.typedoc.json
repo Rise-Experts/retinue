@@ -72,17 +72,13 @@
       ],
       "@retinue/react": [
         "../frontend/src/index.ts"
-      ],
-      "@retinue/shareflow": [
-        "../shareflow/src/index.ts"
       ]
     },
     "noEmit": true
   },
   "include": [
     "../backend/src/index.ts",
-    "../frontend/src/index.ts",
-    "../shareflow/src/index.ts"
+    "../frontend/src/index.ts"
   ],
   "//6": "Each published subpath is mapped too: without them the root resolved to src and a subpath to dist, so one type had two identities and every cross-import failed to assign to itself."
 }

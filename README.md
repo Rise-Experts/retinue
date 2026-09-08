@@ -14,7 +14,6 @@ rules are in [`brand/tokens.json`](brand/tokens.json), measured by `npm run chec
 | [`examples/`](examples) | `@retinue/example-app` | The reference application: what a deployment's own app module looks like |
 | [`frontend/`](frontend) | `@retinue/react` | Client: headless React state, subscriptions and typed part reducers |
 | [`tools/*`](tools) | `@retinue/tools-*` | **Sixteen integration packages, 161 tools.** Siblings, not folders in the runtime — a vendor's API change is a patch to one small package, not a platform release. Listed below |
-| [`shareflow/`](shareflow) | `@retinue/shareflow` | The ShareFlow integration: its tools, context providers, skills and agent manifests. Depends on `backend`; nothing generic depends on it |
 | [`brand/`](brand) | — | The marks, and the palette and type as tokens |
 | [`docs/`](docs) | — | The specifications these packages implement |
 
@@ -176,14 +175,15 @@ test with neither ShareFlow/Chorus nor Twenty installed:
 - `frontend` is headless and carries no product styling.
 - Adapters implement ports; ports never import adapters.
 - No public API contains Twenty names or types.
-- A generic package never imports `shareflow`, and `shareflow` never imports the ShareFlow
-  application. The seam is the interfaces in `shareflow/src/services/` — declared there and
-  implemented by ShareFlow, so the dependency points one way only.
+- A generic package never imports a product's integration package. That rule used to be enforced
+  against `shareflow`, a workspace here; it now lives in the product's own repository and consumes
+  this platform from the registry, which is the strongest possible form of the same rule — the code
+  it would have to import is not in this tree at all.
 - The AI SDK is confined to `backend/src/models`, and OpenTelemetry to `backend/src/adapters/otel`. Both are
   the same rule: a provider dependency that leaks out of its adapter is one the whole platform then has.
 - Every package may only import what its own `package.json` declares. npm hoists all workspace
   dependencies into one `node_modules`, so an undeclared import works here and fails wherever the
-  package is installed alone — the manifest is the only place "builds without ShareFlow installed"
+  package is installed alone — the manifest is the only place "builds without a product installed"
   is actually written down.
 
 `npm run check:boundaries` enforces all of the above and fails the build on a violation;
@@ -196,8 +196,9 @@ deep import into `dist/` or `src/` fails **with `ERR_PACKAGE_PATH_NOT_EXPORTED`*
 not the file happening to be absent — and that no sources or sourcemaps are shipped. It is what makes the
 separate-repository argument in [`docs/21-platform.md`](docs/21-platform.md) enforceable rather than cultural.
 
-ShareFlow-specific tools, context providers, skills and agents are registered through
-the public interfaces from `shareflow/`, never added to a generic package.
+Product-specific tools, context providers, skills and agents are registered through the public
+interfaces, from the product's own package, and never added to a generic one. ShareFlow — the first
+consumer — does exactly that from its own repository.
 
 ## Deployment
 

@@ -31,11 +31,14 @@ import { readdirSync, readFileSync } from "node:fs";
 
 import { collect } from "./collect-runtime-imports.mjs";
 
-/** The images this repo ships, each with the application whose manifest is answerable for it. */
-export const IMAGES = [
-  { dockerfile: "Dockerfile", app: "examples" },
-  { dockerfile: "Dockerfile.shareflow", app: "shareflow" },
-];
+/**
+ * The images this repo ships, each with the application whose manifest is answerable for it.
+ *
+ * One entry now. `Dockerfile.shareflow` was the second until that package moved to the product's own
+ * repo, which carries its own copy of this check — the reasoning is identical there, and the two
+ * differ only in where they look for peer declarations.
+ */
+export const IMAGES = [{ dockerfile: "Dockerfile", app: "examples" }];
 
 /**
  * What an image actually runs, read out of the Dockerfile.

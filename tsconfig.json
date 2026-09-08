@@ -8,9 +8,6 @@
       "path": "./frontend"
     },
     {
-      "path": "./shareflow"
-    },
-    {
       "path": "./examples"
     },
     {

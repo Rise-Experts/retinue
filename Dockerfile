@@ -27,7 +27,6 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 COPY backend/package.json ./backend/
 COPY frontend/package.json ./frontend/
-COPY shareflow/package.json ./shareflow/
 COPY examples/package.json ./examples/
 COPY tools/azure/package.json ./tools/azure/
 COPY tools/browser/package.json ./tools/browser/
@@ -52,9 +51,11 @@ COPY backend ./backend
 COPY frontend ./frontend
 COPY tools ./tools
 COPY examples ./examples
-# Named projects, not a bare `tsc -b`: the root config also references shareflow, whose sources this
-# image deliberately does not carry. `frontend` is here because the reference app imports its view
-# models; the host itself does not.
+# Named projects, not a bare `tsc -b`. The reason used to be shareflow, which the root config
+# referenced and this image deliberately did not carry; that package now lives in the product's own
+# repo. Naming them stays right regardless: it says what this image is for, and a workspace added to
+# the root for something else does not silently become part of it. `frontend` is here because the
+# reference app imports its view models; the host itself does not.
 RUN npx tsc -b backend tools/azure tools/email tools/google tools/scrape tools/confluence tools/discord tools/github tools/jira tools/linear tools/meta tools/notion tools/reddit tools/x tools/search tools/slack tools/telegram examples
 # The composer bundle, built **here** rather than committed — #267.
 #
@@ -64,17 +65,33 @@ RUN npx tsc -b backend tools/azure tools/email tools/google tools/scrape tools/c
 # `esbuild` is an examples devDependency and this stage still has devDependencies, which is why it can
 # run here and not in the runtime stage.
 RUN node examples/scripts/build-composer.mjs
+# Derived from the built output, never a list typed into a file — see the script's header. Both entry
+# points, because the image runs one and loads the other: `cli.js` is the CMD and `examples/dist` is
+# what RETINUE_APP_MODULE hands the host.
+COPY scripts/collect-runtime-imports.mjs ./scripts/
+RUN node scripts/collect-runtime-imports.mjs examples/dist/index.js backend/dist/server/cli.js > runtime-imports.json
 
 FROM node:20-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
-# Production install only: the build output is copied, not rebuilt. This is also the check that the
-# app layer declares what it imports — the runtime's dev dependencies are gone at this point, so an
-# undeclared peer fails here rather than in production.
+# Production install only: the build output is copied, not rebuilt.
+#
+# This used to claim it was "the check that the app layer declares what it imports", on the reasoning
+# that the runtime's dev dependencies are gone by here so an undeclared peer fails. **That was false.**
+# Deleting `pg` from an app's manifest and rebuilding still produced an image where `import("pg")`
+# resolved, because `bullmq` depends on `pg` and brought it along — the check passed on a package
+# nobody had asked for.
+#
+# It is two guarantees, and each now lives where it can actually hold:
+#
+#   - **The image can load the code it runs** — a resolution question, answerable only in here. The
+#     build stage walks the compiled graph from both entry points and the step below resolves every
+#     specifier it found against this install.
+#   - **Nothing is installed by luck** — a manifest question no amount of resolving answers. Checked
+#     statically by `scripts/check-optional-peers.mjs` in `npm run ci:local`.
 COPY package.json package-lock.json ./
 COPY backend/package.json ./backend/
 COPY frontend/package.json ./frontend/
-COPY shareflow/package.json ./shareflow/
 COPY examples/package.json ./examples/
 COPY tools/azure/package.json ./tools/azure/
 COPY tools/browser/package.json ./tools/browser/
@@ -119,6 +136,12 @@ COPY --from=build /app/examples/public ./examples/public
 # The reference app is started by `run-app.mjs`, which was in neither `dist` nor `public` — so the image
 # could serve the platform host and not the application. See the note at the top of compose.yaml.
 COPY --from=build /app/examples/scripts ./examples/scripts
+# The check that makes the paragraph above true. It runs *here*, after the production install, because
+# that is the only node_modules whose answer matters — and the script has no dependencies of its own,
+# not even typescript, so it cannot be part of what it is checking.
+COPY --from=build /app/runtime-imports.json ./
+COPY scripts/check-runtime-imports.mjs ./scripts/
+RUN node scripts/check-runtime-imports.mjs runtime-imports.json
 # Non-root: nothing here needs to write to the filesystem.
 USER node
 EXPOSE 4000

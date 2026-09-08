@@ -31,7 +31,7 @@ const CONFIG = resolve(HERE, "../website/typedoc.json");
  */
 const shipped = () => {
   const names = [];
-  for (const dir of ["backend", "frontend", "shareflow", "examples", "website", "services/api"]) {
+  for (const dir of ["backend", "frontend", "examples", "website", "services/api"]) {
     let manifest;
     try {
       manifest = JSON.parse(readFileSync(resolve(HERE, "..", dir, "package.json"), "utf8"));
@@ -62,13 +62,27 @@ test("the API reference has no entry point in a package this repository does not
   assert.ok(config.entryPoints.length >= 2, `expected entry points, found ${config.entryPoints.length}`);
 });
 
-test("shareflow is private, which is what makes it illegal as an entry point", () => {
+test("a private workspace is not publishable, which is what makes it illegal as an entry point", () => {
   /**
    * The premise the test above rests on, asserted separately so a change to it fails here rather than
-   * quietly widening what may be documented. Flipping `shareflow` to publishable would make documenting it
-   * legal — which is the right behaviour, and should be a deliberate act with this test failing first.
+   * quietly widening what may be documented.
+   *
+   * `shareflow` used to be the subject: it was the package whose exported surface reached the public docs
+   * site as 404 sitemap URLs, and it was `private: true`, which is what made documenting it illegal. It has
+   * since moved to the product's own repository, so the premise is asserted against whatever private
+   * workspace exists rather than against that one name — a name match would have quietly become vacuous
+   * the moment the directory disappeared, and this file's whole argument is that the manifest is the honest
+   * test rather than a name.
    */
-  const manifest = JSON.parse(readFileSync(resolve(HERE, "../shareflow/package.json"), "utf8"));
-  assert.equal(manifest.private, true);
-  assert.ok(!shipped().includes("shareflow"));
+  const candidates = ["backend", "frontend", "examples", "website", "services/api"];
+  const privateOnes = candidates.filter((dir) => {
+    try {
+      return JSON.parse(readFileSync(resolve(HERE, "..", dir, "package.json"), "utf8")).private === true;
+    } catch {
+      return false;
+    }
+  });
+  // At least one, or the rule is unexercised and this test proves nothing about it.
+  assert.ok(privateOnes.length > 0, "no private workspace remains, so the publishable/private split is untested");
+  for (const dir of privateOnes) assert.ok(!shipped().includes(dir), `${dir} is private but counted as shipped`);
 });
