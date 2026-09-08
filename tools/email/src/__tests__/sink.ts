@@ -23,6 +23,16 @@ export type SinkOptions = {
 
 export type Sink = {
   readonly port: number;
+  /**
+   * How many client connections have closed.
+   *
+   * Observable so a test can assert the client *released* the socket, which is a guarantee the
+   * handshake deadline makes in its own comment — "a half-open handshake holds a socket and a file
+   * descriptor" — and which nothing checked: removing both `destroy()` calls broke no test, and the
+   * cost is one leaked descriptor per failed handshake, which a real deployment discovers as
+   * EMFILE hours later.
+   */
+  readonly closes: () => number;
   /** Every complete DATA payload the sink received, exactly as transmitted. */
   readonly messages: string[];
   /** Every command line, so a test can assert the envelope rather than only the message. */
@@ -33,6 +43,7 @@ export type Sink = {
 export const startSink = async (options: SinkOptions = {}): Promise<Sink> => {
   const messages: string[] = [];
   const commands: string[] = [];
+  let closes = 0;
   /**
    * No `STARTTLS` by default, because this sink cannot do TLS.
    *
@@ -46,6 +57,24 @@ export const startSink = async (options: SinkOptions = {}): Promise<Sink> => {
     let buffer = "";
     let inData = false;
     let body = "";
+    /**
+     * Set once STARTTLS is answered, after which the sink says **nothing** ever again.
+     *
+     * This sink cannot speak TLS, and the tests that ask for STARTTLS want it to stall — that is how a
+     * real server which advertises STARTTLS and then goes quiet wedges a client with no handshake
+     * deadline. Going quiet has to be deliberate, because the alternative is not silence:
+     *
+     * There was no `STARTTLS` case in the switch below, so it fell through to `default`, which answers
+     * `235 Authentication successful`. The client then sends a ClientHello, whose bytes contain `\r\n`,
+     * so this loop read the handshake as command lines and answered each one in plaintext — and OpenSSL
+     * read *that* as a TLS record: `tls_validate_record_header: wrong version number`.
+     *
+     * That error races the handshake deadline, and whichever arrives first decides the outcome. It made
+     * two tests fail roughly one run in six under load while passing every time in isolation — the exact
+     * shape their own comments warn about ("passing here and failing there depending on whether the
+     * socket happened to error first"). With the sink silent, the deadline is the only possible outcome.
+     */
+    let mute = false;
     socket.setEncoding("utf8");
     socket.write("220 sink.test ESMTP ready\r\n");
 
@@ -57,6 +86,9 @@ export const startSink = async (options: SinkOptions = {}): Promise<Sink> => {
     };
 
     socket.on("data", (chunk: string) => {
+      // Not even buffered once muted: the bytes arriving now are a TLS handshake, and treating them as
+      // text is what produced the race described above.
+      if (mute) return;
       buffer += chunk;
       for (;;) {
         const end = buffer.indexOf("\r\n");
@@ -103,6 +135,15 @@ export const startSink = async (options: SinkOptions = {}): Promise<Sink> => {
             inData = true;
             socket.write("354 End data with <CR><LF>.<CR><LF>\r\n");
             break;
+          case "STARTTLS":
+            /**
+             * Answered, then silence. Answering matters: a client that never gets `220` fails at the
+             * command rather than at the handshake, which tests something else entirely — whether the
+             * upgrade was even attempted is the whole point of the IP-address test.
+             */
+            socket.write("220 2.0.0 Ready to start TLS\r\n");
+            mute = true;
+            break;
           case "QUIT":
             socket.write("221 2.0.0 Bye\r\n");
             socket.end();
@@ -116,6 +157,9 @@ export const startSink = async (options: SinkOptions = {}): Promise<Sink> => {
     socket.on("error", () => {
       // A client that hangs up mid-conversation is normal in these tests.
     });
+    socket.on("close", () => {
+      closes += 1;
+    });
   });
 
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -126,6 +170,7 @@ export const startSink = async (options: SinkOptions = {}): Promise<Sink> => {
     port,
     messages,
     commands,
+    closes: () => closes,
     close: () =>
       new Promise<void>((resolve) => {
         server.close(() => resolve());

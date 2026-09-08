@@ -360,6 +360,17 @@ describe("a rejection is never reported as a send — AC-6", () => {
     // Bounded, not merely eventual: well inside the harness's own limit rather than racing it.
     expect(Date.now() - started).toBeLessThan(2_000);
     expect(sink.messages).toHaveLength(0);
+    /**
+     * And the socket is *released*, not left half-open — one leaked descriptor per failed handshake is
+     * what a deployment meets as EMFILE hours later rather than as a failure here.
+     *
+     * Deliberately stated as an end-to-end property, because it has **two** providers and this cannot
+     * tell them apart: the deadline destroys both sockets, and `smtpSend`'s `finally` calls
+     * `connection.close()` regardless. Deleting the `destroy()` calls alone therefore does not break
+     * this — I checked, expecting it would. What it does pin is the property that actually matters, and
+     * it would catch losing *both*.
+     */
+    await vi.waitFor(() => expect(sink.closes()).toBe(1));
   });
 
   it("upgrades a connection to an IP address, where SNI does not apply", async () => {
