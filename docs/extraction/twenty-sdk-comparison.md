@@ -29,7 +29,7 @@ by events/UI — **not** AI agent tools.
 
 - **@agentkit tools wrap existing twenty-sdk logic-functions / platform services** — they do not
   reimplement connectors, publishing, media handling or storage. This matches the ShareFlow
-  integration spec (docs/07): "existing publishing, connector and database services are reused
+  integration spec (`social_integgration: docs/retinue-integration-spec.md`): "existing publishing, connector and database services are reused
   behind tools."
 - **A tool is a thin, agent-facing envelope over a deterministic function**: it adds the
   permission filter (docs/11), the approval gate for external writes (docs/04), and the

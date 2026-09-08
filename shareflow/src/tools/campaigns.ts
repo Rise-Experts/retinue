@@ -1,5 +1,5 @@
 /**
- * The Campaigns capabilities — `docs/07-shareflow-integration.md`, second tool category: *"read, create
+ * The Campaigns capabilities — the Retinue integration spec (`social_integgration: docs/retinue-integration-spec.md`), second tool category: *"read, create
  * and update campaigns"*, plus the content calendar (#116).
  *
  * Same construction as `posts.ts`: a `defineDelegatingTool` over a `ContentService` method, `.strict()`

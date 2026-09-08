@@ -1,5 +1,5 @@
 /**
- * The Media capabilities — `docs/07-shareflow-integration.md`: *"list, inspect, attach and convert"*,
+ * The Media capabilities — the Retinue integration spec (`social_integgration: docs/retinue-integration-spec.md`): *"list, inspect, attach and convert"*,
  * plus the storage diagnostic (#118).
  *
  * ## No limit is written down here (AC-5)

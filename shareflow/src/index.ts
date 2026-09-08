@@ -13,6 +13,19 @@
  * - `tools/` — the provider that serves ShareFlow's capabilities, each one an envelope (#113) over a
  *   service method.
  * - `context/` — the shared section builder for docs/07's context providers.
+ *
+ * ## "docs/07" in this package
+ *
+ * Shorthand, used ~50 times below, for the **Retinue integration spec** — the document that names the tool
+ * categories, the context providers and the numbered workflows this package implements. It was
+ * `docs/07-shareflow-integration.md` in the retinue repository and now lives in `social_integgration` as
+ * `docs/retinue-integration-spec.md`.
+ *
+ * It moved because retinue's `docs/` tree is auto-published as that site's specifications section, and the
+ * repository is public so npm can generate release provenance — so this product's tool categories and
+ * workflow design were being served from `docs.retinue.riseexperts.de`. Nothing in it was a credential; all
+ * of it was Chorus's design. The shorthand is left as `docs/07` rather than rewritten in fifty places
+ * because the numbering is how every one of those references reads, and this note is what resolves it.
  * - `skills/` — built-in skills, validated at import time.
  * - `manifests/` — the Social Assistant.
  */

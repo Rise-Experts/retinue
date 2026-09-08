@@ -68,3 +68,21 @@ and publishes automatically.
 ## Known follow-up
 - AI search widget (kapa/Inkeep/Algolia AskAI) — wire in `themeConfig`, keys via env at deploy.
 - The `onBrokenMarkdownLinks` deprecation warning migrates to `markdown.hooks` in Docusaurus v4.
+
+## Why the API reference covers two packages and not three
+
+`typedoc.json`'s `entryPoints` are `backend` and `frontend`. **`shareflow` was there and was removed**, and
+JSON takes no comments, so the reason is here.
+
+This site is public, and TypeDoc published `shareflow`'s whole exported surface under `/api/shareflow/src/` —
+404 URLs in the sitemap, every function and type with the docstrings attached. Those docstrings are where the
+integration's reasoning lives: ShareFlow's table names, its schema quirks, which platform refuses what. None
+of it is a credential and all of it is Chorus's product design, so it is documented in the
+`social_integgration` repository instead.
+
+The rule this follows: **this site documents the platform, not its consumers.** A second consumer added to
+`entryPoints` would publish that consumer's internals the same way, and would do it silently — nothing about
+adding a path to a JSON array looks like publishing a customer's design. So
+`scripts/check-api-reference.test.mjs` refuses an entry point in any package this repository does not publish,
+derived from `private: true` rather than from a name match: a published package's API is public by definition,
+so documenting it adds no exposure.

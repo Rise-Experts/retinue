@@ -1,5 +1,5 @@
 /**
- * The Accounts capabilities — `docs/07-shareflow-integration.md`: *"list destinations and connection
+ * The Accounts capabilities — the Retinue integration spec (`social_integgration: docs/retinue-integration-spec.md`): *"list destinations and connection
  * health"* (#117).
  *
  * ## The four named functions are not four capabilities

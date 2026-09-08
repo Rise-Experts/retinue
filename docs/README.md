@@ -40,7 +40,7 @@ This directory defines the extraction and migration of a reusable AI platform in
 4. [Durable execution, streaming and HITL](04-durable-runtime-and-hitl.md)
 5. [RAG, attachments, vision and documents](05-knowledge-and-documents.md)
 6. [GraphQL and frontend packages](06-graphql-and-frontend.md)
-7. [ShareFlow integration](07-shareflow-integration.md)
+7. ShareFlow integration — **moved.** The specification is Chorus's product design, not the platform's, and this repository's `docs/` tree is published. It lives in the `social_integgration` repository as `docs/retinue-integration-spec.md`.
 8. [Migration and delivery plan](08-migration-plan.md)
 9. [Testing, security and release criteria](09-quality-and-release.md)
 10. [Outbound MCP integration](10-mcp-integration.md)

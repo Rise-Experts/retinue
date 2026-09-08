@@ -1,5 +1,5 @@
 /**
- * The Posts capabilities — `docs/07-shareflow-integration.md`, first tool category: *"read, create,
+ * The Posts capabilities — the Retinue integration spec (`social_integgration: docs/retinue-integration-spec.md`), first tool category: *"read, create,
  * update and duplicate drafts"* (#115).
  *
  * Every one is a `defineDelegatingTool` over a `ContentService` method. **No draft logic is
