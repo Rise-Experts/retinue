@@ -334,6 +334,65 @@ their required providers. That is not defeatism — each refusal is a case where
 a false claim an assistant then relays to a user.
 
 
+## The deployable backend
+
+`src/app/module.ts` is what a deployment actually loads. It default-exports `{ authenticate, deps }` — the
+contract `RETINUE_APP_MODULE` names — and `Dockerfile.shareflow` builds an image around it:
+
+```bash
+docker build -f Dockerfile.shareflow -t retinue-shareflow .
+```
+
+A separate image from the reference app's, because the two carry different *applications*: the host binary is
+the same, but the module it loads decides which workspaces must compile and which optional peers must be
+installed. One image serving both would ship twenty toolkits to a deployment that registers none.
+
+### Every dependency either works or refuses by name
+
+The module's first version passed `undefined as never` for four dependencies. It typechecked, and it would
+have produced a container that booted, reported healthy, and failed on the first turn that touched a
+connector, the web or the model. All four are real now, and two of them **degrade rather than refuse**,
+because the distinction is one a user can act on:
+
+| Dependency | With nothing configured |
+| --- | --- |
+| `SHARED_API_SECRET` | Every request is refused. Never a fallback secret: an unset secret means *deny*, or a backend serves an open API to whoever forgot to configure it. |
+| `PUBLIC_APP_URL` | Refuses to boot. The connection setup tells someone which redirect URL to paste into a developer console, and a wrong one fails at consent with no explanation. Plain http outside localhost boots but sets `ConnectionSetup.warning`, because every platform refuses that redirect. |
+| `RETINUE_MODEL_API_KEY` | Refuses to boot, rather than admitting a drafting turn it cannot finish. |
+| Search provider | **Degrades.** `{ searched: false, reason: "not-configured" }`, never an empty result list — an empty list is indistinguishable from "nothing out there" and invites a model to answer from what it already believes. |
+
+The page fetcher is always the platform's `createFetchPage`, never a second one: it is where the egress
+policy, the redirect refusal and the body ceiling live.
+
+### One thing the type system did not catch
+
+`ConnectorDeps.setup` is a *function* — `createPostgresConnectorService` calls `deps.setup(context)`. The
+first implementation returned a plain object through `as unknown as ConnectorDeps["setup"]`. `tsc -b` was
+clean, the image built, and the first person to ask "how do I connect LinkedIn?" would have got
+`deps.setup is not a function`. What found it was the **test** typecheck added by #276, rejecting a cast in a
+test that mirrored the cast in the source. The cast is gone; the annotation is checked.
+
+### What guarantees the image can load its own code
+
+The runtime declares `pg`, `ioredis`, `bullmq`, `graphql-yoga`, `@whatwg-node/server` and six `@ai-sdk/*`
+providers as **optional** peers, so the application has to name the ones its wiring uses. Both Dockerfiles
+used to claim their `npm ci --omit=dev` caught a missing one. It does not: with `pg` deleted from this
+package's manifest the image still built and still resolved `pg`, because `bullmq` depends on `pg` and
+brought it along.
+
+That is two guarantees, and they live in the two places that can hold them:
+
+- **The image can load what it runs.** `scripts/collect-runtime-imports.mjs` walks the compiled graph from
+  both entry points — the CMD and the app module — crossing into workspace packages, and
+  `scripts/check-runtime-imports.mjs` resolves every specifier it found against the production install,
+  inside the image. Both halves are derived from the build; the version of this with fourteen specifiers
+  typed into it was a test whose expectation was the same hand-maintained list it checked.
+- **Nothing is installed by luck.** `scripts/check-optional-peers.mjs`, in `npm run ci:local`, compares that
+  reached set against this package's own dependencies. It is the half resolution cannot see, and it is what
+  fails on the `pg` case above. It also found five: this package declared `@ai-sdk/openai` and needed all
+  six, because `provider-factory.js` imports every one of them statically.
+
+
 ### A capability declares the services it reads
 
 ```ts

@@ -400,12 +400,21 @@ jobs:
         run: npm run check:domain -- --offline
 
   image:
-    # The image build is the only check that the application layer declares every dependency it
-    # imports: the runtime declares its heavy dependencies as optional peers, so inside this repo they
-    # resolve by hoisting from the runtime's devDependencies and an under-declared app works anyway.
-    # The runtime stage installs with --omit=dev, so there it does not. This job also catches a
-    # Dockerfile left pointing at a workspace that no longer exists, which is how it started: #196
-    # merged the `server` workspace into the runtime package and the Dockerfile still copied it.
+    # This job used to be described as "the only check that the application layer declares every
+    # dependency it imports", on the reasoning that the runtime stage installs with --omit=dev so an
+    # under-declared app fails there. **That was wrong.** Deleting `pg` from an app's manifest and
+    # rebuilding still produced an image where `import("pg")` resolved, because `bullmq` depends on
+    # `pg` and brought it along — the check passed on a package nobody had asked for.
+    #
+    # The guarantee is now two checks, in the two places that can actually hold them. Inside the image
+    # build: the build stage walks the compiled graph from the entry points and the runtime stage
+    # resolves every specifier it found (see scripts/collect-runtime-imports.mjs). Statically, in the
+    # gate: scripts/check-optional-peers.mjs compares that reached set against the app's own
+    # dependencies, which is the half resolution cannot see.
+    #
+    # What this job still uniquely catches is a Dockerfile pointing at a workspace that no longer
+    # exists, which is how it started: #196 merged the `server` workspace into the runtime package and
+    # the Dockerfile still copied it.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -430,3 +439,38 @@ jobs:
       - name: Cleanup
         if: always()
         run: docker rm -f retinue-ci || true
+
+  shareflow-image:
+    # The product image, built from Dockerfile.shareflow. A separate job rather than a step in the one
+    # above, so a break in either is attributable and neither hides behind the other's cache.
+    #
+    # Its own dependency check runs inside the build (see the paragraph in Dockerfile.shareflow), so a
+    # failure here before the health step means the image cannot load the code it runs.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the ShareFlow image
+        run: docker build -f Dockerfile.shareflow -t retinue-shareflow:ci .
+      - name: The host must at least start and answer /healthz
+        # Same reasoning as the image job: no database here, so readiness is expected to fail and
+        # liveness must not. SHARED_API_SECRET and PUBLIC_APP_URL are set because the app module
+        # refuses to boot without them — that refusal is deliberate, and this step would otherwise be
+        # testing it rather than the host.
+        run: |
+          docker run -d --name shareflow-ci -p 4100:4000 \
+            -e RETINUE_DATABASE_URL=postgres://nobody@127.0.0.1:1/none \
+            -e RETINUE_REDIS_URL=redis://127.0.0.1:1 \
+            -e SHARED_API_SECRET=ci-not-a-real-secret \
+            -e PUBLIC_APP_URL=https://ci.invalid \
+            -e RETINUE_MODEL_API_KEY=sk-ci-not-a-real-key \
+            retinue-shareflow:ci
+          for i in $(seq 20); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:4100/healthz || true)
+            [ "$code" = "200" ] && break
+            sleep 1
+          done
+          docker logs shareflow-ci
+          test "$code" = "200"
+      - name: Cleanup
+        if: always()
+        run: docker rm -f shareflow-ci || true

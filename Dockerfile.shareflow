@@ -1,0 +1,119 @@
+# The ShareFlow backend image — REQ-041 (#190).
+#
+# A second image rather than a flag on the first, because the two carry different *applications*. The
+# platform host is the same binary in both; what differs is the module `RETINUE_APP_MODULE` loads, and
+# with it the workspaces that must be compiled and the optional peers that must be installed. Making
+# one image serve both would mean shipping the reference app's twenty toolkits to a product deployment
+# that registers none of them, and shipping a private workspace into the public example image.
+#
+# `Dockerfile` says shareflow is "deliberately absent" from that image and builds named projects for
+# exactly that reason. This file is the other half of that sentence.
+#
+# **The app layer declares what it imports.** The runtime declares `pg`, `ioredis`, `bullmq`,
+# `@ai-sdk/*`, `graphql-yoga` and `@whatwg-node/server` as *optional* peers, so something has to name
+# the ones a given wiring actually uses — and that something is the application. `shareflow` did not,
+# because in the monorepo the root install hoists them and nothing noticed.
+#
+# This file first claimed the runtime install caught that on its own — "an undeclared import fails the
+# build instead of the first request that touches Postgres". **That was false.** With `pg` deleted from
+# `shareflow/package.json` the rebuilt image still resolved it, because `bullmq` depends on `pg` and
+# brought it along; the claim held only while an unrelated package kept a dependency.
+#
+# So the guarantee was split in two, because it is two guarantees:
+#
+#   - **The image can load the code it runs.** The build stage walks the compiled graph from both entry
+#     points and writes down every specifier it reaches; the runtime stage resolves each one against
+#     the production install. That is the pair of steps below, and it fails `docker build` on a package
+#     nothing installs, a dropped dependency, or a subpath the exports map does not answer.
+#   - **Nothing is installed by luck.** Resolution cannot see this one: with `pg` undeclared it still
+#     resolves, so the image still builds. That is a *manifest* question and it is checked statically
+#     by `scripts/check-optional-peers.mjs` in `npm run ci:local`, which compares the reached set
+#     against this app's own dependencies. It is the check that fails on the `pg` case above.
+#
+# Every workspace manifest is copied even though two are built: `npm ci` refuses to install a workspace
+# root whose lockfile names a manifest that is not on disk.
+
+FROM node:20-slim AS build
+WORKDIR /app
+# Manifests first, so a dependency-only change reuses the install layer.
+COPY package.json package-lock.json ./
+COPY backend/package.json ./backend/
+COPY frontend/package.json ./frontend/
+COPY shareflow/package.json ./shareflow/
+COPY examples/package.json ./examples/
+COPY tools/azure/package.json ./tools/azure/
+COPY tools/browser/package.json ./tools/browser/
+COPY tools/confluence/package.json ./tools/confluence/
+COPY tools/email/package.json ./tools/email/
+COPY tools/discord/package.json ./tools/discord/
+COPY tools/github/package.json ./tools/github/
+COPY tools/jira/package.json ./tools/jira/
+COPY tools/linear/package.json ./tools/linear/
+COPY tools/meta/package.json ./tools/meta/
+COPY tools/notion/package.json ./tools/notion/
+COPY tools/reddit/package.json ./tools/reddit/
+COPY tools/x/package.json ./tools/x/
+COPY tools/search/package.json ./tools/search/
+COPY tools/slack/package.json ./tools/slack/
+COPY tools/google/package.json ./tools/google/
+COPY tools/scrape/package.json ./tools/scrape/
+COPY tools/telegram/package.json ./tools/telegram/
+RUN npm ci
+COPY tsconfig.json ./
+COPY backend ./backend
+COPY shareflow ./shareflow
+COPY scripts/collect-runtime-imports.mjs ./scripts/
+# `shareflow` alone: its tsconfig references `../backend`, so the host and runtime are compiled as its
+# dependency. Naming `backend` as well would be harmless and redundant; naming the root project would
+# pull in `examples`, `frontend` and every toolkit this image does not carry.
+RUN npx tsc -b shareflow
+# Derived from the built output, never a list typed into a file — see the script's header. Both entry
+# points, because the image runs one and loads the other: `cli.js` is the CMD and `module.js` is what
+# RETINUE_APP_MODULE hands the host.
+RUN node scripts/collect-runtime-imports.mjs shareflow/dist/app/module.js backend/dist/server/cli.js > runtime-imports.json
+
+FROM node:20-slim AS runtime
+WORKDIR /app
+ENV NODE_ENV=production
+COPY package.json package-lock.json ./
+COPY backend/package.json ./backend/
+COPY frontend/package.json ./frontend/
+COPY shareflow/package.json ./shareflow/
+COPY examples/package.json ./examples/
+COPY tools/azure/package.json ./tools/azure/
+COPY tools/browser/package.json ./tools/browser/
+COPY tools/confluence/package.json ./tools/confluence/
+COPY tools/email/package.json ./tools/email/
+COPY tools/discord/package.json ./tools/discord/
+COPY tools/github/package.json ./tools/github/
+COPY tools/jira/package.json ./tools/jira/
+COPY tools/linear/package.json ./tools/linear/
+COPY tools/meta/package.json ./tools/meta/
+COPY tools/notion/package.json ./tools/notion/
+COPY tools/reddit/package.json ./tools/reddit/
+COPY tools/x/package.json ./tools/x/
+COPY tools/search/package.json ./tools/search/
+COPY tools/slack/package.json ./tools/slack/
+COPY tools/google/package.json ./tools/google/
+COPY tools/scrape/package.json ./tools/scrape/
+COPY tools/telegram/package.json ./tools/telegram/
+# `--workspace` twice rather than a bare install: the root's other workspaces declare the reference
+# app's toolkits and Tiptap, none of which this image loads. Installing them would be a hundred
+# megabytes of dependencies that no code path here can reach.
+RUN npm ci --omit=dev --workspace backend --workspace shareflow --include-workspace-root
+COPY --from=build /app/backend/dist ./backend/dist
+COPY --from=build /app/shareflow/dist ./shareflow/dist
+# The check that makes the paragraph at the top of this file true. It runs *here*, after the production
+# install, because that is the only node_modules whose answer matters. The script has no dependencies
+# of its own — not even typescript — so it cannot be part of what it is checking.
+COPY --from=build /app/runtime-imports.json ./
+COPY scripts/check-runtime-imports.mjs ./scripts/
+RUN node scripts/check-runtime-imports.mjs runtime-imports.json
+# Non-root: nothing here writes to the filesystem.
+USER node
+EXPOSE 4000
+# The application, not the reference app. `module.js` default-exports `{ authenticate, deps }`, which is
+# the contract the host loads — see shareflow/src/app/module.ts.
+ENV RETINUE_APP_MODULE=file:///app/shareflow/dist/app/module.js
+# Defaults to the API host. Override the command for the worker; see the README.
+CMD ["node", "backend/dist/server/cli.js"]
