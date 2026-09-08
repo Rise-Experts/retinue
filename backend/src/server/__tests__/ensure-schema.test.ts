@@ -179,3 +179,33 @@ describe("the one call site in `migrate`", () => {
     );
   });
 });
+
+describe("why the schema must exist before anything connects", () => {
+  it("shows that Postgres does NOT error on a missing schema in search_path", async () => {
+    /**
+     * The premise of this whole file, executable rather than asserted in prose.
+     *
+     * It is tempting to assume a missing schema announces itself — that `SET search_path TO retinue,
+     * public` fails, or that the first `CREATE TABLE` does. Neither happens. A missing entry in the
+     * path is *skipped*, and the create lands in the next schema that exists. So without
+     * `ensureSchema`, all 34 platform migrations would be created in `public` beside a product's
+     * tables, every statement reporting success.
+     *
+     * Pinned here because the comments in `bin.ts` and `pool.ts` both rest on it. If a future Postgres
+     * started rejecting this, those comments would become wrong and this test is what would say so.
+     */
+    const pg = new PGlite();
+    try {
+      await pg.query(`create schema present`);
+      await pg.query(`set search_path to absent_schema, present`);
+      // Neither statement throws. That is the finding.
+      await pg.query(`create table landed_somewhere (id int)`);
+      const rows = (
+        await pg.query(`select table_schema from information_schema.tables where table_name = 'landed_somewhere'`)
+      ).rows as { table_schema: string }[];
+      expect(rows[0]?.table_schema).toBe("present");
+    } finally {
+      await pg.close();
+    }
+  });
+});

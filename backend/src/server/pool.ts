@@ -71,10 +71,12 @@ export const openPostgres = async (settings: PoolSettings): Promise<PostgresConn
      * runs next on that same connection. An `await` here would have nothing to attach to: `connect` is
      * an event, and the pool hands the client out regardless of what a listener is still doing.
      *
-     * A failure is surfaced rather than swallowed. It would mean the schema does not exist or the role
-     * cannot use it, and every later query silently running in the wrong schema is the outcome worth
-     * refusing — so the client is destroyed, which fails the borrower's query instead of answering it
-     * from the wrong tables.
+     * A failure is surfaced rather than swallowed, and it is worth being precise about what it can and
+     * cannot catch. It means the role may not *use* the schema. It does **not** mean the schema is
+     * missing: `SET search_path TO retinue, public` succeeds when `retinue` does not exist, because a
+     * missing entry is skipped rather than rejected, and every write then lands in `public` with no
+     * error anywhere. Nothing at this layer can see that — which is why `retinue migrate` creates the
+     * schema before anything connects, and why this listener is not the guard against it.
      */
     pool.on("connect", (client) => {
       void client.query(`SET search_path TO ${searchPath}`).catch((error: unknown) => {

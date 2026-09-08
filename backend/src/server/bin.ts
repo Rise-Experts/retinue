@@ -60,9 +60,15 @@ const postgres = async (config: { readonly databaseUrl: string; readonly databas
  * Create the configured schema if it is not there, before anything tries to use it.
  *
  * `migrate` is the command that owns provisioning, so the namespace it was told to provision into is
- * its job too. Without this the failure is technically clear and practically baffling: `pool.ts` sets
- * `search_path` on every connection and destroys any connection where that fails, so a missing schema
- * surfaces as every query failing rather than as "the schema does not exist".
+ * its job too — and the reason is worse than a missing-schema error. **Postgres does not error.**
+ * `SET search_path TO retinue, public` succeeds when `retinue` does not exist: a missing entry is
+ * skipped, not rejected. `CREATE TABLE conversations` then lands in the first schema that *does*
+ * exist, which is `public` — so all 34 platform migrations would silently be created alongside the
+ * product's tables, reporting success the whole way. Verified against a real Postgres 17: the SET
+ * returns, the CREATE returns, and `information_schema` says `public`.
+ *
+ * That is the failure this function exists to prevent, and it is why it runs before the pool rather
+ * than relying on a connection error that never comes.
  *
  * On its own connection with the **default** search path, which is the part that is easy to get wrong.
  * A connection configured for `retinue` cannot be the one that creates `retinue` — `openPostgres`
@@ -122,9 +128,10 @@ export const ensureSchema = async (
     );
     if (rows[0]?.exists === true) return true;
     console.error(
-      `schema: ${config.databaseSchema} does not exist. RETINUE_DATABASE_SCHEMA names it, so every query ` +
-        `would run there. Run \`retinue migrate\` — which creates it — or unset the variable to use the ` +
-        `connection's own schema.`,
+      `schema: ${config.databaseSchema} does not exist. Postgres will not complain — it skips a missing ` +
+        `entry in search_path — so tables would be created in the next schema on the path instead, ` +
+        `silently. Run \`retinue migrate\`, which creates it, or unset RETINUE_DATABASE_SCHEMA to use the ` +
+        `connection's own schema deliberately.`,
     );
     return false;
   } finally {
@@ -134,9 +141,9 @@ export const ensureSchema = async (
 
 const migrate = async (flags: ReadonlySet<string>, env = process.env): Promise<number> => {
   const config = loadConfig(env);
-  // Before the pool that needs it, because `pool.ts` sets `search_path` on every connection and destroys
-  // any connection where that fails — so a missing schema otherwise surfaces as every query failing
-  // rather than as the one sentence that explains it. The read-only flags report rather than create.
+  // Before the pool, because a missing schema does not fail: `SET search_path` skips an entry that does
+  // not exist and every CREATE lands in `public` instead, silently. The read-only flags report rather
+  // than create — see `ensureSchema`.
   if (!(await ensureSchema(config, { create: !isReadOnly(flags) }))) return 1;
   const { sql, open, end } = await postgres(config);
   try {
