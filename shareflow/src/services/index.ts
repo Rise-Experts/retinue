@@ -855,7 +855,88 @@ export interface PublishingService {
     context: ExecutionContext,
     input: { readonly idempotencyKey: ServiceIdempotencyKey; readonly targetId: PublishTargetId },
   ): Promise<PublishTargetStatus>;
+
+  /**
+   * Publish a post's content again — REQ-041 (#190).
+   *
+   * **This duplicates rather than republishes, and that is the platforms' constraint rather than a choice.**
+   * The old runtime's docstring is explicit: *"The platform APIs cannot edit or re-publish a live post, so
+   * this DUPLICATES the content into a new post and publishes that — the original stays intact with its own
+   * history and metrics."* Keeping the original intact is the point: its engagement numbers belong to it.
+   *
+   * It is also why this is a service method rather than two tool calls. `duplicate_post_draft` followed by
+   * `publish_post_now` is the same two writes, but a model doing it in two turns can duplicate and then fail
+   * to publish, leaving an orphan draft nobody asked for — and can publish to destinations the original never
+   * reached, which is the thing the default below prevents.
+   *
+   * `accountIds` omitted means **the destinations the original actually published to successfully**, which is
+   * narrower than "its destinations": a target that failed the first time is not silently retried under
+   * cover of a repost.
+   */
+  repost(
+    context: ExecutionContext,
+    input: {
+      readonly idempotencyKey: ServiceIdempotencyKey;
+      readonly draftId: PostDraftId;
+      /** Omitted means every destination the original published to successfully. */
+      readonly accountIds?: readonly SocialAccountId[];
+      /** Omitted means now. An instant in the future schedules the copy instead. */
+      readonly scheduledAt?: string;
+    },
+  ): Promise<RepostReceipt>;
+
+  /**
+   * Delete a published post from the platforms **and** from ShareFlow — REQ-041 (#190).
+   *
+   * Irreversible on both sides, which is why the tool over it is `destructive` and waits for a person.
+   *
+   * ## Partial deletion is the normal case, not the error case
+   *
+   * *"Not every platform can delete: TikTok has no delete API, and Instagram refuses ads and single items
+   * inside a carousel. Those copies stay live."* So the result is **per platform**, and the record is removed
+   * only when every platform confirmed. A leftover with no record is a post nobody can find again, which is
+   * worse than a record for a post that is half gone.
+   *
+   * The instruction that matters is downstream of that: never report the post as deleted unless `stillLive`
+   * is empty. The shape makes the honest sentence the easy one to write.
+   *
+   * Throws `capability_unavailable` when no platform connector is wired, for the reason
+   * `EngagementService.reply` does: the method's whole purpose is the external effect, so there is no useful
+   * part of it to perform without a way to perform it.
+   */
+  deletePublished(
+    context: ExecutionContext,
+    input: { readonly idempotencyKey: ServiceIdempotencyKey; readonly draftId: PostDraftId },
+  ): Promise<DeletePublishedResult>;
 }
+
+export type RepostReceipt = {
+  /** The new post. The original keeps its id, its history and its metrics. */
+  readonly draftId: PostDraftId;
+  readonly targets: readonly PublishTargetStatus[];
+};
+
+/** One platform's answer. `deleted: false` with a reason is a normal outcome, not a failure of the call. */
+export type PlatformDeletion = {
+  readonly platformId: PlatformId;
+  readonly accountId: SocialAccountId;
+  readonly deleted: boolean;
+  /** Why not, when not. The sentence a user is told, never a provider's raw body. */
+  readonly reason?: string;
+};
+
+export type DeletePublishedResult = {
+  readonly draftId: PostDraftId;
+  readonly platforms: readonly PlatformDeletion[];
+  /**
+   * True only when every platform confirmed.
+   *
+   * The record is kept otherwise, deliberately: a live post with no row is a post nobody can find again.
+   */
+  readonly removedFromDatabase: boolean;
+  /** Platforms that still have a copy. **Empty is the only state in which the post is gone.** */
+  readonly stillLive: readonly PlatformId[];
+};
 
 // ---------------------------------------------------------------------------------------------------
 

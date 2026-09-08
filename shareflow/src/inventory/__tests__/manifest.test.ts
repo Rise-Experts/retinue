@@ -156,12 +156,24 @@ describe("the approval requirement survives the migration — AC-4", () => {
     const results = approvalParity({ entries: CAPABILITY_INVENTORY, manifest, descriptors });
     const byVerdict = (verdict: string) => results.filter((r) => r.verdict === verdict).map((r) => r.oldTool);
 
-    expect(byVerdict("held").sort()).toEqual(["publish_now", "reply_to_comment", "schedule_post"]);
+    expect(byVerdict("held").sort()).toEqual([
+      "delete_post",
+      "publish_now",
+      "reply_to_comment",
+      "repost_post",
+      "schedule_post",
+    ]);
     expect(byVerdict("lost")).toEqual([]);
+    /**
+     * Four, down from six: `repost_post` and `delete_post` have replacements now and both kept their gate —
+     * `delete_post` by way of `destructive`, which is stronger than the `external-write` the others carry.
+     *
+     * The remaining four are the agent-skill writes and the brand write, all signed off as dropped on
+     * 2026-09-07. `no-replacement` for a *dropped* capability is the honest verdict: there is no gate to have
+     * lost, because there is nothing there.
+     */
     expect(byVerdict("no-replacement").sort()).toEqual([
       "delete_agent_skill",
-      "delete_post",
-      "repost_post",
       "save_agent_skill",
       "set_agent_skill_enabled",
       "update_branding",
@@ -215,8 +227,10 @@ describe("the approval requirement survives the migration — AC-4", () => {
     const gated = descriptors.filter((d) => d.approvalPolicy === "always").map((d) => d.name).sort();
     expect(gated).toEqual([
       "check_media_storage",
+      "delete_post",
       "publish_post_now",
       "reply_to_comment",
+      "repost_post",
       "retry_publish_target",
       "schedule_post",
     ]);
@@ -301,12 +315,27 @@ describe("every capability is attached to a gate, or visibly to none — AC-2", 
       identical: true,
       approvalBearingWrites: { old: 0, new: 0 },
     })) as never[];
-    const evaluation = evaluateParity({ publish: reports }, CAPABILITY_INVENTORY);
-    expect(evaluation.verdicts.find((v) => v.workflow === "publish")?.verdict).toBe("incomplete");
+    /**
+     * `campaign-planning`, not `publish` — and the change is worth recording rather than editing past.
+     *
+     * This asserted on `publish` until REQ-041 built `repost_post` and `delete_post`. **All seven of that
+     * workflow's capabilities are now implemented**, so it is no longer `incomplete` and cannot demonstrate
+     * the verdict. `campaign-planning` still has five unbuilt, so it can.
+     */
+    const evaluation = evaluateParity({ "campaign-planning": reports }, CAPABILITY_INVENTORY);
+    expect(evaluation.verdicts.find((v) => v.workflow === "campaign-planning")?.verdict).toBe("incomplete");
 
     // The control: the same data with no capabilities passes, which is what the report used to print.
-    const blind = evaluateParity({ publish: reports }, []);
-    expect(blind.verdicts.find((v) => v.workflow === "publish")?.verdict).toBe("passed");
+    const blind = evaluateParity({ "campaign-planning": reports }, []);
+    expect(blind.verdicts.find((v) => v.workflow === "campaign-planning")?.verdict).toBe("passed");
+
+    /**
+     * And the milestone, asserted so it cannot regress silently: `publish` is the first workflow whose every
+     * capability is built. It is the highest-consequence one — an irreversible external write — so it is the
+     * one whose gate becoming *measurable* matters most.
+     */
+    const built = evaluateParity({ publish: reports }, CAPABILITY_INVENTORY);
+    expect(built.verdicts.find((v) => v.workflow === "publish")?.verdict).not.toBe("incomplete");
   });
 
   it("counts the capabilities no gate covers, rather than letting an empty list read as nothing to do", () => {

@@ -17,8 +17,10 @@ import { publishingProblems, scopeOf, tableUnder } from "../../../../scripts/che
  */
 const PUBLISHES_PUBLICLY = [
   // Built.
+  "delete_post",
   "publish_post_now",
   "reply_to_comment",
+  "repost_post",
   "retry_publish_target",
   "schedule_post",
   // Specified — REQ-053, issues #229 to #231.

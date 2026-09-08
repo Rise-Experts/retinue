@@ -302,11 +302,23 @@ export const blockedByExports = (outcome) => outcome.code === "ERR_PACKAGE_PATH_
 /**
  * How long to wait for a just-published version to appear, and how often to ask.
  *
- * Three minutes because the observed lag ran to twenty for one package's *packument* while its version document
- * was served immediately — so this is not sized to the worst case, it is sized to the common one, and the
- * uncommon case now fails with a sentence naming the wait rather than with "nothing was verified".
+ * Was three minutes, sized to the common case — the observed lag ran to twenty for one package's *packument*
+ * while its version document was served immediately.
+ *
+ * Ten now, because the common case moved. Releasing the whole scope at once (nineteen packages, 2026-09-08)
+ * put five of them past three minutes: `tools-browser`, `tools-confluence`, `tools-email`, `tools-google` and
+ * `tools-jira` each **published successfully** and then went red on this wait. All five install cleanly from
+ * the registry, checked afterwards by hand.
+ *
+ * That is the worst kind of red. The workflow's own reasoning about fork PRs applies exactly — *"a job that
+ * goes red on every fork PR is a job people learn to ignore"* — and a release that fails after a successful
+ * publish is worse still: the version is permanent, so the only thing the failure can mean is "look again in
+ * a minute", and a check whose failure means that teaches everyone to re-run it without reading.
+ *
+ * Ten minutes is still not the worst case. It is sized to a first publish of a brand-new package under load,
+ * which is what those five were, and the refusal still names the wait so an operator knows what to look at.
  */
-export const PUBLISH_WAIT_MS = 180_000;
+export const PUBLISH_WAIT_MS = 600_000;
 export const PUBLISH_POLL_MS = 10_000;
 
 /**

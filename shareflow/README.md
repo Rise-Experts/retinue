@@ -620,9 +620,9 @@ endpoints, 7 skills, 5 inbound webhooks and 1 cron job — 51 capabilities:
 
 | | |
 |---|---|
-| 16 `implemented` | a replacement exists with a behavioural test against the old contract |
+| 18 `implemented` | a replacement exists with a behavioural test against the old contract |
 | 3 `partial` | `convert_media` (the old tool queues video and this one cannot represent a running job) and the two generation endpoints, where the tool exists and the non-conversational HTTP entry point does not |
-| 18 `missing` | diagrams, PDFs, `read_pdf`, `repost_post`, `delete_post`, and ten endpoints |
+| 16 `missing` | diagrams, PDFs, `read_pdf`, and ten endpoints |
 | 8 `dropped` | signed 2026-09-07: the six workspace-configuration tools and `POST /llm/validate`, `POST /assistant/session-name`. Two of the signatures record a **cost**, not a redirection — see below |
 | 6 `retained` | five webhooks and the publish sweep, which live in `web/` and call the AI backend not at all — verified by grep. Removing Agno leaves every one of them running |
 
@@ -672,6 +672,39 @@ in the same position as the 19 nothing measures — and a capability no threshol
 worse than failing. It stays proposed because it is the first gate written *after* shadow data existed:
 agreeing a threshold now is what #128 AC-1 forbids, so `gate-not-agreed` blocks until somebody signs it having
 looked at the runs. It is the only unsigned gate, and a test pins that.
+
+### `repost_post` and `delete_post` — and the first complete workflow
+
+Both were `requires_confirmation=True` in the old runtime and both are now replaced, over
+`scheduled_items` and a connector seam that already existed. **42 tools.**
+
+**A repost duplicates.** Not a stylistic choice — the old tool's docstring states the constraint: *"The
+platform APIs cannot edit or re-publish a live post, so this DUPLICATES the content into a new post and
+publishes that — the original stays intact with its own history and metrics."* Keeping the original is the
+point; its engagement numbers belong to it. It is a service method rather than two tool calls for a related
+reason: `duplicate_post_draft` then `publish_post_now` is the same two writes, but a model doing it across two
+turns can duplicate and then fail to publish, leaving an orphan draft nobody asked for.
+
+Its default is **narrower than the destinations the original was sent to** — only the ones it published to
+*successfully*. A target that failed the first time is not silently retried under cover of a repost;
+`retry_publish_target` is the tool for that, per target. And a post with no successful target is **refused**
+rather than treated as a first publish, because otherwise a model reaches for `repost_post` when the honest
+tool is `publish_post_now`, whose validation and approval it would then have skipped.
+
+**A delete asks the platforms first, and keeps the record when any of them still has a copy.** Partial
+deletion is the normal case rather than the error case — TikTok has no delete API, Instagram refuses ads and
+single items inside a carousel — so the result is per platform and `removedFromDatabase` is true only when
+every one confirmed. A live post with no row is a post nobody can find again, which is worse than a row for a
+post that is half gone. A connector that *throws* is recorded exactly like one that refuses, because both mean
+the copy is still live and `stillLive` must not be able to miss one.
+
+It is the only **`destructive`** tool in the package. `defineTool` derives `approvalPolicy: "always"` and a
+required idempotency key from that, so the old decorator's flag becomes an effect the gate reads.
+
+**`publish` is now the first workflow whose every capability is built** — 7 of 7. It is also the
+highest-consequence one, an irreversible external write against REQ-021's *"zero unauthorized or duplicate
+actions"*, so it is the gate whose becoming measurable matters most. A test asserts it, so the milestone
+cannot regress quietly.
 
 ### The eight drops, and what two of them cost
 

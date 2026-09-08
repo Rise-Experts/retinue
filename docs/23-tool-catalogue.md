@@ -159,6 +159,8 @@ Public under the operator's brand. Exact, and checked in both directions.
 | `publish_post_now` | `shareflow` | `external-write` | Posts to every selected network immediately |
 | `schedule_post` | `shareflow` | `external-write` | Publishes later without asking again |
 | `retry_publish_target` | `shareflow` | `external-write` | Re-attempts a public post |
+| `repost_post` | `shareflow` | `external-write` | Publishes a copy of the content to the destinations the original reached |
+| `delete_post` | `shareflow` | `destructive` | Irreversible on the platform and in Chorus, and the deletion is itself public — the precedent is `x_delete_post` below |
 | `reply_to_comment` | `shareflow` | `external-write` | A public reply, attributed to the account |
 | `x_post` | `tools-x` | `external-write` | Visible to every follower and to search, immediately |
 | `x_delete_post` | `tools-x` | `destructive` | Irreversible, and the deletion is itself public |

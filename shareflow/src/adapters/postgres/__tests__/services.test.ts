@@ -31,7 +31,12 @@ import type { AgentPlatformError } from "@retinue/agentkit";
 import { createPoolOpener, createTransactionScope, type TransactionRunner } from "@retinue/agentkit/adapters/postgres";
 
 import { createPostgresBrandService, BRAND_SUPPORTED } from "../brand.js";
-import { SWEEP_ALERT_MS, SWEEP_WORST_CASE_MS, UNCHECKED_CODES } from "../publishing.js";
+import {
+  SWEEP_ALERT_MS,
+  SWEEP_WORST_CASE_MS,
+  UNCHECKED_CODES,
+  createPostgresPublishingService,
+} from "../publishing.js";
 import { ACCOUNT_STATUS_FROM_DB, accountHealthFrom } from "../connectors.js";
 import { LEAD_SUPPRESSION, STORED_LEAD_STATUSES, encodeAttribution, normaliseEmail } from "../leads.js";
 import { ANALYTICS_REFRESH_WINDOW_MS } from "../analytics.js";
@@ -3177,5 +3182,258 @@ describe.skipIf(URL_ === undefined)("ArtifactService over assistant_artifacts �
     expect(artifactReference("  550E8400-E29B-41D4-A716-446655440000  ")).toBe(
       `${ARTIFACT_SCHEME}550e8400-e29b-41d4-a716-446655440000`,
     );
+  });
+});
+
+describe.skipIf(URL_ === undefined)("repost and delete — the two publish capabilities REQ-041 added (#190)", () => {
+  /**
+   * Both were `requires_confirmation=True` in the old runtime and both are unreplaced-no-longer. The
+   * assertions worth having are the two places a plausible implementation is wrong about something the old
+   * tool's docstring is explicit on:
+   *
+   * - **a repost duplicates**, because the platforms cannot re-publish a live post, and the original keeps
+   *   its own history and metrics;
+   * - **a delete asks the platforms first**, and keeps the record whenever any of them still has a copy.
+   */
+  const deletions: { platformId: string; externalPostId: string }[] = [];
+
+  const publishing = (over: Partial<Parameters<typeof createPostgresPublishingService>[0]> = {}) =>
+    createPostgresPublishingService({
+      sql,
+      transaction,
+      validateContent: createPostgresContentService(sql).validateContent,
+      duplicate: (context, input) => createPostgresContentService(sql).duplicateDraft(context, input),
+      ...over,
+    });
+
+  /** A post with one successful target, which is what both capabilities need to exist at all. */
+  const published = async (over: { external?: string | null } = {}) => {
+    const account = await sql.query<{ id: string }>(
+      `insert into public.social_accounts
+         (workspace_id, platform, platform_user_id, account_name, auth_tokens, status)
+       values ($1::uuid, 'linkedin', $2, 'Repost target', '{}'::jsonb, 'ACTIVE') returning id`,
+      [workspaceId, `li-${Math.random().toString(36).slice(2)}`],
+    );
+    const accountId = account[0]!.id;
+    const post = await sql.query<{ id: string }>(
+      `insert into public.posts (workspace_id, author_id, raw_content, status, target_platforms)
+       values ($1::uuid, $2::uuid, 'Original caption', 'PUBLISHED', '{linkedin}') returning id`,
+      [workspaceId, userId],
+    );
+    const postId = post[0]!.id;
+    await sql.query(
+      `insert into public.scheduled_items (post_id, social_account_id, scheduled_at, status, external_post_id, published_at)
+       values ($1::uuid, $2::uuid, now(), 'SUCCESS', $3, now())`,
+      [postId, accountId, over.external === undefined ? "urn:li:share:1" : over.external],
+    );
+    return { postId, accountId };
+  };
+
+  it("duplicates rather than republishing, and leaves the original intact", async () => {
+    /**
+     * The old docstring: *"The platform APIs cannot edit or re-publish a live post, so this DUPLICATES the
+     * content into a new post and publishes that — the original stays intact with its own history and
+     * metrics."* Keeping the original is the assertion: its engagement numbers belong to it.
+     */
+    const { postId } = await published();
+    const receipt = await publishing().repost(context(), {
+      idempotencyKey: `r-${Math.random()}` as never,
+      draftId: postId as never,
+    });
+
+    expect(String(receipt.draftId)).not.toBe(postId);
+    expect(receipt.targets.length).toBe(1);
+
+    // The original still exists, still published, still with its own successful item.
+    const original = await sql.query<{ status: string }>(
+      `select status from public.posts where id = $1::uuid`,
+      [postId],
+    );
+    expect(original[0]?.status).toBe("PUBLISHED");
+    const originalItems = await sql.query<{ n: string }>(
+      `select count(*) as n from public.scheduled_items where post_id = $1::uuid and status = 'SUCCESS'`,
+      [postId],
+    );
+    expect(Number(originalItems[0]?.n)).toBe(1);
+
+    // And the copy carries the content, so a repost is the same post rather than an empty one.
+    const copy = await sql.query<{ raw_content: string }>(
+      `select raw_content from public.posts where id = $1::uuid`,
+      [String(receipt.draftId)],
+    );
+    expect(copy[0]?.raw_content).toContain("Original caption");
+  });
+
+  it("defaults to the destinations that succeeded, not the ones that were attempted", async () => {
+    /**
+     * The narrower default, and the reason for it: a target that failed the first time is not silently
+     * retried under cover of a repost. `retry_publish_target` exists for that, per target — so a draft that
+     * reached three of four destinations is never re-sent to the three that worked.
+     */
+    const { postId } = await published();
+    const failed = await sql.query<{ id: string }>(
+      `insert into public.social_accounts
+         (workspace_id, platform, platform_user_id, account_name, auth_tokens, status)
+       values ($1::uuid, 'linkedin', $2, 'Failed target', '{}'::jsonb, 'ACTIVE') returning id`,
+      [workspaceId, `li-${Math.random().toString(36).slice(2)}`],
+    );
+    await sql.query(
+      `insert into public.scheduled_items (post_id, social_account_id, scheduled_at, status)
+       values ($1::uuid, $2::uuid, now(), 'FAILED')`,
+      [postId, failed[0]!.id],
+    );
+
+    const receipt = await publishing().repost(context(), {
+      idempotencyKey: `r2-${Math.random()}` as never,
+      draftId: postId as never,
+    });
+    // One, not two: the failed destination is not in the repost.
+    expect(receipt.targets).toHaveLength(1);
+  });
+
+  it("refuses a post that never published, instead of treating a repost as a first publish", async () => {
+    /**
+     * A post with no successful target never published, so there is nothing to publish *again*. Refused
+     * rather than defaulted to its intended destinations — otherwise a model reaches for `repost_post` when
+     * the honest tool is `publish_post_now`, whose validation it would then have skipped.
+     */
+    const post = await sql.query<{ id: string }>(
+      `insert into public.posts (workspace_id, author_id, raw_content, status, target_platforms)
+       values ($1::uuid, $2::uuid, 'Never sent', 'DRAFT', '{linkedin}') returning id`,
+      [workspaceId, userId],
+    );
+    const error = thrown(
+      await publishing()
+        .repost(context(), { idempotencyKey: "r3" as never, draftId: post[0]!.id as never })
+        .catch((r: unknown) => r),
+    );
+    expect(error.code).toBe("conflict");
+    expect(error.message).toContain("publish_post_now");
+  });
+
+  it("refuses to repost without duplication wired, rather than publishing the original again", async () => {
+    const { postId } = await published();
+    const error = thrown(
+      await createPostgresPublishingService({
+        sql,
+        transaction,
+        validateContent: createPostgresContentService(sql).validateContent,
+      })
+        .repost(context(), { idempotencyKey: "r4" as never, draftId: postId as never })
+        .catch((r: unknown) => r),
+    );
+    expect(error.code).toBe("capability_unavailable");
+  });
+
+  it("asks the platforms first and removes the record only when all confirmed", async () => {
+    deletions.length = 0;
+    const { postId } = await published();
+    const result = await publishing({
+      deleteFrom: async (input) => {
+        deletions.push({ platformId: input.platformId, externalPostId: input.externalPostId });
+        return { deleted: true };
+      },
+    }).deletePublished(context(), { idempotencyKey: "d1" as never, draftId: postId as never });
+
+    // The platform was asked, with the id this database holds — not a guess.
+    expect(deletions).toEqual([{ platformId: "linkedin", externalPostId: "urn:li:share:1" }]);
+    expect(result.removedFromDatabase).toBe(true);
+    expect(result.stillLive).toEqual([]);
+
+    // And the row is gone, with its scheduled items cascaded.
+    const rows = await sql.query<{ n: string }>(`select count(*) as n from public.posts where id = $1::uuid`, [postId]);
+    expect(Number(rows[0]?.n)).toBe(0);
+    const items = await sql.query<{ n: string }>(
+      `select count(*) as n from public.scheduled_items where post_id = $1::uuid`,
+      [postId],
+    );
+    expect(Number(items[0]?.n)).toBe(0);
+  });
+
+  it("keeps the record when a platform refuses, because a live post with no row cannot be found again", async () => {
+    /**
+     * The case the old docstring spends a paragraph on: *"TikTok has no delete API, and Instagram refuses ads
+     * and single items inside a carousel. Those copies stay live."* A refusal is a normal answer, not a
+     * failed call — and the record is kept **on purpose** so the leftover is still findable.
+     */
+    const { postId } = await published();
+    const result = await publishing({
+      deleteFrom: async () => ({ deleted: false, reason: "TikTok has no delete API" }),
+    }).deletePublished(context(), { idempotencyKey: "d2" as never, draftId: postId as never });
+
+    expect(result.removedFromDatabase).toBe(false);
+    expect(result.stillLive).toEqual(["linkedin"]);
+    expect(result.platforms[0]?.reason).toContain("no delete API");
+
+    const rows = await sql.query<{ n: string }>(`select count(*) as n from public.posts where id = $1::uuid`, [postId]);
+    // Still there, which is what makes the leftover findable.
+    expect(Number(rows[0]?.n)).toBe(1);
+    await sql.query(`delete from public.posts where id = $1::uuid`, [postId]);
+  });
+
+  it("treats a connector that threw exactly like one that refused", async () => {
+    // Both mean the platform still has a copy, so `stillLive` must not be able to miss one of them.
+    const { postId } = await published();
+    const result = await publishing({
+      deleteFrom: async () => {
+        throw new Error("connection reset");
+      },
+    }).deletePublished(context(), { idempotencyKey: "d3" as never, draftId: postId as never });
+    expect(result.stillLive).toEqual(["linkedin"]);
+    expect(result.removedFromDatabase).toBe(false);
+    expect(result.platforms[0]?.reason).toContain("connection reset");
+    await sql.query(`delete from public.posts where id = $1::uuid`, [postId]);
+  });
+
+  it("reports a published target with no external id rather than skipping it", async () => {
+    /**
+     * A `SUCCESS` row without `external_post_id` is a post the platform accepted and this database cannot
+     * name. There is nothing to ask the platform to delete, and a skipped row is a live post nobody was told
+     * about — so it is reported as un-deleted with a reason.
+     */
+    const { postId } = await published({ external: null });
+    const result = await publishing({
+      deleteFrom: async () => ({ deleted: true }),
+    }).deletePublished(context(), { idempotencyKey: "d4" as never, draftId: postId as never });
+    expect(result.stillLive).toEqual(["linkedin"]);
+    expect(result.platforms[0]?.reason).toContain("no id for the published post");
+    await sql.query(`delete from public.posts where id = $1::uuid`, [postId]);
+  });
+
+  it("refuses to delete without a connector, rather than removing the record alone", async () => {
+    /**
+     * The most consequential refusal in the pair. Removing the row without asking the platforms would leave
+     * live posts nobody can find, and report the post as deleted.
+     */
+    const { postId } = await published();
+    const error = thrown(
+      await publishing()
+        .deletePublished(context(), { idempotencyKey: "d5" as never, draftId: postId as never })
+        .catch((r: unknown) => r),
+    );
+    expect(error.code).toBe("capability_unavailable");
+    const rows = await sql.query<{ n: string }>(`select count(*) as n from public.posts where id = $1::uuid`, [postId]);
+    expect(Number(rows[0]?.n)).toBe(1);
+    await sql.query(`delete from public.posts where id = $1::uuid`, [postId]);
+  });
+
+  it("deletes a never-published post without asking any platform", async () => {
+    // Nothing is live, so nothing needs the platforms' permission — and requiring a connector here would
+    // make an ordinary draft undeletable in a deployment that has none.
+    const post = await sql.query<{ id: string }>(
+      `insert into public.posts (workspace_id, author_id, raw_content, status, target_platforms)
+       values ($1::uuid, $2::uuid, 'Draft only', 'DRAFT', '{linkedin}') returning id`,
+      [workspaceId, userId],
+    );
+    let asked = 0;
+    const result = await publishing({
+      deleteFrom: async () => {
+        asked += 1;
+        return { deleted: true };
+      },
+    }).deletePublished(context(), { idempotencyKey: "d6" as never, draftId: post[0]!.id as never });
+    expect(asked).toBe(0);
+    expect(result.removedFromDatabase).toBe(true);
+    expect(result.platforms).toEqual([]);
   });
 });

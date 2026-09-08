@@ -85,7 +85,7 @@ export const createShareFlowToolProvider = (input: {
    * not.
    *
    * The assumption — that no factory touches a service while building — is not left to trust: a test
-   * builds all 40 against a services object whose every property throws on access.
+   * builds all 42 against a services object whose every property throws on access.
    */
   const built = input.factories.map((factory) => ({
     factory,

@@ -23,8 +23,8 @@
  * ## What the honest picture is
  *
  * The old runtime is 31 Agno tools across 9 components, 14 purpose-built HTTP endpoints, 7 skills, 5 inbound
- * webhooks and 1 cron job. This package replaces 16 outright, part of 3 more, has **8 signed off as dropped**
- * on 2026-09-07, retains 6 that live in `web/` — and has not replaced 18. The inventory gate is therefore
+ * webhooks and 1 cron job. This package replaces 18 outright, part of 3 more, has **8 signed off as dropped**
+ * on 2026-09-07, retains 6 that live in `web/` — and has not replaced 16. The inventory gate is therefore
  * `incomplete`, which is the correct verdict and not a defect in the gate.
  *
  * The eight drops are the six workspace-configuration tools and two platform endpoints, and two of their
@@ -33,8 +33,8 @@
  * only surface. Neither moves anywhere; both stop being editable. That is written into `droppedBy.reason`
  * rather than a comment beside it, because the record is what somebody reads in a year.
  *
- * The remaining 18 are not dropped for the reason the drops exist: a drop needs a person, and nobody has
- * agreed to remove diagrams, PDFs, `repost_post` or `delete_post` from a live product.
+ * The remaining 16 are not dropped for the reason the drops exist: a drop needs a person, and nobody has
+ * agreed to remove diagrams, PDFs or the campaign-generation endpoints from a live product.
  *
  * The old-runtime paths are not written here at all — they come from `OLD_RUNTIME_MANIFEST`, which the scan
  * generates. A reviewer who wants the file and line reads it from there rather than trusting a string typed by
@@ -215,24 +215,40 @@ export const CAPABILITY_INVENTORY: readonly CapabilityEntry[] = [
     capability: "repost a published post",
     oldRuntimeRef: "tool:repost_post",
     workflows: ["publish"],
-    replacement: null,
-    status: "missing",
+    replacement: "repost_post",
+    status: "implemented",
     invocation: "interactive",
+    instructions:
+      "skills/publishing-safety — a repost is a publish and reads the same rules; the approval gate is platform behaviour rather than instruction",
     /**
-     * Unreplaced **and** confirmation-gated in the old runtime, which makes it the most consequential gap in
-     * this file: a customer can repost today and cannot after the cutover.
+     * The default is narrower than the old tool's *stated* default and matches its actual one: the old
+     * runtime targets "the platforms the original actually published to **successfully**". A target that
+     * failed the first time is not silently retried under cover of a repost — `retry_publish_target` is the
+     * tool for that, per target.
      */
-    sideEffects: "publishes to a customer's audience. Confirmation-gated in the old runtime",
+    sideEffects:
+      "duplicates the post and publishes the copy to a customer's audience. The original is untouched and keeps its own metrics, because the platforms cannot re-publish a live post",
+    contractTest: "shareflow/src/tools/__tests__/publishing.test.ts",
   },
   {
     capability: "delete a published post",
     oldRuntimeRef: "tool:delete_post",
     workflows: ["publish"],
-    replacement: null,
-    status: "missing",
+    replacement: "delete_post",
+    status: "implemented",
     invocation: "interactive",
+    instructions:
+      "skills/publishing-safety — and the tool's own description, which carries the clause that matters: never report the post as deleted unless `stillLive` is empty",
+    /**
+     * The only `destructive` tool in the package, and the only one that destroys on two systems at once.
+     *
+     * Partial deletion is the normal case rather than the error case: TikTok has no delete API and Instagram
+     * refuses ads and carousel items. The record is kept whenever any platform still has a copy, because a
+     * live post with no row is a post nobody can find again.
+     */
     sideEffects:
-      "deletes a post from a customer's platform account. Confirmation-gated in the old runtime, and irreversible",
+      "deletes the live posts from a customer's platform accounts, then removes the Chorus record — but only when every platform confirmed. Cascades to scheduled_items and post_comments. Irreversible",
+    contractTest: "shareflow/src/tools/__tests__/publishing.test.ts",
   },
 
   // ---- Engagement -----------------------------------------------------------------------------------------

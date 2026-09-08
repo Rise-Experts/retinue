@@ -30,7 +30,10 @@ import type { SqlExecutor, TransactionRunner } from "@retinue/agentkit/adapters/
 import { findDuplicateContent } from "../../tools/duplication.js";
 import type {
   ContentService,
+  DeletePublishedResult,
+  PlatformDeletion,
   PublishTarget,
+  RepostReceipt,
   PublishTargetState,
   PublishTargetStatus,
   PublishingService,
@@ -159,6 +162,29 @@ export type PublishingDeps = {
    * rather than a limitation buried in an adapter.
    */
   readonly enqueue?: (input: { readonly scheduledItemId: string; readonly delayMs: number }) => Promise<void>;
+  /**
+   * Duplication, borrowed from `ContentService` rather than reimplemented — REQ-041 (#190).
+   *
+   * `repost` publishes a **copy**, because the platforms cannot re-publish a live post, and copying a post
+   * correctly means knowing what a post is: its destinations, its attachments, its campaign, its status on
+   * creation. That knowledge is `ContentService`'s and a second copy of it here would drift from the tool a
+   * user reaches directly. The same reason `validateContent` is handed over.
+   */
+  readonly duplicate?: ContentService["duplicateDraft"];
+  /**
+   * Deletes a post from a platform. **Absent means `deletePublished` refuses.**
+   *
+   * ShareFlow's connectors live in another repository, so this is the seam — the same one
+   * `EngagementService.reply` has for sending. Returning `deleted: false` with a reason is a normal answer,
+   * not an error: TikTok has no delete API at all, and Instagram refuses ads and single items inside a
+   * carousel. A connector that threw for those would turn "this platform cannot" into "the call failed".
+   */
+  readonly deleteFrom?: (input: {
+    readonly context: ExecutionContext;
+    readonly accountId: string;
+    readonly platformId: string;
+    readonly externalPostId: string;
+  }) => Promise<{ readonly deleted: boolean; readonly reason?: string }>;
   readonly now?: () => number;
 };
 
@@ -260,7 +286,14 @@ export const createPostgresPublishingService = (deps: PublishingDeps): Publishin
     return rows.map(toStatus);
   };
 
-  return {
+  /**
+   * Named rather than returned inline, so `repost` can call `schedule` without `this`.
+   *
+   * `this.schedule(…)` works when the method is invoked off the object and breaks the moment anyone writes
+   * `const { repost } = services.publishing` — and a publish path that fails on a destructure is a footgun
+   * with a permanent consequence.
+   */
+  const service: PublishingService = {
     async validate(context, input): Promise<ValidationReport> {
       const draft = await draftIn(context, String(input.draftId));
       const issues: ValidationIssue[] = [];
@@ -549,7 +582,214 @@ export const createPostgresPublishingService = (deps: PublishingDeps): Publishin
       }
       return toStatus(row);
     },
+
+    async repost(context, input): Promise<RepostReceipt> {
+      const duplicate = deps.duplicate;
+      if (duplicate === undefined) {
+        throw new AgentPlatformError({
+          code: "capability_unavailable",
+          message:
+            "This deployment cannot repost: no duplication is wired. Duplicate the post and publish the copy " +
+            "instead — reposting is those two steps, and the platforms cannot re-publish a live post.",
+          retryable: false,
+        });
+      }
+      const draftId = asUuid("postDraftId", String(input.draftId));
+
+      /**
+       * The destinations, and the default is narrower than "where it was sent".
+       *
+       * `status = 'SUCCESS'` only. A target that failed the first time is not silently retried under cover of
+       * a repost: that is what `retry_publish_target` is for, per target, so a draft that reached three of
+       * four destinations is never re-sent to the three that worked.
+       */
+      const succeeded = await sql.query<{ social_account_id: string }>(
+        `select distinct s.social_account_id
+           from public.scheduled_items s
+           join public.posts p on p.id = s.post_id
+          where p.workspace_id = $1::uuid and s.post_id = $2::uuid and s.status = 'SUCCESS'`,
+        [String(context.tenantId), draftId],
+      );
+
+      const chosen =
+        input.accountIds !== undefined && input.accountIds.length > 0
+          ? input.accountIds.map((id) => asUuid("accountId", String(id)))
+          : succeeded.map((row) => row.social_account_id);
+
+      if (chosen.length === 0) {
+        /**
+         * Refused rather than defaulted to the original's *intended* destinations.
+         *
+         * A post with no successful target never published, so there is nothing to publish *again* — and
+         * treating a repost as a first publish would let a model reach for it when the honest tool is
+         * `publish_post_now`, whose validation and approval it would then have skipped.
+         */
+        throw new AgentPlatformError({
+          code: "conflict",
+          message:
+            "That post has not published anywhere successfully, so there is nothing to repost. Publish it " +
+            "with publish_post_now, or retry a failed destination with retry_publish_target.",
+          retryable: false,
+        });
+      }
+
+      /**
+       * The platforms the chosen accounts belong to, so the copy is created for those destinations.
+       *
+       * `duplicateDraft` takes platform ids and not account ids — its own contract — so this translates, and
+       * refuses an account that is not this workspace's rather than letting the copy be created for a
+       * platform the caller does not own.
+       */
+      const accounts = await sql.query<{ id: string; platform: string }>(
+        `select id, platform from public.social_accounts
+          where workspace_id = $1::uuid and id = any($2::uuid[])`,
+        [String(context.tenantId), chosen],
+      );
+      if (accounts.length !== chosen.length) {
+        throw new AgentPlatformError({
+          code: "not_found",
+          message: "One of those destinations is not an account in this workspace.",
+          retryable: false,
+        });
+      }
+
+      const copy = await duplicate(context, {
+        idempotencyKey: `${input.idempotencyKey}:duplicate` as never,
+        id: input.draftId,
+        targetPlatforms: [...new Set(accounts.map((row) => row.platform))] as never,
+      });
+
+      /**
+       * Per-destination keys derived from the **copy** and the account, never from the call.
+       *
+       * The same rule `PublishTarget.idempotencyKey` documents. Derived from the new draft's id, a re-delivery
+       * of this repost publishes the copy once; derived from the original's, a second repost would collide
+       * with the first and silently publish nothing.
+       */
+      const targets: PublishTarget[] = accounts.map((row) => ({
+        accountId: row.id as never,
+        ...(input.scheduledAt === undefined ? {} : { scheduledAt: input.scheduledAt }),
+        idempotencyKey: `${String(copy.id)}:${row.id}` as never,
+      }));
+
+      const statuses = await service.schedule(context, {
+        idempotencyKey: input.idempotencyKey,
+        draftId: copy.id,
+        targets,
+      });
+      return { draftId: copy.id, targets: statuses };
+    },
+
+    async deletePublished(context, input): Promise<DeletePublishedResult> {
+      const deleteFrom = deps.deleteFrom;
+      if (deleteFrom === undefined) {
+        throw new AgentPlatformError({
+          code: "capability_unavailable",
+          message:
+            "This deployment cannot delete published posts: no platform connector is wired. Delete the post " +
+            "in each platform's own app, and then remove it in Chorus.",
+          retryable: false,
+        });
+      }
+      const draftId = asUuid("postDraftId", String(input.draftId));
+
+      /**
+       * Only what actually published, and only with an external id.
+       *
+       * A `SUCCESS` row without `external_post_id` is a post the platform accepted and this database cannot
+       * name — there is nothing to ask the platform to delete, and guessing would be deleting *something*.
+       * Those are reported as un-deleted with a reason rather than skipped, because a skipped row is a live
+       * post nobody was told about.
+       */
+      const live = await sql.query<{
+        social_account_id: string;
+        platform: string;
+        external_post_id: string | null;
+      }>(
+        `select s.social_account_id, a.platform, s.external_post_id
+           from public.scheduled_items s
+           join public.posts p on p.id = s.post_id
+           join public.social_accounts a on a.id = s.social_account_id
+          where p.workspace_id = $1::uuid and s.post_id = $2::uuid and s.status = 'SUCCESS'`,
+        [String(context.tenantId), draftId],
+      );
+
+      if (live.length === 0) {
+        // Nothing is live, so nothing needs the platforms' permission. The record is the whole of it.
+        const removed = await sql.query<{ id: string }>(
+          `delete from public.posts where workspace_id = $1::uuid and id = $2::uuid returning id`,
+          [String(context.tenantId), draftId],
+        );
+        if (removed[0] === undefined) {
+          throw new AgentPlatformError({ code: "not_found", message: `No post ${draftId}.`, retryable: false });
+        }
+        return { draftId: input.draftId, platforms: [], removedFromDatabase: true, stillLive: [] };
+      }
+
+      /**
+       * The platforms first, the record second — and never the other way round.
+       *
+       * A record removed before the platforms confirm is a live post with no row: nobody can find it to try
+       * again, and the assistant has already reported it gone. Sequential rather than parallel so a
+       * connector that rate-limits does not make one destination's failure look like another's.
+       */
+      const platforms: PlatformDeletion[] = [];
+      for (const row of live) {
+        if (row.external_post_id === null || row.external_post_id === "") {
+          platforms.push({
+            platformId: row.platform as never,
+            accountId: row.social_account_id as never,
+            deleted: false,
+            reason:
+              "This database has no id for the published post, so there is nothing to ask " +
+              `${row.platform} to delete. Remove it in ${row.platform}'s own app.`,
+          });
+          continue;
+        }
+        try {
+          const outcome = await deleteFrom({
+            context,
+            accountId: row.social_account_id,
+            platformId: row.platform,
+            externalPostId: row.external_post_id,
+          });
+          platforms.push({
+            platformId: row.platform as never,
+            accountId: row.social_account_id as never,
+            deleted: outcome.deleted,
+            ...(outcome.reason === undefined ? {} : { reason: outcome.reason }),
+          });
+        } catch (error) {
+          // A connector that threw is a platform whose copy is still live, which is the same fact as a
+          // refusal — reported the same way, so `stillLive` cannot miss it.
+          platforms.push({
+            platformId: row.platform as never,
+            accountId: row.social_account_id as never,
+            deleted: false,
+            reason: `${row.platform} did not confirm the deletion: ${error instanceof Error ? error.message : String(error)}`,
+          });
+        }
+      }
+
+      const stillLive = [...new Set(platforms.filter((p) => !p.deleted).map((p) => p.platformId))];
+      if (stillLive.length > 0) {
+        // Kept on purpose, so the leftover can still be found. The tool's description says so to the model.
+        return { draftId: input.draftId, platforms, removedFromDatabase: false, stillLive };
+      }
+
+      const removed = await sql.query<{ id: string }>(
+        `delete from public.posts where workspace_id = $1::uuid and id = $2::uuid returning id`,
+        [String(context.tenantId), draftId],
+      );
+      return {
+        draftId: input.draftId,
+        platforms,
+        removedFromDatabase: removed[0] !== undefined,
+        stillLive: [],
+      };
+    },
   };
+  return service;
 };
 
 export { STATE_FROM_DB as PUBLISH_STATE_FROM_DB, stateFrom as publishStateFrom };

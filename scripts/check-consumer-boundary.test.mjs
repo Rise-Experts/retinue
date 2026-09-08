@@ -189,8 +189,13 @@ test("the publish wait is bounded and polls, rather than probing once", async ()
    * ran seconds after the publish, the registry had not propagated, the version was skipped as absent, and the
    * guard against a silent skip fired for a timing reason. Earlier the same day another package took roughly
    * twenty minutes to expose its packument while serving the version document immediately.
+   *
+   * Raised from three minutes to ten on 2026-09-08, when releasing the whole scope at once put five brand-new
+   * packages past the old window — each published, then red on the wait, and each verified installable
+   * afterwards by hand. A release that fails *after* a successful publish can only mean "look again in a
+   * minute", and a check whose failure means that is a check people re-run without reading.
    */
-  assert.equal(PUBLISH_WAIT_MS, 180_000);
+  assert.equal(PUBLISH_WAIT_MS, 600_000);
   assert.ok(PUBLISH_POLL_MS > 0 && PUBLISH_POLL_MS < PUBLISH_WAIT_MS);
 
   const started = Date.now();

@@ -324,8 +324,92 @@ export const retryPublishTargetTool = shareFlowTool(["publishing"], ({ services,
       ),
   }));
 
+const repostSchema = z
+  .object({
+    postDraftId: idString,
+    /**
+     * Omitted means the destinations the original **published to successfully**.
+     *
+     * Deliberately not "its destinations": a target that failed the first time is not silently retried under
+     * cover of a repost. `retry_publish_target` is the tool for that, per target.
+     */
+    accountIds: z.array(idString).min(1).max(10).optional(),
+    /** Omitted means now. A future instant schedules the copy. */
+    scheduledAt: z.string().datetime({ offset: true }).optional(),
+  })
+  .strict();
+
+export const repostPostTool = shareFlowTool(["publishing"], ({ services, deps }): Tool =>
+  defineDelegatingTool(deps, {
+    name: "repost_post",
+    label: "Post it again",
+    description:
+      "Publish a post's content again. This creates a NEW post from the original's content and publishes that, because the platforms cannot re-publish a live post — so the original keeps its own history and its own metrics. By default it goes only to the destinations the original actually published to successfully; name `accountIds` to choose others. Omit `scheduledAt` to send it now. If a destination failed the first time, use `retry_publish_target` instead: a repost is not a retry.",
+    category: "publishing",
+    effect: "external-write",
+    inputSchema: repostSchema,
+    delegatesTo: "PublishingService.repost",
+    delegate: async (input: z.infer<typeof repostSchema>, context, { idempotencyKey }) => {
+      const receipt = await services.publishing.repost(context, {
+        idempotencyKey,
+        draftId: asId<PostDraftId>(input.postDraftId),
+        ...(input.accountIds === undefined
+          ? {}
+          : { accountIds: input.accountIds.map((id) => asId<SocialAccountId>(id)) }),
+        ...(input.scheduledAt === undefined ? {} : { scheduledAt: input.scheduledAt }),
+      });
+      return {
+        // Named `newPostDraftId` rather than `postDraftId`: the model was handed the original's id and will
+        // otherwise report that one as the thing it just published.
+        newPostDraftId: String(receipt.draftId),
+        targets: receipt.targets.map(targetView),
+      };
+    },
+  }));
+
+const deletePostSchema = z.object({ postDraftId: idString }).strict();
+
+export const deletePostTool = shareFlowTool(["publishing"], ({ services, deps }): Tool =>
+  defineDelegatingTool(deps, {
+    name: "delete_post",
+    label: "Delete a published post",
+    description:
+      "Delete a post from the platforms AND from Chorus. Irreversible on both sides: the live posts are gone, engagement history included. Not every platform can delete — TikTok has no delete API, and Instagram refuses ads and single items inside a carousel — so read `platforms` and report it destination by destination. **The post is only gone when `stillLive` is empty.** When it is not empty the Chorus record is kept on purpose so the leftover can still be found; say which platforms still have it and that the user must remove it in that app.",
+    category: "publishing",
+    /**
+     * `destructive`, which is stronger than the `external-write` the other publishing tools carry.
+     *
+     * It is the only tool in this package that destroys something rather than creating it, on two systems at
+     * once, and `defineTool` derives `approvalPolicy: "always"` and a required idempotency key from that. The
+     * old runtime is `requires_confirmation=True`; this is the same guarantee expressed as an effect the gate
+     * reads rather than a flag on a decorator.
+     */
+    effect: "destructive",
+    inputSchema: deletePostSchema,
+    delegatesTo: "PublishingService.deletePublished",
+    delegate: async (input: z.infer<typeof deletePostSchema>, context, { idempotencyKey }) => {
+      const result = await services.publishing.deletePublished(context, {
+        idempotencyKey,
+        draftId: asId<PostDraftId>(input.postDraftId),
+      });
+      return {
+        postDraftId: String(result.draftId),
+        platforms: result.platforms.map((platform) => ({
+          platformId: String(platform.platformId),
+          deleted: platform.deleted,
+          ...(platform.reason === undefined ? {} : { reason: platform.reason }),
+        })),
+        removedFromChorus: result.removedFromDatabase,
+        /** Empty is the only state in which the post is gone. The description tells the model to read this. */
+        stillLive: result.stillLive.map(String),
+      };
+    },
+  }));
+
 /** The complete Publishing catalog, pinned by a test. */
 export const PUBLISHING_TOOL_NAMES = [
+  "repost_post",
+  "delete_post",
   "validate_publish",
   "publish_post_now",
   "schedule_post",
@@ -334,6 +418,8 @@ export const PUBLISHING_TOOL_NAMES = [
 ] as const;
 
 export const PUBLISHING_TOOL_FACTORIES: readonly ShareFlowToolFactory[] = [
+  repostPostTool,
+  deletePostTool,
   validatePublishTool,
   publishPostNowTool,
   schedulePostTool,

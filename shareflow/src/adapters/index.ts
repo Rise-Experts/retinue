@@ -164,6 +164,14 @@ export type ShareFlowAdapterConfig = {
   readonly mediaBucket?: string;
   /** Whether an address must never be added as a lead. Absent means no lead is ever suppressed. */
   readonly isSuppressed?: LeadDeps["isSuppressed"];
+  /**
+   * Deletes a published post from a platform. Absent means `delete_post` refuses rather than half-works.
+   *
+   * The same seam as `sendReply`: ShareFlow's connectors are in another repository. Passed through rather
+   * than defaulted, because a default here would be this package inventing a platform capability — and
+   * TikTok genuinely has no delete API.
+   */
+  readonly deletePostFrom?: PublishingDeps["deleteFrom"];
 };
 
 /**
@@ -209,6 +217,17 @@ export const createShareFlowServices = (config: ShareFlowAdapterConfig): BackedS
       ...(config.probe === undefined ? {} : { probe: config.probe }),
     }),
     publishing: createPostgresPublishingService({
+      /**
+       * `duplicate` is wired to the content service here — the third composition decision this function
+       * makes, and the same reason as the other two.
+       *
+       * `repost` publishes a copy, because the platforms cannot re-publish a live post. Copying a post
+       * correctly means knowing what a post is — destinations, attachments, campaign, status on creation —
+       * and that knowledge is `ContentService`'s. A second copy of it in the publishing adapter would drift
+       * from `duplicate_post_draft`, which a user reaches directly.
+       */
+      duplicate: (context, input) => content.duplicateDraft(context, input),
+      ...(config.deletePostFrom === undefined ? {} : { deleteFrom: config.deletePostFrom }),
       sql: config.sql,
       transaction: config.transaction,
       validateContent: (context, input) => content.validateContent(context, input),

@@ -485,6 +485,10 @@ describe("arguments and delegation", () => {
 
   it("names the service method every capability wraps", () => {
     expect(PUBLISHING_TOOL_FACTORIES.map((f) => build(f).descriptor).map((d) => [d.name, d.delegatesTo])).toEqual([
+      // `repost` composes duplication and a schedule *inside* the service, so the tool still names one
+      // method — a model doing it in two turns can duplicate and then fail to publish.
+      ["repost_post", "PublishingService.repost"],
+      ["delete_post", "PublishingService.deletePublished"],
       ["validate_publish", "PublishingService.validate"],
       ["publish_post_now", "PublishingService.schedule"],
       ["schedule_post", "PublishingService.schedule"],
@@ -493,7 +497,7 @@ describe("arguments and delegation", () => {
     ]);
   });
 
-  it("registers under publishing with exactly three gated capabilities", async () => {
+  it("registers under publishing with exactly five gated capabilities", async () => {
     const provider = createShareFlowToolProvider({
       services: { publishing: stubPublishing(recorder) } as unknown as ShareFlowServices,
       deps: { authorization: allowAll, idempotency, approvals: await grantedGate("publishing") },
@@ -502,11 +506,24 @@ describe("arguments and delegation", () => {
     const descriptors = (await provider.listTools(CONTEXT)).map((t) => t.descriptor);
     expect(descriptors.map((d) => d.name)).toEqual([...PUBLISHING_TOOL_NAMES]);
     for (const d of descriptors) expect(d.category).toBe("publishing");
+    /**
+     * Five since REQ-041 (#190) added `repost_post` and `delete_post`, and the order is the registration
+     * order rather than a preference.
+     *
+     * Both were `requires_confirmation=True` in the old runtime, and neither declares an approval policy: it
+     * is derived from the effect. `repost_post` is `external-write` because it publishes; `delete_post` is
+     * `destructive`, the only one in the package, because it destroys on two systems at once.
+     */
     expect(descriptors.filter((d) => d.approvalPolicy !== "never").map((d) => d.name)).toEqual([
+      "repost_post",
+      "delete_post",
       "publish_post_now",
       "schedule_post",
       "retry_publish_target",
     ]);
+    expect(descriptors.find((d) => d.name === "delete_post")?.effect).toBe("destructive");
+    // The only one. A second destructive tool is a decision, not an increment.
+    expect(descriptors.filter((d) => d.effect === "destructive").map((d) => d.name)).toEqual(["delete_post"]);
   });
 
   it("refuses before the service is called when the policy says no", async () => {

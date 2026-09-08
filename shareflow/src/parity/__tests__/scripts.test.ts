@@ -319,8 +319,14 @@ describe("parity-report.mjs", () => {
     const { code, stdout } = await exec("parity-report.mjs", ["--shadow", path]);
     expect(code).toBe(1);
     expect(stdout).toContain("incomplete");
-    // Named, so the report says what to build rather than that something is wrong.
-    expect(stdout).toContain("repost a published post (missing)");
+    /**
+     * Named, so the report says what to build rather than that something is wrong.
+     *
+     * This asserted on `repost a published post (missing)` until REQ-041 built it. `publish` has no unbuilt
+     * capabilities at all now — the first workflow to get there — so the assertion moved to one that still
+     * does. When `campaign-planning` is finished this line moves again, which is the point of naming them.
+     */
+    expect(stdout).toContain("plan a campaign agentically (missing)");
     expect(stdout).toContain("cannot be distinguished from one that agrees");
     expect(stdout).not.toContain("failed");
     /**
