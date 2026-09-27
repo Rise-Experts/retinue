@@ -146,23 +146,77 @@ export type ModelRegistryConfig = {
 const covers = (have: readonly string[], need: readonly string[]): boolean =>
   need.every((n) => have.includes(n));
 
-/** A model is eligible when it clears every hard constraint in the policy. */
-const eligible = (m: ModelDefinition, p: ModelPolicy): boolean => {
-  if (m.lifecycle === "retired") return false;
-  if (p.allowedProviders && !p.allowedProviders.includes(m.provider)) return false;
-  if (p.requiredModalities && !covers(m.inputModalities, p.requiredModalities)) return false;
-  if (p.dataResidency && !covers(m.dataResidency, p.dataResidency)) return false;
+/**
+ * Why a model fails a policy's hard constraints, or `undefined` when it clears them all.
+ *
+ * A reason rather than a boolean since #286: a run that *names* a model has to be told why that model was
+ * refused, and "not eligible" gives a person nothing to change. `eligible` below is this with the reason dropped,
+ * so role resolution and per-run validation cannot come to disagree about what the constraints are.
+ */
+export const ineligibilityReason = (m: ModelDefinition, p: Omit<ModelPolicy, "role">): string | undefined => {
+  if (m.lifecycle === "retired") return `model ${m.modelId} is retired`;
+  if (p.allowedProviders && !p.allowedProviders.includes(m.provider))
+    return `provider ${m.provider} is not among the allowed providers (${p.allowedProviders.join(", ")})`;
+  if (p.requiredModalities && !covers(m.inputModalities, p.requiredModalities))
+    return `model ${m.modelId} does not accept ${p.requiredModalities.filter((x) => !m.inputModalities.includes(x)).join(", ")}`;
+  if (p.dataResidency && !covers(m.dataResidency, p.dataResidency))
+    return `model ${m.modelId} does not process data in ${p.dataResidency.filter((x) => !m.dataResidency.includes(x)).join(", ")}`;
   if (p.requiredCapabilities) {
     for (const key of Object.keys(p.requiredCapabilities) as (keyof ModelCapabilities)[]) {
-      if (p.requiredCapabilities[key] && !m.capabilities[key]) return false;
+      if (p.requiredCapabilities[key] && !m.capabilities[key]) return `model ${m.modelId} lacks the ${key} capability`;
     }
   }
   // Cost ceiling is honored at resolution as an output-price ceiling; the per-run budget is
   // separately enforced at execution by the usage recorder.
   if (p.costCeilingMinorUnits !== undefined && m.pricing.outputPerMillion > p.costCeilingMinorUnits) {
-    return false;
+    return `model ${m.modelId} costs more per output token than the policy's ceiling allows`;
   }
-  return true;
+  return undefined;
+};
+
+/** A model is eligible when it clears every hard constraint in the policy. */
+const eligible = (m: ModelDefinition, p: ModelPolicy): boolean => ineligibilityReason(m, p) === undefined;
+
+/**
+ * The outcome of checking a per-run model choice — #286.
+ *
+ * A result rather than a throw, so a host can call this at **admission** and answer the request with a 400 and the
+ * reason before a run row exists. The engine calls the same function again at execution, because a catalogue is
+ * the host's and can change between the click and the turn.
+ */
+export type RunModelValidation =
+  | { readonly ok: true; readonly definition: ModelDefinition }
+  | { readonly ok: false; readonly reason: string };
+
+/**
+ * Check a model id a run asked for against the catalogue the host allows, and the agent's policy.
+ *
+ * **Refused, never replaced.** An unknown id is not rounded to the nearest known one and a disallowed one does not
+ * fall back to the agent's role. A person who picked "Opus" and was silently served "Haiku" has been misled about
+ * what they are paying for and what answered them; a refusal with a reason is the only honest outcome. This is the
+ * silent-fallback failure #279 ended for tenant resolution, closed here for the per-run choice as well.
+ *
+ * The policy check reuses `ineligibilityReason`, minus the role: a run naming a model has already chosen, so the
+ * role assignment is moot — but the agent's *hard* constraints (modalities, residency, required capabilities) are
+ * properties of the agent, and a model picker must not be a way around them.
+ */
+export const validateRunModel = (input: {
+  readonly modelId: string;
+  readonly catalogue: readonly ModelDefinition[];
+  readonly policy?: Omit<ModelPolicy, "role">;
+}): RunModelValidation => {
+  const definition = input.catalogue.find((m) => m.modelId === input.modelId);
+  if (definition === undefined) {
+    const allowed = input.catalogue.filter((m) => m.lifecycle !== "retired").map((m) => m.modelId);
+    return {
+      ok: false,
+      reason:
+        `model ${JSON.stringify(input.modelId)} is not in this deployment's allowed models` +
+        (allowed.length === 0 ? " (the catalogue is empty)" : ` (${allowed.join(", ")})`),
+    };
+  }
+  const reason = ineligibilityReason(definition, input.policy ?? {});
+  return reason === undefined ? { ok: true, definition } : { ok: false, reason };
 };
 
 /**
@@ -201,3 +255,4 @@ export const createModelRegistry = (config: ModelRegistryConfig): ModelRegistry 
 export { computeModelCostMinorUnits } from "./pricing.js";
 
 export * from "./streaming.js";
+export * from "./effort.js";

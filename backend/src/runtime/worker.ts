@@ -264,6 +264,8 @@ export const createDurableWorker = (deps: DurableWorkerDeps) => {
           ...(event.reasoningTokens === undefined ? {} : { reasoningTokens: event.reasoningTokens }),
           ...(event.imageCount === undefined ? {} : { imageCount: event.imageCount }),
           ...(event.audioSeconds === undefined ? {} : { audioSeconds: event.audioSeconds }),
+          // #286. The effort that reached the provider, so a host can price the step at the rate it was served.
+          ...(event.effort === undefined ? {} : { effort: event.effort }),
           costMinorUnits: event.costMinorUnits ?? 0,
           currency: event.currency ?? "USD",
           stepId: event.stepId ?? String(event.sequence),

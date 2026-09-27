@@ -75,6 +75,44 @@ User memory enters a run through a **context provider** (docs/03), not by dumpin
 - `MemoryExtractor` — proposes candidate entries from a completed turn (validated before commit).
 - A built-in **user-memory context provider**.
 
+## Scoped memory — #285
+
+Memory for a **group of conversations** rather than a person: what a project's chats have taught
+("never say *revolutionary*", "slide 1 names the dish"), known to every chat in that project.
+
+| Scope | Keyed by | Lifetime | Home |
+|---|---|---|---|
+| **Scoped memory** | `tenantId` + `scope` (`kind:id`, e.g. `project:7f3c…`) | across every conversation in the scope | **`ScopedMemoryStore`** |
+
+**A second store, not a column on `principal_memory`.** That table's RLS policy is
+`principal_id = app.principal_id` — right for a person, wrong for a project, where a rule Alice's chat taught
+must reach Bob's chat. Folding both into one table would weaken the policy on everyone's personal memory, or
+make it switch per row; a separate `scoped_memory` table with a tenant-only policy keeps the personal
+guarantee untouched. Which scopes a run may read is the host's decision, made when it names them.
+
+Everything else is shared with personal memory: `MEMORY_LIMITS`, `validateAndDedupe`, `MemoryCandidate`,
+`MemoryPatch` — one gate, not two.
+
+- **The host names scopes per run** — `NewRun.memoryScopes` (or `RunInput.memoryScopes` on `createAgent`). The
+  engine copies them from the run row onto `ExecutionContext.memoryScopes`, the one object a model cannot write
+  to, so a tool argument can never add a scope. `parseMemoryScope` decides what is well formed; `principal` is
+  reserved as a kind.
+- **The provider** (`createScopedMemoryProvider`) emits one "What this project has learned" section per scope,
+  **bounded in UTF-8 bytes** (`maxBytes`, default 2,048, per scope). Entries are taken most-salient first and
+  added whole while they fit; one that does not fit is skipped, never cut. `estimatedTokens` is computed from
+  the body actually emitted and the section draws from the `user-context` bucket, so the assembler's budget
+  sees exactly what it costs. `provenance` is `scoped-memory:<scope>#<entry ids>` for the inspector.
+- **Extraction** (`commitExtractedScopedMemories`) takes the execution context: the source (conversation, run,
+  principal) is read from it, and the target scope must be one the run belongs to. `requireConfirmation: true`
+  stores accepted candidates as `proposed` — listed for review, never retrieved until a person confirms them.
+- **The host UI's API is the store**: `list` (with `status: "proposed"` for the review queue), `update` to edit,
+  disable or confirm (`patch: { status: "active" }`), and `delete` to forget — a hard delete, so a forgotten
+  entry cannot re-enter the next turn.
+- **Every write records its source.** `put` requires `source: { conversationId, runId?, principalId? }`, and
+  `conversationId` is required-but-nullable: a note typed into a project's settings says `null` explicitly.
+
+Migration `0037_scoped_memory` adds the table and `runs.memory_scopes`; it is additive and reversible.
+
 ## Acceptance criteria
 
 - Memory persists across a principal's conversations and is never visible to another principal
@@ -83,3 +121,7 @@ User memory enters a run through a **context provider** (docs/03), not by dumpin
 - The provider retrieves only relevant entries under budget and never crowds out recent turns.
 - A user can list/edit/delete/disable their memory; deletion cannot resurface in later prompts.
 - The inspector attributes which memory entries influenced a given turn.
+- (#285) A memory written in one conversation of a scope appears in the next conversation of the same scope,
+  and never in another scope or tenant — proven against Postgres (`postgres-scoped-memory.test.ts`).
+- (#285) Forgetting a scoped memory removes it from the next turn's context.
+- (#285) The scoped section respects a byte budget and reports its size to the context-budget accounting.

@@ -66,6 +66,18 @@ export type ExecutionContext = {
     readonly categories: readonly string[];
     readonly excluded: readonly string[];
   };
+  /**
+   * The memory scopes this run belongs to, as `kind:id` — #285, e.g. `["project:7f3c…"]`.
+   *
+   * On the context for the reason `agentToolPolicy` is: which group memory a run may read is an authorization
+   * decision, so it must travel on the one object a model cannot write to. The host names the scopes at admission
+   * (`NewRun.memoryScopes`) and the engine copies them here from the run row; the scoped memory provider and the
+   * post-turn extraction both read them from here and nowhere else. A tool argument naming a scope would let a
+   * model read another project's memory by guessing its id.
+   *
+   * Absent means no group memory — the principal's own memory only, which is every run before this existed.
+   */
+  readonly memoryScopes?: readonly string[];
 };
 
 /**

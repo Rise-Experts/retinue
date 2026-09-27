@@ -22,6 +22,8 @@ import type { BlobStore } from "../../persistence/index.js";
 import type {
   PrincipalMemoryEntry,
   PrincipalMemoryStore,
+  ScopedMemoryEntry,
+  ScopedMemoryStore,
 } from "../../principal-memory/index.js";
 import type { SqlExecutor } from "./sql.js";
 
@@ -214,6 +216,219 @@ export const createPostgresPrincipalMemoryStore = (
         [tenantId, principalId, q === undefined || q === "" ? null : q, limit],
       );
       return rows.map(toEntry);
+    },
+  };
+};
+
+type ScopedRow = {
+  tenant_id: string;
+  scope: string;
+  id: string;
+  text: string;
+  tags: unknown;
+  salience: number;
+  status: string;
+  source_conversation_id: string | null;
+  source_run_id: string | null;
+  created_by: string | null;
+  version: number;
+  created_at: string | Date;
+  updated_at: string | Date;
+  disabled_at: string | Date | null;
+};
+
+const toScopedEntry = (r: ScopedRow): ScopedMemoryEntry => ({
+  id: r.id,
+  tenantId: r.tenant_id,
+  scope: r.scope,
+  text: r.text,
+  tags: json<readonly string[]>(r.tags) ?? [],
+  salience: Number(r.salience),
+  // The column's CHECK admits only these two, which is what makes the cast honest.
+  status: r.status as ScopedMemoryEntry["status"],
+  ...(r.source_conversation_id === null ? {} : { sourceConversationId: r.source_conversation_id }),
+  ...(r.source_run_id === null ? {} : { sourceRunId: r.source_run_id }),
+  ...(r.created_by === null ? {} : { createdBy: r.created_by }),
+  version: Number(r.version),
+  createdAt: iso(r.created_at),
+  updatedAt: iso(r.updated_at),
+  ...(r.disabled_at === null ? {} : { disabledAt: iso(r.disabled_at) }),
+});
+
+const SCOPED_COLUMNS = `tenant_id, scope, id, text, tags, salience, status,
+         source_conversation_id, source_run_id, created_by, version, created_at, updated_at, disabled_at`;
+
+/**
+ * PostgreSQL `ScopedMemoryStore` — #285. Memory for a group of conversations (a project), on `scoped_memory`.
+ *
+ * The principal store's two load-bearing properties carry over, re-stated for a scope:
+ *
+ * - **Scope isolation is structural.** `(tenant_id, scope, id)` is the primary key and every statement filters on
+ *   the first two, so no method *could* read a scope it was not given. `retrieve` takes a list, and an empty list
+ *   binds an empty array that `= ANY` matches nothing against — never "all scopes".
+ * - **Only confirmed, enabled entries are retrieval candidates.** `retrieve` filters `status = 'active' AND
+ *   disabled_at IS NULL`, and the index it reads is partial on the same predicate. A proposed lesson nobody has
+ *   approved shaping a project's answers is the failure the confirmation step exists to prevent.
+ *
+ * Row-level security on this table is tenant-only (see `adapters/supabase/rls.ts`), deliberately unlike
+ * `principal_memory`: a project's memory is shared by the project's members, so a per-person predicate would hide
+ * a rule from the colleague it was written for.
+ */
+export const createPostgresScopedMemoryStore = (
+  sql: SqlExecutor,
+  options: { readonly clock?: () => string } = {},
+): ScopedMemoryStore => {
+  const clock = options.clock ?? (() => new Date().toISOString());
+
+  return {
+    async put({ tenantId, scope, id, text, tags, salience, status, source }) {
+      const now = clock();
+      // Same upsert as the principal store: version bumped and created_at kept in the statement, so two concurrent
+      // puts on one id cannot both compute version 2. The source columns take the latest write's values — the
+      // question they answer is where *this* text came from. `disabled_at` is left alone: re-teaching a lesson a
+      // person switched off must not quietly switch it back on.
+      const rows = await sql.query<ScopedRow>(
+        `INSERT INTO scoped_memory
+           (tenant_id, scope, id, text, tags, salience, status,
+            source_conversation_id, source_run_id, created_by, version, created_at, updated_at)
+         VALUES ($1, $2, COALESCE($3, 'smem-' || nextval('blob_ref_seq')), $4, $5::jsonb, $6, $7,
+                 $8, $9, $10, 1, $11::timestamptz, $11::timestamptz)
+         ON CONFLICT (tenant_id, scope, id) DO UPDATE
+            SET text                   = excluded.text,
+                tags                   = excluded.tags,
+                salience               = excluded.salience,
+                status                 = excluded.status,
+                source_conversation_id = excluded.source_conversation_id,
+                source_run_id          = excluded.source_run_id,
+                created_by             = excluded.created_by,
+                version                = scoped_memory.version + 1,
+                updated_at             = excluded.updated_at
+         RETURNING ${SCOPED_COLUMNS}`,
+        [
+          tenantId,
+          scope,
+          id ?? null,
+          text,
+          JSON.stringify(tags ?? []),
+          salience ?? 1,
+          status ?? "active",
+          source.conversationId,
+          source.runId ?? null,
+          source.principalId ?? null,
+          now,
+        ],
+      );
+      const row = rows[0];
+      if (!row) throw conflict(`Could not store memory for scope ${scope}`);
+      return toScopedEntry(row);
+    },
+
+    async get({ tenantId, scope, id }) {
+      const rows = await sql.query<ScopedRow>(
+        `SELECT ${SCOPED_COLUMNS} FROM scoped_memory WHERE tenant_id = $1 AND scope = $2 AND id = $3`,
+        [tenantId, scope, id],
+      );
+      const row = rows[0];
+      return row ? toScopedEntry(row) : null;
+    },
+
+    async list({ tenantId, scope, status, limit, cursor }) {
+      // Keyset on (created_at, id), as the principal store: a concurrent put cannot shift a page boundary.
+      const rows = await sql.query<ScopedRow>(
+        `WITH anchor AS (
+           SELECT created_at, id FROM scoped_memory
+            WHERE tenant_id = $1 AND scope = $2 AND id = $3
+         )
+         SELECT ${SCOPED_COLUMNS} FROM scoped_memory
+          WHERE tenant_id = $1 AND scope = $2
+            AND ($5::text IS NULL OR status = $5::text)
+            AND ($3::text IS NULL
+                 OR (created_at, id) > ((SELECT created_at FROM anchor), (SELECT id FROM anchor)))
+          ORDER BY created_at, id
+          LIMIT $4`,
+        [tenantId, scope, cursor ?? null, limit + 1, status ?? null],
+      );
+      const hasMore = rows.length > limit;
+      const items = (hasMore ? rows.slice(0, limit) : rows).map(toScopedEntry);
+      const last = items[items.length - 1];
+      const page: Page<ScopedMemoryEntry> = hasMore && last ? { items, nextCursor: last.id } : { items };
+      return page;
+    },
+
+    async update({ tenantId, scope, id, expectedVersion, patch }) {
+      // The principal store's statement, plus `status`. COALESCE is enough for status because the patch can only
+      // ever move it to 'active' — confirmation is one-way, so "leave it" and "set it" never need telling apart.
+      const rows = await sql.query<ScopedRow>(
+        `UPDATE scoped_memory
+            SET text        = COALESCE($5, text),
+                tags        = COALESCE($6::jsonb, tags),
+                salience    = COALESCE($7, salience),
+                status      = COALESCE($10, status),
+                disabled_at = CASE
+                                WHEN $8::boolean IS NULL THEN disabled_at
+                                WHEN $8::boolean THEN $9::timestamptz
+                                ELSE NULL
+                              END,
+                version     = version + 1,
+                updated_at  = $9::timestamptz
+          WHERE tenant_id = $1 AND scope = $2 AND id = $3 AND version = $4
+          RETURNING ${SCOPED_COLUMNS}`,
+        [
+          tenantId,
+          scope,
+          id,
+          expectedVersion,
+          patch.text ?? null,
+          patch.tags === undefined ? null : JSON.stringify(patch.tags),
+          patch.salience ?? null,
+          patch.disabled ?? null,
+          clock(),
+          patch.status ?? null,
+        ],
+      );
+      const row = rows[0];
+      if (row) return toScopedEntry(row);
+      const current = await this.get({ tenantId, scope, id });
+      if (!current) throw notFound(id);
+      throw conflict(`Memory ${id} version ${expectedVersion} is stale (current ${current.version})`);
+    },
+
+    async delete({ tenantId, scope, id }) {
+      // Hard delete: "Forget" means the text is gone, not hidden.
+      await sql.query(`DELETE FROM scoped_memory WHERE tenant_id = $1 AND scope = $2 AND id = $3`, [
+        tenantId,
+        scope,
+        id,
+      ]);
+    },
+
+    async retrieve({ tenantId, scopes, query, limit }) {
+      const unique = [...new Set(scopes)];
+      if (unique.length === 0) return [];
+      const q = query?.trim();
+      // `limit` per scope, via a window, so one prolific project cannot starve another named on the same run — and
+      // so the result matches the reference adapter's per-scope union exactly. `strpos`, not ILIKE, for the reason
+      // the principal store gives: a query of "%" must not become a wildcard.
+      const rows = await sql.query<ScopedRow>(
+        `SELECT ${SCOPED_COLUMNS} FROM (
+           SELECT *, row_number() OVER (PARTITION BY scope ORDER BY salience DESC, created_at, id) AS rank
+             FROM scoped_memory
+            WHERE tenant_id = $1
+              AND scope = ANY($2::text[])
+              AND status = 'active'
+              AND disabled_at IS NULL
+              AND ($3::text IS NULL
+                   OR strpos(lower(text), lower($3::text)) > 0
+                   OR EXISTS (
+                        SELECT 1 FROM jsonb_array_elements_text(tags) AS t(tag)
+                         WHERE strpos(lower(tag), lower($3::text)) > 0
+                      ))
+         ) ranked
+          WHERE rank <= $4
+          ORDER BY array_position($2::text[], scope), salience DESC, created_at, id`,
+        [tenantId, unique, q === undefined || q === "" ? null : q, limit],
+      );
+      return rows.map(toScopedEntry);
     },
   };
 };

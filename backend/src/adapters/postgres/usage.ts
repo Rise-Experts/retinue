@@ -40,6 +40,8 @@ type UsageRow = {
   reasoning_tokens: number | null;
   image_count: number | null;
   audio_seconds: number | null;
+  // #286. Optional on the row type: a row read before migration 0036 has no such column.
+  effort?: string | null;
   cost_minor_units: number;
   currency: string;
   occurred_at: string | Date;
@@ -65,6 +67,8 @@ const toEvent = (r: UsageRow): UsageEvent => ({
   // Null stays absent: "not counted" and "none" are different facts about a row (#185).
   ...(r.image_count === null || r.image_count === undefined ? {} : { imageCount: int(r.image_count) }),
   ...(r.audio_seconds === null || r.audio_seconds === undefined ? {} : { audioSeconds: int(r.audio_seconds) }),
+  // #286. The column's CHECK constraint admits only the three efforts, which is what makes the cast honest.
+  ...(r.effort === null || r.effort === undefined ? {} : { effort: r.effort as NonNullable<UsageEvent["effort"]> }),
   costMinorUnits: int(r.cost_minor_units),
   currency: r.currency,
   occurredAt: iso(r.occurred_at),
@@ -72,7 +76,7 @@ const toEvent = (r: UsageRow): UsageEvent => ({
 
 const USAGE_COLUMNS = `id, tenant_id, principal_id, run_id, conversation_id, step_id, tool_call_id, model_id,
          input_tokens, output_tokens, cached_input_tokens, reasoning_tokens,
-         image_count, audio_seconds,
+         image_count, audio_seconds, effort,
          cost_minor_units, currency, occurred_at`;
 
 export const createPostgresUsageStore = (sql: SqlExecutor): UsageStore => ({
@@ -84,8 +88,8 @@ export const createPostgresUsageStore = (sql: SqlExecutor): UsageStore => ({
          (tenant_id, id, dedupe_key, principal_id, run_id, conversation_id, step_id, tool_call_id, model_id,
           input_tokens, output_tokens, cached_input_tokens, reasoning_tokens,
           image_count, audio_seconds,
-          cost_minor_units, currency, occurred_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18::timestamptz)
+          cost_minor_units, currency, occurred_at, effort)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18::timestamptz, $19)
        ON CONFLICT (tenant_id, dedupe_key) DO NOTHING`,
       [
         tenantId,
@@ -106,6 +110,8 @@ export const createPostgresUsageStore = (sql: SqlExecutor): UsageStore => ({
         event.costMinorUnits,
         event.currency,
         event.occurredAt,
+        // #286. Null when no effort was applied — "the provider's default", which is a different fact from "low".
+        event.effort ?? null,
       ],
     );
   },

@@ -143,6 +143,20 @@ export type UsageUpdatedEvent = EventBase<"usage.updated"> & {
    */
   readonly imageCount?: number;
   readonly audioSeconds?: number;
+  /**
+   * The reasoning effort that reached the provider for this step — #286. Absent when none was requested, and
+   * absent when one was requested and ignored; `effortIgnored` then says why. Recorded on the usage row.
+   */
+  readonly effort?: "low" | "medium" | "high";
+  /**
+   * Why a requested effort was **not** applied — #286, "effort ignored: provider mistral has no reasoning-effort
+   * option". Present only in that case.
+   *
+   * On the event rather than only in a log because the person moved a slider and is owed an answer, and because
+   * a host pricing effort must be able to tell "ran at high" from "asked for high, ran at the default". Written as
+   * a sentence starting `effort ignored:` so a UI can show it verbatim.
+   */
+  readonly effortIgnored?: string;
   readonly currency?: string;
   /** Stable per-step id so recording is idempotent across a recovery. */
   readonly stepId?: string;

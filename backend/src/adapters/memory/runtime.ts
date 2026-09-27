@@ -55,7 +55,20 @@ export const createMemoryRunStore = (): RunStore => {
   };
 
   return {
-    async create({ tenantId, id, conversationId, agentId, agentVersion, principalId, roleIds, input, limits }: TenantScope & NewRun) {
+    async create({
+      tenantId,
+      id,
+      conversationId,
+      agentId,
+      agentVersion,
+      principalId,
+      roleIds,
+      input,
+      limits,
+      model,
+      effort,
+      memoryScopes,
+    }: TenantScope & NewRun) {
       const rows = tenant(tenantId);
       if (rows.has(id)) throw conflict(`Run ${id} already exists`);
       const run: Run = {
@@ -77,6 +90,10 @@ export const createMemoryRunStore = (): RunStore => {
         // conformance suite stops meaning anything.
         ...(principalId === undefined ? {} : { principalId }),
         ...(roleIds === undefined ? {} : { roleIds }),
+        // #286, #285 — omitted when absent, the same rule as every field above.
+        ...(model === undefined ? {} : { model }),
+        ...(effort === undefined ? {} : { effort }),
+        ...(memoryScopes === undefined ? {} : { memoryScopes: [...memoryScopes] }),
       };
       rows.set(id, run);
       return run;

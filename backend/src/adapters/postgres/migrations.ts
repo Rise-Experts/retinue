@@ -1633,6 +1633,117 @@ export const MIGRATIONS: readonly Migration[] = [
       `DROP TABLE IF EXISTS knowledge_graph_settings`,
     ],
   },
+  {
+    /**
+     * Per-run model and reasoning effort — #286.
+     *
+     * On `runs` because the choice is per run — a model picker beside a chat box — and the worker that executes a
+     * run is not the process that admitted it, so the row is the only way the choice reaches the engine. On
+     * `usage_records` because a host prices a step by the model *and* the effort it was actually served at, and
+     * `model_id` was already there.
+     *
+     * All nullable, and null is the meaning every existing row already has: "the agent's own model" and "the
+     * provider's default effort". The effort check is on the column rather than only in the engine because a
+     * misspelt effort written by some other process would otherwise be read back and quietly ignored.
+     */
+    id: "0036_run_model_and_effort",
+    up: [
+      `ALTER TABLE runs ADD COLUMN IF NOT EXISTS model text`,
+      `ALTER TABLE runs ADD COLUMN IF NOT EXISTS effort text`,
+      `ALTER TABLE usage_records ADD COLUMN IF NOT EXISTS effort text`,
+      // Guarded like 0027's: `migrate` re-runs the list against a schema provisioned before the ledger existed.
+      //
+      // Unlike 0027's, the guard is scoped to *this* table (`conrelid`), because `pg_constraint` is database-wide:
+      // matching on the name alone finds a constraint of that name in another schema and skips creating it here.
+      // That is not hypothetical — `RETINUE_DATABASE_SCHEMA` puts the platform beside other schemas, and the test
+      // suite runs one schema per case in a shared instance, which is where an unscoped guard was seen to fail.
+      `DO $$
+       BEGIN
+         IF NOT EXISTS (
+           SELECT 1 FROM pg_constraint WHERE conname = 'runs_effort_known' AND conrelid = 'runs'::regclass
+         ) THEN
+           ALTER TABLE runs ADD CONSTRAINT runs_effort_known
+             CHECK (effort IS NULL OR effort IN ('low', 'medium', 'high'));
+         END IF;
+         IF NOT EXISTS (
+           SELECT 1 FROM pg_constraint
+            WHERE conname = 'usage_records_effort_known' AND conrelid = 'usage_records'::regclass
+         ) THEN
+           ALTER TABLE usage_records ADD CONSTRAINT usage_records_effort_known
+             CHECK (effort IS NULL OR effort IN ('low', 'medium', 'high'));
+         END IF;
+       END $$`,
+    ],
+    down: [
+      `ALTER TABLE usage_records DROP CONSTRAINT IF EXISTS usage_records_effort_known`,
+      `ALTER TABLE runs DROP CONSTRAINT IF EXISTS runs_effort_known`,
+      `ALTER TABLE usage_records DROP COLUMN IF EXISTS effort`,
+      `ALTER TABLE runs DROP COLUMN IF EXISTS effort`,
+      `ALTER TABLE runs DROP COLUMN IF EXISTS model`,
+    ],
+  },
+  {
+    /**
+     * Scoped memory — #285. Memory for a group of conversations (a project), beside the per-person kind.
+     *
+     * **A table of its own, not a `scope` column on `principal_memory`.** The RLS policy there is
+     * `principal_id = app.principal_id`, which is right for a person's memory and wrong for a project's: a rule
+     * Alice's chat taught the project has to reach Bob's chat. Folding both into one table would have meant a
+     * weaker policy on the table holding everyone's personal memory, or a per-row policy switch that one mistaken
+     * NULL turns into a cross-person leak. This table gets the tenant-only policy it needs and the personal one
+     * keeps its guarantee untouched — see `adapters/supabase/rls.ts`.
+     *
+     * Same bounds as `principal_memory` (they mirror `MEMORY_LIMITS`), plus what the issue adds: `status` for
+     * entries awaiting a person's confirmation, and the source of every write (`source_conversation_id`,
+     * `source_run_id`, `created_by`). The source conversation is nullable because a note typed into a project's
+     * settings has none; the port makes the caller say so explicitly.
+     *
+     * `runs.memory_scopes` is how a run names the scopes it belongs to. jsonb, like `role_ids`' neighbours `input`
+     * and `limits`, and nullable: null is "no group memory", which every existing run means.
+     */
+    id: "0037_scoped_memory",
+    up: [
+      `CREATE TABLE IF NOT EXISTS scoped_memory (
+        tenant_id              text        NOT NULL,
+        scope                  text        NOT NULL,
+        id                     text        NOT NULL,
+        text                   text        NOT NULL,
+        tags                   jsonb       NOT NULL DEFAULT '[]'::jsonb,
+        salience               integer     NOT NULL,
+        status                 text        NOT NULL DEFAULT 'active',
+        source_conversation_id text,
+        source_run_id          text,
+        created_by             text,
+        version                integer     NOT NULL,
+        created_at             timestamptz NOT NULL,
+        updated_at             timestamptz NOT NULL,
+        disabled_at            timestamptz,
+        -- Scope-leading after the tenant, so a query that names no scope cannot use the key at all.
+        PRIMARY KEY (tenant_id, scope, id),
+        CONSTRAINT scoped_memory_version_positive CHECK (version > 0),
+        CONSTRAINT scoped_memory_status_known CHECK (status IN ('active', 'proposed')),
+        CONSTRAINT scoped_memory_tags_is_array CHECK (jsonb_typeof(tags) = 'array'),
+        -- Mirrors MEMORY_LIMITS, as principal_memory's constraints do.
+        CONSTRAINT scoped_memory_text_bounds CHECK (length(text) BETWEEN 1 AND 1000),
+        CONSTRAINT scoped_memory_tag_count CHECK (jsonb_array_length(tags) <= 8),
+        -- kind:id, the shape parseMemoryScope enforces, so a row written around the port is still well formed.
+        CONSTRAINT scoped_memory_scope_shape CHECK (scope ~ '^[a-z][a-z0-9_-]{0,31}:[^[:space:]]{1,200}$')
+      )`,
+      // list() pages by (created_at, id) within a scope.
+      `CREATE INDEX IF NOT EXISTS scoped_memory_list_idx
+        ON scoped_memory (tenant_id, scope, created_at, id)`,
+      // retrieve() reads confirmed, enabled entries, most salient first. Partial on both, so neither a proposed nor
+      // a disabled entry can be returned by the index it reads.
+      `CREATE INDEX IF NOT EXISTS scoped_memory_retrieve_idx
+        ON scoped_memory (tenant_id, scope, salience DESC)
+        WHERE disabled_at IS NULL AND status = 'active'`,
+      `ALTER TABLE runs ADD COLUMN IF NOT EXISTS memory_scopes jsonb`,
+    ],
+    down: [
+      `ALTER TABLE runs DROP COLUMN IF EXISTS memory_scopes`,
+      `DROP TABLE IF EXISTS scoped_memory`,
+    ],
+  },
 ];
 
 /**

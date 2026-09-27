@@ -43,6 +43,7 @@ import {
   createMemoryMcpConnectionStore,
   createMemoryMessageStore,
   createMemoryPrincipalMemoryStore,
+  createMemoryScopedMemoryStore,
   createMemoryRunEventLog,
   createMemoryRunStore,
   createMemorySkillStore,
@@ -83,6 +84,7 @@ import {
   mcpConnectionStoreConformance,
   messageStoreConformance,
   principalMemoryStoreConformance,
+  scopedMemoryStoreConformance,
   runEventLogConformance,
   runStoreConformance,
   sessionStateStoreConformance,
@@ -199,6 +201,7 @@ flowDefinitionStoreConformance(() => createMemoryFlowDefinitionStore());
 flowExecutionStoreConformance(() => createMemoryFlowExecutionStore());
 idempotencyStoreConformance(() => createMemoryIdempotencyStore());
 principalMemoryStoreConformance(() => createMemoryPrincipalMemoryStore());
+scopedMemoryStoreConformance(() => createMemoryScopedMemoryStore());
 
 mcpConnectionStoreConformance(
   () => createMemoryMcpConnectionStore({ allowedSchemes: ["https"] }),

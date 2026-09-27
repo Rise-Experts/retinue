@@ -165,6 +165,13 @@ const SEEDS: Readonly<Record<string, (tenant: string, principal: string) => stri
     `INSERT INTO principal_memory
        (tenant_id, principal_id, id, text, tags, salience, version, created_at, updated_at)
      VALUES ('${t}', '${p}', '${t}-mem1', 'remembered', '[]'::jsonb, 1, 1, now(), now())`,
+  // #285. Written by P1 — and the policy must still let P2 in the same tenant read it (see the case below).
+  scoped_memory: (t, p) =>
+    `INSERT INTO scoped_memory
+       (tenant_id, scope, id, text, tags, salience, status, source_conversation_id, created_by, version,
+        created_at, updated_at)
+     VALUES ('${t}', 'project:${t}-p1', '${t}-smem1', 'never say revolutionary', '[]'::jsonb, 1, 'active',
+             '${t}-c1', '${p}', 1, now(), now())`,
   blobs: (t) => `INSERT INTO blobs (tenant_id, ref, value) VALUES ('${t}', '${t}-blob1', '{}'::jsonb)`,
   artifacts: (t) =>
     `INSERT INTO artifacts (tenant_id, id, conversation_id, kind, name, latest_version, created_at, updated_at)
@@ -300,11 +307,11 @@ describe("policy coverage is derived from MIGRATIONS, not transcribed", () => {
       expect(RLS_STATEMENTS).toContain(`ALTER TABLE ${table} ENABLE ROW LEVEL SECURITY`);
       expect(RLS_STATEMENTS).toContain(`ALTER TABLE ${table} FORCE ROW LEVEL SECURITY`);
     }
-    // 37 tables as of #272 (`knowledge_graph_communities`); 36 at #271 (the other five `knowledge_graph_*`
+    // 38 tables as of #285 (`scoped_memory`); 37 at #272 (`knowledge_graph_communities`); 36 at #271 (the other five `knowledge_graph_*`
     // tables); 31 at #261 (`connections`); 30 before that, from #187's flow tables. The count is asserted so a table silently dropping out is visible.
     // Updating this number is meant to be a moment of thought: it is the one place that notices a policy list
     // shrinking, which no per-table test can see.
-    expect(TENANT_SCOPED_TABLES).toHaveLength(37);
+    expect(TENANT_SCOPED_TABLES).toHaveLength(38);
 
     // #135. `knowledge_chunks` lives behind the optional pgvector migration, so its policies are a separate
     // list applied by whoever ran that migration -- `ALTER TABLE ... ENABLE ROW LEVEL SECURITY` on an absent
@@ -392,6 +399,29 @@ describe("principal_memory is scoped to the principal as well as the tenant", ()
     const rows = await ctx.sql.query<{ n: string | number }>(`SELECT count(*) AS n FROM principal_memory`);
     expect(Number(rows[0]?.n)).toBe(0);
     await ctx.db.exec(`RESET ROLE;`);
+  });
+});
+
+// ------------------------------------------------------------------- scoped memory is shared (#285)
+
+describe("scoped_memory is shared within the tenant, not per principal", () => {
+  /**
+   * The deliberate difference from `principal_memory`. A project's lesson written from P1's chat must reach P2's
+   * chat in the same project, so the policy is tenant-only; were someone to "harden" it with the principal
+   * predicate, project memory would silently become personal memory and this is the case that says so.
+   */
+  it("lets another principal of the same tenant read it, and no other tenant", async () => {
+    const ctx = await prepared();
+    expect(await readAs(ctx, "scoped_memory", T1, P1)).toBe(1);
+    expect(await readAs(ctx, "scoped_memory", T1, P2)).toBe(1);
+    // From T2 the one visible row is T2's own, never T1's — asserted by tenant, not only by count.
+    await ctx.db.exec(`RESET ROLE;`);
+    await setTenantContext(ctx.sql, T2);
+    await setPrincipalContext(ctx.sql, P1);
+    await ctx.db.exec(`SET ROLE app_user;`);
+    const rows = await ctx.sql.query<{ tenant_id: string }>(`SELECT tenant_id FROM scoped_memory`);
+    await ctx.db.exec(`RESET ROLE;`);
+    expect(rows.map((r) => r.tenant_id)).toEqual([T2]);
   });
 });
 

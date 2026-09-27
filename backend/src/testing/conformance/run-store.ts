@@ -73,6 +73,40 @@ export function runStoreConformance(makeStore: () => RunStore): void {
       expect(found?.roleIds).toBeUndefined();
     });
 
+    /**
+     * The per-run model, effort and memory scopes survive the round trip — #286, #285.
+     *
+     * The worker that executes a run is not the process that admitted it, so anything the host decided at
+     * admission reaches the engine only through this row. An adapter that dropped `model` would serve the
+     * agent's default model while the person's picker said otherwise — silently, which is the one outcome #286
+     * forbids — and one that dropped `memoryScopes` would run a project chat without the project's memory.
+     */
+    it("records the model, effort and memory scopes a run was admitted with", async () => {
+      const store = makeStore();
+      await store.create({
+        tenantId: T1,
+        id: run("r-choice"),
+        conversationId: CONVO,
+        agentId: AGENT,
+        agentVersion: 1,
+        model: "claude-opus-5",
+        effort: "high",
+        memoryScopes: ["project:p-1", "team:t-9"],
+      });
+      const found = await store.findById({ tenantId: T1, id: run("r-choice") });
+      expect(found?.model).toBe("claude-opus-5");
+      expect(found?.effort).toBe("high");
+      // Order preserved: the provider renders scopes in the order the host named them.
+      expect(found?.memoryScopes).toEqual(["project:p-1", "team:t-9"]);
+
+      // And absent stays absent, so a run that asked for nothing is indistinguishable from one written before.
+      await seed(store, "r-default");
+      const plain = await store.findById({ tenantId: T1, id: run("r-default") });
+      expect(plain?.model).toBeUndefined();
+      expect(plain?.effort).toBeUndefined();
+      expect(plain?.memoryScopes).toBeUndefined();
+    });
+
     it("creates a run that belongs to no conversation", async () => {
       /**
        * The whole point of #198. A triggered automation — a webhook, a schedule, a flow step — has no

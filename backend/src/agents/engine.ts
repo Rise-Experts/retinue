@@ -35,7 +35,15 @@ import type {
   TurnMessage,
 } from "../models/index.js";
 import { applyInputGuardrails, applyOutputGuardrails, type Guardrail, type GuardrailRecord } from "../guardrails/index.js";
-import { streamModelTurn, turnText } from "../models/index.js";
+import {
+  isReasoningEffort,
+  mapReasoningEffort,
+  providerOfModel,
+  streamModelTurn,
+  turnText,
+  validateRunModel,
+  type EffortMapping,
+} from "../models/index.js";
 import {
   decideRetry,
   deriveRunMessageId,
@@ -83,6 +91,22 @@ export type ResolvedModelInfo = {
   readonly definition?: ModelDefinition;
 };
 
+/**
+ * The models a run may name, and how to build one — #286.
+ *
+ * Two functions rather than a list, because both halves are the host's and both can depend on the tenant: which
+ * models a workspace may pick is a plan decision, and building one may need that workspace's own key (BYO). Given
+ * the context, so neither has to be answered for the whole deployment at once.
+ *
+ * `models` is the catalogue a run's `model` is validated against, with `validateRunModel`; `resolve` is only ever
+ * handed a definition that passed. A host can therefore not be asked to build a model it did not list — the
+ * refusal happens before `resolve` is reached, with the reason the person will see.
+ */
+export type RunModelCatalogue = {
+  models(context: ExecutionContext): readonly ModelDefinition[] | Promise<readonly ModelDefinition[]>;
+  resolve(definition: ModelDefinition, context: ExecutionContext): ResolvedModelInfo | Promise<ResolvedModelInfo>;
+};
+
 export type DefaultEngineDeps = {
   /** Load the manifest the run executes (by agent id + version), so history is never rewritten. */
   loadManifest: (input: { agentId: string; version: number; context: ExecutionContext }) => Promise<AgentManifest>;
@@ -110,6 +134,15 @@ export type DefaultEngineDeps = {
     manifest: AgentManifest,
     context: ExecutionContext,
   ) => ResolvedModelInfo | Promise<ResolvedModelInfo>;
+  /**
+   * Where a run that names its own model is resolved — #286.
+   *
+   * **Optional, and its absence is a refusal, not a fallback.** A run carrying `model` on an engine with no
+   * catalogue fails with a reason saying so, rather than quietly running on `resolveModel`'s choice: the person
+   * picked a model, and serving them another one while the picker still shows theirs is the silent substitution
+   * #286 exists to rule out. A run with no `model` never consults this, so every existing host is unaffected.
+   */
+  readonly runModels?: RunModelCatalogue;
   /** Conversation history as neutral turn messages, oldest first. */
   loadHistory: (context: ExecutionContext, run: Run) => Promise<readonly TurnMessage[]>;
   /** The tools the model may call this turn (already permission-filtered / guarded on execute). */
@@ -275,6 +308,38 @@ export const createDefaultEngine = (deps: DefaultEngineDeps): AgentEngine => {
   const now = deps.now ?? Date.now;
   const streamTurn = deps.streamTurn ?? streamModelTurn;
 
+  /**
+   * A run's own model choice, validated and built — #286.
+   *
+   * Validated **here**, at execution, even when the host already validated at admission: the catalogue is the
+   * host's and can change between the click and the turn (a model withdrawn from a plan, a key revoked), and the
+   * run row is data another process wrote. Refusal is a failed run with the reason — never `resolveModel`'s
+   * choice in its place.
+   */
+  const resolveRunModel = async (run: Run, manifest: AgentManifest, context: ExecutionContext): Promise<ResolvedModelInfo> => {
+    const refuse = (reason: string): never => {
+      throw new AgentPlatformError({
+        code: "invalid_input",
+        message:
+          `run ${run.id} asked for model ${JSON.stringify(run.model)}, which is refused: ${reason}. ` +
+          "The run is not served by another model in its place.",
+        retryable: false,
+        details: { model: run.model ?? null },
+      });
+    };
+    if (deps.runModels === undefined)
+      return refuse("this runtime has no run-model catalogue (`runModels`), so a run cannot choose its model");
+    const { role: _role, ...policy } = manifest.modelPolicy;
+    void _role;
+    const verdict = validateRunModel({
+      modelId: run.model ?? "",
+      catalogue: await deps.runModels.models(context),
+      policy,
+    });
+    if (!verdict.ok) return refuse(verdict.reason);
+    return deps.runModels.resolve(verdict.definition, context);
+  };
+
   return {
     async *run({ run, context: hostContext, signal }: EngineRunInput): AsyncIterable<EngineEvent> {
       const manifest = await deps.loadManifest({
@@ -294,8 +359,41 @@ export const createDefaultEngine = (deps: DefaultEngineDeps): AgentEngine => {
        * is overridden by the manifest's: the manifest is what the run's `agentVersion` pins, so a stored
        * definition — not the caller — decides what this agent may reach.
        */
-      const context: ExecutionContext = { ...hostContext, agentToolPolicy: manifest.toolPolicy };
-      const resolved = await deps.resolveModel(manifest, context);
+      const context: ExecutionContext = {
+        ...hostContext,
+        agentToolPolicy: manifest.toolPolicy,
+        /**
+         * The run's memory scopes, onto the context — #285.
+         *
+         * From the run row, which the host wrote at admission, so the scoped memory provider sees them without every
+         * host's `buildContext` having to remember to copy a field. The row wins over the host context when both say
+         * something: the row is what was admitted, and the context is rebuilt from it by code that may predate it.
+         */
+        ...(run.memoryScopes === undefined ? {} : { memoryScopes: run.memoryScopes }),
+      };
+      const resolved = run.model === undefined ? await deps.resolveModel(manifest, context) : await resolveRunModel(run, manifest, context);
+      /**
+       * The run's reasoning effort, mapped for the provider that will actually serve it — #286.
+       *
+       * Mapped *after* resolution, because the provider is not known before it: the same "high" becomes a thinking
+       * budget on Anthropic and `reasoningEffort` on OpenAI. A value outside the three is refused rather than
+       * dropped — a stored row with a misspelt effort is a bug in whoever wrote it, and ignoring it would make the
+       * slider look broken for a reason nobody can find.
+       */
+      if (run.effort !== undefined && !isReasoningEffort(run.effort))
+        throw new AgentPlatformError({
+          code: "invalid_input",
+          message: `run ${run.id} asked for effort ${JSON.stringify(run.effort)}; the efforts are low, medium and high.`,
+          retryable: false,
+        });
+      const effort: EffortMapping | undefined =
+        run.effort === undefined
+          ? undefined
+          : mapReasoningEffort({
+              effort: run.effort,
+              provider: providerOfModel(resolved.model, resolved.definition),
+              ...(resolved.definition === undefined ? {} : { definition: resolved.definition }),
+            });
       /**
        * A structured agent needs a model that can do it — task #243 AC-3.
        *
@@ -689,6 +787,8 @@ export const createDefaultEngine = (deps: DefaultEngineDeps): AgentEngine => {
             ...(resolved.definition?.capabilities?.promptCaching === undefined
               ? {}
               : { promptCaching: resolved.definition.capabilities.promptCaching }),
+            // #286. Only when the effort maps; an ignored one sends nothing and says so on the usage event instead.
+            ...(effort?.applied === true ? { providerOptions: effort.providerOptions } : {}),
             tools,
             maxSteps,
             abortSignal: controller.signal,
@@ -700,7 +800,7 @@ export const createDefaultEngine = (deps: DefaultEngineDeps): AgentEngine => {
               controller.abort();
               return;
             }
-            for (const event of mapChunk(chunk, messageId, resolved, textParts, ranByCall)) {
+            for (const event of mapChunk(chunk, messageId, resolved, textParts, ranByCall, effort)) {
               emitted += 1;
               if (event.type === "part.added" && event.part.type === "structured") sawStructured = true;
               yield event;
@@ -900,6 +1000,8 @@ function* mapChunk(
   textParts: Map<string, { partId: MessagePartId; text: string }>,
   /** What each call resolved to, when it was not what the model named — task #210. */
   ranByCall: Map<string, string> = new Map(),
+  /** What became of the run's requested effort — #286. */
+  effort?: EffortMapping,
 ): Generator<EngineEvent> {
   switch (chunk.type) {
     case "text-delta": {
@@ -967,6 +1069,8 @@ function* mapChunk(
         ...(chunk.usage.imageCount !== undefined ? { imageCount: chunk.usage.imageCount } : {}),
         ...(chunk.usage.audioSeconds !== undefined ? { audioSeconds: chunk.usage.audioSeconds } : {}),
         modelId: resolved.modelId,
+        // #286. The effort that reached the provider, or why a requested one did not — exactly one, never both.
+        ...(effort === undefined ? {} : effort.applied ? { effort: effort.effort } : { effortIgnored: effort.ignored }),
         currency: resolved.currency ?? "USD",
         costMinorUnits: resolved.price ? resolved.price(chunk.usage) : 0,
       };

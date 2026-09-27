@@ -97,6 +97,16 @@ export const TENANT_SCOPED_TABLES: readonly RlsTable[] = [
    */
   { table: "connections" },
   { table: "principal_memory", extraPredicate: PRINCIPAL_PREDICATE },
+  /**
+   * #285. Tenant-scoped only — the opposite answer to the line above, on purpose.
+   *
+   * A project's memory is shared by the project's members: a rule one person's chat taught it must reach the next
+   * person's chat. `PRINCIPAL_PREDICATE` here would hide every lesson from everyone but its author, which is the
+   * per-person memory next door under another name. Which *scopes* a run may read is decided by the host when it
+   * names them on the run, the same way it decides which conversations a person may open; the database's job is
+   * the boundary no host can get wrong, and that is the tenant.
+   */
+  { table: "scoped_memory" },
   // `blobs`, not the SPEC's `blob_refs`: BlobStore stores the value, and the metadata-and-pointer
   // design belongs to FileMetadataStore (#129) / ArtifactStore (#133).
   { table: "blobs" },

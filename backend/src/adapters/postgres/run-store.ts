@@ -37,6 +37,10 @@ type Row = {
   cancel_requested_at: string | Date | null;
   principal_id: string | null;
   role_ids: readonly string[] | null;
+  // #286 and #285. Optional on the row type because a row read before migration 0036 has no such columns.
+  model?: string | null;
+  effort?: string | null;
+  memory_scopes?: unknown;
 };
 
 const iso = (v: string | Date): string => (v instanceof Date ? v.toISOString() : new Date(v).toISOString());
@@ -71,6 +75,17 @@ const toRun = (r: Row): Run => ({
   // different facts — one is a caller with no roles, the other is a run nobody can attribute.
   ...(r.principal_id === null || r.principal_id === undefined ? {} : { principalId: r.principal_id as PrincipalId }),
   ...(r.role_ids === null || r.role_ids === undefined ? {} : { roleIds: r.role_ids }),
+  // #286. The column's CHECK constraint is what makes the cast honest: nothing but the three efforts can be stored.
+  ...(r.model === null || r.model === undefined ? {} : { model: r.model }),
+  ...(r.effort === null || r.effort === undefined ? {} : { effort: r.effort as NonNullable<Run["effort"]> }),
+  // #285.
+  ...(r.memory_scopes === null || r.memory_scopes === undefined
+    ? {}
+    : {
+        memoryScopes: (typeof r.memory_scopes === "string"
+          ? JSON.parse(r.memory_scopes)
+          : r.memory_scopes) as readonly string[],
+      }),
 });
 
 const conflict = (m: string) => new AgentPlatformError({ code: "conflict", message: m, retryable: false });
@@ -88,11 +103,24 @@ export const createPostgresRunStore = (sql: SqlExecutor): RunStore => {
   };
 
   return {
-    async create({ tenantId, id, conversationId, agentId, agentVersion, principalId, roleIds, input, limits }) {
+    async create({
+      tenantId,
+      id,
+      conversationId,
+      agentId,
+      agentVersion,
+      principalId,
+      roleIds,
+      input,
+      limits,
+      model,
+      effort,
+      memoryScopes,
+    }) {
       const rows = await sql.query<Row>(
         `INSERT INTO runs (tenant_id, id, conversation_id, agent_id, agent_version, status, created_at,
-                           principal_id, role_ids, input, limits)
-         VALUES ($1, $2, $3, $4, $5, 'queued', now(), $6, $7, $8::jsonb, $9::jsonb)
+                           principal_id, role_ids, input, limits, model, effort, memory_scopes)
+         VALUES ($1, $2, $3, $4, $5, 'queued', now(), $6, $7, $8::jsonb, $9::jsonb, $10, $11, $12::jsonb)
          ON CONFLICT (tenant_id, id) DO NOTHING
          RETURNING *`,
         // `?? null` on the conversation since #198: absent means the run belongs to none, and a
@@ -109,6 +137,10 @@ export const createPostgresRunStore = (sql: SqlExecutor): RunStore => {
           roleIds ?? null,
           input === undefined ? null : JSON.stringify(input),
           limits === undefined ? null : JSON.stringify(limits),
+          // #286, #285. Null for absent, so a run that asked for nothing reads back exactly as before.
+          model ?? null,
+          effort ?? null,
+          memoryScopes === undefined ? null : JSON.stringify(memoryScopes),
         ],
       );
       const row = rows[0];

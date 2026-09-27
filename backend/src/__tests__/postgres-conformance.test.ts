@@ -49,6 +49,7 @@ import { createPostgresConnectionStore,
   createPostgresSkillStore,
   createPostgresMcpConnectionStore,
   createPostgresPrincipalMemoryStore,
+  createPostgresScopedMemoryStore,
   createPostgresBlobStore,
   createPoolOpener,
   createSingleConnectionOpener,
@@ -104,6 +105,7 @@ import {
   idempotencyStoreConformance,
   mcpConnectionStoreConformance,
   principalMemoryStoreConformance,
+  scopedMemoryStoreConformance,
   skillStoreConformance,
 } from "../testing/conformance/records.js";
 
@@ -460,6 +462,7 @@ mcpConnectionStoreConformance(
 
 // The last two ports, #102. Neither references a run or a conversation, so no seeders.
 principalMemoryStoreConformance(() => createPostgresPrincipalMemoryStore(freshExecutor()));
+scopedMemoryStoreConformance(() => createPostgresScopedMemoryStore(freshExecutor()));
 blobStoreConformance(() => createPostgresBlobStore(freshExecutor()));
 
 // #129. `files` has a foreign key to `conversations`, so this one takes the fixture shape: the harness's
@@ -644,6 +647,7 @@ describe("postgres adapter coverage", () => {
       "SkillStore",
       "McpConnectionStore",
       "PrincipalMemoryStore",
+      "ScopedMemoryStore",
       "BlobStore",
       "FileMetadataStore",
       "ArtifactStore",

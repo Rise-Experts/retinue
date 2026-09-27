@@ -76,6 +76,8 @@ export const REGISTERED_PORTS: readonly PortCoverage[] = [
   { port: "RunEventLog", harness: "runEventLogConformance" },
   { port: "IdempotencyStore", harness: "idempotencyStoreConformance" },
   { port: "PrincipalMemoryStore", harness: "principalMemoryStoreConformance" },
+  /** #285. Memory for a group of conversations; isolated by tenant *and* scope. */
+  { port: "ScopedMemoryStore", harness: "scopedMemoryStoreConformance" },
   { port: "McpConnectionStore", harness: "mcpConnectionStoreConformance" },
   { port: "FileMetadataStore", harness: "fileMetadataStoreConformance" },
   { port: "FileContentStore", harness: "fileContentStoreConformance" },
@@ -286,6 +288,7 @@ export const ADAPTER_COVERAGE: readonly AdapterCoverage[] = [
       "SkillStore",
       "McpConnectionStore",
       "PrincipalMemoryStore",
+      "ScopedMemoryStore",
       "BlobStore",
       "FileMetadataStore",
       "ArtifactStore",
