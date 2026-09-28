@@ -32,6 +32,16 @@
 
   **Additive.** `await` on a non-promise yields the value, so every existing synchronous resolver keeps working with no change — asserted by a test rather than assumed. A rejecting resolver propagates with its message intact rather than falling back to another model, which is the silent-fallback failure this exists to end.
 
+## agentkit 0.3.4
+
+### Added
+
+- **memory**: scoped memory — what a group of conversations has learned, not only one person ([#285](https://github.com/Rise-Experts/retinue/issues/285)). A host names the scopes per run (`NewRun.memoryScopes`, e.g. `project:<uuid>`); `createScopedMemoryProvider` gives the turn a bounded "what this project has learned" section per scope; `commitExtractedScopedMemories` writes with the run's conversation, run and person as the source, refuses a scope the run was not given, and can store entries as `proposed` until confirmed. A new `scoped_memory` table (migration `0037`) rather than a column on `principal_memory`, because a project's memory must reach every member and that table's policy is per person. In-memory, Postgres and Supabase adapters, with a tenant-only RLS policy.
+
+- **agents**: a model and a reasoning effort per run ([#286](https://github.com/Rise-Experts/retinue/issues/286)). `run.model` must be in the host's catalogue (`runModels`) — an unknown, retired or ineligible model is refused with a reason, never replaced. `run.effort` (`low | medium | high`) is mapped per provider by `mapReasoningEffort`: Anthropic and Google thinking budgets, OpenAI and Azure `reasoningEffort`; a provider without the concept reports "effort ignored". Usage records carry the effort only when it was applied. Migration `0036` adds `runs.model`, `runs.effort` and `usage_records.effort`.
+
+  A patch rather than a minor, for 0.3.1's reason: both are additive — a run that names no model, effort or scope behaves exactly as before — and a `0.4.0` would fall outside the `^0.3.0` the toolkits declare.
+
 ## Unreleased
 
 ### Changed — BREAKING
