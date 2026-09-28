@@ -8,6 +8,7 @@
 import type { ExecutionContext } from "../core/context.js";
 import type { ConversationId, PrincipalId, RunId } from "../core/ids.js";
 import type { ModelPricing } from "../models/index.js";
+import type { ReasoningEffort } from "../models/effort.js";
 
 export type UsageEvent = {
   readonly id: string;
@@ -51,6 +52,16 @@ export type UsageEvent = {
    */
   readonly imageCount?: number;
   readonly audioSeconds?: number;
+  /**
+   * The reasoning effort this step actually ran at — #286.
+   *
+   * *Actually*, not *requested*: a run that asked for `high` on a provider with no such concept ran at the
+   * provider's default, and recording `high` would let a host price a step at a rate it was never served. So this
+   * is present only when the effort reached the provider, and a requested-but-ignored effort is visible on the
+   * run's `usage.updated` event instead (`effortIgnored`). `modelId` beside it is likewise the model that served
+   * the step, which is what makes two runs of one conversation on two models priceable separately.
+   */
+  readonly effort?: ReasoningEffort;
   /** Integer minor units in the tenant's accounting currency. */
   readonly costMinorUnits: number;
   readonly currency: string;

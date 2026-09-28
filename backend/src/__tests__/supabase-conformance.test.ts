@@ -62,6 +62,7 @@ import {
   idempotencyStoreConformance,
   mcpConnectionStoreConformance,
   principalMemoryStoreConformance,
+  scopedMemoryStoreConformance,
   skillStoreConformance,
 } from "../testing/conformance/records.js";
 import {
@@ -283,6 +284,7 @@ mcpConnectionStoreConformance(
 );
 
 principalMemoryStoreConformance(() => supabase.createSupabasePrincipalMemoryStore(freshExecutor()));
+scopedMemoryStoreConformance(() => supabase.createSupabaseScopedMemoryStore(freshExecutor()));
 blobStoreConformance(() => supabase.createSupabaseBlobStore(freshExecutor()));
 
 // #129. Runs the harness through the Supabase entrypoint even though the alias assertion below proves it
@@ -436,6 +438,7 @@ const ALIASES: readonly (readonly [keyof typeof supabase, keyof typeof postgres]
   ["createSupabaseSkillStore", "createPostgresSkillStore"],
   ["createSupabaseMcpConnectionStore", "createPostgresMcpConnectionStore"],
   ["createSupabasePrincipalMemoryStore", "createPostgresPrincipalMemoryStore"],
+  ["createSupabaseScopedMemoryStore", "createPostgresScopedMemoryStore"],
   ["createSupabaseBlobStore", "createPostgresBlobStore"],
   ["createSupabaseFileMetadataStore", "createPostgresFileMetadataStore"],
   ["createSupabaseArtifactStore", "createPostgresArtifactStore"],

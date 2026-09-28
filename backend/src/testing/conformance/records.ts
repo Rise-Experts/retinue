@@ -23,7 +23,7 @@ import type {
   SkillStore,
 } from "../../persistence/index.js";
 import { deriveIdempotencyKey, type IdempotencyStore } from "../../idempotency/index.js";
-import type { PrincipalMemoryStore } from "../../principal-memory/index.js";
+import type { PrincipalMemoryStore, ScopedMemoryStore } from "../../principal-memory/index.js";
 import type { McpConnectionStore } from "../../mcp/provider.js";
 import type { ConversationId } from "../../core/ids.js";
 
@@ -431,6 +431,131 @@ export function principalMemoryStoreConformance(makeStore: () => PrincipalMemory
       const top = await store.retrieve({ tenantId: T1, principalId: P1, limit: 1 });
       expect(top).toHaveLength(1);
       expect(top[0]?.text).toBe("high");
+    });
+  });
+}
+
+/**
+ * `ScopedMemoryStore` — #285. Memory for a group of conversations, isolated by tenant **and** scope.
+ *
+ * The cross-*scope* case inside one tenant is the one worth the most here, for the reason the principal harness
+ * gives about colleagues: a tenant runs many projects, and a lesson one project learned leaking into another's
+ * chats is a leak between customers of that tenant. The confirmation and source cases are the two things this
+ * port adds over the principal one, so an adapter that dropped either would otherwise pass everything.
+ */
+export function scopedMemoryStoreConformance(makeStore: () => ScopedMemoryStore): void {
+  const S1 = "project:conf-1";
+  const S2 = "project:conf-2";
+  const src = { conversationId: C1, runId: RUN, principalId: P1 };
+
+  describe("ScopedMemoryStore conformance", () => {
+    it("stores an entry with its source and reads it back within its scope", async () => {
+      const store = makeStore();
+      const entry = await store.put({ tenantId: T1, scope: S1, text: "never say revolutionary", source: src });
+      const read = await store.get({ tenantId: T1, scope: S1, id: entry.id });
+      expect(read).toMatchObject({
+        text: "never say revolutionary",
+        scope: S1,
+        status: "active",
+        version: 1,
+        sourceConversationId: C1,
+        sourceRunId: RUN,
+        createdBy: P1,
+      });
+    });
+
+    it("records an explicit no-conversation source as absent, not invented", async () => {
+      const store = makeStore();
+      const entry = await store.put({ tenantId: T1, scope: S1, text: "typed in settings", source: { conversationId: null } });
+      const read = await store.get({ tenantId: T1, scope: S1, id: entry.id });
+      expect(read?.sourceConversationId).toBeUndefined();
+      expect(read?.createdBy).toBeUndefined();
+    });
+
+    it("never reaches another scope's memory inside the same tenant", async () => {
+      const store = makeStore();
+      const entry = await store.put({ tenantId: T1, scope: S1, text: "private to project 1", source: src });
+      expect(await store.get({ tenantId: T1, scope: S2, id: entry.id })).toBeNull();
+      expect((await store.list({ tenantId: T1, scope: S2, limit: 10 })).items).toHaveLength(0);
+      expect(await store.retrieve({ tenantId: T1, scopes: [S2], limit: 10 })).toHaveLength(0);
+    });
+
+    it("never reaches another tenant's memory in a scope of the same name", async () => {
+      const store = makeStore();
+      const entry = await store.put({ tenantId: T1, scope: S1, text: "private to T1", source: src });
+      expect(await store.get({ tenantId: T2, scope: S1, id: entry.id })).toBeNull();
+      expect(await store.retrieve({ tenantId: T2, scopes: [S1], limit: 10 })).toHaveLength(0);
+    });
+
+    it("retrieves nothing for an empty scope list — never every scope", async () => {
+      const store = makeStore();
+      await store.put({ tenantId: T1, scope: S1, text: "a lesson", source: src });
+      expect(await store.retrieve({ tenantId: T1, scopes: [], limit: 10 })).toHaveLength(0);
+    });
+
+    it("retrieves across the named scopes, most salient first within each, capped per scope", async () => {
+      const store = makeStore();
+      await store.put({ tenantId: T1, scope: S1, text: "s1 low", salience: 1, source: src });
+      await store.put({ tenantId: T1, scope: S1, text: "s1 high", salience: 9, source: src });
+      await store.put({ tenantId: T1, scope: S2, text: "s2 only", salience: 5, source: src });
+      const got = await store.retrieve({ tenantId: T1, scopes: [S1, S2], limit: 1 });
+      expect(got.map((e) => e.text)).toEqual(["s1 high", "s2 only"]);
+    });
+
+    it("rejects a stale update with a conflict", async () => {
+      const store = makeStore();
+      const entry = await store.put({ tenantId: T1, scope: S1, text: "v1", source: src });
+      await store.update({ tenantId: T1, scope: S1, id: entry.id, expectedVersion: 1, patch: { text: "v2" } });
+      await expect(
+        store.update({ tenantId: T1, scope: S1, id: entry.id, expectedVersion: 1, patch: { text: "v3" } }),
+      ).rejects.toMatchObject({ code: "conflict" });
+    });
+
+    it("forget is a hard delete: gone from get, list and retrieve", async () => {
+      const store = makeStore();
+      const entry = await store.put({ tenantId: T1, scope: S1, text: "forget me", source: src });
+      await store.delete({ tenantId: T1, scope: S1, id: entry.id });
+      expect(await store.get({ tenantId: T1, scope: S1, id: entry.id })).toBeNull();
+      expect((await store.list({ tenantId: T1, scope: S1, limit: 10 })).items).toHaveLength(0);
+      expect(await store.retrieve({ tenantId: T1, scopes: [S1], limit: 10 })).toHaveLength(0);
+    });
+
+    it("a disabled entry is never retrieved, but is still listed", async () => {
+      const store = makeStore();
+      const entry = await store.put({ tenantId: T1, scope: S1, text: "switched off", source: src });
+      await store.update({ tenantId: T1, scope: S1, id: entry.id, expectedVersion: 1, patch: { disabled: true } });
+      expect(await store.retrieve({ tenantId: T1, scopes: [S1], limit: 10 })).toHaveLength(0);
+      expect((await store.list({ tenantId: T1, scope: S1, limit: 10 })).items).toHaveLength(1);
+    });
+
+    it("a proposed entry waits: listed for review, never retrieved until confirmed", async () => {
+      const store = makeStore();
+      const entry = await store.put({ tenantId: T1, scope: S1, text: "awaiting review", status: "proposed", source: src });
+      await store.put({ tenantId: T1, scope: S1, text: "already agreed", source: src });
+      expect((await store.retrieve({ tenantId: T1, scopes: [S1], limit: 10 })).map((e) => e.text)).toEqual(["already agreed"]);
+      expect((await store.list({ tenantId: T1, scope: S1, status: "proposed", limit: 10 })).items.map((e) => e.text)).toEqual([
+        "awaiting review",
+      ]);
+
+      const confirmed = await store.update({ tenantId: T1, scope: S1, id: entry.id, expectedVersion: 1, patch: { status: "active" } });
+      expect(confirmed.status).toBe("active");
+      expect((await store.retrieve({ tenantId: T1, scopes: [S1], limit: 10 })).map((e) => e.text).sort()).toEqual([
+        "already agreed",
+        "awaiting review",
+      ]);
+    });
+
+    it("pages a scope's list with a stable cursor", async () => {
+      const store = makeStore();
+      for (const text of ["one", "two", "three"]) await store.put({ tenantId: T1, scope: S1, text, source: src });
+      const first = await store.list({ tenantId: T1, scope: S1, limit: 2 });
+      expect(first.items).toHaveLength(2);
+      expect(first.nextCursor).toBeDefined();
+      const second = await store.list({ tenantId: T1, scope: S1, limit: 2, cursor: first.nextCursor! });
+      expect(second.items).toHaveLength(1);
+      expect(second.nextCursor).toBeUndefined();
+      const all = [...first.items, ...second.items].map((e) => e.id);
+      expect(new Set(all).size).toBe(3);
     });
   });
 }

@@ -94,6 +94,44 @@ and it is the shape a first attempt naturally takes.
 
 It does **not** belong in #242's unread-field inventory.
 
+### Per-run model and reasoning effort — #286
+
+A run may name its **model** and a reasoning **effort** — the model picker and "Faster ↔ Smarter" slider beside a
+chat box. Both are properties of the run (`NewRun.model`, `NewRun.effort`; `RunInput` on `createAgent`), stored
+on the row because the worker that executes a run is not the process that admitted it. Absent, a run resolves
+exactly as before.
+
+**The model is validated against a catalogue the host supplies, and refused — never replaced.** The engine takes
+`runModels: { models(context), resolve(definition, context) }`. `validateRunModel` checks the id is in `models`,
+not retired, and inside the agent's hard constraints (modalities, residency, required capabilities, providers);
+a failure fails the run with the reason, and neither `resolveModel` nor any other model serves it. A runtime with
+no `runModels` refuses any run that names a model. Hosts should also call `validateRunModel` at admission, so the
+person hears "not allowed" before a run exists; the engine checks again because a catalogue can change between
+the click and the turn.
+
+**Effort is mapped per provider by `mapReasoningEffort`**, after resolution, because the provider decides the
+option:
+
+| Provider | `effort: high` becomes |
+|---|---|
+| Anthropic | `providerOptions.anthropic.thinking = { type: "enabled", budgetTokens: 16384 }` (low 1,024, medium 4,096) |
+| OpenAI | `providerOptions.openai.reasoningEffort = "high"` |
+| Azure OpenAI | the same, under both `azure` and `openai` (its Responses and Chat models read different namespaces) |
+| Google | `providerOptions.google.thinkingConfig.thinkingBudget = 24576` (low 1,024, medium 8,192) |
+| Mistral, OpenAI-compatible | nothing — `effort ignored: provider … has no reasoning-effort option` |
+
+A model whose definition declares `capabilities.reasoning: false` is ignored before the provider is consulted,
+because Anthropic and OpenAI reject the option on non-reasoning models. With no definition, the provider is read
+off the AI SDK model's own id (`anthropic.messages` → `anthropic`). The AI SDK's neutral `reasoning` option was not
+used: an unsupported provider answers it with a post-hoc warning, and the issue requires the run itself to say
+the effort was ignored.
+
+**What is recorded.** `usage.updated` carries `effort` when it reached the provider, or `effortIgnored` with the
+reason when it did not — never both. The usage row (`UsageEvent.effort`) records only an effort actually applied,
+beside the `modelId` that actually served the step, so a host prices each step at the rate it was served. Migration
+`0036_run_model_and_effort` adds `runs.model`, `runs.effort` and `usage_records.effort`, nullable, with the effort
+checked by the column.
+
 ## Agent manifest
 
 ```ts

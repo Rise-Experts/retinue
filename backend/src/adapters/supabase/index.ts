@@ -55,6 +55,7 @@ export {
 } from "../postgres/config.js";
 export {
   createPostgresPrincipalMemoryStore as createSupabasePrincipalMemoryStore,
+  createPostgresScopedMemoryStore as createSupabaseScopedMemoryStore,
   createPostgresBlobStore as createSupabaseBlobStore,
 } from "../postgres/memory.js";
 /**

@@ -5,6 +5,9 @@
 import { AgentPlatformError } from "../core/errors.js";
 import type { PlatformError } from "../core/errors.js";
 import type { AgentId, ConversationId, PrincipalId, RunId, TenantId } from "../core/ids.js";
+// The pure module, not the `models` barrel: the barrel re-exports the AI SDK stream, and the runtime's dependency
+// graph must not reach it for the sake of one string union.
+import type { ReasoningEffort } from "../models/effort.js";
 
 export const RUN_STATUSES = [
   "queued",
@@ -144,6 +147,12 @@ export type Run = {
    */
   readonly principalId?: PrincipalId;
   readonly roleIds?: readonly string[];
+  /** The model this run asked for, from the host's catalogue — see `NewRun.model` (#286). */
+  readonly model?: string;
+  /** The reasoning effort this run asked for — see `NewRun.effort` (#286). */
+  readonly effort?: ReasoningEffort;
+  /** The memory scopes this run reads and writes, beside its principal's own — see `NewRun.memoryScopes` (#285). */
+  readonly memoryScopes?: readonly string[];
 };
 
 /** Durable job enqueue. Adapters: BullMQ, in-memory for tests. */

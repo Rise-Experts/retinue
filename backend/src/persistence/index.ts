@@ -28,6 +28,7 @@ import type {
   TenantId,
 } from "../core/ids.js";
 import type { ApprovalDecision, ApprovalGrant, PendingApproval, PendingQuestion } from "../hitl/index.js";
+import type { ReasoningEffort } from "../models/effort.js";
 import type { Run, RunCheckpoint, RunStatus } from "../runtime/index.js";
 import type { UsageEvent } from "../usage/index.js";
 import type { SkillCatalogEntry, SkillVersion } from "../skills/index.js";
@@ -218,6 +219,34 @@ export type NewRun = {
     readonly costCeilingMinorUnits?: number;
     readonly wallClockTimeoutMs?: number;
   };
+  /**
+   * The model this run should use, by id — #286.
+   *
+   * A property of the *run*, not of the conversation or the agent, because the picker it serves is per message:
+   * two runs in one conversation may ask for two models, and each must be recorded against its own. Stored on
+   * the row rather than passed to the worker out of band, because the worker that executes the run is not the
+   * process that admitted it.
+   *
+   * Validated against the host's catalogue by the engine (`DefaultEngineDeps.runModels`) and refused with a
+   * reason when it is not there — never replaced. A host should also call `validateRunModel` at admission, so
+   * the person hears "not allowed" before a run exists rather than as a failed one. Absent means the agent's
+   * own resolution, exactly as before.
+   */
+  readonly model?: string;
+  /**
+   * How hard the model should think — #286. Mapped per provider by `mapReasoningEffort`; a provider without the
+   * concept ignores it and the run's usage says so. Absent means the provider's default.
+   */
+  readonly effort?: ReasoningEffort;
+  /**
+   * The memory scopes this run belongs to, as `kind:id` — #285, for example `["project:7f3c…"]`.
+   *
+   * Named by the host per run, from what it knows about the conversation (which project it sits in), and never
+   * from anything the model produced: a scope is an authorization decision — whose remembered context this run
+   * may read — in the same way `principalId` is. The engine puts it on the execution context, where the scoped
+   * memory provider reads it. Absent means the principal's own memory only, as before.
+   */
+  readonly memoryScopes?: readonly string[];
 };
 
 /**

@@ -15,7 +15,7 @@ import { asId } from "../core/ids.js";
 import type { ConversationId, MessageId, PrincipalId, RunId, TenantId } from "../core/ids.js";
 import type { Message, MessagePart, TextPart } from "../core/content-parts.js";
 import { createModelRegistry, computeModelCostMinorUnits } from "../models/index.js";
-import type { ModelDefinition, ModelRoleAssignments } from "../models/index.js";
+import type { ModelDefinition, ModelRoleAssignments, ReasoningEffort } from "../models/index.js";
 // From the module rather than the barrel: `models/index.ts` no longer re-exports the factory, because doing so
 // made every root import load six provider SDKs (#196).
 import {
@@ -51,7 +51,7 @@ import {
   createSkillCatalogueProvider,
   type SkillResolver,
 } from "../skills/index.js";
-import { createDefaultEngine, type ResolvedModelInfo } from "./engine.js";
+import { createDefaultEngine, type ResolvedModelInfo, type RunModelCatalogue } from "./engine.js";
 import type { AgentManifest } from "./index.js";
 import {
   DEFAULT_MODEL_CATALOG,
@@ -236,6 +236,14 @@ export type CreateAgentConfig = {
     manifest: AgentManifest,
     context: ExecutionContext,
   ) => ResolvedModelInfo | Promise<ResolvedModelInfo>;
+  /**
+   * The models a run may pick with `RunInput.model` — #286.
+   *
+   * Defaults to `models` (or the default catalogue), built with the same provider factory as role resolution: the
+   * catalogue this facade was handed *is* the host's allowed list. Supply one to narrow it per tenant, or to build
+   * models some other way; a run naming a model outside it is refused with the reason.
+   */
+  readonly runModels?: RunModelCatalogue;
   /** Test/advanced seam: supply the engine directly instead of building the default one. */
   readonly engine?: AgentEngine;
   readonly now?: () => number;
@@ -258,6 +266,15 @@ export type RunInput = {
    * agent does after publishing cannot be observed without publishing.
    */
   readonly shadow?: boolean;
+  /**
+   * The model for this turn, from the allowed catalogue — #286. An id outside it fails the run with the reason;
+   * it is never replaced by the agent's default. Absent means the agent's own model policy.
+   */
+  readonly model?: string;
+  /** How hard the model should think this turn — #286. Ignored, and reported so on the usage event, where unsupported. */
+  readonly effort?: ReasoningEffort;
+  /** The memory scopes this turn belongs to, as `kind:id` — #285. Read by `createScopedMemoryProvider`. */
+  readonly memoryScopes?: readonly string[];
 };
 
 export type RunResult = {
@@ -316,25 +333,36 @@ export const createAgent = (config: CreateAgentConfig) => {
     ...(config.shadow === undefined ? {} : { shadow: config.shadow }),
   });
 
+  const priced = (def: ModelDefinition): ResolvedModelInfo => ({
+    model: providerFactory.languageModel(def),
+    modelId: def.modelId,
+    currency: def.pricing.currency,
+    price: (u) =>
+      computeModelCostMinorUnits(def.pricing, {
+        inputTokens: u.inputTokens,
+        outputTokens: u.outputTokens,
+        cachedInputTokens: u.cachedInputTokens,
+        // Dropped here before #247, so a cache write was billed as fresh input — and on a provider that
+        // charges a premium for a write, under-billed.
+        ...(u.cacheWriteTokens === undefined ? {} : { cacheWriteTokens: u.cacheWriteTokens }),
+      }),
+  });
   const resolveModel: NonNullable<CreateAgentConfig["resolveModel"]> =
-    config.resolveModel ??
-    ((m) => {
-      const def = registry.resolve(m.modelPolicy);
-      return {
-        model: providerFactory.languageModel(def),
-        modelId: def.modelId,
-        currency: def.pricing.currency,
-        price: (u) =>
-          computeModelCostMinorUnits(def.pricing, {
-            inputTokens: u.inputTokens,
-            outputTokens: u.outputTokens,
-            cachedInputTokens: u.cachedInputTokens,
-            // Dropped here before #247, so a cache write was billed as fresh input — and on a provider that
-            // charges a premium for a write, under-billed.
-            ...(u.cacheWriteTokens === undefined ? {} : { cacheWriteTokens: u.cacheWriteTokens }),
-          }),
-      };
-    });
+    config.resolveModel ?? ((m) => priced(registry.resolve(m.modelPolicy)));
+  /**
+   * The per-run catalogue — #286. Retired models are left to `validateRunModel` to refuse by name, rather than
+   * filtered out here, so the refusal says "retired" instead of "unknown".
+   */
+  const runModels: RunModelCatalogue = config.runModels ?? {
+    models: () => registry.list(),
+    /**
+     * With the definition attached, unlike role resolution above. That one has never passed it, and adding it there
+     * would switch on modality checks, cache directives and output ceilings for every existing embedded agent — a
+     * behaviour change hiding in a feature. A per-run choice is new, so it can carry what the model declares from
+     * the start, and effort mapping can consult `capabilities.reasoning`.
+     */
+    resolve: (def) => ({ ...priced(def), definition: def }),
+  };
 
   const contextProviders = [
     ...(config.contextProviders ?? []),
@@ -349,6 +377,7 @@ export const createAgent = (config: CreateAgentConfig) => {
       return manifest; // single-manifest embedded agent
     },
     resolveModel,
+    runModels,
     ...(contextProviders.length > 0
       ? {
           /**
@@ -546,7 +575,17 @@ export const createAgent = (config: CreateAgentConfig) => {
         await conversations.create({ tenantId, id: conversationId, title: input.message.slice(0, 80) || "Conversation" });
       }
       await messages.append({ tenantId, message: userMessage(conversationId, `${runId}:user`, input.message) });
-      await runs.create({ tenantId, id: runId, conversationId, agentId: asId(manifest.id), agentVersion: manifest.version });
+      await runs.create({
+        tenantId,
+        id: runId,
+        conversationId,
+        agentId: asId(manifest.id),
+        agentVersion: manifest.version,
+        // #286, #285 — on the run row, where the engine reads them, exactly as a durable host records them.
+        ...(input.model === undefined ? {} : { model: input.model }),
+        ...(input.effort === undefined ? {} : { effort: input.effort }),
+        ...(input.memoryScopes === undefined ? {} : { memoryScopes: input.memoryScopes }),
+      });
 
       const result = await worker.process({ tenantId, runId });
       const checkpoint = await checkpoints.latest({ tenantId, runId });

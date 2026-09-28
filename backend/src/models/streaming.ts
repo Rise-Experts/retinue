@@ -10,6 +10,7 @@
 import { Output, jsonSchema, stepCountIs, streamText, tool as aiTool, type LanguageModel, type ModelMessage, type ToolSet } from "ai";
 import { AgentPlatformError } from "../core/errors.js";
 import type { InputModality } from "./index.js";
+import { mergeProviderOptions, type ProviderOptions } from "./effort.js";
 
 /** Opaque handle to a provider model. Aliased here so layers above `models/` never import the SDK. */
 export type ResolvedModel = LanguageModel;
@@ -175,6 +176,15 @@ export type ModelTurnRequest = {
    * is the behaviour every existing host already has.
    */
   readonly promptCaching?: "automatic" | "explicit" | "none";
+  /**
+   * Provider-specific options for this turn — #286, where reasoning effort arrives already mapped.
+   *
+   * Neutral in shape (namespace → options) and opaque in content: the engine decides *what* to send through
+   * `mapReasoningEffort`, which knows each provider's name for the idea, and this layer only delivers it. Merged
+   * one namespace deep with the cache directive above, because both live under `anthropic` and a shallow spread
+   * would let effort switch caching off.
+   */
+  readonly providerOptions?: ProviderOptions;
   readonly maxOutputTokens?: number;
   readonly temperature?: number;
   readonly topP?: number;
@@ -407,6 +417,22 @@ export const cacheWrite = (usage: Record<string, unknown>): number | undefined =
   return usage.cacheWriteTokens === undefined ? undefined : num(usage.cacheWriteTokens);
 };
 
+/**
+ * The turn's `providerOptions`, or nothing at all.
+ *
+ * Omitted entirely when empty rather than sent as `{}`, so a turn with no cache directive and no effort sends
+ * exactly what it sent before #286 — the property every existing host's recorded behaviour rests on.
+ */
+const providerOptionsFor = (req: ModelTurnRequest): { providerOptions?: Record<string, Record<string, never>> } => {
+  const merged = mergeProviderOptions(
+    req.promptCaching === "explicit" ? { anthropic: { cacheControl: { type: "ephemeral" } } } : undefined,
+    req.providerOptions,
+  );
+  // The SDK types `providerOptions` as JSON values; ours are plain data built by `mapReasoningEffort` and the
+  // cache directive above, so the cast narrows a type rather than hiding a shape.
+  return merged === undefined ? {} : { providerOptions: merged as Record<string, Record<string, never>> };
+};
+
 export async function* streamModelTurn(req: ModelTurnRequest): AsyncIterable<NeutralStreamChunk> {
   /**
    * Refuse a modality the model cannot take — #185.
@@ -480,9 +506,7 @@ export async function* streamModelTurn(req: ModelTurnRequest): AsyncIterable<Neu
      * `providerOptions` rather than a top-level field, because this is provider-specific by construction and the
      * AI SDK's neutral surface has no cache concept. A provider that ignores the namespace is unaffected.
      */
-    ...(req.promptCaching === "explicit"
-      ? { providerOptions: { anthropic: { cacheControl: { type: "ephemeral" } } } }
-      : {}),
+    ...providerOptionsFor(req),
     stopWhen: stepCountIs(req.maxSteps ?? 8),
     ...(req.abortSignal ? { abortSignal: req.abortSignal } : {}),
     // Spread conditionally so an unset parameter leaves the provider's own default alone, rather than pinning it

@@ -72,6 +72,7 @@ interface ConversationStore {}
 interface SessionStateStore {}
 interface ThreadSummaryStore {}
 interface PrincipalMemoryStore {}
+interface ScopedMemoryStore {}
 interface RunStore {}
 interface MessageStore {}
 interface AgentStore {}

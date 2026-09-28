@@ -58,6 +58,9 @@ describe("runs migration 0002", () => {
         "claimed_by",
         "conversation_id",
         "created_at",
+        // The run's own model and reasoning effort — #286. On the row because the worker that executes it is not
+        // the process that admitted it; nullable, because null is "the agent's model, the provider's effort".
+        "effort",
         "error",
         "finished_at",
         "id",
@@ -73,6 +76,9 @@ describe("runs migration 0002", () => {
         "keepalive_at",
         "lease_expires_at",
         "limits",
+        // The memory scopes the run belongs to — #285. Null is "no group memory".
+        "memory_scopes",
+        "model",
         // Who the run is for — #164. Until these existed, a durable worker had nothing to rebuild the caller's
         // identity from and every host invented one.
         "principal_id",
@@ -93,6 +99,8 @@ describe("runs migration 0002", () => {
      */
     expect(cols.find((c) => c.column_name === "principal_id")?.is_nullable).toBe("YES");
     expect(cols.find((c) => c.column_name === "role_ids")?.is_nullable).toBe("YES");
+    for (const added of ["model", "effort", "memory_scopes"])
+      expect(cols.find((c) => c.column_name === added)?.is_nullable, `${added} must stay nullable`).toBe("YES");
   });
 
   it("migrates up, rolls back (table and indexes gone), and re-migrates", async () => {
