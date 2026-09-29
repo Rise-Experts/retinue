@@ -12,6 +12,8 @@ import { APP_MODULE_VARIABLE, type RetinueApp } from "./cli.js";
 import { loadConfig, type RetinueConfig } from "./config.js";
 import type { AgentEngine, PricingResolver, ResolverDeps } from "../index.js";
 import type { SqlExecutor } from "../entries/adapters-postgres.js";
+// A leaf module with no imports of its own, so this costs the runtime nothing — bullmq and ioredis stay optional.
+import { quietQueueErrors } from "../adapters/bullmq/errors.js";
 
 export type RetinueWorkerApp = RetinueApp & {
   readonly engine: (input: { readonly config: RetinueConfig; readonly sql: SqlExecutor }) => AgentEngine;
@@ -98,7 +100,11 @@ export const runWorker = async (
    * Not overridable to a no-op. A deployment that wants no realtime can simply have no subscribers; making
    * "publish nothing" reachable by configuration is what produced this bug.
    */
-  const realtimeConnection = new (await import("ioredis")).Redis(config.redisUrl);
+  // Long-lived and in the same process, so the same unbounded-logging risk applies — #288.
+  const realtimeConnection = quietQueueErrors(
+    new (await import("ioredis")).Redis(config.redisUrl),
+    "realtime-connection",
+  );
   const publisher = redisAdapters.createRedisRealtimePublisher(realtimeConnection);
 
   const worker = backend.createDurableWorker({
@@ -145,16 +151,30 @@ export const runWorker = async (
 
   const { Worker } = await import("bullmq");
   const { Redis } = await import("ioredis");
-  const connection = new Redis(config.redisUrl, { maxRetriesPerRequest: null });
+  /**
+   * The worker's connection and every worker built on it get a quiet `error` listener — #288.
+   *
+   * This is the gap that filled production's disk. A BullMQ `Worker` with no listener prints the whole error
+   * object, ioredis hangs the refused command's arguments off it, and against a full Redis the retry loop wrote
+   * 55 GB from this process alone. The listener goes on the connection *and* each worker because they emit
+   * separately: a refused command surfaces on one, a failed blocking read on the other.
+   */
+  const connection = quietQueueErrors(
+    new Redis(config.redisUrl, { maxRetriesPerRequest: null }),
+    "worker-connection",
+  );
   const createQueueWorker: Parameters<typeof queueAdapters.createBullMqJobConsumer>[0] = (
     name,
     handler,
     options,
   ) =>
-    new Worker(name, async (job) => handler({ data: job.data as never }), {
-      connection,
-      concurrency: options.concurrency,
-    });
+    quietQueueErrors(
+      new Worker(name, async (job) => handler({ data: job.data as never }), {
+        connection,
+        concurrency: options.concurrency,
+      }),
+      `worker:${name}`,
+    );
   const consumer = queueAdapters.createBullMqJobConsumer(createQueueWorker, {
     concurrency: config.workerConcurrency,
   });

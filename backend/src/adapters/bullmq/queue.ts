@@ -7,6 +7,7 @@
 import { Queue } from "bullmq";
 import { Redis } from "ioredis";
 import { QUEUE_ATTEMPTS, RUN_QUEUE_NAME, type JobQueue } from "./dispatcher.js";
+import { quietQueueErrors } from "./errors.js";
 
 export type RunQueueOptions = {
   readonly url: string;
@@ -61,15 +62,26 @@ export const createRunQueueConnection = (options: RunQueueOptions): Redis =>
 export const createBullMqRunQueue = (
   options: RunQueueOptions,
 ): JobQueue & { readonly queue: Queue; close(): Promise<void> } => {
-  const connection = createRunQueueConnection(options);
-  const queue = new Queue(RUN_QUEUE_NAME, {
-    connection,
-    defaultJobOptions: {
-      attempts: QUEUE_ATTEMPTS,
-      removeOnComplete: { count: options.keepCompleted ?? 1_000 },
-      removeOnFail: { count: options.keepFailed ?? 5_000 },
-    },
-  });
+  /**
+   * Both get a quiet `error` listener — #288.
+   *
+   * Attached here rather than left to the caller, because "the caller remembers" is what produced a 55 GB log
+   * file: every construction site is a place to forget, and this one is reached by the API host, the worker and
+   * every embedding consumer. Without a listener ioredis prints the refused command's arguments, payload
+   * buffers included, on every retry against a full Redis.
+   */
+  const connection = quietQueueErrors(createRunQueueConnection(options), "run-queue-connection");
+  const queue = quietQueueErrors(
+    new Queue(RUN_QUEUE_NAME, {
+      connection,
+      defaultJobOptions: {
+        attempts: QUEUE_ATTEMPTS,
+        removeOnComplete: { count: options.keepCompleted ?? 1_000 },
+        removeOnFail: { count: options.keepFailed ?? 5_000 },
+      },
+    }),
+    "run-queue",
+  );
 
   return {
     queue,
