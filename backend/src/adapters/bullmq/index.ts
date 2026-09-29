@@ -5,6 +5,7 @@
  * boundary checker expects an adapter's client coupling to live.
  */
 export * from "./dispatcher.js";
+export * from "./errors.js";
 export * from "./extraction.js";
 export * from "./export.js";
 export * from "./queue.js";

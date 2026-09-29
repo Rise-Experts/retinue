@@ -42,6 +42,22 @@
 
   A patch rather than a minor, for 0.3.1's reason: both are additive — a run that names no model, effort or scope behaves exactly as before — and a `0.4.0` would fall outside the `^0.3.0` the toolkits declare.
 
+## agentkit 0.3.5
+
+### Fixed
+
+- **server, adapters**: a quiet `error` listener on every queue, worker and Redis connection ([#288](https://github.com/Rise-Experts/retinue/issues/288)).
+
+  A BullMQ `Queue`, `Worker` or ioredis client with no `error` listener prints the whole error object, and ioredis hangs the refused command's arguments off it — payload buffers included, because a queued job's payload is an argument. When production's Redis hit `maxmemory` under `noeviction` and refused every write, the retry loop wrote **55 GB** of logs from the worker alone and filled the disk. The outage was the logging, not the full Redis.
+
+  The listener logs the **message only** (so ioredis's `args` are never reached), capped at 300 characters, and **one line per minute** with the suppressed count on the next line that gets through. The first error is immediate: a rate limit that swallows the first occurrence hides the incident it exists to report, and "once a minute" and "thirty thousand times a minute" read identically without the count.
+
+  Attached where the objects are built rather than left to callers — `createBullMqRunQueue` covers the queue and its connection for the API host, the worker and every embedding consumer, and `cli-worker` covers its connection, each `Worker` and the realtime connection. "The caller remembers" is what produced the 55 GB.
+
+  **Nothing to do on upgrade.** No API, configuration or behaviour changes; a deployment whose Redis is healthy will not notice. Hosts that added their own listener keep it — this one is additional, not a replacement.
+
+- **package**: the `bin` map declared `retinue` twice. The Forge unwind renamed the `forge` entry to `retinue` beside the existing one, leaving a duplicate key that 0.3.4 shipped with. Both values were identical and JSON parsers take the last, so the installed command was always correct — but the manifest was malformed.
+
 ## Unreleased
 
 ### Changed — BREAKING
