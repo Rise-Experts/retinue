@@ -42,7 +42,34 @@
  * checks here would mean a second place for the traversal bug to live, and the second place is always the one
  * that is missed.
  */
+import { existsSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { createFileReader, type FileScope } from "./files.js";
+
+/**
+ * Where this package's own documentation is, so a host can serve it without guessing — #291.
+ *
+ * Two locations, because there are honestly two. In a published install the documentation is copied to
+ * `dist/docs` at pack time and sits beside this compiled module. In this repository `dist/docs` exists only
+ * after a build, and the real corpus is `packages/docs` — a sibling of `backend`, which is the whole reason the
+ * copy exists at all.
+ *
+ * Checked in that order and existence-tested rather than assumed: returning a path that is not there would turn
+ * "the documentation tools found nothing" into the symptom, three layers from the cause.
+ *
+ * Returns `undefined` when neither is present, so a caller decides what that means. This is deliberately not a
+ * default for `docs: { root }` — `wiring is the toggle` is the rule every tool in the library follows, and a
+ * root that appears on its own would make the documentation tools the one exception.
+ */
+export const agentkitDocsRoot = (): string | undefined => {
+  const here = dirname(fileURLToPath(import.meta.url));
+  for (const candidate of [join(here, "..", "docs"), resolve(here, "..", "..", "..", "docs")]) {
+    if (existsSync(candidate)) return candidate;
+  }
+  return undefined;
+};
 
 export type DocsScope = FileScope;
 

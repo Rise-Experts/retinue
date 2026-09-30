@@ -10,7 +10,9 @@ import { describe, expect, it } from "vitest";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { createDocsReader, headingFor, parseDoc, sectionOf } from "../docs.js";
+import { existsSync, readFileSync } from "node:fs";
+
+import { agentkitDocsRoot, createDocsReader, headingFor, parseDoc, sectionOf } from "../docs.js";
 
 const DOCS = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..", "docs");
 
@@ -141,5 +143,32 @@ describe("createDocsReader, against the real docs/", () => {
     expect(escaped.ok).toBe(false);
     const absolute = await docs.read({ path: "/etc/passwd" });
     expect(absolute.ok).toBe(false);
+  });
+});
+
+describe("the documentation ships with the package — #291", () => {
+  it("agentkitDocsRoot finds a real directory with documents in it", async () => {
+    const root = agentkitDocsRoot();
+    expect(root).toBeTruthy();
+    // Existence-tested rather than assumed: a path that is not there turns "the tools found nothing" into the
+    // symptom, three layers from the cause.
+    expect(existsSync(root as string)).toBe(true);
+    const listing = await createDocsReader({ root: root as string }).list();
+    if (!listing.ok) throw new Error(listing.reason);
+    expect(listing.docs.length).toBeGreaterThan(20);
+  });
+
+  it("the manifest ships them and copies them at pack time", () => {
+    /**
+     * Both halves, because either alone ships nothing and says so only at runtime: `files` without `prepack`
+     * publishes an empty `dist/docs`, and `prepack` without `files` copies into a tarball that excludes it.
+     * The pair is the feature.
+     */
+    const manifest = JSON.parse(readFileSync(join(DOCS, "..", "backend", "package.json"), "utf8")) as {
+      files: string[];
+      scripts: Record<string, string>;
+    };
+    expect(manifest.files).toContain("dist/docs/**/*.md");
+    expect(manifest.scripts.prepack).toMatch(/copy-docs\.mjs/);
   });
 });

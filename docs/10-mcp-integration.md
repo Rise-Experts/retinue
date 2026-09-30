@@ -167,10 +167,22 @@ headings listed, so the next call can be right without another round trip.
 The reader is built with **no writable root**, unlike `FileScope`. A corpus a model can edit is a corpus a model
 can cite itself into, and documentation is the last place that should be possible.
 
-### What is not solved here
+### The documentation ships with the package
 
-The published package ships `dist/` and `README.md` only, and `docs/` sits outside `backend/`, so an installed
-`@retinue/agentkit` has no documentation for these tools to serve. They work against any root a host configures
-— including a host's own documentation, which is the more common case — and serving *this* package's docs from
-an installed copy would need a `prepack` step that copies them in, at about 14% package growth. That decision is
-deliberately not taken here.
+`docs/` is a **sibling** of `backend/`, and `files` cannot reach outside the package root — so the choice was to
+copy the documentation in at pack time or to ship a documentation server with no documentation. A `prepack` step
+(`scripts/copy-docs.mjs`) copies it, and `files` ships `dist/docs/**/*.md`. 32 documents, and the package grows
+from 3.44 MB to 3.72 MB.
+
+**Into `dist/`, and that detail is load-bearing.** The obvious destination is `backend/docs/`, which is wrong:
+`check-terminology.mjs` and `check-doc-imports.mjs` both walk the tree for markdown and neither skips a
+directory called `docs`, so every document would be scanned twice and a copy left behind by an interrupted pack
+would keep doing it. `dist/` is already in those checks' `SKIP_DIRS`, already in `.gitignore`, and already
+removed by `clean`. A copy is a build artifact; putting it where build artifacts live answers every question
+about stale copies at once.
+
+`agentkitDocsRoot()` returns the shipped copy when there is one and this repository's `docs/` otherwise, both
+existence-tested — a path that is not there would turn "the tools found nothing" into the symptom, three layers
+from the cause. It is **not** a default for `docs: { root }`: `wiring is the toggle` is the rule every tool in
+the library follows, and a root that appeared on its own would make these the one exception. A host that wants
+them writes `docs: { root: agentkitDocsRoot() }`, and a host serving its own documentation passes its own root.
