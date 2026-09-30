@@ -27,14 +27,17 @@ import { createHttpRequestTool, createHttpWriteTool } from "./http.js";
 import { createSearchKnowledgeTool } from "./knowledge.js";
 import { createFetchJsonTool, createFetchUrlTool, createWebSearchTool } from "./web.js";
 import { createFsListTool, createFsReadTool, createFsSearchTool, createFsWriteTool } from "./fs.js";
+import { createDocsListTool, createDocsReadTool, createDocsSearchTool } from "./docs.js";
 import { createShellExecTool } from "./shell.js";
 export { createFsListTool, createFsReadTool, createFsSearchTool, createFsWriteTool } from "./fs.js";
+export { createDocsListTool, createDocsReadTool, createDocsSearchTool } from "./docs.js";
 export { createShellExecTool, shellDisabled } from "./shell.js";
 export type { ShellToolConfig } from "./shell.js";
 import { createHttpClient } from "../../toolkit/http.js";
 import { createFetchJson, createFetchPage, createWebSearch } from "../../toolkit/web.js";
 import { createSqlQuery, createSqlSchema } from "../../toolkit/data.js";
 import { createFileReader } from "../../toolkit/files.js";
+import { createDocsReader, type DocsReader, type DocsScope } from "../../toolkit/docs.js";
 import { createReadAttachmentTool, createListAttachmentsTool } from "../../files/read-tool.js";
 import { createReadDocumentTool } from "../../documents/read-tool.js";
 import type { DelegatingToolDeps } from "../delegating.js";
@@ -73,6 +76,9 @@ export const STANDARD_TOOL_NAMES = [
   "fs_search",
   "fs_write",
   "shell_exec",
+  "docs_list",
+  "docs_search",
+  "docs_read",
 ] as const;
 
 export type StandardToolName = (typeof STANDARD_TOOL_NAMES)[number];
@@ -125,6 +131,17 @@ export type StandardToolsConfig = {
    * also reads, which is how a corpus a model cites becomes a corpus a model wrote.
    */
   readonly filesystem?: FileScope | { readonly reader: FileReader; readonly writable: boolean };
+  /**
+   * A documentation root — REQ #291.
+   *
+   * Supplying a `root` enables `docs_list`, `docs_search` and `docs_read`. Separate from `filesystem` on
+   * purpose, and not merely a second `FileScope`: documentation is a corpus a deployment *publishes*, and
+   * pointing the general file tools at it would mean choosing between exposing the whole repository and
+   * exposing nothing. A host can hand over a reader it already built instead of a scope.
+   *
+   * There is no writable half. A corpus a model can edit is a corpus a model can cite itself into.
+   */
+  readonly docs?: DocsScope | { readonly reader: DocsReader };
   /**
    * A sandbox, which is what makes `shell_exec` exist — task #215.
    *
@@ -182,6 +199,14 @@ export const createStandardToolProvider = (config: StandardToolsConfig): ToolPro
         ? { reader: config.filesystem.reader, writable: config.filesystem.writable }
         : { reader: createFileReader(config.filesystem), writable: config.filesystem.writableRoot !== undefined };
 
+  /** Same shape as `filesystem`: a scope we build a reader from, or a reader the host already has. */
+  const docs =
+    config.docs === undefined
+      ? undefined
+      : "reader" in config.docs
+        ? config.docs.reader
+        : createDocsReader(config.docs);
+
   const fixed: readonly (readonly [StandardToolName, () => Tool])[] = [
     ["fetch_url", () => createFetchUrlTool(deps, fetchPage as NonNullable<typeof fetchPage>)],
     ["fetch_json", () => createFetchJsonTool(deps, fetchJson as NonNullable<typeof fetchJson>)],
@@ -201,6 +226,9 @@ export const createStandardToolProvider = (config: StandardToolsConfig): ToolPro
     ["fs_list", () => createFsListTool(deps, (filesystem as NonNullable<typeof filesystem>).reader)],
     ["fs_search", () => createFsSearchTool(deps, (filesystem as NonNullable<typeof filesystem>).reader)],
     ["fs_write", () => createFsWriteTool(deps, (filesystem as NonNullable<typeof filesystem>).reader)],
+    ["docs_list", () => createDocsListTool(deps, docs as NonNullable<typeof docs>)],
+    ["docs_search", () => createDocsSearchTool(deps, docs as NonNullable<typeof docs>)],
+    ["docs_read", () => createDocsReadTool(deps, docs as NonNullable<typeof docs>)],
     [
       "shell_exec",
       () =>
@@ -231,6 +259,9 @@ export const createStandardToolProvider = (config: StandardToolsConfig): ToolPro
     // A writable root, separately: the three reads are useful on their own, and most deployments want only those.
     fs_write: filesystem?.writable === true,
     shell_exec: config.sandbox !== undefined,
+    docs_list: docs !== undefined,
+    docs_search: docs !== undefined,
+    docs_read: docs !== undefined,
   };
 
   const tools = fixed

@@ -123,3 +123,66 @@ advertises `readOnlyHint: true` to an external client, which may skip a confirma
 did not catch it because that check reads the tool's *name*.
 
 See `website/content/integrations/mcp-server.md` for the operator-facing page.
+
+## Serving the documentation, without an index — #291
+
+The inbound server exposes a deployment's tools; `docs_list`, `docs_search` and `docs_read` make one of those
+tools the documentation itself. A root is configured (`docs: { root }`) and the three appear; configure nothing
+and they are absent, the same rule the filesystem tools follow.
+
+**There are no vectors, and that is a measured position rather than a preference.**
+`docs/26-retrieval-quality.md` scored five arms on this corpus. The one with no index — read a table of
+contents, choose documents, look inside them — had the **best P@1 (44.4%) and the best MRR** of all five,
+beating semantic, hybrid, and hybrid with a reranker. It recorded two costs: roughly 7× the latency and 4,000×
+the marginal cost, and the worst-but-one recall "because it reads at most three documents".
+
+Neither cost survives the move to MCP, which is the whole argument:
+
+- the cost was **a model call inside the runtime** to choose documents. Over MCP the client's model chooses, as
+  part of reasoning it is already doing. The expense leaves this side of the boundary entirely.
+- the recall cap was **three documents**, a limit of that implementation. A client reads as many as it likes.
+
+What remains is the property that was never a score: **no index**. Nothing to rebuild when a document changes,
+no re-embedding, and no window in which the prose says one thing and the index still serves the previous
+version. It also helps that this corpus's vocabulary is *enforced* — `check:terminology` against
+`docs/22-glossary.md` — because controlled nouns are the condition under which literal search stops losing to
+embeddings.
+
+### Why not `fs_read`, `fs_list` and `fs_search`
+
+Those exist and they are correct, and these three delegate to the same reader rather than reaching disk
+themselves. Three differences, each of which otherwise costs a model a whole document:
+
+| | the file tools | the documentation tools |
+|---|---|---|
+| listing | name, kind, bytes | **title**, summary and section headings |
+| a match | the matching line | the line **plus the heading it sits under** |
+| a read | the whole file | the whole file, **or one named section** |
+
+A listing of `21-platform.md, 14KB` does not say what is in it, so choosing between thirty-two files means
+opening thirty-two files; a line without its heading is hard to judge; and the largest document here is about
+10k tokens to answer one question about one section. An unknown section is refused with the document's real
+headings listed, so the next call can be right without another round trip.
+
+The reader is built with **no writable root**, unlike `FileScope`. A corpus a model can edit is a corpus a model
+can cite itself into, and documentation is the last place that should be possible.
+
+### The documentation ships with the package
+
+`docs/` is a **sibling** of `backend/`, and `files` cannot reach outside the package root — so the choice was to
+copy the documentation in at pack time or to ship a documentation server with no documentation. A `prepack` step
+(`scripts/copy-docs.mjs`) copies it, and `files` ships `dist/docs/**/*.md`. 32 documents, and the package grows
+from 3.44 MB to 3.72 MB.
+
+**Into `dist/`, and that detail is load-bearing.** The obvious destination is `backend/docs/`, which is wrong:
+`check-terminology.mjs` and `check-doc-imports.mjs` both walk the tree for markdown and neither skips a
+directory called `docs`, so every document would be scanned twice and a copy left behind by an interrupted pack
+would keep doing it. `dist/` is already in those checks' `SKIP_DIRS`, already in `.gitignore`, and already
+removed by `clean`. A copy is a build artifact; putting it where build artifacts live answers every question
+about stale copies at once.
+
+`agentkitDocsRoot()` returns the shipped copy when there is one and this repository's `docs/` otherwise, both
+existence-tested — a path that is not there would turn "the tools found nothing" into the symptom, three layers
+from the cause. It is **not** a default for `docs: { root }`: `wiring is the toggle` is the rule every tool in
+the library follows, and a root that appeared on its own would make these the one exception. A host that wants
+them writes `docs: { root: agentkitDocsRoot() }`, and a host serving its own documentation passes its own root.

@@ -96,6 +96,7 @@
   "files": [
     "dist/**/*.js",
     "dist/**/*.d.ts",
+    "dist/docs/**/*.md",
     "README.md",
     "!dist/**/*.map"
   ],
@@ -104,7 +105,8 @@
     "typecheck": "tsc -b",
     "test": "vitest run",
     "clean": "rm -rf dist tsconfig.tsbuildinfo",
-    "prepublishOnly": "node ../scripts/publish-guard.mjs"
+    "prepublishOnly": "node ../scripts/publish-guard.mjs",
+    "prepack": "node ../scripts/copy-docs.mjs"
   },
   "dependencies": {
     "ai": "^7.0.66",
