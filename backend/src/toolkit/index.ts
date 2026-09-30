@@ -102,6 +102,9 @@ export {
 } from "./files.js";
 export type { FileEntry, FileFailure, FileList, FileMatch, FileRead, FileReader, FileScope, FileSearch, FileWrite } from "./files.js";
 
+export { createDocsReader, headingFor, parseDoc, sectionOf } from "./docs.js";
+export type { DocEntry, DocMatch, DocsFailure, DocsIndex, DocsRead, DocsReader, DocsScope, DocsSearch, ParsedDoc } from "./docs.js";
+
 export {
   DEFAULT_MEMORY_MB,
   DEFAULT_TIMEOUT_MS,

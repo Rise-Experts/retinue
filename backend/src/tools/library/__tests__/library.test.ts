@@ -97,6 +97,10 @@ describe("wiring is the toggle", () => {
     // *list*, and a tool that cannot be built is what it exists to catch.
     const root = mkdtempSync(join(tmpdir(), "retinue-library-read-"));
     const writable = mkdtempSync(join(tmpdir(), "retinue-library-write-"));
+    // A third root for the documentation tools. Separate from `root` on purpose, the way the config is: a
+    // deployment publishes its documentation, and pointing the general file tools at it would mean choosing
+    // between exposing the whole repository and exposing nothing.
+    const docsRoot = mkdtempSync(join(tmpdir(), "retinue-library-docs-"));
     const wired = await names(
       {
         deps,
@@ -107,6 +111,7 @@ describe("wiring is the toggle", () => {
         files: {} as never,
         documents: {} as never,
         filesystem: { root, writableRoot: writable },
+        docs: { root: docsRoot },
         sandbox: { id: "test", run: async () => ({ ok: true, exitCode: 0, stdout: "", stderr: "", truncated: false, durationMs: 0 }) },
         shellEnabled: () => true,
       },

@@ -233,6 +233,9 @@ Extensions of what exists. Nothing here needs a vendor account, so nothing here 
 | `fs_read` | files | `read` | `never` | no | **built** (#215). Path-scoped; an absolute path, a `..` escape and a symlink out of the root are all refused, and the refusal does not depend on whether the target exists |
 | `fs_list` | files | `read` | `never` | no | **built** (#215) |
 | `fs_search` | files | `read` | `never` | no | **built** (#215). Literal-text search, bounded in files and matches, reporting when a ceiling stopped it |
+| `docs_list` | knowledge | `read` | `never` | no | **built** (#291). The table of contents: path, title, summary and section headings for every document, in one call |
+| `docs_search` | knowledge | `read` | `never` | no | **built** (#291). Literal search carrying each match's document title and enclosing heading, so a hit is judgeable without opening the file |
+| `docs_read` | knowledge | `read` | `never` | no | **built** (#291). A whole document, or one named section and its subsections; an unknown section is refused with the real headings listed |
 | `fs_write` | files | `internal-write` | `policy` | no | **built** (#215) — a *different* root from the reads, so a model cannot edit the material it also cites |
 | `shell_exec` | code | `destructive` | `always` | yes | **built** (#215). Two switches: a `Sandbox` wired **and** the `shell` capability declared. The local adapter throws unless a deployment types `allowUnsafeLocalExecution: true` |
 | `file_generate` | files | `internal-write` | `never` | no | CSV/Markdown/PDF to an artifact; the renderers exist |
