@@ -152,6 +152,10 @@ jobs:
         # caught, and exactly **one** apply line, so a re-run that migrated twice is too. Neither needs a
         # magic number, and neither goes stale.
         run: |
+          # `pipefail`: `grep` exits 1 when it matches nothing and `tee` would report success over it. The `test`
+          # below still catches an empty log, so this changes the *message*, not the verdict — the failure
+          # now names the command that broke instead of a line count that came out zero. #290.
+          set -o pipefail
           docker compose logs migrate | tee /tmp/migrate.log
           grep -oE "applied [0-9]+ migration\(s\); schema now at [0-9]+" /tmp/migrate.log | tee /tmp/applied.log
           test "$(wc -l < /tmp/applied.log)" -eq 1
@@ -161,6 +165,9 @@ jobs:
           test -n "$n" && test "$n" = "$at"
       - name: Every service healthy
         run: |
+          # `pipefail`, for the same reason as the rest of this file — #290. The comparison below already fails on an
+          # empty result, so this is about which command gets blamed.
+          set -o pipefail
           docker compose ps
           test "$(docker compose ps --status running --services | sort | tr '\n' ' ')" = "api app postgres redis worker "
       - name: The host is ready on its published port
@@ -185,6 +192,9 @@ jobs:
         run: docker compose exec -T api node backend/dist/server/bin.js doctor
       - name: A conversation round-trips through the API and into Postgres
         run: |
+          # `pipefail`: a failing `curl -sf` or `psql` would otherwise be reported by `tee`/`grep` as a content
+          # mismatch rather than a dead service. The `grep -q` below still catches it either way. #290.
+          set -o pipefail
           curl -sf -X POST http://127.0.0.1:4010/graphql \
             -H 'content-type: application/json' \
             -H 'x-retinue-tenant: ci' -H 'x-retinue-principal: ci' -H 'x-retinue-roles: admin' \
