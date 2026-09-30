@@ -83,9 +83,24 @@ jobs:
         id: target
         # Refuses a tag that names a package we do not publish, or a version the manifest disagrees with.
         run: |
+          # `pipefail` first, and it is the whole point of this step — #290.
+          #
+          # A pipeline reports the exit status of its *last* command, so `node … | tee target.json` reports
+          # `tee`'s success no matter what the resolver decided. `agentkit@0.3.5` was tagged on a main that
+          # still said `0.3.4`; the resolver refused it, in a sentence naming both versions, and exited 1. The
+          # step went green, `target.json` was empty, `require()` threw, and both outputs came out blank — so
+          # the release failed three steps later as `npm publish -w --provenance`, a message naming neither the
+          # tag, the version, nor the package. The verdict was correct and printed; nothing read it.
+          set -o pipefail
           node scripts/release-target.mjs "$GITHUB_REF" --json | tee target.json
-          echo "workspace=$(node -e "console.log(require('./target.json').workspace)")" >> "$GITHUB_OUTPUT"
-          echo "dist_tag=$(node -e "console.log(require('./target.json').distTag)")" >> "$GITHUB_OUTPUT"
+          workspace="$(node -p "require('./target.json').workspace")"
+          dist_tag="$(node -p "require('./target.json').distTag")"
+          # An empty value is what let `-w` swallow the next flag. Refuse here, where the cause is still visible.
+          [ -n "$workspace" ] && [ -n "$dist_tag" ] || {
+            echo "✗ the tag resolved to no workspace or no dist-tag. target.json:"; cat target.json; exit 1;
+          }
+          echo "workspace=$workspace" >> "$GITHUB_OUTPUT"
+          echo "dist_tag=$dist_tag" >> "$GITHUB_OUTPUT"
 
       - name: The gate
         # The whole gate, and a failure blocks the publish rather than warning (#193 AC-4). This is the same
@@ -103,8 +118,10 @@ jobs:
         # `--access public` explicitly: a first publish under a scope defaults to restricted, and a "published"
         # package nobody can install is the failure that looks like success.
         run: |
-          npm publish -w ${{ steps.target.outputs.workspace }} \
-            --provenance --access public --tag ${{ steps.target.outputs.dist_tag }}
+          # Quoted, so an empty workspace is an empty argument that npm rejects by name rather than a gap the
+          # next flag falls into. `-w --provenance` is what an unquoted blank produced.
+          npm publish -w "${{ steps.target.outputs.workspace }}" \
+            --provenance --access public --tag "${{ steps.target.outputs.dist_tag }}"
 
       - name: What a consumer now gets
         # The published artefact, installed from the registry into a scratch project outside this repository —
