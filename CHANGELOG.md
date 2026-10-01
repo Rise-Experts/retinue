@@ -58,6 +58,24 @@
 
 - **package**: the `bin` map declared `retinue` twice. The Forge unwind renamed the `forge` entry to `retinue` beside the existing one, leaving a duplicate key that 0.3.4 shipped with. Both values were identical and JSON parsers take the last, so the installed command was always correct — but the manifest was malformed.
 
+## agentkit 0.3.6
+
+### Added
+
+- **tools, mcp**: the documentation, served over MCP, without an index ([#291](https://github.com/Rise-Experts/retinue/issues/291)). `docs_list` returns a table of contents with titles, summaries and section headings; `docs_search` returns each match with the document title and **the heading it sits under**, so a hit can be judged without opening the file; `docs_read` returns a whole document or **one named section** — on this corpus a section is about a third of the document. An unknown section is refused with the real headings listed, so the next call is right without another round trip.
+
+  Configure `docs: { root }` and the three appear; configure nothing and they are absent, the rule every tool in the library follows. They go through `registry.execute` like any other tool, so authorization, the tenant toolset, the approval gate, validation, idempotency and audit all apply, and an MCP client sees them with no new handler.
+
+  **No vectors, and that is measured rather than preferred.** `docs/26-retrieval-quality.md` scored five arms on this corpus and the no-index arm had the best P@1 (44.4%) and the best MRR of all five. Its two recorded costs — roughly 7× latency and 4,000× marginal cost, and a recall cap "because it reads at most three documents" — are both properties of doing the choosing *inside* the runtime. Over MCP the client's model chooses, so neither applies. What remains is no index to rebuild, no re-embedding, and no window where the prose says one thing and the index serves the previous version.
+
+  Reads only, and the reader is constructed with no writable root: a corpus a model can edit is a corpus a model can cite itself into. Path safety is inherited from `createFileReader` rather than re-derived — realpath'd root, absolute paths refused, `..` and symlink escapes refused.
+
+- **package**: the documentation ships with the package, so an installed agentkit can serve its own ([#291](https://github.com/Rise-Experts/retinue/issues/291)). `docs/` is a sibling of `backend/` and `files` cannot reach outside the package root, so a `prepack` step copies it to `dist/docs` and `files` ships `dist/docs/**/*.md`. 32 documents; the package grows from 3.44 MB to 3.72 MB. `agentkitDocsRoot()` returns the shipped copy when there is one and the repository's `docs/` otherwise, both existence-tested.
+
+  Into `dist/` deliberately: `check-terminology` and `check-doc-imports` both walk the tree for markdown and neither skips a directory named `docs`, so a copy at `backend/docs/` would be scanned twice and a copy left by an interrupted pack would keep doing it. `dist/` is already skipped by those checks, already ignored by git, already removed by `clean`.
+
+  **Nothing to do on upgrade.** Purely additive: a deployment that configures no `docs` root behaves exactly as before. A patch rather than a minor for 0.3.1's reason — a `0.4.0` would fall outside the `^0.3.0` that all eighteen toolkits declare.
+
 ## Unreleased
 
 ### Changed — BREAKING
