@@ -1,0 +1,1744 @@
+/*
+ * Chat message rendering for the assistant pane.
+ *
+ * Ported from the immo_finanz chat components (Messages/MessageItem/
+ * ToolComponent/DateSeparator/AgentThinkingLoader), which are Tailwind +
+ * shadcn/ui. This app has neither, so the same visual structure is rebuilt
+ * against the design tokens in globals.css — which also gets dark mode for
+ * free, since every colour here is a custom property.
+ *
+ * Replacements for immo's dependencies: `@keyframes` for framer-motion,
+ * native `title` tooltips for shadcn Tooltip, inline SVG for lucide icons.
+ */
+
+/* --------------------------------------------------------------- thread ---- */
+
+/*
+ * The scroll container, matching immo's AgnoChatContainer
+ * (`flex-1 overflow-y-auto w-full px-12 flex flex-col-reverse`).
+ *
+ * `column-reverse` is what makes this feel like a chat, and it does two jobs
+ * that would otherwise need JavaScript:
+ *
+ *  1. The flex main-start sits at the BOTTOM, so content packs downward — a
+ *     two-message conversation rests above the composer instead of floating at
+ *     the top of an empty pane.
+ *  2. Browsers anchor a scroll container at its main-start, so appending a
+ *     message (which lands at the visual bottom) keeps the view pinned there,
+ *     while scrolling up still holds position. That replaces the
+ *     scrollTop-tracking effect this component used to run.
+ *
+ * The consequence is that DOM order must be newest-first — MessageList
+ * reverses for render. See the comment there.
+ */
+.thread {
+  flex: 1;
+  min-height: 0;
+  /* Out to the chat's edges, so the scrollbar is at the right of the chat, not next to the column. */
+  margin-inline: calc(-1 * var(--chat-gutter, 22px));
+  padding: 20px var(--chat-gutter, 22px) 8px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column-reverse;
+  gap: 20px;
+}
+
+/* The reading column: every message, card and the blank state, centred and capped (assistant `.wrap`). */
+.thread > * {
+  width: 100%;
+  max-width: var(--chat-column, 820px);
+  margin-inline: auto;
+  flex-shrink: 0;
+}
+
+/* Wraps one message together with the date separator that may precede it. */
+.messageSlot {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* ---------------------------------------------------------------- rows ---- */
+
+.row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.rowUser {
+  justify-content: flex-end;
+}
+
+.body {
+  flex: 1;
+  min-width: 0;
+  max-width: 80%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.bodyUser {
+  align-items: flex-end;
+}
+
+/* The copy button sits under the message, revealed on row hover. */
+.content {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.bodyUser .content {
+  align-items: flex-end;
+}
+
+.bodyUser .copyBtn {
+  align-self: flex-end;
+}
+
+/* ------------------------------------------------------------- avatars ---- */
+
+.avatar {
+  flex-shrink: 0;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11.5px;
+  font-weight: 700;
+  line-height: 1;
+  user-select: none;
+}
+
+.avatarAgent {
+  background: var(--brand-grad);
+  color: var(--primary-ink);
+}
+
+.avatarUser {
+  background: var(--surface-hover);
+  border: 1px solid var(--border);
+  color: var(--ink-mid);
+  text-transform: uppercase;
+}
+
+/* ------------------------------------------------------------- bubbles ---- */
+
+.bubbleUser {
+  background: var(--accent-tint);
+  color: var(--ink);
+  padding: 8px 14px;
+  border-radius: 12px;
+  font-size: 13.5px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+/*
+ * The assistant reply is deliberately unboxed — immo renders agent text flat
+ * against the canvas so long markdown (tables, code, lists) isn't squeezed
+ * inside a bubble, and only the user turn gets a tinted box.
+ */
+.bubbleAgent {
+  color: var(--ink);
+  font-size: 13.5px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.errorText {
+  color: var(--danger);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.pausedNotice {
+  color: var(--warn);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+/* --------------------------------------------------------- meta / copy ---- */
+
+.meta {
+  font-size: 10px;
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+
+/*
+ * In the flow, under the message — like ChatGPT's action row. It was absolute at the top right, where on
+ * hover it covered the end of the reply's first line.
+ */
+.copyBtn {
+  align-self: flex-start;
+  margin-top: 4px;
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-ctl);
+  background: var(--card);
+  color: var(--muted);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity .15s ease, color .15s ease;
+}
+
+.row:hover .copyBtn,
+.copyBtn:focus-visible {
+  opacity: 1;
+}
+
+.copyBtn:hover {
+  color: var(--ink);
+  background: var(--surface-hover);
+}
+
+/* -------------------------------------------------------------- extras ---- */
+
+/* Reasoning / references / tool groups stacked above the reply text. */
+.extras {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.extraGroup {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.extraIcon {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 7px;
+  background: var(--surface-hover);
+  color: var(--muted);
+}
+
+.extraBody {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.extraLabel {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* --------------------------------------------------------- tool chips ---- */
+
+.toolChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+/*
+ * immo's chip is a static name pill. Chorus tool calls can publish or
+ * schedule real posts, so the chip carries its lifecycle: a pulsing dot while
+ * running, a check when done, a cross when it failed.
+ */
+.toolChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: var(--r-pill);
+  background: var(--accent-tint);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: var(--ink-mid);
+  cursor: default;
+}
+
+.toolChipDone {
+  background: var(--success-bg);
+  color: var(--success);
+}
+
+.toolChipError {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+.toolDot {
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: toolPulse 1.1s ease-in-out infinite;
+}
+
+.toolGlyph {
+  flex-shrink: 0;
+  display: flex;
+}
+
+@keyframes toolPulse {
+  0%, 100% { opacity: .25; }
+  50% { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toolDot { animation: none; opacity: .8; }
+}
+
+/* -------------------------------------------------- reasoning (dormant) --- */
+
+.reasonStep {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+}
+
+.reasonBadge {
+  flex-shrink: 0;
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: var(--surface-hover);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .04em;
+}
+
+.reasonTitle {
+  font-size: 11.5px;
+  min-width: 0;
+}
+
+/* ------------------------------------------------- references (dormant) --- */
+
+.refGrid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.refCard {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 4px;
+  width: 190px;
+  height: 62px;
+  padding: 9px 11px;
+  border-radius: var(--r-ctl);
+  background: var(--surface-hover);
+  cursor: default;
+  overflow: hidden;
+}
+
+.refName {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.refContent {
+  font-size: 10.5px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ------------------------------------------------------ media (dormant) --- */
+
+.media {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.mediaItem {
+  width: 100%;
+  max-width: 460px;
+}
+
+.mediaImage,
+.mediaVideo {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: var(--r-ctl);
+  border: 1px solid var(--border);
+}
+
+.mediaAudio {
+  width: 100%;
+}
+
+.mediaCaption {
+  margin-top: 5px;
+  font-size: 10.5px;
+  color: var(--muted);
+}
+
+/* ---------------------------------------------------- thinking loader ---- */
+
+.loader {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 0;
+}
+
+.loaderDot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  opacity: .35;
+  animation: loaderBounce .7s ease-in-out infinite;
+}
+
+.loaderDot:nth-child(2) { animation-delay: .1s; }
+.loaderDot:nth-child(3) { animation-delay: .2s; }
+
+@keyframes loaderBounce {
+  0%, 100% { transform: translateY(0); opacity: .3; }
+  50% { transform: translateY(-4px); opacity: .85; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .loaderDot { animation: none; }
+}
+
+/* ------------------------------------------------------ date separator ---- */
+
+.dateSeparator {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 0 4px;
+}
+
+.dateSeparatorLabel {
+  padding: 3px 11px;
+  border-radius: var(--r-pill);
+  background: var(--surface-hover);
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+/* ---------------------------------------------------------- blank state --- */
+
+.blank {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  flex: 1;
+  min-height: 220px;
+  text-align: center;
+  padding: 24px 16px;
+  animation: blankIn .45s ease both;
+  animation-delay: .1s;
+}
+
+.blankTitle {
+  font-family: var(--font-display);
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.blankSubtitle {
+  font-size: 13.5px;
+  color: var(--muted);
+  max-width: 420px;
+}
+
+@keyframes blankIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .blank { animation: none; }
+}
+
+/* -------------------------------------------------------------- markdown --- */
+
+/*
+ * Moved here from assistant.module.css so both the user and the assistant
+ * turn can share it — immo renders markdown on both sides.
+ */
+.markdown :global(p) {
+  margin: 0 0 8px;
+}
+
+.markdown :global(p:last-child) {
+  margin-bottom: 0;
+}
+
+.markdown :global(ul),
+.markdown :global(ol) {
+  margin: 0 0 8px;
+  padding-left: 1.4em;
+}
+
+.markdown :global(li) {
+  margin-bottom: 2px;
+}
+
+.markdown :global(li:last-child) {
+  margin-bottom: 0;
+}
+
+.markdown :global(h1),
+.markdown :global(h2),
+.markdown :global(h3),
+.markdown :global(h4) {
+  margin: 10px 0 6px;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.markdown :global(h1:first-child),
+.markdown :global(h2:first-child),
+.markdown :global(h3:first-child),
+.markdown :global(h4:first-child) {
+  margin-top: 0;
+}
+
+.markdown :global(h1) {
+  font-size: 17px;
+}
+
+.markdown :global(h2) {
+  font-size: 15.5px;
+}
+
+.markdown :global(h3),
+.markdown :global(h4) {
+  font-size: 14px;
+}
+
+/*
+ * Links and images arrive from whatever page read_url fetched, so they are
+ * styled here rather than left to the browser default. `:global` because
+ * react-markdown renders plain tags; the custom `a`/`img` renderers in
+ * Markdown.tsx add the module-scoped classes below.
+ */
+.markdown :global(a) {
+  color: inherit;
+  text-decoration: underline;
+  /* A bare URL is one unbreakable word; production showed a list of sources scrolling sideways. */
+  overflow-wrap: anywhere;
+}
+
+.mdLink {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  overflow-wrap: anywhere;
+}
+
+.mdLink:hover {
+  text-decoration-thickness: 2px;
+}
+
+/*
+ * Inline media is now a REFERENCE, not an image: a chip of clickable text. Every
+ * size below is fixed, so no amount of media can re-lay out a message or
+ * overflow the column — which is what inline images did.
+ */
+.mdRefWrap {
+  position: relative;
+  display: inline;
+  white-space: nowrap;
+}
+
+.mdRef {
+  display: inline;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  background: var(--surface-hover);
+  color: var(--accent);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: baseline;
+}
+
+.mdRef:hover,
+.mdRef:focus-visible {
+  background: var(--accent-tint);
+}
+
+/* Hover/focus preview. Fixed box, `contain` so any aspect ratio fits. */
+.mdPreview {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  z-index: 20;
+  display: block;
+  width: 260px;
+  height: 180px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-ctl);
+  background: var(--card);
+  box-shadow: var(--modal-shadow);
+  pointer-events: none;
+}
+
+.mdPreviewImage {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  border-radius: 6px;
+}
+
+.mdImageFallback {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: var(--r-pill);
+  background: var(--surface-hover);
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.markdown :global(strong) {
+  font-weight: 700;
+}
+
+.markdown :global(blockquote) {
+  margin: 0 0 8px;
+  padding-left: 10px;
+  border-left: 3px solid var(--border);
+  color: var(--muted);
+}
+
+.markdown :global(code) {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12.5px;
+  background: var(--surface-input);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
+.markdown :global(pre) {
+  margin: 0 0 8px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--surface-input);
+  border: 1px solid var(--border);
+  overflow-x: auto;
+}
+
+.markdown :global(pre code) {
+  background: transparent;
+  padding: 0;
+}
+
+/* Wide tables scroll inside the message instead of widening the pane. */
+.markdown :global(table) {
+  border-collapse: collapse;
+  margin: 0 0 8px;
+  width: 100%;
+  font-size: 13px;
+}
+
+.markdown :global(th),
+.markdown :global(td) {
+  border: 1px solid var(--border);
+  padding: 4px 8px;
+  text-align: left;
+}
+
+.markdown :global(hr) {
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: 10px 0;
+}
+
+@media (max-width: 720px) {
+  .body {
+    max-width: 100%;
+  }
+
+  .refCard {
+    width: 100%;
+  }
+}
+
+
+/* ------------------------------------------- attach-from-message ---- */
+
+/*
+ * The "+" revealed on hover/focus over an image or link in a reply, which copies
+ * it into the composer. Focus-visible as well as hover, so it is reachable
+ * without a mouse.
+ */
+.attachFromMessage {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 1;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--card);
+  color: var(--ink);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity .15s ease;
+}
+
+.mdFigure {
+  position: relative;
+}
+
+.mdFigure:hover .attachFromMessage,
+.mdLinkWrap:hover .attachFromMessage,
+.attachFromMessage:focus-visible {
+  opacity: 1;
+}
+
+.attachFromMessage:hover {
+  background: var(--surface-hover);
+}
+
+/* Inline links: the button sits after the text rather than over it. */
+.mdLinkWrap {
+  position: relative;
+  display: inline;
+  white-space: nowrap;
+}
+
+/*
+ * The link itself wraps. `nowrap` above is there to keep the attach button on the same line as the end of
+ * the link, but the link inherited it, so a long URL could never break and the whole chat scrolled
+ * sideways (production, 2026-09-29) — the `overflow-wrap: anywhere` on .mdLink had nothing to act on.
+ * Breaks are allowed inside the link; between its last fragment and the button they still are not.
+ */
+.mdLinkWrap > .mdLink {
+  white-space: normal;
+}
+
+.mdLinkWrap .attachFromMessage {
+  position: static;
+  display: inline-flex;
+  width: 17px;
+  height: 17px;
+  margin-left: 4px;
+  font-size: 12px;
+  vertical-align: middle;
+}
+
+
+/* ------------------------------------------------------------ gallery ---- */
+
+/*
+ * Everything a reply referenced, beneath its text. Tiles are a FIXED size on
+ * purpose: the number of images a page read returns is unbounded, and letting
+ * them size themselves is what pushed the actual answer off screen.
+ */
+.gallery {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.galleryTile {
+  position: relative;
+  width: 128px;
+  height: 96px;
+  flex: 0 0 auto;
+  border: 1px solid var(--border);
+  border-radius: var(--r-ctl);
+  background: var(--surface-input);
+  overflow: hidden;
+}
+
+.galleryThumbButton {
+  display: block;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: zoom-in;
+}
+
+.galleryThumb {
+  width: 100%;
+  height: 100%;
+  /* cover fills the tile; the modal shows the whole image with contain. */
+  object-fit: cover;
+  display: block;
+}
+
+/* #628: a PDF's first page — the top of the page is what identifies it. */
+.galleryPdfPage {
+  object-position: top;
+  background: var(--card);
+}
+
+.galleryPdfBadge {
+  position: absolute;
+  left: 4px;
+  bottom: 4px;
+  padding: 1px 5px;
+  border-radius: var(--r-ctl);
+  background: var(--card);
+  border: 1px solid var(--border);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: .03em;
+  color: var(--accent);
+}
+
+/* A link, or an image whose host refused — same fixed box either way. */
+.galleryLinkTile {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+  width: 100%;
+  height: 100%;
+  padding: 8px;
+  text-decoration: none;
+  overflow: hidden;
+}
+
+.galleryLinkHost {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .03em;
+  color: var(--accent);
+  text-transform: uppercase;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.galleryLinkLabel {
+  font-size: 11px;
+  line-height: 1.3;
+  color: var(--ink);
+  /* Clamped rather than scrolled: the tile height is fixed. */
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.galleryAttach {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--card);
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity .15s ease;
+}
+
+.galleryTile:hover .galleryAttach,
+.galleryAttach:focus-visible {
+  opacity: 1;
+}
+
+/* -------------------------------------------------------------- modal ---- */
+
+.modalBackdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--overlay);
+}
+
+.modalBody {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  /* Bounded by the viewport, so a huge image cannot overflow the screen. */
+  max-width: min(90vw, 900px);
+  max-height: 90vh;
+  padding: 10px;
+  border-radius: var(--r-card);
+  background: var(--card);
+  box-shadow: var(--modal-shadow);
+}
+
+.modalImage {
+  max-width: 100%;
+  /* Leaves room for the footer inside the 90vh cap. */
+  max-height: calc(90vh - 80px);
+  object-fit: contain;
+  border-radius: var(--r-ctl);
+}
+
+/* A PDF in the viewer: the browser's own reader, page-sized. */
+.modalPdf {
+  display: block;
+  width: min(900px, 90vw);
+  height: 80vh;
+  border: 0;
+  border-radius: 8px;
+  background: var(--card);
+}
+
+.modalFooter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.modalLabel {
+  font-size: 12px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.modalOpen {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.modalClose {
+  position: absolute;
+  top: -10px;
+  right: -10px;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--card);
+  color: var(--ink);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+@media (max-width: 720px) {
+  .galleryTile {
+    width: 96px;
+    height: 72px;
+  }
+
+  .mdPreview {
+    width: 200px;
+    height: 140px;
+  }
+}
+
+/*
+ * Inline post preview card (SPEC #317).
+ *
+ * The chip is inline so it sits inside a sentence; the expanded body is
+ * block-level. That is why the wrapper is a `span` with `display: block` on the
+ * body rather than a `div`: react-markdown puts the link inside a `<p>`, and a
+ * `div` there is invalid HTML that React warns about (AC-7).
+ */
+.postCardWrap {
+  display: inline;
+}
+
+.postCardChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 2px 8px;
+  border: 1px solid var(--divider);
+  border-radius: 999px;
+  background: var(--surface-hover);
+  color: inherit;
+  font: inherit;
+  font-size: 0.92em;
+  cursor: pointer;
+  vertical-align: baseline;
+}
+
+.postCardChip:hover,
+.postCardChip:focus-visible {
+  border-color: var(--accent);
+}
+
+.postCardLabel {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 22ch;
+}
+
+.postCardStatus {
+  font-size: 0.8em;
+  text-transform: lowercase;
+  color: var(--faint);
+}
+
+.postCardBody {
+  display: block;
+  /* Fixed max width so a preview never widens the message column. */
+  max-width: min(100%, 340px);
+  margin: 8px 0;
+}
+
+.postCardUnavailable {
+  color: var(--faint);
+  font-size: 0.92em;
+}
+
+/*
+ * ```chorus-post block — the whole post as a card.
+ *
+ * Width is capped so a card never widens the message column, and the media frame
+ * inside PostPreview is fixed-height, so the reply above never shifts as images
+ * resolve.
+ */
+.postBlock {
+  max-width: min(100%, 360px);
+  margin: 10px 0;
+}
+
+.postBlockHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  font-size: 11.5px;
+  color: var(--faint);
+}
+
+.postBlockStatus {
+  padding: 1px 7px;
+  border: 1px solid var(--divider);
+  border-radius: 999px;
+  text-transform: lowercase;
+}
+
+.postBlockPlatforms {
+  text-transform: capitalize;
+}
+
+.postBlockCount {
+  margin-left: auto;
+}
+
+/* Fallback when a post block will not parse — shown as the raw fence. */
+.mdCode {
+  display: block;
+  overflow-x: auto;
+  padding: 8px 10px;
+  border: 1px solid var(--divider);
+  border-radius: 8px;
+  font-size: 11.5px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/*
+ * Mermaid diagrams.
+ *
+ * A diagram can be arbitrarily wide, so it scrolls INSIDE its own box — the
+ * message column must never widen or scroll horizontally because of one.
+ */
+.diagram {
+  max-width: 100%;
+  overflow-x: auto;
+  margin: 10px 0;
+  padding: 10px;
+  border: 1px solid var(--divider);
+  border-radius: 10px;
+}
+
+.diagram svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.diagramFallback {
+  margin: 10px 0;
+}
+
+.diagramFallbackNote {
+  font-size: 11.5px;
+  color: var(--faint);
+  margin-bottom: 4px;
+}
+
+/*
+ * Artifacts: a compact chip in the chat, and a panel beside it.
+ */
+.artifactChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  max-width: 100%;
+  padding: 5px 11px;
+  border: 1px solid var(--divider);
+  border-radius: 10px;
+  background: var(--surface-hover);
+  color: inherit;
+  font: inherit;
+  font-size: 0.94em;
+  cursor: pointer;
+  text-align: left;
+}
+
+.artifactChip:hover,
+.artifactChip:focus-visible {
+  border-color: var(--accent);
+}
+
+.artifactChipLabel {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 28ch;
+}
+
+.artifactChipHint {
+  font-size: 0.82em;
+  color: var(--faint);
+}
+
+/*
+ * The panel, side by side only where there is room for both.
+ *
+ * **The breakpoint was 900px and that was measured against the wrong width.** The panel is the fourth
+ * column on this page, not the second: the dashboard's own navigation takes ~230px and the thread list
+ * another ~240 before the conversation gets any. At a 1280px window the arithmetic came out as
+ * 1280 − 230 − 240 − 46vw ≈ 140px of chat, and the transcript rendered one word per line beside a
+ * perfectly comfortable document. Verified in a browser at 1280 — it is not a subtle effect, it is
+ * unreadable.
+ *
+ * So the split needs a genuinely wide window, and below that the panel takes over the view the way it
+ * already did on a phone: full screen, with its own close button. A document you can read and a chat
+ * you can return to beats two columns that are each too narrow to use.
+ *
+ * `flex: 0 1 auto` and `min-width` together: above the breakpoint the panel gives ground before the
+ * conversation does, and stops at a width a document is still legible in.
+ */
+.artifactPanel {
+  display: flex;
+  flex-direction: column;
+  width: min(46vw, 620px);
+  min-width: 360px;
+  flex: 0 1 auto;
+  border-left: 1px solid var(--divider);
+  height: 100%;
+  overflow: hidden;
+}
+
+/*
+ * #546: no more full-screen takeover below 1400px. The panel now lives in the chat's pane host
+ * (`panes/PaneHost.tsx`), which sits beside the chat and becomes a slide-over from the right on a narrow
+ * window — the conversation stays on screen either way.
+ */
+
+/*
+ * The post panel (#497): the same slot and the same breakpoint as an artifact, a little wider — a
+ * board of channel cards needs room for two cards side by side before it is worth splitting the view.
+ * Below 1400px it takes the view like the artifact panel does, for the reason given above.
+ */
+.postPanel {
+  width: min(44vw, 660px);
+  min-width: 420px;
+}
+
+
+
+/* The quick changes (#498): the compose chips, sending the same prompts as their slash commands. */
+.postQuick {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--divider);
+}
+
+.postPanelBody {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.postPanelBody > p {
+  padding: 12px 16px;
+  margin: 0;
+}
+
+.artifactHead {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--divider);
+}
+
+.artifactHeadMain {
+  flex: 1;
+  min-width: 0;
+}
+
+.artifactTitle {
+  display: block;
+  font-weight: 700;
+  font-size: 13.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.artifactMeta {
+  font-size: 11.5px;
+  color: var(--faint);
+  text-transform: lowercase;
+}
+
+.artifactClose {
+  border: none;
+  background: transparent;
+  color: var(--ink-mid);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+}
+
+/* The Attach menu is placed against the toolbar, not its button, so it can never run off the panel. */
+.artifactToolbar {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 10px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--divider);
+}
+
+.artifactTabs,
+.artifactActions,
+.artifactVersions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+/* Each group stays on one line; the toolbar wraps between them instead of inside them. */
+.artifactTabs,
+.artifactActions {
+  flex-wrap: nowrap;
+}
+
+.artifactTab,
+.artifactTabActive,
+.artifactAction,
+.artifactVersion,
+.artifactVersionActive {
+  padding: 3px 10px;
+  border: 1px solid var(--divider);
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.artifactTabActive,
+.artifactVersionActive {
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.artifactVersions {
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--divider);
+  font-size: 12px;
+}
+
+.artifactBody {
+  flex: 1;
+  overflow: auto;
+  padding: 14px;
+}
+
+.artifactLoading {
+  color: var(--faint);
+}
+
+.artifactSource {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+/* The iframe is sandboxed; see ArtifactPanel for why that matters. */
+.artifactFrame {
+  width: 100%;
+  height: 100%;
+  min-height: 420px;
+  border: 1px solid var(--divider);
+  border-radius: 8px;
+  /* allow-literal: the sandboxed iframe renders arbitrary artifact HTML, so it needs the
+     browser's own default page backdrop rather than the app's theme — a themed ground
+     would show through any artifact that does not paint its own. */
+  background: #fff;
+}
+
+/* #607 part 3: an SVG artifact, drawn through an <img> so it can never run script. */
+.artifactSvg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto;
+}
+
+/* #607 part 5: full screen — the panel is portalled to the document root and covers the window. */
+.artifactPanel.artifactPanelFull {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  width: auto;
+  min-width: 0;
+  border-left: none;
+  background: var(--canvas);
+}
+
+/* The new-tab page: the panel fills the window it was opened in. */
+.artifactPanel.artifactPanelPage {
+  width: 100%;
+  min-width: 0;
+  height: 100vh;
+  border-left: none;
+  background: var(--canvas);
+}
+
+.artifactPanelFull .artifactFrame,
+.artifactPanelPage .artifactFrame {
+  min-height: calc(100vh - 180px);
+}
+
+.artifactHeadAction {
+  flex-shrink: 0;
+  padding: 3px 9px;
+  border: 1px solid var(--divider);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink-mid);
+  font: inherit;
+  font-size: 11.5px;
+  line-height: 1.4;
+  white-space: nowrap;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.artifactHeadAction:hover,
+.artifactHeadAction:focus-visible {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.artifactNotice {
+  padding: 6px 14px;
+  font-size: 12px;
+  color: var(--danger);
+  border-bottom: 1px solid var(--divider);
+}
+
+/* The body positions the "Ask Chorus to change this" button against the selection. */
+.artifactBody {
+  position: relative;
+}
+
+.editPick {
+  position: absolute;
+  z-index: 30;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--canvas);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+}
+
+.editPickForm {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.editPickInput {
+  width: 220px;
+  padding: 4px 8px;
+  border: 1px solid var(--divider);
+  border-radius: 8px;
+  background: var(--surface-input);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12.5px;
+}
+
+/* #607 part 5: Compare — a revision against the current version, line by line. */
+.diff {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.diffSummary {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.diffLines {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.diffSame,
+.diffAdd,
+.diffDel {
+  padding: 0 6px;
+  border-radius: 3px;
+}
+
+.diffSame {
+  color: var(--muted);
+}
+
+.diffAdd {
+  background: var(--success-bg);
+  color: var(--success);
+}
+
+.diffDel {
+  background: var(--danger-bg);
+  color: var(--danger);
+  text-decoration: line-through;
+}
+
+.diffMark {
+  display: inline-block;
+  width: 1.2em;
+  user-select: none;
+}
+
+/* The real mermaid parse error, shown under a diagram that would not render.
+   Previously mermaid appended its own "Syntax error in text" block to
+   document.body instead — outside the React tree, at the bottom of the page. */
+.diagramErrorDetail {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--danger-border);
+  background: var(--danger-bg);
+  color: var(--danger);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-x: auto;
+}
+
+/*
+ * The post-reference hover card.
+ *
+ * The token renders as a link in the prose and the card is a portalled popover, so nothing in the
+ * message moves when it opens — which is the whole reason the inline chip was replaced.
+ */
+.postLink {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-thickness: 1px;
+  cursor: pointer;
+  border-radius: 3px;
+}
+.postLink:hover { text-decoration-thickness: 2px; }
+.postLink:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+
+.postHoverCard {
+  position: fixed;
+  z-index: 60;
+  padding: 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: var(--r-card);
+  background: var(--card);
+  backdrop-filter: blur(12px);
+  box-shadow: var(--modal-shadow);
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+/* Anchored by its bottom edge when it opens upwards, so it grows away from the link either way. */
+.postHoverCardAbove { transform: translateY(-100%); }
+
+.postHoverHead {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  justify-content: space-between;
+  font-size: 0.72rem;
+}
+.postHoverPlatforms { color: var(--ink-low); text-transform: capitalize; }
+
+.postHoverMedia { display: flex; flex-direction: column; gap: 0.35rem; }
+.postHoverMediaCount { font-size: 0.7rem; color: var(--ink-low); }
+.postHoverThumbs { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+
+.postHoverThumb {
+  width: 2.75rem;
+  height: 2.75rem;
+  border-radius: 0.5rem;
+  overflow: hidden;
+  border: 1px solid var(--border-soft);
+  background: var(--surface-hover);
+  flex: none;
+}
+.postHoverThumbMedia { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+.postHoverDoc {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  max-width: 100%;
+  padding: 0.25rem 0.5rem;
+  border-radius: 0.5rem;
+  border: 1px solid var(--border-soft);
+  background: var(--surface-hover);
+  font-size: 0.72rem;
+  color: var(--ink-dim);
+}
+.postHoverDocName {
+  max-width: 9rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .postHoverCard { transition: none; }
+}
+
+/* #589: "Attach to post" in the artifact pane — this chat's posts, each with PDF or image. */
+.attachRoot {
+  position: static;
+}
+
+.attachMenu {
+  position: absolute;
+  right: 14px;
+  top: calc(100% + 4px);
+  z-index: 20;
+  width: min(380px, calc(100% - 28px));
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--canvas);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.25);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.attachRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 8px;
+}
+
+.attachRow:hover {
+  background: var(--surface-hover);
+}
+
+.attachLabel {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  font-size: 13px;
+  color: var(--ink);
+}
+
+.attachName,
+.attachSub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachRow .artifactAction {
+  flex-shrink: 0;
+}
+
+.attachSub {
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.attachHint {
+  padding: 8px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+/*
+ * #607: a markdown artifact in a themed project chat, previewed as the page its PDF prints — the rules of
+ * `themedPrintCss` (shareflow/src/adapters/web/document.ts) over the chat's markdown, in the project's own
+ * `--t-*` variables set inline on the element. After `.markdown`, so at equal specificity these win.
+ */
+.themedDoc {
+  /*
+   * The theme's variables, set inline from the chat's project theme. These defaults are the app's own
+   * tokens, for the moment before a theme arrives; the inline style always wins over them.
+   */
+  --t-bg: var(--card);
+  --t-surface: var(--surface-input);
+  --t-primary: var(--ink);
+  --t-accent: var(--accent);
+  --t-text: var(--ink);
+  --t-muted: var(--muted);
+  --t-on-primary: var(--card);
+  --t-radius: 8px;
+  --t-font-heading: inherit;
+  --t-font-body: inherit;
+  min-height: 100%;
+  padding: 28px 30px;
+  border-radius: 8px;
+  background: var(--t-bg);
+  color: var(--t-text);
+  font-family: var(--t-font-body);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.themedRule {
+  height: 6px;
+  margin: 0 0 18px;
+  border-radius: var(--t-radius);
+  background: linear-gradient(90deg, var(--t-primary), var(--t-accent));
+}
+
+.themedDoc :global(h1),
+.themedDoc :global(h2),
+.themedDoc :global(h3) {
+  font-family: var(--t-font-heading);
+  color: var(--t-primary);
+  line-height: 1.25;
+  margin: 1.2em 0 0.5em;
+}
+
+/* The PDF's 20/15/12.5pt over an 11pt body, at this page's 14px. */
+.themedDoc :global(h1) {
+  font-size: 25px;
+  padding-bottom: 0.3em;
+  border-bottom: 2px solid var(--t-accent);
+}
+
+.themedDoc :global(h2) { font-size: 19px; }
+.themedDoc :global(h3) { font-size: 16px; }
+.themedDoc :global(h1:first-child),
+.themedDoc :global(h2:first-child),
+.themedDoc :global(h3:first-child) { margin-top: 0; }
+
+.themedDoc :global(a),
+.themedDoc .mdLink { color: var(--t-accent); }
+
+.themedDoc :global(blockquote) {
+  margin-left: 0;
+  padding-left: 1em;
+  border-left: 3px solid var(--t-accent);
+  color: var(--t-muted);
+}
+
+.themedDoc :global(pre),
+.themedDoc :global(code) {
+  background: var(--t-surface);
+  border-color: transparent;
+}
+
+.themedDoc :global(pre) { border-radius: var(--t-radius); }
+.themedDoc :global(th) { background: var(--t-surface); }
+.themedDoc :global(th),
+.themedDoc :global(td) { border-color: var(--t-muted); }
+.themedDoc :global(hr) { border-top-color: var(--t-muted); }

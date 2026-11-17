@@ -1,0 +1,67 @@
+{
+  "name": "@retinue/shareflow",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The ShareFlow product integration for the retinue platform: its tools, prompts and adapters. Product code, not a platform extension point \u2014 it lives with the product it serves.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b && tsc -p tsconfig.test.json --noEmit",
+    "test": "tsc -b && vitest run",
+    "clean": "rm -rf dist tsconfig.tsbuildinfo",
+    "exercise:tools": "tsc -b && node scripts/exercise-tools.mjs",
+    "eval:agent": "tsc -b && node scripts/agent-eval.mjs",
+    "scan:old-runtime-capabilities": "node scripts/scan-old-runtime-capabilities.mjs",
+    "check:peers": "node scripts/check-optional-peers.mjs",
+    "ci": "npm run typecheck && npm test && npm run check:peers",
+    "repair:conversation-timestamps": "node scripts/repair-conversation-timestamps.mjs"
+  },
+  "dependencies": {
+    "@ai-sdk/anthropic": "^4.0.42",
+    "@ai-sdk/azure": "^4.0.49",
+    "@ai-sdk/google": "^4.0.51",
+    "@ai-sdk/mistral": "^4.0.33",
+    "@ai-sdk/openai": "^4.0.47",
+    "@ai-sdk/openai-compatible": "^3.0.37",
+    "@retinue/agentkit": "^0.3.5",
+    "@types/markdown-it": "^14.2.0",
+    "@whatwg-node/server": "^0.11.0",
+    "ai": "7.0.69",
+    "bullmq": "^6.2.2",
+    "graphql": "^16.14.2",
+    "graphql-yoga": "^5.22.0",
+    "ioredis": "^6.0.0",
+    "markdown-it": "^14.3.0",
+    "pg": "^8.23.0",
+    "playwright": "^1.63.0",
+    "unpdf": "^1.8.1",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.23.1",
+    "mermaid": "^11.16.1",
+    "typescript": "^5",
+    "vitest": "^4.1.9"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "author": "Rise Experts",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Rise-Experts/retinue.git",
+    "directory": "shareflow"
+  }
+}

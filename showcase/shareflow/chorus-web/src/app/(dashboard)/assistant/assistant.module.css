@@ -1,0 +1,1144 @@
+/*
+ * Edge to edge, like Claude Code: the dashboard shell pads every page by 26px (`layout.module.css`
+ * `.scroll`), and inside that the chat's scrollbar floated mid-screen, a strip sat under the chat box,
+ * and the side pane stood off the top and right edges (production, #557). Compose cancels the shell's
+ * padding; the chat keeps its own inset (`--chat-gutter`) so text never touches an edge, and the pane
+ * meets the chat at its border with no gap, which is where the chat's scrollbar now sits.
+ */
+.page {
+  --shell-pad-block: 26px;
+  --shell-pad-inline: 26px;
+  display: flex;
+  margin: calc(-1 * var(--shell-pad-block)) calc(-1 * var(--shell-pad-inline));
+  height: calc(100% + 2 * var(--shell-pad-block));
+  gap: 0;
+}
+
+@media (max-width: 640px) {
+  .page {
+    --shell-pad-block: 16px;
+    --shell-pad-inline: 12px;
+  }
+}
+
+.newChat {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  /* No border: a solid button with a border of a different colour reads as two shapes. */
+  border: 0;
+  background: var(--primary);
+  color: var(--primary-ink);
+  font-weight: 650;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+
+.newChat:disabled {
+  opacity: .5;
+  cursor: not-allowed;
+}
+
+.threadListLabel {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: 0 2px;
+}
+
+.threadEmpty {
+  padding: 8px;
+  font-size: 12.5px;
+  color: var(--faint);
+}
+
+/*
+ * The active row: a tint AND a rail AND a weight change.
+ *
+ * It was a tint alone, in `--surface-input` — a colour two steps from the canvas, which on the dark
+ * theme is very nearly the canvas. Three signals rather than one, because "which conversation am I
+ * looking at" is the question this list exists to answer.
+ */
+.threadItemActive,
+.threadItemActive:hover {
+  background: var(--primary-soft);
+  border-left-color: var(--primary);
+}
+
+.threadItemActive .threadButton {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+/*
+ * The filter.
+ *
+ * Grouping by day stops helping the moment one day holds forty conversations, which is what a real
+ * workspace looks like after a week. Shown only once there is enough to filter.
+ */
+.threadFilter {
+  width: 100%;
+  padding: 7px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--surface-input);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12.5px;
+}
+
+.threadFilter::placeholder {
+  color: var(--faint);
+}
+
+.threadFilter:focus-visible {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
+/*
+ * The clamp lives on an inner span, and the padding is why.
+ *
+ * With `-webkit-line-clamp` on the button itself, the *first* deploy of this showed two lines and then
+ * the top eight pixels of a third: `overflow: hidden` clips the border box, so the bottom padding is
+ * inside the clip and a third line bleeds into it. Chrome also blockifies `display: -webkit-box` now
+ * that it implements the standard `line-clamp` — the computed value came back `flow-root` — so the
+ * element's own height was right and the discard was not happening.
+ *
+ * A span with no padding clips exactly on the line boundary either way, which is the property worth
+ * having: it does not depend on which of the two clamp implementations the browser is using.
+ */
+.threadTitle {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
+  line-clamp: 1;
+  overflow: hidden;
+  /* `anywhere` rather than `break-word`: a pasted URL as a thread title must not push the rail wide. */
+  overflow-wrap: anywhere;
+}
+
+/*
+ * A centred reading column, like Claude Code: messages and the chat box stop at `--chat-column` on a wide
+ * screen instead of stretching edge to edge. Only the content is capped — the thread's scroll area still
+ * spans the whole chat (`.thread` in messages.module.css), so its scrollbar sits at the right edge rather
+ * than beside the text. Asked for after #557 went live on a large display.
+ */
+.wrap {
+  --chat-column: 820px;
+  --chat-gutter: 22px;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  flex: 1;
+  min-width: 0;
+  gap: 12px;
+  padding-inline: var(--chat-gutter);
+}
+
+.title {
+  font-family: var(--font-display);
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.permissionCard {
+  align-self: flex-start;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 70%;
+  background: var(--warn-bg);
+  border: 1px solid var(--warn);
+  border-radius: 12px;
+  padding: 10px 12px;
+}
+
+.permissionText {
+  color: var(--ink);
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+
+.permissionActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.permissionAllow {
+  padding: 8px 14px;
+  border-radius: var(--r-pill);
+  border: 0;
+  background: var(--primary);
+  color: var(--primary-ink);
+  font-weight: 700;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.permissionAllow:disabled {
+  opacity: .5;
+  cursor: not-allowed;
+}
+
+.permissionDeny {
+  padding: 8px 14px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--danger-border);
+  background: var(--danger-bg);
+  color: var(--danger);
+  font-weight: 700;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.permissionDeny:disabled {
+  opacity: .5;
+  cursor: not-allowed;
+}
+
+.permissionSessionLink {
+  align-self: flex-start;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.permissionSessionLink:disabled {
+  opacity: .5;
+  cursor: not-allowed;
+}
+
+/*
+ * The composer is now a column: attachment chips sit above the input row, so the
+ * whole thing reads as one control rather than a bar floating over a text field.
+ */
+/*
+ * The composer is **one** surface, not a box inside a box.
+ *
+ * It used to be a bordered card containing a *second* bordered, differently-coloured box for the
+ * editor, with the attach button as a third bordered box beside it — three nested rectangles for one
+ * text field, and no focus state anywhere, so typing gave no signal that the field was live. The field
+ * is now the whole thing: the editor is transparent inside it and `:focus-within` lights the border
+ * and the ring, which is the one piece of feedback a composer actually owes you.
+ */
+.composer {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  position: relative;
+  padding: 8px 8px 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--card);
+  box-shadow: 0 1px 2px rgba(16, 12, 34, .04);
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.composer:focus-within {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
+.composerRow {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+/* Drag-and-drop feedback: the whole composer is the drop target. */
+.composerDragging {
+  border-color: var(--accent);
+  background: var(--accent-tint);
+}
+
+.dropHint {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--r-card);
+  background: var(--accent-tint);
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 600;
+  pointer-events: none;
+}
+
+.editorShell {
+  flex: 1;
+  min-width: 0;
+  /* Grows with the prompt, then scrolls — a long paste must not push the
+     message pane off screen. */
+  max-height: 200px;
+  overflow-y: auto;
+  /* No border, no fill: the composer around it is the field. */
+  padding: 8px 4px;
+}
+
+.editorContent {
+  outline: none;
+  font-size: 14.5px;
+  line-height: 1.55;
+  color: var(--ink);
+  min-height: 24px;
+}
+
+.editorContent :global(p) {
+  margin: 0 0 6px;
+}
+
+.editorContent :global(p:last-child) {
+  margin-bottom: 0;
+}
+
+.editorContent :global(ul),
+.editorContent :global(ol) {
+  margin: 0 0 6px;
+  padding-left: 1.3em;
+}
+
+.editorContent :global(code) {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12.5px;
+  background: var(--surface-hover);
+  border-radius: 4px;
+  padding: 1px 4px;
+}
+
+.editorContent :global(a) {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+/* TipTap's Placeholder extension marks the first empty node with this class. */
+.editorContent :global(p.is-editor-empty:first-child::before) {
+  content: attr(data-placeholder);
+  color: var(--faint);
+  float: left;
+  height: 0;
+  pointer-events: none;
+}
+
+.input {
+  flex: 1;
+  padding: 10px 12px;
+  border-radius: var(--r-ctl);
+  border: 1px solid var(--border);
+  background: var(--surface-input);
+  color: var(--ink);
+  font-size: 13.5px;
+}
+
+.send {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 14px;
+  border-radius: 12px;
+  border: 0;
+  background: var(--primary);
+  color: var(--primary-ink);
+  font-weight: 650;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 120ms ease, transform 80ms ease;
+}
+
+.send:active:not(:disabled) {
+  /* One pixel, because a control that does not move under the finger reads as one that did not fire. */
+  transform: translateY(1px);
+}
+
+.sendIcon {
+  display: block;
+}
+
+/*
+ * The keyboard hint, shown only while the composer has focus.
+ *
+ * Enter-sends is not discoverable, and the cost of getting it wrong is a half-written message posted to
+ * an assistant. Always-on it would be furniture; on focus it is an answer to the question you have at
+ * the moment you have it.
+ */
+.composerHint {
+  display: none;
+  padding: 0 6px 2px;
+  font-size: 11.5px;
+  color: var(--faint);
+}
+
+.composer:focus-within .composerHint {
+  display: block;
+}
+
+.send:disabled {
+  opacity: .5;
+  cursor: not-allowed;
+}
+
+@media (max-width: 720px) {
+  .page {
+    flex-direction: column;
+  }
+
+  /* The dashboard shell already drops to 12px side padding here, so keep the
+     chat's own inset small rather than stacking two generous paddings on a
+     narrow screen. */
+  .wrap {
+    --chat-gutter: 4px;
+  }
+}
+
+/* ------------------------------------------------------- attachments ---- */
+
+/* The native input is replaced by the paperclip button. */
+.fileInput {
+  display: none;
+}
+
+/* A ghost icon button: it is a secondary action inside the field, not a third bordered box. */
+.attachButton {
+  flex-shrink: 0;
+  width: 34px;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.attachButton:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--ink-mid);
+}
+
+.attachButton:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.attachButton:disabled {
+  opacity: .4;
+  cursor: not-allowed;
+}
+
+.attachButton:hover:not(:disabled) {
+  color: var(--ink);
+  background: var(--surface-hover);
+}
+
+.attachButton:disabled {
+  opacity: .45;
+  cursor: not-allowed;
+}
+
+.attachBar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.attachChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 220px;
+  padding: 4px 8px 4px 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-ctl);
+  background: var(--card);
+  font-size: 12px;
+  color: var(--ink);
+}
+
+.attachChipUploading {
+  opacity: .7;
+}
+
+.attachThumb {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.attachKind {
+  flex-shrink: 0;
+  padding: 0 6px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  border-radius: 6px;
+  background: var(--surface-hover);
+  color: var(--muted);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: .04em;
+}
+
+.attachName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachRemove {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.attachRemove:hover {
+  color: var(--ink);
+  background: var(--surface-hover);
+}
+
+.attachSpinner {
+  flex-shrink: 0;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  animation: attachSpin .7s linear infinite;
+}
+
+@keyframes attachSpin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .attachSpinner { animation-duration: 2s; }
+}
+
+/* Filenames shown under a sent user message. */
+.sentAttachments {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 5px;
+}
+
+.sentAttachment {
+  max-width: 180px;
+  padding: 2px 7px;
+  border-radius: var(--r-pill);
+  background: var(--surface-hover);
+  color: var(--muted);
+  font-size: 10.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/*
+ * Agent/team picker. Only rendered when more than one component exists, so it
+ * never appears as a dropdown with a single option.
+ */
+/*
+ * Header row: title on the left, switcher on the right. Wraps rather than
+ * shrinking the select, so a long component name never truncates on a narrow
+ * viewport.
+ */
+.headerRow {
+  display: flex;
+  align-items: baseline;
+  /* `flex-start`, not `space-between`: the title and the thread name are one group now, and the status
+     pushes itself right with its own `margin-left: auto`. */
+  justify-content: flex-start;
+  gap: 8px;
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+
+.switcher {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  cursor: pointer;
+}
+
+/* Visible label, not just an aria-label: a bare select gives no clue what it
+ * chooses, and this one changes who answers. */
+.switcherLabel {
+  font-size: 11.5px;
+  color: var(--faint);
+  white-space: nowrap;
+}
+
+.componentPicker {
+  padding: 4px 8px;
+  border: 1px solid var(--divider);
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12.5px;
+  max-width: 220px;
+  cursor: pointer;
+}
+
+.componentPicker:disabled {
+  /* Disabled mid-run: switching would abandon a stream in flight. */
+  opacity: 0.55;
+  cursor: default;
+}
+
+/* ---------------------------------------------------------------------------
+   What is left of the plain `/assistant/next` chat: the four classes the
+   question card and its error line still use.
+
+   The rest of that block is gone, and two of its rules were doing damage. It
+   claimed "every class here is new rather than reused, so nothing in the
+   current chat can shift underneath it" — and it redefined `.threadList` and
+   `.composerRow`, both of which the restored chat uses. Being *later* in the
+   file, those won: a 1px `border-top` drawn across the composer (reported as
+   "we have a line in the input which looks weird") and a `grid-row` plus a
+   second `border-right` on the thread rail.
+
+   Duplicate class blocks in one stylesheet are exactly the cascade collision
+   that is invisible in review: both rules read as correct on their own.
+   --------------------------------------------------------------------------- */
+
+.errorText {
+  margin: 0;
+  font-size: 0.9em;
+  color: var(--danger);
+}
+
+/* "Ask again" inside an error line: the line's own colour, underlined. */
+.retryLink {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.retryLink:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.composerInput {
+  flex: 1;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  font: inherit;
+}
+
+.sendButton {
+  padding: 10px 16px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  cursor: pointer;
+  font: inherit;
+}
+
+.sendButton:disabled,
+.composerInput:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/*
+ * The interaction cards — a question the assistant is waiting on, and an approval it needs decided.
+ *
+ * Set apart from the surrounding activity lines on purpose: everything else in a turn is a record of
+ * what happened, and these two are the only places the transcript is waiting on a person. They use the
+ * app's own tokens (`--card`, `--border`, `--accent`, `--danger`) rather than new colours, so the
+ * chat inherits whatever the theme decides instead of carrying a second palette that drifts from it.
+ */
+.interactionCard {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 8px 0;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  /* A left rail rather than a fill: it marks the card as needing attention without shouting. */
+  border-left: 3px solid var(--accent);
+  border-radius: var(--r-card);
+  background: var(--card);
+}
+
+.interactionField {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.interactionPrompt {
+  margin: 0;
+  padding: 0;
+  font-weight: 600;
+  color: var(--ink);
+  /* The prompt is a question, so it reads better unbroken across awkward line ends. */
+  text-wrap: balance;
+}
+
+.interactionOption {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  cursor: pointer;
+  color: var(--ink);
+}
+
+.interactionButtons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.secondaryButton {
+  padding: 10px 16px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+  font: inherit;
+}
+
+/*
+ * Deny is styled apart from the three allow decisions, because those three differ in *scope* and this
+ * one differs in *outcome*. Making it look like a fourth option of the same kind is how somebody
+ * clicks it thinking they picked a narrower approval.
+ */
+.denyButton {
+  padding: 10px 16px;
+  border-radius: 8px;
+  border: 1px solid var(--danger-border);
+  background: var(--danger-bg);
+  color: var(--danger);
+  cursor: pointer;
+  font: inherit;
+}
+
+.secondaryButton:disabled,
+.denyButton:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/*
+ * Pointer states for the primary controls.
+ *
+ * These did not exist: a gradient has no obvious hover, so none was written, and every
+ * primary button in the app was inert under the pointer. One flat colour makes all three
+ * states a line each.
+ */
+.newChat:hover:not(:disabled) { background: var(--primary-hover); }
+.newChat:active:not(:disabled) { background: var(--primary-press); }
+.newChat:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+
+.permissionAllow:hover:not(:disabled) { background: var(--primary-hover); }
+.permissionAllow:active:not(:disabled) { background: var(--primary-press); }
+.permissionAllow:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+
+.send:hover:not(:disabled) { background: var(--primary-hover); }
+.send:active:not(:disabled) { background: var(--primary-press); }
+.send:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+
+/*
+ * The slash-command menu.
+ *
+ * Inside the composer and above the field, so it inherits the focus ring and moves with the box. It is
+ * a list of *prompts*, not a second route into the runtime: accepting one fills the composer, and what
+ * happens next is an ordinary turn.
+ */
+.slashMenu {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-height: 264px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 4px;
+  margin: -2px -2px 4px;
+  border-radius: 12px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  box-shadow: 0 12px 28px rgba(16, 12, 34, .16);
+}
+
+.slashItem {
+  display: grid;
+  /*
+   * name | label | hint — a fixed name column so the slashes line up and the list reads as a table. Sized for
+   * the longest names (`/professional`, `/instructions`: 13 monospace characters); at 96px they ran into
+   * their labels (#641).
+   */
+  grid-template-columns: 112px minmax(0, auto) minmax(0, 1fr);
+  align-items: baseline;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.slashItemActive {
+  background: var(--primary-soft);
+}
+
+.slashName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--primary);
+}
+
+.slashLabel {
+  font-size: 13px;
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+.slashItemHint {
+  font-size: 12px;
+  color: var(--faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 620px) {
+  /* One column of names on a phone: the hint is the first thing that can go. */
+  .slashItem {
+    grid-template-columns: 108px minmax(0, 1fr);
+  }
+
+  .slashItemHint {
+    display: none;
+  }
+}
+
+/*
+ * The arguments on the permission card.
+ *
+ * A definition list because that is what it is — field, value — and because the label column keeping a
+ * fixed width is what makes three rows scannable rather than three sentences. `word-break` on the value
+ * so a post id or a URL wraps instead of widening the card.
+ */
+.permissionDetails {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 8px 0 2px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--surface-input);
+  border: 1px solid var(--border-faint);
+}
+
+.permissionDetail {
+  display: grid;
+  grid-template-columns: 104px minmax(0, 1fr);
+  gap: 10px;
+  align-items: baseline;
+}
+
+.permissionDetailLabel {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+.permissionDetailValue {
+  font-size: 12.5px;
+  color: var(--ink-mid);
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 620px) {
+  .permissionDetail {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 1px;
+  }
+}
+
+/*
+ * The header's second line of information.
+ *
+ * "Assistant" alone was the same on every thread, so switching conversations changed the transcript and
+ * nothing above it. The title is the user's own first sentence, so it is the most recognisable label
+ * there is — clipped to one line, because some of them are long.
+ */
+.headerThread {
+  min-width: 0;
+  max-width: 46ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding-left: 10px;
+  margin-left: 2px;
+  border-left: 1px solid var(--border);
+  font-size: 13px;
+  color: var(--muted);
+}
+
+/* "Thinking…" beside the title, so a run in flight is visible even when scrolled away from the answer. */
+.headerStatus {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--primary);
+}
+
+/*
+ * The composer's footer: the keyboard hint on the left, the context meter on the right.
+ *
+ * A row rather than two stacked lines, because the hint only appears on focus and the meter is always
+ * there — stacked, the meter would jump every time the field was focused.
+ */
+.composerFoot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 16px;
+  padding: 0 4px 2px;
+}
+
+/*
+ * How full the context window is.
+ *
+ * Quiet until it matters: the bar warms past 70% and turns to the warning colour past 90%. A meter that
+ * shouts at 5% is a meter people learn to ignore, and the number it is drawn against comes from the
+ * manifest rather than from here.
+ */
+.contextMeter {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.contextMeterLabel {
+  font-size: 11px;
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.contextTrack {
+  display: block;
+  width: 52px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--border);
+  overflow: hidden;
+}
+
+.contextFill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--primary);
+  transition: width 200ms ease, background 200ms ease;
+}
+
+.contextFillWarm {
+  background: var(--warn);
+}
+
+.contextFillFull {
+  background: var(--danger);
+}
+
+@media (max-width: 620px) {
+  /* The bar survives, the number goes: 52px of bar says "nearly full" on its own. */
+  .contextMeterLabel {
+    display: none;
+  }
+}
+
+/* ── Projects (#521) ─────────────────────────────────────────────────────────── */
+
+.projectsAdd {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--ink-mid);
+  border-radius: 8px;
+  padding: 3px 8px;
+  font-size: 12px;
+  cursor: pointer;
+  /* #526: also used as a link (the project page's "All posts" and "On the calendar"). */
+  text-decoration: none;
+}
+
+.projectItem {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 10px;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+  text-decoration: none;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.projectItem:hover {
+  background: var(--surface-hover);
+}
+
+.projectPage {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  /* Out to the chat's edges like the thread, so the scrollbar is at the right, not beside the cards. */
+  margin-inline: calc(-1 * var(--chat-gutter, 22px));
+  padding: 24px var(--chat-gutter, 22px) 32px;
+}
+
+/* The page's column, centred like the chat's (it sat against the left edge on a wide screen, #557). */
+.projectPage > * {
+  width: 100%;
+  max-width: var(--chat-column, 820px);
+  margin-inline: auto;
+  flex-shrink: 0;
+}
+
+.projectPageHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.projectName {
+  flex: 1;
+  min-width: 0;
+  font-size: 20px;
+  font-weight: 700;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  padding: 4px 8px;
+  background: transparent;
+  color: var(--ink);
+}
+
+.projectName:focus {
+  border-color: var(--border);
+  outline: none;
+}
+
+.projectField {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.projectInstructions {
+  width: 100%;
+  min-height: 220px;
+  resize: vertical;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px;
+  background: var(--surface-input);
+  color: var(--ink);
+  font: inherit;
+  line-height: 1.5;
+}
+
+.projectActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Project files and links (#523). */
+.projectAssetGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 10px;
+}
+
+.projectAsset {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  min-width: 0;
+}
+
+.projectAssetThumb {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+  border-radius: 8px;
+}
+
+.projectAssetKind,
+.projectAssetLink {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  aspect-ratio: 4 / 3;
+  border-radius: 8px;
+  background: var(--surface-hover);
+  color: var(--ink-mid);
+  font-size: 12px;
+  text-align: center;
+  padding: 6px;
+  overflow: hidden;
+  text-decoration: none;
+  word-break: break-all;
+}

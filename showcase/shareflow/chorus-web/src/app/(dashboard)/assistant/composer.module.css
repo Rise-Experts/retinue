@@ -1,0 +1,642 @@
+/*
+ * The chat box — #549, styled like Claude Code's input: one large rounded box holding attachments,
+ * chips and the text with send at its corner, and a quiet row of controls under it.
+ *
+ * rgba(0,0,0,…) in shadows is a veil, not a colour (see Topbar.module.css).
+ */
+
+.wrap {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 4px 10px;
+  /* The same centred column as the messages (assistant `.wrap`). */
+  width: 100%;
+  max-width: var(--chat-column, 820px);
+  margin-inline: auto;
+  box-sizing: border-box;
+}
+
+.box {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  /* Equal top and bottom: measured on production, the line sat 4px under the box's centre (#576). */
+  padding: 11px 14px;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: var(--surface-input);
+  transition: border-color 0.15s ease;
+}
+
+.box:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-tint);
+}
+
+.boxDragging {
+  border-style: dashed;
+  border-color: var(--accent);
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 260px;
+  padding: 3px 4px 3px 9px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--border);
+  background: var(--surface-hover);
+  font-size: 12px;
+  color: var(--ink);
+}
+
+.chipLabel {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chipKind {
+  font-size: 10.5px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.chipRemove {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: none;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.chipRemove:hover,
+.chipRemove:focus-visible {
+  background: var(--divider);
+  color: var(--ink);
+  outline: none;
+}
+
+.inputRow {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.editor {
+  flex: 1;
+  min-width: 0;
+  max-height: 220px;
+  overflow-y: auto;
+  /* One line centres on the send button; more lines grow down from there (#576). */
+  min-height: 32px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.send {
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  border-radius: 10px;
+  border: none;
+  background: var(--accent);
+  color: var(--primary-ink);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.send:disabled {
+  background: var(--divider);
+  color: var(--muted);
+  cursor: default;
+}
+
+/* #747: the send button while a turn runs — the ink colour, so it does not read as "send". */
+.stop {
+  background: var(--ink);
+  color: var(--canvas);
+}
+
+.stop:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.send:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.controls {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 4px;
+  min-height: 32px;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.popRoot {
+  position: relative;
+}
+
+.tb {
+  height: 30px;
+  min-width: 30px;
+  padding: 0 7px;
+  border-radius: 8px;
+  border: none;
+  background: none;
+  color: var(--ink-dim, var(--muted));
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+}
+
+.tb:hover:not(:disabled),
+.tbOn {
+  background: var(--surface-hover);
+  color: var(--ink);
+}
+
+.tb:focus-visible {
+  outline: 2px solid var(--focus-ring);
+}
+
+.tb:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.tbRec {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+.tbText {
+  white-space: nowrap;
+}
+
+.ic {
+  width: 16px;
+  height: 16px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  flex-shrink: 0;
+}
+
+.menu {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 8px);
+  z-index: 50;
+  min-width: 220px;
+  max-width: calc(100vw - 32px);
+  max-height: min(420px, 60vh);
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--canvas);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.35);
+  display: flex;
+  flex-direction: column;
+}
+
+.menuRight {
+  left: auto;
+  right: 0;
+}
+
+.mh {
+  padding: 6px 10px 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.mi {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 9px;
+  border: none;
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  font-size: 13.5px;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.mi:hover:not(:disabled),
+.mi:focus-visible,
+.miActive {
+  background: var(--surface-hover);
+  outline: none;
+}
+
+.mi:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.miText {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.miSub {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.tag {
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: var(--divider);
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.num {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.sep {
+  height: 1px;
+  margin: 4px 8px;
+  background: var(--divider);
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.effort {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 8px 8px 6px;
+}
+
+.effortHead {
+  display: flex;
+  gap: 8px;
+  font-size: 14px;
+}
+
+.effortEnds {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.effortTrack {
+  height: 34px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--surface-hover);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 12px;
+}
+
+.effortDot,
+.effortThumb {
+  border: none;
+  cursor: pointer;
+  padding: 0;
+}
+
+.effortDot {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: none;
+  position: relative;
+}
+
+.effortDot::after {
+  content: "";
+  position: absolute;
+  inset: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.effortThumb {
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  background: var(--ink);
+}
+
+.effortDot:focus-visible,
+.effortThumb:focus-visible {
+  outline: 2px solid var(--focus-ring);
+}
+
+.effortHint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+.meterBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.meterPct {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+.ring {
+  width: 20px;
+  height: 20px;
+}
+
+.ringTrack {
+  fill: none;
+  stroke: var(--divider);
+  stroke-width: 5;
+}
+
+.ringFill {
+  fill: none;
+  stroke-width: 5;
+  stroke-linecap: round;
+}
+
+.calm {
+  stroke: var(--accent);
+}
+
+.warm {
+  stroke: var(--accent-2);
+}
+
+.full {
+  stroke: var(--danger);
+}
+
+.meterPop {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 8px 8px 6px;
+  font-size: 13px;
+}
+
+.meterRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.stack {
+  height: 6px;
+  border-radius: 6px;
+  background: var(--divider);
+  display: flex;
+  gap: 2px;
+  overflow: hidden;
+}
+
+.stackPart {
+  display: block;
+  height: 100%;
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+}
+
+.legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  display: inline-block;
+}
+
+.src_chat {
+  background: var(--accent);
+}
+
+.src_instructions {
+  background: var(--faint);
+}
+
+.src_project {
+  background: var(--accent-2);
+}
+
+.src_posts {
+  background: var(--accent-2);
+  opacity: 0.8;
+}
+
+.src_brand {
+  background: var(--muted);
+}
+
+.src_skills {
+  background: var(--ink);
+  opacity: 0.5;
+}
+
+.bar {
+  height: 5px;
+  border-radius: 5px;
+  background: var(--divider);
+  display: flex;
+}
+
+.bar span {
+  border-radius: 5px;
+  background: var(--accent);
+}
+
+.linkSmall {
+  font-size: 13px;
+  color: var(--ink);
+  text-decoration: none;
+}
+
+.linkSmall:hover {
+  text-decoration: underline;
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* The @ picker, above the box like the slash menu. */
+.mention {
+  position: absolute;
+  left: 8px;
+  bottom: calc(100% + 6px);
+  z-index: 50;
+  width: min(420px, calc(100vw - 32px));
+  max-height: 340px;
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--canvas);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.35);
+}
+
+.mentionGroup {
+  padding: 8px 10px 4px;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.mentionHint {
+  padding: 8px 10px 4px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.channelDot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  border-radius: 5px;
+  background: var(--divider);
+  font-size: 9.5px;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.dropHint {
+  position: absolute;
+  inset: 0;
+  border-radius: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent-tint);
+  color: var(--ink);
+  font-size: 13px;
+  pointer-events: none;
+}
+
+@media (max-width: 640px) {
+  .tbText {
+    max-width: 88px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .box {
+    transition: none;
+  }
+}
+
+/* #575: the Image / Video switch at the top of the media menu. */
+.seg {
+  display: flex;
+  gap: 4px;
+  margin: 0 6px 4px;
+  padding: 3px;
+  border-radius: 10px;
+  background: var(--surface-hover);
+}
+
+.segBtn {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 30px;
+  border: none;
+  border-radius: 8px;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.segBtn:focus-visible {
+  outline: 2px solid var(--focus-ring);
+}
+
+.segOn {
+  background: var(--canvas);
+  color: var(--ink);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+}
