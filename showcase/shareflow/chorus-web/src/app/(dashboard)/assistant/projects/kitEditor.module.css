@@ -1,0 +1,1110 @@
+/*
+ * #595 — the style kit editor: controls beside a live preview.
+ *
+ * App chrome uses globals.css tokens only. The previews are drawn in the *project's* theme, whose colours
+ * are data: they arrive as inline `--t-*` custom properties (set from `themeVars` in theme.ts, the names
+ * the agent's HTML renderers use), so no colour literal lives in this file.
+ */
+
+.wrap {
+  container-type: inline-size;
+}
+
+/*
+ * The theme's properties, declared with app-chrome fallbacks so every var() below resolves to something.
+ * The inline style from `themeVars` (and the code window's colours) overrides them on the same element.
+ */
+.mini,
+.previews {
+  --t-bg: var(--card);
+  --t-surface: var(--surface-raised);
+  --t-primary: var(--primary);
+  --t-accent: var(--accent);
+  --t-text: var(--ink);
+  --t-muted: var(--muted);
+  --t-on-primary: var(--primary-ink);
+  --t-on-accent: var(--primary-ink);
+  --t-radius: var(--r-card);
+  --t-font-heading: var(--font-display);
+  --t-font-body: var(--font-body);
+  --code-bg: var(--surface-raised);
+  --code-bar: var(--surface-hover);
+  --code-term: var(--surface-hover);
+  --code-text: var(--ink);
+  --code-dim: var(--muted);
+  --code-k: var(--accent);
+  --code-s: var(--emerald);
+  --code-c: var(--faint);
+  --code-n: var(--warn);
+  --code-f: var(--info);
+  --code-radius: var(--r-ctl);
+}
+
+.kit {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+
+@container (max-width: 720px) {
+  /* Narrow: the controls come first, the previews follow underneath. */
+  .kit {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .previews {
+    position: static;
+  }
+}
+
+.controls {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  min-width: 0;
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.sectionHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+.linkButton {
+  border: 0;
+  background: none;
+  padding: 0;
+  font: inherit;
+  font-size: 12px;
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.linkButton:hover,
+.linkButton:focus-visible {
+  text-decoration: underline;
+  outline: none;
+}
+
+.linkButton:disabled {
+  color: var(--faint);
+  cursor: default;
+  text-decoration: none;
+}
+
+/* ---- preset gallery ---- */
+
+.presets {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
+  gap: 10px;
+}
+
+.preset {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-card);
+  background: var(--card);
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.preset:hover {
+  background: var(--surface-hover);
+}
+
+.preset:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.preset[aria-checked="true"] {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.preset:disabled {
+  cursor: default;
+}
+
+.presetName {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 0 2px 2px;
+}
+
+/* The mini preview inside a preset card: its own palette, fonts and radius. */
+.mini {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 8px;
+  height: 78px;
+  border-radius: var(--t-radius);
+  background: var(--t-bg);
+  color: var(--t-text);
+  box-shadow: inset 0 0 0 1px rgba(127, 127, 127, 0.18);
+  overflow: hidden;
+}
+
+.miniHeading {
+  font-family: var(--t-font-heading);
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.miniLine {
+  height: 5px;
+  width: 80%;
+  border-radius: 3px;
+  background: var(--t-muted);
+  opacity: 0.55;
+}
+
+.miniRow {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: auto;
+}
+
+.miniButton {
+  padding: 3px 8px;
+  border-radius: var(--t-radius);
+  background: var(--t-primary);
+  color: var(--t-on-primary);
+  font-family: var(--t-font-body);
+  font-size: 9px;
+  font-weight: 600;
+}
+
+.miniDot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--t-accent);
+}
+
+.miniSurface {
+  flex: 1;
+  height: 12px;
+  border-radius: var(--t-radius);
+  background: var(--t-surface);
+}
+
+/* ---- palette ---- */
+
+.roles {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 8px;
+}
+
+.role {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-ctl);
+  min-width: 0;
+}
+
+.swatch {
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: none;
+  cursor: pointer;
+}
+
+.swatch:disabled {
+  cursor: default;
+}
+
+.roleText {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.roleName {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.roleHex {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.roleReset {
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 6px;
+}
+
+.roleReset:hover,
+.roleReset:focus-visible {
+  color: var(--ink);
+  background: var(--surface-hover);
+  outline: none;
+}
+
+/* ---- fonts, radius, picture ---- */
+
+.fontGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+@container (max-width: 420px) {
+  .fontGrid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.fieldLabel {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-mid);
+}
+
+.select {
+  width: 100%;
+  padding: 7px 10px;
+  border-radius: var(--r-ctl);
+  border: 1px solid var(--border);
+  background: var(--surface-input);
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.fontSample {
+  font-size: 18px;
+  line-height: 1.2;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.range {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.range input {
+  flex: 1;
+  accent-color: var(--accent);
+}
+
+.rangeValue {
+  min-width: 48px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--muted);
+  text-align: right;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.chip {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--ink-mid);
+  border-radius: var(--r-pill);
+  padding: 4px 10px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.chip:hover {
+  background: var(--surface-hover);
+}
+
+.chip:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* Selected: a tint, the accent border and a weight change — not colour alone. */
+.chipOn {
+  border-color: var(--accent);
+  background: var(--accent-tint);
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.chip:disabled {
+  cursor: default;
+}
+
+.styleHint {
+  margin: 0;
+  min-height: 1.4em;
+  font-size: 12px;
+  color: var(--muted);
+  font-style: italic;
+}
+
+.notes {
+  width: 100%;
+  min-height: 64px;
+  padding: 7px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--surface-input);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12.5px;
+  resize: vertical;
+}
+
+/* ---- live previews ---- */
+
+.previews {
+  position: sticky;
+  top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.previewGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.previewWide {
+  grid-column: 1 / -1;
+}
+
+.previewCard {
+  container-type: inline-size;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.previewLabel {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* Every surface below is in the project's theme. */
+.post {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8%;
+  border-radius: var(--t-radius);
+  background: var(--t-primary);
+  color: var(--t-on-primary);
+  overflow: hidden;
+}
+
+/* The logo's edge gets room for it, as the server templates reserve it. */
+.postLogoTop {
+  padding-top: 26%;
+}
+
+.postLogoBottom {
+  padding-bottom: 26%;
+}
+
+.postBar {
+  width: 22%;
+  height: 4px;
+  border-radius: var(--t-radius);
+  background: var(--t-accent);
+}
+
+.postQuote {
+  font-family: var(--t-font-heading);
+  font-size: clamp(12px, 8cqi, 24px);
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.postFoot {
+  font-family: var(--t-font-body);
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--t-on-primary);
+  opacity: 0.8;
+}
+
+.logo {
+  position: absolute;
+  width: 16%;
+  aspect-ratio: 1;
+  object-fit: contain;
+}
+
+.logoTopLeft { top: 5%; left: 5%; }
+.logoTopRight { top: 5%; right: 5%; }
+.logoBottomLeft { bottom: 5%; left: 5%; }
+.logoBottomRight { bottom: 5%; right: 5%; }
+
+.slide {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8%;
+  border-radius: var(--t-radius);
+  background: var(--t-bg);
+  color: var(--t-text);
+  box-shadow: inset 0 0 0 1px rgba(127, 127, 127, 0.18);
+  overflow: hidden;
+}
+
+.slideKicker {
+  align-self: flex-start;
+  padding: 2px 8px;
+  border-radius: var(--t-radius);
+  background: var(--t-accent);
+  color: var(--t-on-accent);
+  font-family: var(--t-font-body);
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.slideTitle {
+  margin-top: auto;
+  font-family: var(--t-font-heading);
+  font-size: clamp(12px, 8cqi, 22px);
+  font-weight: 700;
+  line-height: 1.15;
+  color: var(--t-primary);
+}
+
+.slideBody {
+  font-family: var(--t-font-body);
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--t-muted);
+}
+
+.slideDots {
+  display: flex;
+  gap: 4px;
+  margin-top: auto;
+}
+
+.slideDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--t-muted);
+  opacity: 0.4;
+}
+
+.slideDotOn {
+  background: var(--t-primary);
+  opacity: 1;
+}
+
+/* A document page, as the agent's themed print CSS draws it. */
+.doc {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 16px 18px;
+  border-radius: 4px;
+  background: var(--t-bg);
+  color: var(--t-text);
+  font-family: var(--t-font-body);
+  font-size: 11.5px;
+  line-height: 1.5;
+  box-shadow: inset 0 0 0 1px rgba(127, 127, 127, 0.18);
+}
+
+.docRule {
+  height: 5px;
+  border-radius: var(--t-radius);
+  background: linear-gradient(90deg, var(--t-primary), var(--t-accent));
+  margin-bottom: 4px;
+}
+
+.docTitle {
+  margin: 0;
+  padding-bottom: 4px;
+  border-bottom: 2px solid var(--t-accent);
+  font-family: var(--t-font-heading);
+  font-size: 18px;
+  line-height: 1.2;
+  color: var(--t-primary);
+}
+
+.docHeading {
+  margin: 4px 0 0;
+  font-family: var(--t-font-heading);
+  font-size: 14px;
+  color: var(--t-primary);
+}
+
+.docText {
+  margin: 0;
+}
+
+.docList {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.docList li::marker {
+  color: var(--t-accent);
+}
+
+/* The code window over the brand backdrop, as `render_code_snippet` draws it with theme "brand". */
+.codeFrame {
+  padding: 14px;
+  border-radius: var(--t-radius);
+  background: linear-gradient(135deg, var(--t-primary), var(--t-accent));
+}
+
+.codeWindow {
+  border-radius: var(--code-radius);
+  overflow: hidden;
+  background: var(--code-bg);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.3);
+}
+
+.codeBar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 10px;
+  background: var(--code-bar);
+}
+
+.codeDot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+}
+
+.codeTitle {
+  position: absolute;
+  inset: 0;
+  text-align: center;
+  line-height: 26px;
+  font-family: var(--t-font-body);
+  font-size: 10.5px;
+  color: var(--code-dim);
+  pointer-events: none;
+}
+
+.codeBody {
+  margin: 0;
+  padding: 10px 14px 12px;
+  font-family: "JetBrains Mono", var(--font-mono);
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--code-text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.codeK { color: var(--code-k); }
+.codeS { color: var(--code-s); }
+.codeF { color: var(--code-f); }
+.codeC { color: var(--code-c); font-style: italic; }
+.codeN { color: var(--code-n); }
+
+/* A flowchart, as mermaid draws one with the theme's `themeVariables`. */
+.flow {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 8px 4px;
+  padding: 16px 12px;
+  border-radius: var(--t-radius);
+  background: var(--t-bg);
+  font-family: var(--t-font-body);
+  box-shadow: inset 0 0 0 1px rgba(127, 127, 127, 0.18);
+}
+
+.flowNode {
+  padding: 7px 12px;
+  border-radius: min(var(--t-radius), 12px);
+  border: 1px solid var(--t-primary);
+  background: var(--t-primary);
+  color: var(--t-on-primary);
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.flowDecision {
+  border-color: var(--t-accent);
+  background: var(--t-accent);
+  color: var(--t-on-accent);
+}
+
+.flowEnd {
+  border-color: var(--t-muted);
+  background: var(--t-surface);
+  color: var(--t-text);
+}
+
+.flowStep {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.flowArrow {
+  width: 26px;
+  height: 12px;
+  flex: 0 0 auto;
+  fill: none;
+  stroke: var(--t-muted);
+  stroke-width: 1.5;
+}
+
+.flowArrowHead {
+  fill: var(--t-muted);
+  stroke: none;
+}
+
+/*
+ * #595 part 2 — the templates strip: each code frame, diagram preset and document template as a thumbnail in
+ * the kit's theme (TemplatePreviews.tsx). Mirrors of the agent's renderers, sized to choose by.
+ */
+.tplSection {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.tplGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.tplStrip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.tplStripDocs {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+@container (max-width: 420px) {
+  .tplStrip,
+  .tplStripDocs {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.tplCard {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.tplCaption {
+  font-size: 10.5px;
+  color: var(--muted);
+  text-align: center;
+}
+
+/* Code frames: the brand backdrop, the window in the tuned code colours. */
+.tplCode {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  aspect-ratio: 4 / 3;
+  padding: 12%;
+  border-radius: min(var(--t-radius), 10px);
+  background: linear-gradient(135deg, var(--t-primary), var(--t-accent));
+}
+
+.tplCodeNone {
+  background: var(--code-bg);
+  justify-content: flex-start;
+}
+
+.tplWindow {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  border-radius: min(var(--code-radius), 6px);
+  overflow: hidden;
+  background: var(--code-bg);
+  box-shadow: 0 6px 14px rgba(0, 0, 0, 0.28);
+}
+
+.tplWindowMinimal {
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.12), 0 0 0 1px rgba(127, 127, 127, 0.3);
+  padding-top: 4px;
+}
+
+.tplBar {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  height: 10px;
+  padding: 0 5px;
+  background: var(--code-bar);
+}
+
+.tplBarTerm {
+  background: var(--code-term);
+}
+
+.tplLight {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--code-dim);
+}
+
+.tplPrompt {
+  font-size: 7px;
+  line-height: 10px;
+  font-weight: 700;
+  color: var(--code-s);
+}
+
+.tplCodeLines {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 5px 6px 6px;
+  width: 100%;
+}
+
+.tplCodeLine {
+  display: flex;
+  gap: 3px;
+}
+
+.tplTokK,
+.tplTokF,
+.tplTokS,
+.tplTokC,
+.tplTokIndent {
+  height: 3px;
+  border-radius: 2px;
+}
+
+.tplTokK { width: 22%; background: var(--code-k); }
+.tplTokF { width: 40%; background: var(--code-f); }
+.tplTokIndent { width: 10%; }
+.tplTokS { width: 50%; background: var(--code-s); }
+.tplTokC { width: 64%; background: var(--code-c); }
+
+/* Diagram presets: nodes and edges in the theme, as the preset's classDefs colour them. */
+.tplDiagram {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  aspect-ratio: 4 / 3;
+  padding: 10%;
+  border-radius: min(var(--t-radius), 10px);
+  background: var(--t-bg);
+  box-shadow: inset 0 0 0 1px rgba(127, 127, 127, 0.18);
+}
+
+.tplRow {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  width: 100%;
+}
+
+.tplColumn {
+  flex-direction: column;
+  gap: 0;
+}
+
+.tplNode {
+  flex: 0 0 auto;
+  width: 18%;
+  min-width: 10px;
+  height: 11px;
+  border-radius: 2px;
+  background: var(--t-primary);
+}
+
+.tplColumn > .tplNode {
+  width: 26%;
+}
+
+.tplNodeAccent { background: var(--t-accent); }
+.tplNodePlain { background: var(--t-surface); box-shadow: inset 0 0 0 1.5px var(--t-primary); }
+.tplNodeTeam { width: 24%; background: var(--t-bg); box-shadow: inset 0 0 0 1.5px var(--t-accent); }
+.tplNodePro { background: var(--t-surface); box-shadow: inset 0 0 0 1.5px var(--t-accent); }
+.tplNodeCon { background: var(--t-bg); outline: 1px dashed var(--t-muted); outline-offset: -1px; }
+
+.tplEdge {
+  flex: 1 1 auto;
+  height: 1.5px;
+  min-width: 3px;
+  background: var(--t-muted);
+}
+
+/* Right-angled reporting lines under the head of an org chart. */
+.tplOrgLines {
+  width: 66%;
+  height: 8px;
+  border: 1.5px solid var(--t-muted);
+  border-bottom: 0;
+  margin-top: 5px;
+}
+
+.tplCompare {
+  gap: 8%;
+}
+
+.tplOption {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 3px;
+  width: 40%;
+  padding: 4px;
+  background: var(--t-surface);
+  border-radius: 2px;
+}
+
+.tplOption > .tplNode {
+  width: auto;
+  height: 8px;
+}
+
+/* Document templates: an A4 page (the campaign plan landscape) with the themed header and footer. */
+.tplPage {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  aspect-ratio: 1 / 1.414;
+  padding: 10% 9% 6%;
+  border-radius: 3px;
+  background: var(--t-bg);
+  box-shadow: inset 0 0 0 1px rgba(127, 127, 127, 0.22);
+  overflow: hidden;
+}
+
+.tplLandscape {
+  aspect-ratio: 1.414 / 1;
+}
+
+.tplHead {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding-bottom: 3px;
+  margin-bottom: 2px;
+  border-bottom: 1.5px solid var(--t-accent);
+}
+
+.tplLogo {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--t-accent);
+}
+
+.tplTitle {
+  width: 55%;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--t-primary);
+}
+
+.tplLabel {
+  width: 30%;
+  height: 2.5px;
+  margin-top: 2px;
+  border-radius: 2px;
+  background: var(--t-accent);
+}
+
+.tplText {
+  width: 100%;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--t-muted);
+  opacity: 0.55;
+}
+
+.tplTextShort {
+  width: 60%;
+}
+
+.tplSummary {
+  height: 12px;
+  border-radius: 2px;
+  background: var(--t-surface);
+  border-left: 2px solid var(--t-accent);
+}
+
+.tplCheck {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px;
+  border-radius: 2px;
+  background: var(--t-surface);
+}
+
+.tplBox {
+  flex: 0 0 auto;
+  width: 5px;
+  height: 5px;
+  border-radius: 1px;
+  box-shadow: inset 0 0 0 1px var(--t-primary);
+}
+
+.tplBoxDone {
+  background: var(--t-primary);
+}
+
+.tplTable {
+  display: flex;
+  flex-direction: column;
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.tplTh,
+.tplTr {
+  height: 5px;
+}
+
+.tplTh { background: var(--t-primary); }
+.tplTr { background: var(--t-bg); }
+.tplTrBand { background: var(--t-surface); }
+
+.tplFoot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: auto;
+}
+
+.tplFootText {
+  width: 30%;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--t-muted);
+  opacity: 0.6;
+}
+
+.tplFootNum {
+  font-size: 5px;
+  line-height: 1;
+  color: var(--t-muted);
+}
+
+.tplCover {
+  justify-content: flex-end;
+  gap: 4px;
+  padding: 12%;
+  background: var(--t-primary);
+}
+
+.tplCover > .tplLogo {
+  margin-bottom: auto;
+  background: var(--t-on-primary);
+}
+
+.tplCoverTitle {
+  width: 75%;
+  height: 6px;
+  border-radius: 2px;
+  background: var(--t-on-primary);
+}
+
+.tplCoverBar {
+  width: 25%;
+  height: 2.5px;
+  border-radius: 2px;
+  background: var(--t-accent);
+}
+
+.saveRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .mini,
+  .post,
+  .slide,
+  .doc,
+  .codeFrame,
+  .flow {
+    transition: background-color 0.2s ease, border-radius 0.2s ease;
+  }
+}

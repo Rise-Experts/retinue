@@ -1,0 +1,248 @@
+/*
+ * A slide deck in the artifact panel — #607, redesigned in #620.
+ *
+ * The slides themselves are styled by the shared design (`SLIDE_DESIGN_CSS` in `@/lib/assistant/slideDesign`,
+ * a verbatim copy of the export's stylesheet), which measures everything in `--u` — one hundredth of the
+ * slide's shorter side. This file only sets `--u` for the frame, in container units, and styles the chrome
+ * around the deck (navigation, thumbnails, present mode) with the app's own tokens.
+ */
+
+.deck {
+  /*
+   * The theme's variables, set inline from the chat's project theme. These defaults are the app's own
+   * tokens, for the moment before a theme arrives; the inline style always wins over them.
+   */
+  --t-bg: var(--card);
+  --t-surface: var(--surface-input);
+  --t-primary: var(--ink);
+  --t-accent: var(--accent);
+  --t-text: var(--ink);
+  --t-muted: var(--muted);
+  --t-on-primary: var(--card);
+  --t-radius: 8px;
+  --t-font-heading: inherit;
+  --t-font-body: inherit;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.stage {
+  width: 100%;
+  max-width: 560px;
+  margin: 0 auto;
+}
+
+.empty {
+  color: var(--faint);
+}
+
+/* The frame is the container the units measure; its aspect ratio is the slide's. */
+.frame {
+  container-type: inline-size;
+  width: 100%;
+  overflow: hidden;
+  border-radius: 6px;
+  box-shadow: var(--card-lift);
+}
+
+/* 1080x1350: the shorter side is the width. */
+.portrait {
+  aspect-ratio: 4 / 5;
+  --u: 1cqw;
+}
+
+/* 1920x1080: the shorter side is 9/16 of the width. */
+.landscape {
+  aspect-ratio: 16 / 9;
+  --u: 0.5625cqw;
+}
+
+/* The slide fills its frame; the print page gives it a size in px instead. */
+.fill {
+  width: 100%;
+  height: 100%;
+}
+
+/* The arriving slide sizes the stage; the leaving one lies under it while the transition runs. */
+.layers {
+  position: relative;
+  overflow: hidden;
+  border-radius: 6px;
+  isolation: isolate;
+}
+
+.entering {
+  position: relative;
+  z-index: 2;
+}
+
+.leaving {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+}
+
+/* ---- navigation ---- */
+
+.nav {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+}
+
+.navButton {
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--divider);
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.navButton:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.position {
+  font-size: 12px;
+  color: var(--faint);
+  min-width: 64px;
+  text-align: center;
+}
+
+.presentOpen {
+  margin-left: 4px;
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--divider);
+  border-radius: var(--r-pill);
+  background: transparent;
+  color: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.presentOpen:hover {
+  background: var(--surface-hover);
+}
+
+.thumbs {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 2px 2px 6px;
+}
+
+.thumb,
+.thumbActive {
+  flex: 0 0 72px;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: 8px;
+  background: none;
+  cursor: pointer;
+}
+
+.thumbActive { border-color: var(--accent); }
+
+/* A thumbnail is a picture of the slide: its links and text are not targets. */
+.thumb :global(.slide),
+.thumbActive :global(.slide) { pointer-events: none; }
+
+/* ---- #620: present mode ---- */
+
+.present {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 24px;
+  background: var(--overlay);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  outline: none;
+  touch-action: pan-y;
+  user-select: none;
+}
+
+.presentStage {
+  width: 100%;
+}
+
+/* As large as the screen allows, leaving room for the bar under it. */
+.presentLandscape { max-width: min(100%, calc((100dvh - 112px) * 16 / 9)); }
+.presentPortrait { max-width: min(100%, calc((100dvh - 112px) * 4 / 5)); }
+
+.presentStage .frame {
+  border-radius: 10px;
+  box-shadow: var(--modal-shadow);
+}
+
+.presentBar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 8px 6px 6px;
+  border-radius: var(--r-pill);
+  background: var(--surface-raised);
+  color: var(--ink);
+  box-shadow: var(--surface-raised-lift);
+}
+
+.presentButton {
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--surface-hover);
+  color: inherit;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.presentButton:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.presentPosition {
+  font-size: 12px;
+  font-weight: 600;
+  min-width: 72px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.presentHint {
+  font-size: 12px;
+  color: var(--faint);
+}
+
+.presentExit {
+  height: 32px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: var(--r-pill);
+  background: var(--primary);
+  color: var(--primary-ink);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+@media (max-width: 640px) {
+  .presentHint { display: none; }
+}
